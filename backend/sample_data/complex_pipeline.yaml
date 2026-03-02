@@ -1,0 +1,83 @@
+pipeline:
+  name: customer_revenue_report
+  description: >
+    Production-grade pipeline that joins sales with customers and products,
+    filters to delivered orders, renames columns for clarity, aggregates
+    revenue per customer per category, sorts by total revenue, and saves
+    the final report. This is an 8-step pipeline demonstrating the full
+    capabilities of PipelineIQ.
+
+  steps:
+    # Step 1: Load sales data
+    - name: load_sales
+      type: load
+      file_id: "{{SALES_FILE_ID}}"
+
+    # Step 2: Load customer data
+    - name: load_customers
+      type: load
+      file_id: "{{CUSTOMERS_FILE_ID}}"
+
+    # Step 3: Load product data
+    - name: load_products
+      type: load
+      file_id: "{{PRODUCTS_FILE_ID}}"
+
+    # Step 4: Filter to delivered orders only
+    - name: filter_delivered
+      type: filter
+      input: load_sales
+      column: status
+      operator: equals
+      value: delivered
+
+    # Step 5: Join sales with customers on customer_id
+    - name: join_customers
+      type: join
+      left: filter_delivered
+      right: load_customers
+      on: customer_id
+      how: inner
+
+    # Step 6: Join with products on product_id
+    - name: join_products
+      type: join
+      left: join_customers
+      right: load_products
+      on: product_id
+      how: inner
+
+    # Step 7: Rename columns for clarity
+    - name: rename_columns
+      type: rename
+      input: join_products
+      mapping:
+        name: customer_name
+        amount: revenue
+        product_name: product
+
+    # Step 8: Aggregate revenue by customer and category
+    - name: aggregate_revenue
+      type: aggregate
+      input: rename_columns
+      group_by:
+        - customer_name
+        - category
+      aggregations:
+        - column: revenue
+          function: sum
+        - column: order_id
+          function: count
+
+    # Step 9: Sort by total revenue descending
+    - name: sort_by_revenue
+      type: sort
+      input: aggregate_revenue
+      by: revenue_sum
+      order: desc
+
+    # Step 10: Save the final report
+    - name: save_report
+      type: save
+      input: sort_by_revenue
+      filename: customer_revenue_report.csv

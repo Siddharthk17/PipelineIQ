@@ -1,0 +1,100 @@
+"""Application configuration loaded from environment variables.
+
+Uses Pydantic BaseSettings for type-safe configuration with validation
+at import time. The application crashes at startup if any required
+setting is missing or invalid, preventing runtime configuration errors.
+"""
+
+# Standard library
+import logging
+from pathlib import Path
+from typing import List
+
+# Third-party packages
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+
+
+class Settings(BaseSettings):
+    """PipelineIQ application settings.
+
+    All settings are loaded from environment variables or a .env file.
+    Every setting has a sensible default or is derived from another setting.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
+
+    # ── Application ───────────────────────────────────────────────────────────
+    APP_NAME: str = "PipelineIQ"
+    APP_VERSION: str = "1.0.0"
+    DEBUG: bool = False
+    LOG_LEVEL: str = "INFO"
+
+    # ── Database ──────────────────────────────────────────────────────────────
+    DATABASE_URL: str = "sqlite:///./pipelineiq.db"
+
+    # ── Redis & Celery ────────────────────────────────────────────────────────
+    REDIS_URL: str = "redis://localhost:6379/0"
+    CELERY_BROKER_URL: str = ""
+    CELERY_RESULT_BACKEND: str = ""
+
+    # ── File Storage ──────────────────────────────────────────────────────────
+    UPLOAD_DIR: Path = Path("./uploads")
+    MAX_UPLOAD_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
+    ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json"})
+
+    # ── Pipeline Execution ────────────────────────────────────────────────────
+    MAX_PIPELINE_STEPS: int = 50
+    MAX_ROWS_PER_FILE: int = 1_000_000
+    STEP_TIMEOUT_SECONDS: int = 300
+
+    # ── API ───────────────────────────────────────────────────────────────────
+    API_PREFIX: str = "/api/v1"
+    CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        """Ensure LOG_LEVEL is a valid Python logging level."""
+        normalized = value.upper()
+        if normalized not in VALID_LOG_LEVELS:
+            raise ValueError(
+                f"Invalid LOG_LEVEL '{value}'. "
+                f"Must be one of: {sorted(VALID_LOG_LEVELS)}"
+            )
+        return normalized
+
+    @field_validator("UPLOAD_DIR")
+    @classmethod
+    def ensure_upload_dir_exists(cls, value: Path) -> Path:
+        """Create the upload directory if it does not exist."""
+        value.mkdir(parents=True, exist_ok=True)
+        return value
+
+    @model_validator(mode="after")
+    def set_celery_defaults(self) -> "Settings":
+        """Default Celery broker and backend URLs to REDIS_URL if not set."""
+        if not self.CELERY_BROKER_URL:
+            self.CELERY_BROKER_URL = self.REDIS_URL
+        if not self.CELERY_RESULT_BACKEND:
+            self.CELERY_RESULT_BACKEND = self.REDIS_URL
+        return self
+
+
+# Module-level singleton — validated at import time.
+# If configuration is invalid, the application crashes here with a clear error.
+settings = Settings()
+
+# Configure root logger based on settings
+logging.basicConfig(
+    level=getattr(logging, settings.LOG_LEVEL),
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)

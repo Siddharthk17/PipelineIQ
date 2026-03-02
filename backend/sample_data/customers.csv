@@ -1,0 +1,21 @@
+customer_id,name,email,region,tier
+1,Alice Johnson,alice@example.com,North,gold
+2,Bob Smith,bob@example.com,South,silver
+3,Charlie Brown,charlie@example.com,East,bronze
+4,Diana Ross,diana@example.com,West,gold
+5,Eve Wilson,eve@example.com,North,silver
+6,Frank Miller,frank@example.com,South,bronze
+7,Grace Lee,grace@example.com,East,gold
+8,Henry Davis,henry@example.com,West,silver
+9,Ivy Chen,ivy@example.com,North,bronze
+10,Jack Taylor,jack@example.com,South,gold
+11,Karen White,karen@example.com,East,silver
+12,Leo Martinez,leo@example.com,West,bronze
+13,Mia Anderson,mia@example.com,North,gold
+14,Noah Thomas,noah@example.com,South,silver
+15,Olivia Jackson,olivia@example.com,East,bronze
+16,Peter Harris,peter@example.com,West,gold
+17,Quinn Clark,quinn@example.com,North,silver
+18,Rosa Lewis,rosa@example.com,South,bronze
+19,Sam Walker,sam@example.com,East,gold
+20,Tara Hall,tara@example.com,West,silver

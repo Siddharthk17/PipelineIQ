@@ -1,0 +1,22 @@
+pipeline:
+  name: simple_filter_pipeline
+  description: >
+    A simple pipeline that loads sales data, filters to delivered orders,
+    and saves the result. Good for quick testing and demos.
+
+  steps:
+    - name: load_sales
+      type: load
+      file_id: "{{SALES_FILE_ID}}"
+
+    - name: filter_delivered
+      type: filter
+      input: load_sales
+      column: status
+      operator: equals
+      value: delivered
+
+    - name: save_filtered
+      type: save
+      input: filter_delivered
+      filename: filtered_sales.csv

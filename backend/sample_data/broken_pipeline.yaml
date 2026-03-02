@@ -1,0 +1,63 @@
+# This pipeline intentionally contains errors for testing validation.
+# It should produce multiple validation errors when validated.
+
+pipeline:
+  name: ""  # Error: empty name
+
+  steps:
+    # Error: invalid step type
+    - name: transform_data
+      type: transform
+      input: load_data
+
+    # Error: duplicate step name
+    - name: load_data
+      type: load
+      file_id: nonexistent-file-id
+
+    - name: load_data
+      type: load
+      file_id: also-nonexistent
+
+    # Error: references non-existent step
+    - name: filter_step
+      type: filter
+      input: step_that_does_not_exist
+      column: amount
+      operator: equals
+      value: 100
+
+    # Error: invalid operator
+    - name: filter_bad_op
+      type: filter
+      input: load_data
+      column: status
+      operator: matches_regex
+      value: ".*"
+
+    # Error: join missing 'on' field
+    - name: bad_join
+      type: join
+      left: load_data
+      right: load_data
+      how: inner
+
+    # Error: aggregate with no aggregations
+    - name: bad_aggregate
+      type: aggregate
+      input: load_data
+      group_by:
+        - customer_id
+      aggregations: []
+
+    # Error: aggregate with invalid function
+    - name: bad_agg_func
+      type: aggregate
+      input: load_data
+      group_by:
+        - customer_id
+      aggregations:
+        - column: amount
+          function: percentile_99
+
+    # No save step → should produce a warning
