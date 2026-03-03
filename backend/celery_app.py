@@ -26,7 +26,8 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    broker_connection_retry_on_startup=True,
 )
 
 # Auto-discover tasks in the tasks package
-celery_app.autodiscover_tasks(["backend.tasks"])
+celery_app.autodiscover_tasks(["backend.tasks"], related_name="pipeline_tasks")

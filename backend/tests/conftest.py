@@ -5,7 +5,10 @@ FastAPI test clients, and pre-configured LineageRecorder instances.
 """
 
 # Standard library
+import io
+import os
 from typing import Generator
+from unittest.mock import MagicMock, patch
 
 # Third-party packages
 import pandas as pd
@@ -13,10 +16,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 # Internal modules
 from backend.database import Base, get_db
 from backend.main import app
+import backend.models  # noqa: F401 — ensure ORM models are registered with Base.metadata
 from backend.pipeline.lineage import LineageRecorder
 
 
@@ -28,51 +33,52 @@ TEST_DATABASE_URL = "sqlite:///:memory:"
 
 
 @pytest.fixture()
-def test_db() -> Generator[Session, None, None]:
-    """In-memory SQLite database for each test.
-
-    Creates all tables before the test and drops them after,
-    ensuring complete isolation between tests.
-
-    Yields:
-        A SQLAlchemy Session bound to the in-memory database.
-    """
+def test_engine():
+    """Create an in-memory SQLite engine for testing."""
     engine = create_engine(
         TEST_DATABASE_URL,
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
-    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base.metadata.create_all(bind=engine)
+    yield engine
+    Base.metadata.drop_all(bind=engine)
+    engine.dispose()
 
+
+@pytest.fixture()
+def test_db(test_engine) -> Generator[Session, None, None]:
+    """In-memory SQLite database for each test."""
+    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
     db = TestingSession()
     try:
         yield db
     finally:
         db.close()
-        Base.metadata.drop_all(bind=engine)
-        engine.dispose()
 
 
 @pytest.fixture()
-def client(test_db: Session) -> TestClient:
-    """FastAPI TestClient with the test database injected.
-
-    Overrides the get_db dependency so all routes use the in-memory
-    test database instead of the production database.
-
-    Args:
-        test_db: In-memory test database session.
-
-    Returns:
-        FastAPI TestClient ready for API testing.
-    """
+def client(test_db: Session, tmp_path) -> TestClient:
+    """FastAPI TestClient with the test database injected."""
 
     def override_get_db() -> Generator[Session, None, None]:
         yield test_db
 
     app.dependency_overrides[get_db] = override_get_db
-    test_client = TestClient(app)
-    yield test_client
+
+    # Patch upload dir to use tmp_path
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    with patch("backend.api.files.settings") as mock_settings, \
+         patch("backend.api.pipelines.execute_pipeline_task") as mock_task:
+        mock_settings.UPLOAD_DIR = upload_dir
+        mock_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
+        mock_settings.MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
+        mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
+        test_client = TestClient(app)
+        test_client._mock_task = mock_task
+        yield test_client
+
     app.dependency_overrides.clear()
 
 
@@ -85,25 +91,34 @@ def client(test_db: Session) -> TestClient:
 def sample_sales_df() -> pd.DataFrame:
     """Deterministic 20-row sales DataFrame for testing.
 
-    Returns:
-        DataFrame with columns: order_id, customer_id, product_id,
-        amount, quantity, status, date.
+    8 delivered, 6 cancelled, 6 pending.
+    Columns: order_id, customer_id, amount, status, region, date.
     """
     return pd.DataFrame({
         "order_id": list(range(1001, 1021)),
-        "customer_id": [1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
-        "product_id": [101, 102, 103, 101, 102, 103, 101, 102, 103, 101,
-                       102, 103, 101, 102, 103, 101, 102, 103, 101, 102],
-        "amount": [
-            150.0, 250.0, 350.0, 100.0, 200.0, 300.0, 175.0, 225.0, 275.0, 125.0,
-            450.0, 550.0, 150.0, 350.0, 250.0, 175.0, 325.0, 425.0, 50.0, 75.0,
+        "customer_id": [
+            "C001", "C002", "C003", "C004", "C005",
+            "C001", "C002", "C003", "C004", "C005",
+            "C006", "C007", "C008", "C009", "C010",
+            "C006", "C007", "C008", "C009", "C010",
         ],
-        "quantity": [1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 4, 5, 1, 3, 2, 1, 3, 4, 1, 1],
+        "amount": [
+            150.0, 250.0, 350.0, 100.0, 200.0,
+            300.0, 175.0, 225.0, 275.0, 125.0,
+            450.0, 550.0, 150.0, 350.0, 250.0,
+            175.0, 325.0, 425.0, 50.0, 75.0,
+        ],
         "status": [
-            "delivered", "delivered", "shipped", "delivered", "cancelled",
-            "delivered", "shipped", "delivered", "delivered", "cancelled",
-            "delivered", "shipped", "delivered", "delivered", "cancelled",
-            "delivered", "shipped", "delivered", "delivered", "shipped",
+            "delivered", "delivered", "cancelled", "delivered", "pending",
+            "delivered", "cancelled", "pending", "delivered", "cancelled",
+            "pending", "delivered", "cancelled", "pending", "delivered",
+            "cancelled", "pending", "delivered", "cancelled", "pending",
+        ],
+        "region": [
+            "North", "South", "East", "West", "North",
+            "South", "East", "West", "North", "South",
+            "East", "West", "North", "South", "East",
+            "West", "North", "South", "East", "West",
         ],
         "date": [
             "2024-01-05", "2024-01-06", "2024-01-07", "2024-01-08", "2024-01-09",
@@ -116,14 +131,13 @@ def sample_sales_df() -> pd.DataFrame:
 
 @pytest.fixture()
 def sample_customers_df() -> pd.DataFrame:
-    """Deterministic 10-row customers DataFrame for testing.
-
-    Returns:
-        DataFrame with columns: customer_id, name, email, region, tier.
-    """
+    """Deterministic 10-row customers DataFrame for testing."""
     return pd.DataFrame({
-        "customer_id": list(range(1, 11)),
-        "name": [
+        "customer_id": [
+            "C001", "C002", "C003", "C004", "C005",
+            "C006", "C007", "C008", "C009", "C010",
+        ],
+        "customer_name": [
             "Alice Johnson", "Bob Smith", "Charlie Brown", "Diana Ross",
             "Eve Wilson", "Frank Miller", "Grace Lee", "Henry Davis",
             "Ivy Chen", "Jack Taylor",
@@ -147,11 +161,7 @@ def sample_customers_df() -> pd.DataFrame:
 
 @pytest.fixture()
 def sample_products_df() -> pd.DataFrame:
-    """Deterministic 5-row products DataFrame for testing.
-
-    Returns:
-        DataFrame with columns: product_id, product_name, category, price.
-    """
+    """Deterministic 5-row products DataFrame for testing."""
     return pd.DataFrame({
         "product_id": [101, 102, 103, 104, 105],
         "product_name": [
@@ -163,45 +173,76 @@ def sample_products_df() -> pd.DataFrame:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# CSV / JSON BYTE FIXTURES
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture()
+def sales_csv_bytes(sample_sales_df: pd.DataFrame) -> bytes:
+    """Sales DataFrame serialized as CSV bytes."""
+    return sample_sales_df.to_csv(index=False).encode()
+
+
+@pytest.fixture()
+def customers_csv_bytes(sample_customers_df: pd.DataFrame) -> bytes:
+    """Customers DataFrame serialized as CSV bytes."""
+    return sample_customers_df.to_csv(index=False).encode()
+
+
+@pytest.fixture()
+def sample_json_bytes() -> bytes:
+    """Simple JSON array as bytes for upload testing."""
+    return b'[{"id":1,"name":"Alice","value":100},{"id":2,"name":"Bob","value":200}]'
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # LINEAGE FIXTURE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 @pytest.fixture()
 def lineage_recorder() -> LineageRecorder:
-    """Fresh LineageRecorder instance for each test.
-
-    Returns:
-        A new LineageRecorder with an empty graph.
-    """
+    """Fresh LineageRecorder instance for each test."""
     return LineageRecorder()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# FILE UPLOAD FIXTURES
+# FILE UPLOAD HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.fixture()
-def uploaded_sales_file(client: TestClient, tmp_path, sample_sales_df: pd.DataFrame) -> str:
-    """Upload sample sales CSV and return the file_id.
-
-    Args:
-        client: FastAPI test client.
-        tmp_path: Pytest temporary directory.
-        sample_sales_df: Sample sales DataFrame.
-
-    Returns:
-        The file_id of the uploaded file.
-    """
-    csv_path = tmp_path / "sales.csv"
-    sample_sales_df.to_csv(csv_path, index=False)
-
-    with open(csv_path, "rb") as f:
-        response = client.post(
-            "/api/v1/files/upload",
-            files={"file": ("sales.csv", f, "text/csv")},
-        )
-
-    assert response.status_code == 201
+def upload_file(client: TestClient, csv_bytes: bytes, filename: str = "test.csv") -> str:
+    """Upload a CSV file and return its file_id."""
+    response = client.post(
+        "/api/v1/files/upload",
+        files={"file": (filename, csv_bytes, "text/csv")},
+    )
+    assert response.status_code == 201, f"Upload failed: {response.json()}"
     return response.json()["id"]
+
+
+def build_simple_pipeline_yaml(file_id: str) -> str:
+    """Build a minimal valid pipeline YAML for testing."""
+    return f"""pipeline:
+  name: test_pipeline
+  steps:
+    - name: load_sales
+      type: load
+      file_id: "{file_id}"
+    - name: filter_delivered
+      type: filter
+      input: load_sales
+      column: status
+      operator: equals
+      value: "delivered"
+    - name: save_output
+      type: save
+      input: filter_delivered
+      filename: output.csv
+"""
+
+
+@pytest.fixture()
+def uploaded_sales_file(client: TestClient, sales_csv_bytes: bytes) -> str:
+    """Upload sample sales CSV and return the file_id."""
+    return upload_file(client, sales_csv_bytes, "sales.csv")

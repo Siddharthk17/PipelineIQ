@@ -7,6 +7,7 @@ with metadata persisted to the database.
 
 # Standard library
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import List
@@ -38,38 +39,23 @@ async def upload_file(
     file: UploadFile,
     db: Session = get_db_dependency(),
 ) -> FileUploadResponse:
-    """Upload a data file and store its metadata.
+    """Upload a data file and store its metadata."""
+    original_filename = os.path.basename(file.filename or "upload.csv")
+    _validate_file_extension(original_filename)
 
-    Validates file extension, reads the content, parses it into a
-    DataFrame to extract column metadata, then stores the file on
-    disk and records metadata in the database.
-
-    Args:
-        file: The uploaded file (multipart form data).
-        db: Database session (injected).
-
-    Returns:
-        FileUploadResponse with file ID, row count, and column info.
-
-    Raises:
-        HTTPException 400: If the file extension is not supported.
-        HTTPException 413: If the file exceeds the size limit.
-        HTTPException 422: If the file content cannot be parsed.
-    """
-    _validate_file_extension(file.filename or "")
-    content = await file.read()
-    _validate_file_size(len(content))
+    # Stream-read with size enforcement to prevent OOM
+    content = await _read_with_size_limit(file)
 
     file_id = str(uuid.uuid4())
-    stored_path = _store_file(file_id, file.filename or "upload.csv", content)
-    df = _parse_file_content(file.filename or "", stored_path)
+    stored_path = _store_file(file_id, original_filename, content)
+    df = _parse_file_content(original_filename, stored_path)
 
     columns = list(df.columns)
     dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
 
     uploaded_file = UploadedFile(
         id=file_id,
-        original_filename=file.filename or "unknown",
+        original_filename=original_filename,
         stored_path=str(stored_path),
         file_size_bytes=len(content),
         row_count=len(df),
@@ -82,12 +68,12 @@ async def upload_file(
 
     logger.info(
         "File uploaded: id=%s, name=%s, rows=%d, columns=%d",
-        file_id, file.filename, len(df), len(columns),
+        file_id, original_filename, len(df), len(columns),
     )
 
     return FileUploadResponse(
         id=file_id,
-        original_filename=file.filename or "unknown",
+        original_filename=original_filename,
         row_count=len(df),
         column_count=len(columns),
         columns=columns,
@@ -103,14 +89,7 @@ async def upload_file(
     description="Returns metadata for all uploaded files.",
 )
 def list_files(db: Session = get_db_dependency()) -> FileListResponse:
-    """List all uploaded files with their metadata.
-
-    Args:
-        db: Database session (injected).
-
-    Returns:
-        FileListResponse with list of files and total count.
-    """
+    """List all uploaded files with their metadata."""
     files = db.query(UploadedFile).all()
     file_responses = [
         FileUploadResponse(
@@ -127,9 +106,116 @@ def list_files(db: Session = get_db_dependency()) -> FileListResponse:
     return FileListResponse(files=file_responses, total=len(file_responses))
 
 
+@router.get(
+    "/{file_id}",
+    response_model=FileUploadResponse,
+    summary="Get file metadata",
+    description="Returns metadata for a specific uploaded file.",
+)
+def get_file(
+    file_id: str,
+    db: Session = get_db_dependency(),
+) -> FileUploadResponse:
+    """Get metadata for a specific uploaded file."""
+    _validate_uuid_format(file_id)
+    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if uploaded_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File '{file_id}' not found",
+        )
+    return FileUploadResponse(
+        id=uploaded_file.id,
+        original_filename=uploaded_file.original_filename,
+        row_count=uploaded_file.row_count,
+        column_count=uploaded_file.column_count,
+        columns=uploaded_file.columns,
+        dtypes=uploaded_file.dtypes,
+        file_size_bytes=uploaded_file.file_size_bytes,
+    )
+
+
+@router.delete(
+    "/{file_id}",
+    summary="Delete an uploaded file",
+    description="Removes the file from disk and database.",
+)
+def delete_file(
+    file_id: str,
+    db: Session = get_db_dependency(),
+) -> dict:
+    """Delete an uploaded file from disk and database."""
+    _validate_uuid_format(file_id)
+    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if uploaded_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File '{file_id}' not found",
+        )
+
+    # Delete from disk
+    stored_path = Path(uploaded_file.stored_path)
+    if stored_path.exists():
+        stored_path.unlink()
+
+    # Delete from database
+    db.delete(uploaded_file)
+    db.commit()
+
+    logger.info("File deleted: id=%s", file_id)
+    return {"detail": f"File '{file_id}' deleted"}
+
+
+@router.get(
+    "/{file_id}/preview",
+    summary="Preview file data",
+    description="Returns the first N rows of an uploaded file as JSON records.",
+)
+def preview_file(
+    file_id: str,
+    rows: int = 20,
+    db: Session = get_db_dependency(),
+) -> dict:
+    """Return the first N rows of an uploaded file."""
+    _validate_uuid_format(file_id)
+    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    if uploaded_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File '{file_id}' not found",
+        )
+    stored_path = Path(uploaded_file.stored_path)
+    if not stored_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File data not found on disk for '{file_id}'",
+        )
+    df = _parse_file_content(uploaded_file.original_filename, stored_path)
+    preview_df = df.head(min(rows, 100))
+    return {
+        "file_id": file_id,
+        "filename": uploaded_file.original_filename,
+        "total_rows": len(df),
+        "preview_rows": len(preview_df),
+        "columns": list(df.columns),
+        "data": preview_df.to_dict(orient="records"),
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PRIVATE HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _validate_uuid_format(value: str) -> None:
+    """Raise 422 if the value is not a valid UUID."""
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid UUID format: '{value}'",
+        )
 
 
 def _validate_file_extension(filename: str) -> None:
@@ -145,14 +231,33 @@ def _validate_file_extension(filename: str) -> None:
         )
 
 
-def _validate_file_size(size_bytes: int) -> None:
-    """Raise 413 if the file exceeds MAX_UPLOAD_SIZE_BYTES."""
-    if size_bytes > settings.MAX_UPLOAD_SIZE_BYTES:
-        max_mb = settings.MAX_UPLOAD_SIZE_BYTES / (1024 * 1024)
+async def _read_with_size_limit(file: UploadFile) -> bytes:
+    """Read file content with streaming size enforcement to prevent OOM."""
+    max_size = settings.MAX_UPLOAD_SIZE_BYTES
+    chunks: list[bytes] = []
+    total_read = 0
+    chunk_size = 1024 * 1024  # 1MB chunks
+
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total_read += len(chunk)
+        if total_read > max_size:
+            max_mb = max_size / (1024 * 1024)
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File size exceeds maximum ({max_mb:.0f} MB)",
+            )
+        chunks.append(chunk)
+
+    content = b"".join(chunks)
+    if len(content) == 0:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File size ({size_bytes} bytes) exceeds maximum ({max_mb:.0f} MB)",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
         )
+    return content
 
 
 def _store_file(file_id: str, original_filename: str, content: bytes) -> Path:

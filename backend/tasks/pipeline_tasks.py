@@ -210,7 +210,6 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         )
 
     pipeline_run.completed_at = utcnow()
-    pipeline_run.total_duration_ms = summary.total_duration_ms
     pipeline_run.total_rows_in = summary.total_rows_processed
     pipeline_run.total_rows_out = (
         summary.step_results[-1].rows_out if summary.step_results else 0
@@ -220,8 +219,8 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     for idx, result in enumerate(summary.step_results):
         step_record = StepResult(
             pipeline_run_id=pipeline_run.id,
-            step_name=result.columns_out[0] if result.columns_out else f"step_{idx}",
-            step_type="unknown",
+            step_name=result.step_name,
+            step_type=result.step_type,
             step_index=idx,
             status=StepStatus.COMPLETED,
             rows_in=result.rows_in,

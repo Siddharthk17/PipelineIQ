@@ -1,9 +1,7 @@
-version: "3.8"
-
 services:
   api:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-api
     ports:
@@ -11,33 +9,33 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=sqlite:///./pipelineiq.db
+      - DATABASE_URL=sqlite:////app/data/pipelineiq.db
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
     volumes:
       - uploads:/app/uploads
-      - db_data:/app
+      - db_data:/app/data
     restart: unless-stopped
 
   worker:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-worker
     command: celery -A backend.celery_app:celery_app worker --loglevel=info --concurrency=2
     env_file:
       - .env
     environment:
-      - DATABASE_URL=sqlite:///./pipelineiq.db
+      - DATABASE_URL=sqlite:////app/data/pipelineiq.db
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
     volumes:
       - uploads:/app/uploads
-      - db_data:/app
+      - db_data:/app/data
     restart: unless-stopped
 
   redis:
@@ -50,6 +48,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://api:8000
+    container_name: pipelineiq-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+    depends_on:
+      - api
     restart: unless-stopped
 
 volumes:

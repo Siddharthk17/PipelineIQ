@@ -394,12 +394,19 @@ class PipelineParser:
         if step_type == StepType.JOIN:
             return self._build_join_step(name, step_type, raw)
         if step_type == StepType.AGGREGATE:
+            raw_aggs = raw.get("aggregations", [])
+            # Convert {column: function} dict to [{column, function}] list
+            if isinstance(raw_aggs, dict):
+                raw_aggs = [
+                    {"column": col, "function": func}
+                    for col, func in raw_aggs.items()
+                ]
             return AggregateStepConfig(
                 name=name,
                 step_type=step_type,
                 input=raw.get("input", ""),
                 group_by=raw.get("group_by", []),
-                aggregations=raw.get("aggregations", []),
+                aggregations=raw_aggs,
             )
         if step_type == StepType.SORT:
             return self._build_sort_step(name, step_type, raw)
@@ -442,12 +449,15 @@ class PipelineParser:
         except ValueError:
             how = how_str  # type: ignore[assignment]
 
+        # YAML parses bare 'on' as boolean True; check both keys
+        on_value = raw.get("on", "") or raw.get(True, "")
+
         return JoinStepConfig(
             name=name,
             step_type=step_type,
             left=raw.get("left", ""),
             right=raw.get("right", ""),
-            on=raw.get("on", ""),
+            on=str(on_value) if on_value else "",
             how=how,
         )
 
@@ -671,7 +681,10 @@ class PipelineParser:
                         message="Aggregate step must define at least one aggregation",
                     ))
                 for agg in step.aggregations:
-                    func_name = agg.get("function", "")
+                    if isinstance(agg, dict):
+                        func_name = agg.get("function", "")
+                    else:
+                        func_name = str(agg)
                     if func_name not in VALID_AGGREGATION_FUNCTIONS:
                         errors.append(ValidationError(
                             step_name=step.name,

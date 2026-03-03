@@ -7,15 +7,15 @@ RUN groupadd --gid 1000 appuser && \
 WORKDIR /app
 
 # Layer cache optimization: install deps before copying source
-COPY backend/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application source
-COPY backend/ ./backend/
+# Copy application source (context is backend/, copy into /app/backend/)
+COPY . ./backend/
 
-# Create upload directory
-RUN mkdir -p /app/uploads && chown -R appuser:appuser /app
+# Create upload and data directories
+RUN mkdir -p /app/uploads /app/data && chown -R appuser:appuser /app
 
 # Switch to non-root user
 USER appuser

@@ -131,12 +131,19 @@ async def validation_error_handler(
 ) -> JSONResponse:
     """Handle Pydantic validation errors with field-level details."""
     request_id = getattr(request.state, "request_id", "unknown")
+    # Sanitize errors: Pydantic V2 may include non-serializable ctx values
+    safe_errors = []
+    for err in exc.errors():
+        safe_err = {k: v for k, v in err.items() if k != "ctx"}
+        if "ctx" in err:
+            safe_err["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
+        safe_errors.append(safe_err)
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "error_type": "ValidationError",
             "message": "Request validation failed",
-            "details": exc.errors(),
+            "details": safe_errors,
             "request_id": request_id,
         },
     )
@@ -236,7 +243,7 @@ def _check_db_health() -> str:
     """Check database connectivity by executing a simple query."""
     try:
         with engine.connect() as conn:
-            conn.execute(conn.connection.cursor().execute("SELECT 1") if False else conn.exec_driver_sql("SELECT 1"))
+            conn.exec_driver_sql("SELECT 1")
         return "ok"
     except Exception as exc:
         logger.error("Database health check failed: %s", exc)

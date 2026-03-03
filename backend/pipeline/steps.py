@@ -54,6 +54,8 @@ logger = logging.getLogger(__name__)
 class StepExecutionResult:
     """Result of executing a single pipeline step."""
 
+    step_name: str
+    step_type: str
     output_df: pd.DataFrame
     rows_in: int
     rows_out: int
@@ -192,6 +194,8 @@ class StepExecutor:
         )
 
         return StepExecutionResult(
+            step_name=config.name,
+            step_type=config.step_type.value if isinstance(config.step_type, StepType) else str(config.step_type),
             output_df=df,
             rows_in=len(df),
             rows_out=len(df),
@@ -272,6 +276,8 @@ class StepExecutor:
         )
 
         return StepExecutionResult(
+            step_name=config.name,
+            step_type="filter",
             output_df=filtered_df,
             rows_in=len(input_df),
             rows_out=len(filtered_df),
@@ -333,6 +339,8 @@ class StepExecutor:
         )
 
         return StepExecutionResult(
+            step_name=config.name,
+            step_type="select",
             output_df=selected_df,
             rows_in=len(input_df),
             rows_out=len(selected_df),
@@ -379,6 +387,8 @@ class StepExecutor:
         )
 
         return StepExecutionResult(
+            step_name=config.name,
+            step_type="rename",
             output_df=renamed_df,
             rows_in=len(input_df),
             rows_out=len(renamed_df),
@@ -434,6 +444,8 @@ class StepExecutor:
         )
 
         return StepExecutionResult(
+            step_name=config.name,
+            step_type="join",
             output_df=joined_df,
             rows_in=len(left_df) + len(right_df),
             rows_out=len(joined_df),
@@ -499,6 +511,8 @@ class StepExecutor:
         )
 
         return StepExecutionResult(
+            step_name=config.name,
+            step_type="aggregate",
             output_df=aggregated_df,
             rows_in=len(input_df),
             rows_out=len(aggregated_df),
@@ -585,6 +599,8 @@ class StepExecutor:
         )
 
         return StepExecutionResult(
+            step_name=config.name,
+            step_type="sort",
             output_df=sorted_df,
             rows_in=len(input_df),
             rows_out=len(sorted_df),
@@ -628,6 +644,8 @@ class StepExecutor:
         )
 
         return StepExecutionResult(
+            step_name=config.name,
+            step_type="save",
             output_df=input_df,
             rows_in=len(input_df),
             rows_out=len(input_df),

@@ -8,6 +8,7 @@ result retrieval, and real-time progress streaming via Server-Sent Events.
 import asyncio
 import json
 import logging
+import uuid
 from typing import AsyncGenerator
 
 # Third-party packages
@@ -20,6 +21,7 @@ from sqlalchemy.orm import Session
 from backend.config import settings
 from backend.dependencies import get_db_dependency
 from backend.models import PipelineRun, PipelineStatus, UploadedFile
+from datetime import timezone
 from backend.pipeline.parser import PipelineParser
 from backend.schemas import (
     PipelineRunListResponse,
@@ -178,18 +180,8 @@ def get_pipeline_run(
     run_id: str,
     db: Session = get_db_dependency(),
 ) -> PipelineRunResponse:
-    """Get full details of a specific pipeline run.
-
-    Args:
-        run_id: The pipeline run ID.
-        db: Database session (injected).
-
-    Returns:
-        PipelineRunResponse with step results and timing.
-
-    Raises:
-        HTTPException 404: If the run_id is not found.
-    """
+    """Get full details of a specific pipeline run."""
+    _validate_uuid_format(run_id)
     pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
     if pipeline_run is None:
         raise HTTPException(
@@ -208,22 +200,8 @@ async def stream_pipeline_progress(
     run_id: str,
     db: Session = get_db_dependency(),
 ) -> StreamingResponse:
-    """Stream real-time pipeline execution progress via Server-Sent Events.
-
-    Connects to Redis pub/sub channel f"pipeline_progress:{run_id}",
-    forwards messages to the HTTP client as SSE events, and closes
-    the connection when a terminal event is received.
-
-    Args:
-        run_id: The pipeline run ID to stream progress for.
-        db: Database session (injected).
-
-    Returns:
-        StreamingResponse with text/event-stream content type.
-
-    Raises:
-        HTTPException 404: If the run_id is not found.
-    """
+    """Stream real-time pipeline execution progress via Server-Sent Events."""
+    _validate_uuid_format(run_id)
     pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
     if pipeline_run is None:
         raise HTTPException(
@@ -337,9 +315,27 @@ def _sse_headers() -> dict:
     }
 
 
+def _validate_uuid_format(value: str) -> None:
+    """Raise 422 if the value is not a valid UUID."""
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid UUID format: '{value}'",
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # RESPONSE BUILDERS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _ensure_utc(dt):
+    """Attach UTC tzinfo to naive datetimes from SQLite."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
@@ -348,9 +344,9 @@ def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
         id=pipeline_run.id,
         name=pipeline_run.name,
         status=pipeline_run.status.value,
-        created_at=pipeline_run.created_at,
-        started_at=pipeline_run.started_at,
-        completed_at=pipeline_run.completed_at,
+        created_at=_ensure_utc(pipeline_run.created_at),
+        started_at=_ensure_utc(pipeline_run.started_at),
+        completed_at=_ensure_utc(pipeline_run.completed_at),
         duration_ms=pipeline_run.duration_ms,
         total_rows_in=pipeline_run.total_rows_in,
         total_rows_out=pipeline_run.total_rows_out,

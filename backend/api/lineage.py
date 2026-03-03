@@ -6,6 +6,7 @@ tracing column ancestry, and performing forward impact analysis.
 
 # Standard library
 import logging
+import uuid
 from typing import Any, Dict
 
 # Third-party packages
@@ -40,22 +41,8 @@ def get_lineage_graph(
     run_id: str,
     db: Session = get_db_dependency(),
 ) -> LineageGraphResponse:
-    """Retrieve the pre-computed React Flow lineage graph.
-
-    Returns the visualization-ready graph stored during pipeline
-    execution. No recomputation needed — the graph is pre-built
-    and stored in the database.
-
-    Args:
-        run_id: The pipeline run ID.
-        db: Database session (injected).
-
-    Returns:
-        LineageGraphResponse with nodes and edges.
-
-    Raises:
-        HTTPException 404: If the run or lineage graph is not found.
-    """
+    """Retrieve the pre-computed React Flow lineage graph."""
+    _validate_uuid_format(run_id)
     lineage_graph = _get_lineage_record(run_id, db)
     react_flow_data = lineage_graph.react_flow_data
 
@@ -94,25 +81,8 @@ def get_column_lineage(
     column: str = Query(..., description="Column name to trace"),
     db: Session = get_db_dependency(),
 ) -> ColumnLineageResponse:
-    """Trace a column's ancestry back to its source file.
-
-    Reconstructs the lineage recorder from stored graph data and
-    uses it to trace the column through all transformation steps
-    back to the original source file and column.
-
-    Args:
-        run_id: The pipeline run ID.
-        step: Name of the step containing the output column.
-        column: Name of the column to trace.
-        db: Database session (injected).
-
-    Returns:
-        ColumnLineageResponse with source file, source column,
-        and transformation chain.
-
-    Raises:
-        HTTPException 404: If the run, lineage, or column is not found.
-    """
+    """Trace a column's ancestry back to its source file."""
+    _validate_uuid_format(run_id)
     recorder = _reconstruct_recorder(run_id, db)
 
     try:
@@ -154,23 +124,8 @@ def get_impact_analysis(
     column: str = Query(..., description="Column name to analyze"),
     db: Session = get_db_dependency(),
 ) -> ImpactAnalysisResponse:
-    """Analyze the downstream impact of a column.
-
-    Traverses the lineage graph forward from the specified column
-    to find all downstream steps and output columns affected by it.
-
-    Args:
-        run_id: The pipeline run ID.
-        step: Name of the step containing the source column.
-        column: Name of the column to analyze.
-        db: Database session (injected).
-
-    Returns:
-        ImpactAnalysisResponse with affected steps and columns.
-
-    Raises:
-        HTTPException 404: If the run, lineage, or column is not found.
-    """
+    """Analyze the downstream impact of a column."""
+    _validate_uuid_format(run_id)
     recorder = _reconstruct_recorder(run_id, db)
 
     try:
@@ -224,6 +179,17 @@ def _validate_run_exists(run_id: str, db: Session) -> None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline run '{run_id}' not found",
+        )
+
+
+def _validate_uuid_format(value: str) -> None:
+    """Raise 422 if the value is not a valid UUID."""
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid UUID format: '{value}'",
         )
 
 
