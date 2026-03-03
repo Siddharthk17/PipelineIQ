@@ -14,7 +14,6 @@ export function LineageGraphWidget() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Toolbar */}
       <div className="flex items-center justify-between p-2 border-b bg-[var(--bg-surface)]" style={{ borderColor: "var(--widget-border)" }}>
         <div className="flex items-center gap-3">
           <select
@@ -52,7 +51,6 @@ export function LineageGraphWidget() {
         </div>
       </div>
 
-      {/* Graph Area */}
       <div className="flex-1 relative">
         <LineageGraph runId={activeRunId} mode={mode} />
       </div>

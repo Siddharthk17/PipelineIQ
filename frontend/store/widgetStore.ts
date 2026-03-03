@@ -131,12 +131,10 @@ export const useWidgetStore = create<WidgetState>()(
         
         const targetLayout = newWorkspaces[state.activeWorkspaceId];
         
-        // Check if widget is already in the current workspace
         if (getAllWidgets(targetLayout).includes(id)) {
           return { activeWidgetId: id };
         }
         
-        // Add to current workspace
         newWorkspaces[state.activeWorkspaceId] = addWidgetToTree(targetLayout, id, state.activeWidgetId);
         
         return {
@@ -189,17 +187,15 @@ export const useWidgetStore = create<WidgetState>()(
 
         let newWorkspaces = { ...state.workspaces };
 
-        // Remove from current
         const currentLayout = newWorkspaces[state.activeWorkspaceId];
-        newWorkspaces[state.activeWorkspaceId] = removeWidgetFromTree(currentLayout, widgetId);
+        const newLayout = removeWidgetFromTree(currentLayout, widgetId);
+        newWorkspaces[state.activeWorkspaceId] = newLayout;
 
-        // Add to target
         const targetLayout = newWorkspaces[targetWorkspaceId];
         if (!getAllWidgets(targetLayout).includes(widgetId)) {
           newWorkspaces[targetWorkspaceId] = addWidgetToTree(targetLayout, widgetId, null);
         }
 
-        // Update active widget in current workspace
         const remaining = getAllWidgets(newWorkspaces[state.activeWorkspaceId]);
         const newActive = remaining.length > 0 ? remaining[remaining.length - 1] : null;
 

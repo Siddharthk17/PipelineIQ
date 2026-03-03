@@ -9,15 +9,12 @@ Task idempotency: if the same run_id is submitted twice, the task
 checks the current status and only proceeds if PENDING.
 """
 
-# Standard library
 import json
 import logging
 from typing import Dict
 
-# Third-party packages
 import redis
 
-# Internal modules
 from backend.celery_app import celery_app
 from backend.config import settings
 from backend.database import SessionLocal
@@ -47,12 +44,6 @@ def make_redis_progress_callback(run_id: str) -> ProgressCallback:
 
     Channel name: f"pipeline_progress:{run_id}"
     Message format: JSON-serialized StepProgressEvent fields.
-
-    Args:
-        run_id: Unique pipeline run identifier for the channel name.
-
-    Returns:
-        A ProgressCallback that publishes events to Redis pub/sub.
     """
     redis_client = redis.Redis.from_url(settings.REDIS_URL)
     channel = f"pipeline_progress:{run_id}"
@@ -102,13 +93,6 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
 
     This task is idempotent: if the run_id already has a non-PENDING
     status, the task logs a warning and returns early.
-
-    Args:
-        self: Celery task instance (bound task).
-        run_id: The pipeline run ID to execute.
-
-    Returns:
-        Dictionary with run_id and final status.
     """
     db = SessionLocal()
     try:
@@ -176,7 +160,6 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
     parser = PipelineParser()
     config = parser.parse(pipeline_run.yaml_config)
 
-    # Load file paths and metadata for load steps
     uploaded_files = db.query(UploadedFile).all()
     file_paths = {f.id: f.stored_path for f in uploaded_files}
     file_metadata = {
@@ -215,7 +198,6 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         summary.step_results[-1].rows_out if summary.step_results else 0
     )
 
-    # Persist step results
     for idx, result in enumerate(summary.step_results):
         step_record = StepResult(
             pipeline_run_id=pipeline_run.id,
@@ -232,7 +214,6 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         )
         db.add(step_record)
 
-    # Persist lineage graph
     lineage_data = summary.lineage.serialize()
     lineage_record = LineageGraph(
         pipeline_run_id=pipeline_run.id,

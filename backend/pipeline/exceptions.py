@@ -23,14 +23,8 @@ Hierarchy:
         └── StepTimeoutError
 """
 
-# Standard library
 import difflib
 from typing import Any, Dict, List, Optional
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# BASE EXCEPTION
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class PipelineIQError(Exception):
@@ -45,16 +39,10 @@ class PipelineIQError(Exception):
         super().__init__(message)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize the exception to a dictionary for API responses."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
         }
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# CONFIGURATION ERRORS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class PipelineConfigError(PipelineIQError):
@@ -73,7 +61,6 @@ class InvalidYAMLError(PipelineConfigError):
         super().__init__(f"Invalid YAML{location}: {yaml_error}")
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with YAML-specific context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -100,7 +87,6 @@ class MissingRequiredFieldError(PipelineConfigError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with field-specific context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -122,7 +108,6 @@ class DuplicateStepNameError(PipelineConfigError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with duplication context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -151,7 +136,6 @@ class InvalidStepTypeError(PipelineConfigError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with type resolution context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -185,7 +169,6 @@ class InvalidStepReferenceError(PipelineConfigError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with reference resolution context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -215,7 +198,6 @@ class FileNotRegisteredError(PipelineConfigError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with file registration context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -223,12 +205,6 @@ class FileNotRegisteredError(PipelineConfigError):
             "file_id": self.file_id,
             "registered_file_ids": self.registered_file_ids,
         }
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP EXECUTION ERRORS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class StepExecutionError(PipelineIQError):
     """Base for all errors occurring during step execution."""
@@ -238,7 +214,6 @@ class StepExecutionError(PipelineIQError):
         super().__init__(f"Step '{step_name}': {message}")
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with step execution context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -274,7 +249,6 @@ class ColumnNotFoundError(StepExecutionError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with column resolution context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -303,7 +277,6 @@ class InvalidOperatorError(StepExecutionError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with operator context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -339,7 +312,6 @@ class JoinKeyMissingError(StepExecutionError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with join key context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -370,7 +342,6 @@ class AggregationError(StepExecutionError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with aggregation context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -398,7 +369,6 @@ class FileReadError(StepExecutionError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with file read context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -428,7 +398,6 @@ class UnsupportedFileFormatError(StepExecutionError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with file format context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -457,7 +426,6 @@ class StepTimeoutError(StepExecutionError):
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize with timeout context."""
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -467,23 +435,9 @@ class StepTimeoutError(StepExecutionError):
         }
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# UTILITY
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def _find_closest_match(
     target: str, candidates: List[str], cutoff: float = 0.6
 ) -> Optional[str]:
-    """Find the closest string match using difflib sequence matching.
-
-    Args:
-        target: The string to find a match for.
-        candidates: List of possible correct values.
-        cutoff: Minimum similarity ratio (0.0 to 1.0) to consider a match.
-
-    Returns:
-        The closest matching string, or None if no match exceeds the cutoff.
-    """
+    """Find the closest string match using difflib sequence matching."""
     matches = difflib.get_close_matches(target, candidates, n=1, cutoff=cutoff)
     return matches[0] if matches else None

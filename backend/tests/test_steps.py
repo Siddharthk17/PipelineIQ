@@ -1,10 +1,8 @@
 """Tests for the pipeline step executor."""
 
-# Third-party packages
 import pandas as pd
 import pytest
 
-# Internal modules
 from backend.pipeline.exceptions import (
     ColumnNotFoundError,
     JoinKeyMissingError,
@@ -36,10 +34,6 @@ def recorder() -> LineageRecorder:
     """Fresh LineageRecorder instance."""
     return LineageRecorder()
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# FILTER STEP TESTS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestFilterStep:
@@ -180,10 +174,6 @@ class TestFilterStep:
         assert len(result.warnings) > 0
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SELECT STEP TESTS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class TestSelectStep:
     """Tests for the select step executor."""
@@ -217,10 +207,6 @@ class TestSelectStep:
         with pytest.raises(ColumnNotFoundError):
             executor.execute_select(df_registry, config, recorder)
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# RENAME STEP TESTS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestRenameStep:
@@ -273,10 +259,6 @@ class TestRenameStep:
         assert "customer_id" in result.output_df.columns
         assert "status" in result.output_df.columns
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# JOIN STEP TESTS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestJoinStep:
@@ -358,10 +340,6 @@ class TestJoinStep:
         assert exc_info.value.side == "right"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# AGGREGATE STEP TESTS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class TestAggregateStep:
     """Tests for the aggregate step executor."""
@@ -402,10 +380,6 @@ class TestAggregateStep:
         result = executor.execute_aggregate(df_registry, config, recorder)
         assert result.rows_out == sample_sales_df["region"].nunique()
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SORT STEP TESTS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestSortStep:
@@ -458,10 +432,6 @@ class TestSortStep:
         with pytest.raises(ColumnNotFoundError):
             executor.execute_sort(df_registry, config, recorder)
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# EXECUTION RESULT METADATA TESTS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestExecutionResult:

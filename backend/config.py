@@ -5,12 +5,10 @@ at import time. The application crashes at startup if any required
 setting is missing or invalid, preventing runtime configuration errors.
 """
 
-# Standard library
 import logging
 from pathlib import Path
 from typing import List
 
-# Third-party packages
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,31 +29,25 @@ class Settings(BaseSettings):
         case_sensitive=True,
     )
 
-    # ── Application ───────────────────────────────────────────────────────────
     APP_NAME: str = "PipelineIQ"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
-    # ── Database ──────────────────────────────────────────────────────────────
     DATABASE_URL: str = "sqlite:///./pipelineiq.db"
 
-    # ── Redis & Celery ────────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
 
-    # ── File Storage ──────────────────────────────────────────────────────────
     UPLOAD_DIR: Path = Path("./uploads")
     MAX_UPLOAD_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
     ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json"})
 
-    # ── Pipeline Execution ────────────────────────────────────────────────────
     MAX_PIPELINE_STEPS: int = 50
     MAX_ROWS_PER_FILE: int = 1_000_000
     STEP_TIMEOUT_SECONDS: int = 300
 
-    # ── API ───────────────────────────────────────────────────────────────────
     API_PREFIX: str = "/api/v1"
     CORS_ORIGINS: List[str] = ["http://localhost:3000"]
 
@@ -92,7 +84,6 @@ class Settings(BaseSettings):
 # If configuration is invalid, the application crashes here with a clear error.
 settings = Settings()
 
-# Configure root logger based on settings
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",

@@ -4,16 +4,13 @@ Provides endpoints for retrieving the React Flow lineage graph,
 tracing column ancestry, and performing forward impact analysis.
 """
 
-# Standard library
 import logging
 import uuid
 from typing import Any, Dict
 
-# Third-party packages
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-# Internal modules
 from backend.dependencies import get_db_dependency
 from backend.models import LineageGraph, PipelineRun
 from backend.pipeline.lineage import LineageRecorder
@@ -147,11 +144,6 @@ def get_impact_analysis(
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PRIVATE HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def _get_lineage_record(run_id: str, db: Session) -> LineageGraph:
     """Fetch the lineage graph record, raising 404 if not found."""
     _validate_run_exists(run_id, db)
@@ -198,13 +190,6 @@ def _reconstruct_recorder(run_id: str, db: Session) -> LineageRecorder:
 
     Loads the serialized graph from the database and reconstructs
     a LineageRecorder with the full NetworkX graph for querying.
-
-    Args:
-        run_id: The pipeline run ID.
-        db: Database session.
-
-    Returns:
-        LineageRecorder with the reconstructed graph.
     """
     import networkx as nx
 

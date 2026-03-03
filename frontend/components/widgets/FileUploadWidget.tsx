@@ -22,7 +22,7 @@ export function FileUploadWidget() {
       setLastUploaded({ id: data.id, name: data.original_filename, rows: data.row_count || 0 });
       queryClient.invalidateQueries({ queryKey: ["files"] });
     },
-    onError: (error: any) => { // TanStack Query mutation error type {
+    onError: (error: any) => {
       setUploadState("ERROR");
       setErrorMsg(error.message || "Upload failed");
     },

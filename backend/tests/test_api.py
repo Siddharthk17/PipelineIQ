@@ -12,10 +12,6 @@ from fastapi.testclient import TestClient
 from backend.tests.conftest import build_simple_pipeline_yaml, upload_file
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# HEALTH ENDPOINT
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class TestHealthEndpoint:
     """Tests for the /health endpoint."""
@@ -27,10 +23,6 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["status"] in ("ok", "degraded")
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# FILE UPLOAD ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestFileUpload:
@@ -121,10 +113,6 @@ class TestFileDelete:
         assert response.status_code == 404
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PIPELINE VALIDATION ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class TestPipelineValidation:
     """Tests for pipeline validation endpoints."""
@@ -197,10 +185,6 @@ pipeline:
         assert response.status_code in [200, 400, 422]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PIPELINE EXECUTION ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class TestPipelineExecution:
     """Tests for pipeline execution endpoints."""
@@ -251,10 +235,6 @@ class TestPipelineExecution:
         assert data["total"] == 0
         assert data["runs"] == []
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# LINEAGE ENDPOINTS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestLineageEndpoints:

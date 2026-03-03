@@ -5,14 +5,11 @@ Sessions are created per-request via dependency injection in FastAPI
 and must never be shared across threads or async boundaries.
 """
 
-# Standard library
 from typing import Generator
 
-# Third-party packages
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-# Internal modules
 from backend.config import settings
 
 
@@ -44,9 +41,6 @@ def get_db() -> Generator[Session, None, None]:
 
     This is the canonical dependency for FastAPI route handlers.
     The session is rolled back implicitly on exceptions and always closed.
-
-    Yields:
-        A SQLAlchemy Session bound to the application engine.
     """
     db = SessionLocal()
     try:
@@ -58,7 +52,6 @@ def get_db() -> Generator[Session, None, None]:
 def create_all_tables() -> None:
     """Create all tables defined by ORM models.
 
-    Called once at application startup. In production, prefer Alembic
-    migrations. This function exists for development and testing convenience.
+    Called once at application startup. In production, prefer Alembic migrations.
     """
     Base.metadata.create_all(bind=engine)

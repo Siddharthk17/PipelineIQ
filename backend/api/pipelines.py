@@ -4,20 +4,17 @@ Provides endpoints for pipeline validation, execution (async via Celery),
 result retrieval, and real-time progress streaming via Server-Sent Events.
 """
 
-# Standard library
 import asyncio
 import json
 import logging
 import uuid
 from typing import AsyncGenerator
 
-# Third-party packages
 import redis.asyncio as aioredis
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-# Internal modules
 from backend.config import settings
 from backend.dependencies import get_db_dependency
 from backend.models import PipelineRun, PipelineStatus, UploadedFile
@@ -59,15 +56,7 @@ def validate_pipeline(
     request: ValidatePipelineRequest,
     db: Session = get_db_dependency(),
 ) -> ValidatePipelineResponse:
-    """Validate a pipeline configuration against registered files.
-
-    Args:
-        request: Request containing the YAML configuration.
-        db: Database session (injected).
-
-    Returns:
-        Validation result with errors and warnings.
-    """
+    """Validate a pipeline configuration against registered files."""
     parser = PipelineParser()
     config = parser.parse(request.yaml_config)
 
@@ -110,13 +99,6 @@ def run_pipeline(
 
     The endpoint returns immediately with a run_id and PENDING status.
     The actual execution happens asynchronously via a Celery worker.
-
-    Args:
-        request: Request containing YAML config and optional name.
-        db: Database session (injected).
-
-    Returns:
-        RunPipelineResponse with the run_id for tracking.
     """
     parser = PipelineParser()
     config = parser.parse(request.yaml_config)
@@ -152,14 +134,7 @@ def run_pipeline(
 def list_pipeline_runs(
     db: Session = get_db_dependency(),
 ) -> PipelineRunListResponse:
-    """List all pipeline runs ordered by creation time.
-
-    Args:
-        db: Database session (injected).
-
-    Returns:
-        PipelineRunListResponse with all runs.
-    """
+    """List all pipeline runs ordered by creation time."""
     runs = (
         db.query(PipelineRun)
         .order_by(PipelineRun.created_at.desc())
@@ -224,11 +199,6 @@ async def stream_pipeline_progress(
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# SSE EVENT GENERATORS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 async def _live_event_generator(run_id: str) -> AsyncGenerator[str, None]:
     """Subscribe to Redis and yield SSE events until pipeline completes."""
     redis_client = aioredis.from_url(settings.REDIS_URL)
@@ -290,11 +260,9 @@ def _extract_event_type(data: str) -> str:
     """Extract the event type from a JSON message."""
     try:
         parsed = json.loads(data)
-        # Check for terminal events
         event_type = parsed.get("event_type", "")
         if event_type:
             return event_type
-        # Map step status to event type
         step_status = parsed.get("status", "")
         status_to_event = {
             "RUNNING": "step_started",
@@ -324,11 +292,6 @@ def _validate_uuid_format(value: str) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid UUID format: '{value}'",
         )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# RESPONSE BUILDERS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def _ensure_utc(dt):

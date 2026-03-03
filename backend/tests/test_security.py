@@ -11,10 +11,6 @@ from fastapi.testclient import TestClient
 from backend.tests.conftest import upload_file
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# FILE UPLOAD ATTACKS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class TestFileUploadAttacks:
     """Security tests for the file upload endpoint."""
@@ -70,10 +66,6 @@ class TestFileUploadAttacks:
         )
         assert response.status_code in [201, 400, 422]
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# API INJECTION ATTACKS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestAPIInjectionAttacks:

@@ -27,12 +27,10 @@ export function RunMonitorWidget() {
   const totalSteps = activeRun.step_results?.length || 0;
   const completedSteps = activeRun.step_results?.filter(s => s.status === "COMPLETED" || s.status === "FAILED").length || 0;
   
-  // Calculate max duration for proportional bars
   const maxDuration = Math.max(...(activeRun.step_results?.map(s => s.duration_ms || 0) || [1]));
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Header Summary */}
       <div className="flex items-center justify-between p-4 border-b bg-[var(--bg-surface)]" style={{ borderColor: "var(--widget-border)" }}>
         <div>
           <h3 className="text-sm font-bold text-[var(--text-primary)]">{activeRun.name ?? "Unnamed Run"}</h3>
@@ -63,7 +61,6 @@ export function RunMonitorWidget() {
         </div>
       </div>
 
-      {/* Error Banner */}
       {activeRun.error_message && (
         <div className="p-3 bg-[var(--accent-error)]/10 border-b border-[var(--accent-error)]/20 flex items-start gap-2">
           <AlertTriangle className="w-4 h-4 text-[var(--accent-error)] flex-shrink-0 mt-0.5" />
@@ -71,7 +68,6 @@ export function RunMonitorWidget() {
         </div>
       )}
 
-      {/* Steps List */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {activeRun.step_results?.map((step, idx) => {
           const isRunning = step.status === "RUNNING";
@@ -90,7 +86,6 @@ export function RunMonitorWidget() {
                 isRunning ? "bg-[var(--interactive-hover)] border border-[var(--accent-primary)]/30" : "hover:bg-[var(--bg-surface)]"
               } ${isPending ? "opacity-50" : "opacity-100"}`}
             >
-              {/* Status Icon */}
               <div className="w-6 flex justify-center flex-shrink-0 mr-2">
                 {isSuccess && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
                 {isFailed && <XCircle className="w-4 h-4 text-[var(--accent-error)]" />}
@@ -98,7 +93,6 @@ export function RunMonitorWidget() {
                 {isPending && <div className="w-2 h-2 rounded-full border-2 border-[var(--text-secondary)]" />}
               </div>
 
-              {/* Step Info */}
               <div className="flex-1 min-w-0 flex items-center justify-between gap-4">
                 <div className="flex flex-col min-w-0 w-1/3">
                   <span className={`text-sm font-medium truncate ${isRunning ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}>
@@ -109,7 +103,6 @@ export function RunMonitorWidget() {
                   </span>
                 </div>
 
-                {/* Duration Bar */}
                 <div className="flex-1 flex items-center gap-2">
                   {!isPending && (
                     <>
@@ -128,7 +121,6 @@ export function RunMonitorWidget() {
                   )}
                 </div>
 
-                {/* Rows Info */}
                 <div className="w-24 text-right flex flex-col items-end justify-center">
                   {!isPending && (
                     <span className="text-xs font-mono text-[var(--text-secondary)]">

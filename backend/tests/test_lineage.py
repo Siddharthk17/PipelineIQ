@@ -1,9 +1,7 @@
 """Tests for the lineage recorder."""
 
-# Third-party packages
 import pytest
 
-# Internal modules
 from backend.pipeline.lineage import LineageRecorder
 
 

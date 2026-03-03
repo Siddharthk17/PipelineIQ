@@ -6,17 +6,14 @@ signature pattern, returning a StepExecutionResult with timing,
 row counts, and column metadata.
 """
 
-# Standard library
 import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
-# Third-party packages
 import pandas as pd
 
-# Internal modules
 from backend.pipeline.exceptions import (
     AggregationError,
     ColumnNotFoundError,
@@ -45,11 +42,6 @@ from backend.utils.time_utils import measure_ms
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP EXECUTION RESULT
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 @dataclass
 class StepExecutionResult:
     """Result of executing a single pipeline step."""
@@ -64,10 +56,6 @@ class StepExecutionResult:
     duration_ms: int
     warnings: List[str] = field(default_factory=list)
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# FILTER OPERATOR DISPATCH
-# ═══════════════════════════════════════════════════════════════════════════════
 
 # Maps FilterOperator → a callable that takes (pd.Series, value) → pd.Series[bool]
 FILTER_OPERATIONS: Dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] = {
@@ -89,11 +77,6 @@ SUPPORTED_FILE_EXTENSIONS: Dict[str, Callable[..., pd.DataFrame]] = {
     ".csv": pd.read_csv,
     ".json": pd.read_json,
 }
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP EXECUTOR
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class StepExecutor:
@@ -127,16 +110,6 @@ class StepExecutor:
     ) -> StepExecutionResult:
         """Dispatch step execution to the appropriate handler.
 
-        Args:
-            df_registry: Mapping of step name → output DataFrame.
-            config: Typed step configuration.
-            recorder: Active lineage recorder for this pipeline run.
-            file_paths: Mapping of file_id → storage path (for load steps).
-            file_metadata: Mapping of file_id → metadata dict (for load steps).
-
-        Returns:
-            StepExecutionResult with the output DataFrame and metadata.
-
         Raises:
             ValueError: If the step type has no registered executor.
         """
@@ -151,8 +124,6 @@ class StepExecutor:
             return executor(df_registry, config, recorder, file_paths or {}, file_metadata or {})
         return executor(df_registry, config, recorder)
 
-    # ── Load ──────────────────────────────────────────────────────────────────
-
     def execute_load(
         self,
         df_registry: Dict[str, pd.DataFrame],
@@ -162,16 +133,6 @@ class StepExecutor:
         file_metadata: Dict[str, Dict[str, str]],
     ) -> StepExecutionResult:
         """Load a file into a DataFrame.
-
-        Args:
-            df_registry: Step name → DataFrame mapping (updated in place).
-            config: Load step configuration with file_id.
-            recorder: Lineage recorder.
-            file_paths: Mapping of file_id → storage path.
-            file_metadata: Mapping of file_id → metadata including filename.
-
-        Returns:
-            StepExecutionResult with the loaded DataFrame.
 
         Raises:
             FileReadError: If the file cannot be read.
@@ -227,8 +188,6 @@ class StepExecutor:
                 reason=str(exc),
             ) from exc
 
-    # ── Filter ────────────────────────────────────────────────────────────────
-
     def execute_filter(
         self,
         df_registry: Dict[str, pd.DataFrame],
@@ -236,14 +195,6 @@ class StepExecutor:
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Apply a row filter to the input DataFrame.
-
-        Args:
-            df_registry: Step name → DataFrame mapping.
-            config: Filter step configuration.
-            recorder: Lineage recorder.
-
-        Returns:
-            StepExecutionResult with the filtered DataFrame.
 
         Raises:
             ColumnNotFoundError: If the filter column doesn't exist.
@@ -300,8 +251,6 @@ class StepExecutor:
             )
         return operation
 
-    # ── Select ────────────────────────────────────────────────────────────────
-
     def execute_select(
         self,
         df_registry: Dict[str, pd.DataFrame],
@@ -309,14 +258,6 @@ class StepExecutor:
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Select specific columns from the input DataFrame.
-
-        Args:
-            df_registry: Step name → DataFrame mapping.
-            config: Select step configuration with column list.
-            recorder: Lineage recorder.
-
-        Returns:
-            StepExecutionResult with projected DataFrame.
 
         Raises:
             ColumnNotFoundError: If any selected column doesn't exist.
@@ -349,7 +290,7 @@ class StepExecutor:
             duration_ms=measure_ms(start),
         )
 
-    # ── Rename ────────────────────────────────────────────────────────────────
+    # Rename
 
     def execute_rename(
         self,
@@ -358,14 +299,6 @@ class StepExecutor:
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Rename columns in the input DataFrame.
-
-        Args:
-            df_registry: Step name → DataFrame mapping.
-            config: Rename step configuration with mapping.
-            recorder: Lineage recorder.
-
-        Returns:
-            StepExecutionResult with renamed columns.
 
         Raises:
             ColumnNotFoundError: If any source column doesn't exist.
@@ -397,8 +330,6 @@ class StepExecutor:
             duration_ms=measure_ms(start),
         )
 
-    # ── Join ──────────────────────────────────────────────────────────────────
-
     def execute_join(
         self,
         df_registry: Dict[str, pd.DataFrame],
@@ -406,14 +337,6 @@ class StepExecutor:
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Join two DataFrames on a specified key.
-
-        Args:
-            df_registry: Step name → DataFrame mapping.
-            config: Join step configuration.
-            recorder: Lineage recorder.
-
-        Returns:
-            StepExecutionResult with the joined DataFrame.
 
         Raises:
             JoinKeyMissingError: If the join key is missing from either side.
@@ -470,8 +393,6 @@ class StepExecutor:
                 available_columns=list(df.columns),
             )
 
-    # ── Aggregate ─────────────────────────────────────────────────────────────
-
     def execute_aggregate(
         self,
         df_registry: Dict[str, pd.DataFrame],
@@ -479,14 +400,6 @@ class StepExecutor:
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Perform group-by aggregation on the input DataFrame.
-
-        Args:
-            df_registry: Step name → DataFrame mapping.
-            config: Aggregate step configuration.
-            recorder: Lineage recorder.
-
-        Returns:
-            StepExecutionResult with the aggregated DataFrame.
 
         Raises:
             ColumnNotFoundError: If a group-by or aggregation column doesn't exist.
@@ -559,8 +472,6 @@ class StepExecutor:
         ]
         return grouped.reset_index()
 
-    # ── Sort ──────────────────────────────────────────────────────────────────
-
     def execute_sort(
         self,
         df_registry: Dict[str, pd.DataFrame],
@@ -568,14 +479,6 @@ class StepExecutor:
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Sort the input DataFrame by a column.
-
-        Args:
-            df_registry: Step name → DataFrame mapping.
-            config: Sort step configuration.
-            recorder: Lineage recorder.
-
-        Returns:
-            StepExecutionResult with sorted DataFrame.
 
         Raises:
             ColumnNotFoundError: If the sort column doesn't exist.
@@ -609,24 +512,13 @@ class StepExecutor:
             duration_ms=measure_ms(start),
         )
 
-    # ── Save ──────────────────────────────────────────────────────────────────
-
     def execute_save(
         self,
         df_registry: Dict[str, pd.DataFrame],
         config: SaveStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
-        """Save the input DataFrame to a file.
-
-        Args:
-            df_registry: Step name → DataFrame mapping.
-            config: Save step configuration with filename.
-            recorder: Lineage recorder.
-
-        Returns:
-            StepExecutionResult with the unchanged DataFrame.
-        """
+        """Save the input DataFrame to a file."""
         start = time.perf_counter()
         input_df = df_registry[config.input]
         columns = list(input_df.columns)
@@ -653,8 +545,6 @@ class StepExecutor:
             columns_out=columns,
             duration_ms=measure_ms(start),
         )
-
-    # ── Shared Validation ─────────────────────────────────────────────────────
 
     def _validate_column_exists(
         self,

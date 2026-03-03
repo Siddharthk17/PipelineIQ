@@ -5,13 +5,11 @@ column length limits. JSON columns use the native JSON type for structured
 data storage and querying.
 """
 
-# Standard library
 import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 from typing import List, Optional
 
-# Third-party packages
 from sqlalchemy import (
     DateTime,
     Enum as SQLEnum,
@@ -24,7 +22,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-# Internal modules
 from backend.database import Base
 
 
@@ -48,7 +45,6 @@ class StepStatus(str, PyEnum):
 
 
 def _generate_uuid() -> str:
-    """Generate a new UUID4 string for use as a primary key."""
     return str(uuid.uuid4())
 
 
@@ -83,7 +79,6 @@ class PipelineRun(Base):
     total_rows_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Relationships
     step_results: Mapped[List["StepResult"]] = relationship(
         "StepResult",
         back_populates="pipeline_run",
@@ -99,12 +94,7 @@ class PipelineRun(Base):
 
     @property
     def duration_ms(self) -> Optional[int]:
-        """Calculate total execution duration in milliseconds.
-
-        Returns:
-            Duration in milliseconds if both started_at and completed_at
-            are set, otherwise None.
-        """
+        """Calculate total execution duration in milliseconds."""
         if self.started_at and self.completed_at:
             delta = self.completed_at - self.started_at
             return int(delta.total_seconds() * 1000)
@@ -143,7 +133,6 @@ class StepResult(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # Relationships
     pipeline_run: Mapped["PipelineRun"] = relationship(
         "PipelineRun", back_populates="step_results"
     )
@@ -171,7 +160,6 @@ class LineageGraph(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # Relationships
     pipeline_run: Mapped["PipelineRun"] = relationship(
         "PipelineRun", back_populates="lineage_graph"
     )

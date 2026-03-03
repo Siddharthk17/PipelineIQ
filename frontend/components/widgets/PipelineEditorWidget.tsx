@@ -47,7 +47,6 @@ export function PipelineEditorWidget() {
     },
   });
 
-  // Debounce validation
   useEffect(() => {
     setIsValidating(true);
     const timer = setTimeout(() => {
@@ -58,7 +57,7 @@ export function PipelineEditorWidget() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
-  // Handle Ctrl+Enter
+  // Handle Ctrl+Enter to trigger pipeline:run event
   useEffect(() => {
     const handleRun = () => {
       if (validation?.is_valid) {
@@ -83,7 +82,6 @@ export function PipelineEditorWidget() {
 
   return (
     <div className="flex h-full overflow-hidden">
-      {/* Left Panel: Editor */}
       <div className="w-[60%] flex flex-col border-r" style={{ borderColor: "var(--widget-border)" }}>
         <div className="flex-1 overflow-auto bg-[var(--bg-base)]">
           <CodeMirror
@@ -124,9 +122,7 @@ export function PipelineEditorWidget() {
         </div>
       </div>
 
-      {/* Right Panel: Validation & Files */}
       <div className="w-[40%] flex flex-col bg-[var(--bg-surface)] overflow-hidden">
-        {/* Validation Status */}
         <div className="p-3 border-b" style={{ borderColor: "var(--widget-border)" }}>
           <h3 className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider mb-2">Validation</h3>
           {isValidating ? (
@@ -157,7 +153,6 @@ export function PipelineEditorWidget() {
           )}
         </div>
 
-        {/* File Reference Helper */}
         <div className="flex-1 p-3 overflow-y-auto">
           <h3 className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider mb-2">Available Files</h3>
           {files?.length === 0 ? (

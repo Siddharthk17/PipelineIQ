@@ -1,9 +1,7 @@
 """Tests for the pipeline YAML parser and validator."""
 
-# Third-party packages
 import pytest
 
-# Internal modules
 from backend.pipeline.exceptions import InvalidYAMLError, MissingRequiredFieldError
 from backend.pipeline.parser import (
     AggregateStepConfig,

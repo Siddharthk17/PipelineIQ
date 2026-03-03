@@ -5,19 +5,16 @@ extension, and content parsing. Uploaded files are stored on disk
 with metadata persisted to the database.
 """
 
-# Standard library
 import logging
 import os
 import uuid
 from pathlib import Path
 from typing import List
 
-# Third-party packages
 import pandas as pd
 from fastapi import APIRouter, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-# Internal modules
 from backend.config import settings
 from backend.dependencies import get_db_dependency
 from backend.models import UploadedFile
@@ -153,12 +150,10 @@ def delete_file(
             detail=f"File '{file_id}' not found",
         )
 
-    # Delete from disk
     stored_path = Path(uploaded_file.stored_path)
     if stored_path.exists():
         stored_path.unlink()
 
-    # Delete from database
     db.delete(uploaded_file)
     db.commit()
 
@@ -202,11 +197,6 @@ def preview_file(
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PRIVATE HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def _validate_uuid_format(value: str) -> None:
     """Raise 422 if the value is not a valid UUID."""
     try:
@@ -236,7 +226,7 @@ async def _read_with_size_limit(file: UploadFile) -> bytes:
     max_size = settings.MAX_UPLOAD_SIZE_BYTES
     chunks: list[bytes] = []
     total_read = 0
-    chunk_size = 1024 * 1024  # 1MB chunks
+    chunk_size = 1024 * 1024
 
     while True:
         chunk = await file.read(chunk_size)

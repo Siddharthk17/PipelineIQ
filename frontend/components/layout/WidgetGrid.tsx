@@ -4,7 +4,6 @@ import React from "react";
 import { useWidgetStore, LayoutNode, getAllWidgets } from "@/store/widgetStore";
 import { WidgetShell } from "../widgets/WidgetShell";
 
-// Import all widgets
 import { QuickStatsWidget } from "../widgets/QuickStatsWidget";
 import { FileRegistryWidget } from "../widgets/FileRegistryWidget";
 import { FileUploadWidget } from "../widgets/FileUploadWidget";

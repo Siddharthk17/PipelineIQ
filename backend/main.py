@@ -5,21 +5,18 @@ middleware, route mounting, and health checks. This is the single
 entry point for the application.
 """
 
-# Standard library
 import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-# Third-party packages
 import redis
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-# Internal modules
 from backend.api.router import api_router
 from backend.config import settings
 from backend.database import create_all_tables, engine
@@ -28,24 +25,9 @@ from backend.pipeline.exceptions import PipelineIQError
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# LIFESPAN
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Application lifespan handler for startup and shutdown.
-
-    Startup:
-        - Creates database tables
-        - Validates upload directory exists and is writable
-        - Logs application start with version and config summary
-
-    Shutdown:
-        - Logs clean application shutdown
-    """
-    # Startup
+    """Application lifespan handler for startup and shutdown."""
     logger.info(
         "Starting %s v%s (debug=%s, log_level=%s)",
         settings.APP_NAME, settings.APP_VERSION,
@@ -57,7 +39,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     yield
 
-    # Shutdown
     logger.info("Shutting down %s", settings.APP_NAME)
     engine.dispose()
     logger.info("Application shutdown complete")
@@ -79,11 +60,6 @@ def _validate_upload_dir() -> None:
         raise
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# APPLICATION
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 app = FastAPI(
     title="PipelineIQ API",
     description=(
@@ -98,11 +74,6 @@ app = FastAPI(
         "url": "https://github.com/pipelineiq",
     },
 )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# EXCEPTION HANDLERS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 @app.exception_handler(PipelineIQError)
@@ -173,11 +144,6 @@ async def generic_error_handler(
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# MIDDLEWARE
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -207,11 +173,6 @@ async def timing_middleware(request: Request, call_next):
     return response
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# ROUTES
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
 
@@ -222,11 +183,7 @@ app.include_router(api_router, prefix=settings.API_PREFIX)
     description="Checks actual DB and Redis connectivity.",
 )
 def health_check() -> dict:
-    """Health check endpoint that verifies DB and Redis connectivity.
-
-    Returns:
-        Dictionary with status, version, and connectivity checks.
-    """
+    """Health check endpoint that verifies DB and Redis connectivity."""
     db_status = _check_db_health()
     redis_status = _check_redis_health()
     overall = "ok" if db_status == "ok" and redis_status == "ok" else "degraded"

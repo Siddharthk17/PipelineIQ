@@ -13,10 +13,6 @@ from backend.pipeline.lineage import LineageRecorder
 from backend.tests.conftest import upload_file
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# UPLOAD PERFORMANCE
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class TestUploadPerformance:
     """Performance tests for file upload."""
@@ -61,10 +57,6 @@ class TestUploadPerformance:
         assert duration < 10.0, f"Upload took {duration:.2f}s (limit: 10s)"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# LINEAGE PERFORMANCE
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 class TestLineagePerformance:
     """Performance tests for lineage graph operations."""
@@ -102,10 +94,6 @@ class TestLineagePerformance:
         assert duration < 0.1, f"Serialize took {duration:.2f}s (limit: 0.1s)"
         assert "graph_data" in data
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# CONCURRENT UPLOAD SAFETY
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestConcurrentUploads:

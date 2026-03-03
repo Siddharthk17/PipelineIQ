@@ -27,7 +27,6 @@ export function FileRegistryWidget() {
 
   const handleCopyId = (id: string) => {
     navigator.clipboard.writeText(id);
-    // In a real app, show a toast here
   };
 
   if (isLoading) return <div className="p-4 text-[var(--text-secondary)]">Loading files...</div>;

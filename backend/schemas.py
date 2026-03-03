@@ -5,18 +5,11 @@ validators for non-obvious constraints, and Config examples
 for interactive API documentation.
 """
 
-# Standard library
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-# Third-party packages
 import yaml
 from pydantic import BaseModel, Field, field_validator
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# FILE SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class FileUploadResponse(BaseModel):
@@ -60,11 +53,6 @@ class FileListResponse(BaseModel):
         ..., description="List of all uploaded files"
     )
     total: int = Field(..., description="Total number of uploaded files")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# PIPELINE SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class RunPipelineRequest(BaseModel):
@@ -225,11 +213,6 @@ class PipelineRunListResponse(BaseModel):
     total: int = Field(..., description="Total number of runs")
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# LINEAGE SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class ReactFlowNodeResponse(BaseModel):
     """A single node in the React Flow lineage visualization."""
 
@@ -303,11 +286,6 @@ class ImpactAnalysisResponse(BaseModel):
     affected_output_columns: List[str] = Field(
         ..., description="All output columns derived from this column"
     )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# HEALTH & ERROR SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class HealthResponse(BaseModel):

@@ -11,20 +11,13 @@ Node naming convention (consistent everywhere):
     Output file:     "output::{step_name}::{filename}"
 """
 
-# Standard library
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-# Third-party packages
 import networkx as nx
 
 logger = logging.getLogger(__name__)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# NODE ID BUILDERS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def _file_node_id(file_id: str) -> str:
@@ -45,11 +38,6 @@ def _step_node_id(step_name: str) -> str:
 def _output_node_id(step_name: str, filename: str) -> str:
     """Build an output file node ID."""
     return f"output::{step_name}::{filename}"
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# RESULT DATACLASSES
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 @dataclass
@@ -111,14 +99,9 @@ class ReactFlowGraph:
     edges: List[ReactFlowEdge]
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# LAYOUT CONSTANTS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 LAYER_X_SPACING: int = 300
 NODE_Y_SPACING: int = 80
 
-# Node type → React Flow type mapping
 _NODE_TYPE_MAP: Dict[str, str] = {
     "source_file": "sourceFile",
     "source_column": "columnNode",
@@ -126,11 +109,6 @@ _NODE_TYPE_MAP: Dict[str, str] = {
     "output_column": "columnNode",
     "output_file": "outputFile",
 }
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# LINEAGE RECORDER
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class LineageRecorder:
@@ -146,8 +124,6 @@ class LineageRecorder:
     def __init__(self) -> None:
         self.graph: nx.DiGraph = nx.DiGraph()
 
-    # ── Recording Methods ─────────────────────────────────────────────────────
-
     def record_load(
         self,
         file_id: str,
@@ -156,18 +132,7 @@ class LineageRecorder:
         columns: List[str],
         dtypes: Dict[str, str],
     ) -> None:
-        """Record a file load step in the lineage graph.
-
-        Creates a file node and one column node per column, with edges
-        from the file to each column.
-
-        Args:
-            file_id: Unique identifier of the uploaded file.
-            file_name: Original filename for display purposes.
-            step_name: Name of the load step.
-            columns: List of column names loaded from the file.
-            dtypes: Mapping of column name to pandas dtype string.
-        """
+        """Record a file load step in the lineage graph."""
         file_node = _file_node_id(file_id)
         step_node = _step_node_id(step_name)
 
@@ -208,16 +173,7 @@ class LineageRecorder:
         input_step: str,
         columns: List[str],
     ) -> None:
-        """Record a step that passes all columns through unchanged.
-
-        Used for filter and sort steps that change rows but not columns.
-
-        Args:
-            step_name: Name of this step.
-            step_type: Type of this step (e.g., "filter", "sort").
-            input_step: Name of the step providing input data.
-            columns: List of column names passing through.
-        """
+        """Record a step that passes all columns through unchanged (filter/sort)."""
         step_node = _step_node_id(step_name)
         self._add_node(step_node, {
             "node_type": "step",
@@ -254,12 +210,6 @@ class LineageRecorder:
 
         Dropped columns get no output edge, effectively pruning them
         from the lineage graph.
-
-        Args:
-            step_name: Name of this select step.
-            input_step: Name of the step providing input data.
-            kept_columns: Columns that are kept in the output.
-            dropped_columns: Columns that are removed from the output.
         """
         step_node = _step_node_id(step_name)
         self._add_node(step_node, {
@@ -302,12 +252,6 @@ class LineageRecorder:
 
         Renamed columns get edges from old name to new name.
         Unchanged columns pass through with the same name.
-
-        Args:
-            step_name: Name of this rename step.
-            input_step: Name of the step providing input data.
-            rename_mapping: Mapping of old column name to new column name.
-            all_columns: All input columns (both renamed and unchanged).
         """
         step_node = _step_node_id(step_name)
         self._add_node(step_node, {
@@ -350,16 +294,6 @@ class LineageRecorder:
 
         Both left and right columns flow into the step node. Join key
         edges are marked with an is_join_key attribute.
-
-        Args:
-            step_name: Name of this join step.
-            left_step: Name of the left input step.
-            right_step: Name of the right input step.
-            left_cols: Column names from the left DataFrame.
-            right_cols: Column names from the right DataFrame.
-            output_cols: Column names in the joined output.
-            join_key: Column name used as the join key.
-            how: Join method (inner, left, right, outer).
         """
         step_node = _step_node_id(step_name)
         self._add_node(step_node, {
@@ -399,13 +333,6 @@ class LineageRecorder:
 
         Group-by columns pass through. Aggregated columns create new
         output column nodes with computed names.
-
-        Args:
-            step_name: Name of this aggregate step.
-            input_step: Name of the step providing input data.
-            group_by_cols: Columns used for grouping.
-            aggregations: List of {"column": ..., "function": ..., "alias": ...}.
-            output_cols: All output column names after aggregation.
         """
         step_node = _step_node_id(step_name)
         self._add_node(step_node, {
@@ -420,12 +347,10 @@ class LineageRecorder:
             input_col = _col_node_id(input_step, col)
             self.graph.add_edge(input_col, step_node)
 
-        # Aggregated columns
         for agg in aggregations:
             input_col = _col_node_id(input_step, agg["column"])
             self.graph.add_edge(input_col, step_node)
 
-        # Output columns
         for col in output_cols:
             output_col = _col_node_id(step_name, col)
             self._add_node(output_col, {
@@ -452,12 +377,6 @@ class LineageRecorder:
 
         Creates an output file node with edges from the last column
         nodes through the step node.
-
-        Args:
-            step_name: Name of this save step.
-            input_step: Name of the step providing input data.
-            filename: Output filename.
-            columns: Column names being saved.
         """
         step_node = _step_node_id(step_name)
         output_file = _output_node_id(step_name, filename)
@@ -486,8 +405,6 @@ class LineageRecorder:
             step_name, filename, len(columns),
         )
 
-    # ── Query Methods ─────────────────────────────────────────────────────────
-
     def get_column_ancestry(
         self, output_step_name: str, column_name: str
     ) -> ColumnLineage:
@@ -496,14 +413,6 @@ class LineageRecorder:
         Traverses the graph from the output column node backward
         through all ancestors, collecting transformation steps and
         identifying the original source file and column.
-
-        Args:
-            output_step_name: Name of the step containing the column.
-            column_name: Name of the column to trace.
-
-        Returns:
-            ColumnLineage with source file, source column, and the
-            complete transformation chain.
         """
         target_node = _col_node_id(output_step_name, column_name)
         ancestors = nx.ancestors(self.graph, target_node)
@@ -512,13 +421,11 @@ class LineageRecorder:
         source_column = column_name
         transformation_chain: List[TransformationStep] = []
 
-        # Collect step nodes from ancestors in topological order
         step_ancestors = [
             node for node in ancestors
             if self.graph.nodes[node].get("node_type") == "step"
         ]
 
-        # Sort by topological order
         topo_order = list(nx.topological_sort(self.graph))
         topo_index = {node: idx for idx, node in enumerate(topo_order)}
         step_ancestors.sort(key=lambda n: topo_index.get(n, 0))
@@ -531,7 +438,6 @@ class LineageRecorder:
                 detail=attrs.get("label", ""),
             ))
 
-        # Find source file
         file_ancestors = [
             node for node in ancestors
             if self.graph.nodes[node].get("node_type") == "source_file"
@@ -539,7 +445,6 @@ class LineageRecorder:
         if file_ancestors:
             source_file = self.graph.nodes[file_ancestors[0]].get("label", "unknown")
 
-        # Find source column (first column node in ancestry)
         col_ancestors = [
             node for node in ancestors
             if self.graph.nodes[node].get("node_type") == "source_column"
@@ -563,13 +468,6 @@ class LineageRecorder:
 
         Traverses the graph forward from a column node to find all
         steps and output columns that depend on it.
-
-        Args:
-            step_name: Name of the step containing the source column.
-            column_name: Name of the column to analyze.
-
-        Returns:
-            ImpactAnalysis with affected steps and output columns.
         """
         source_node = _col_node_id(step_name, column_name)
         descendants = nx.descendants(self.graph, source_node)
@@ -595,8 +493,6 @@ class LineageRecorder:
             affected_output_columns=affected_output_columns,
         )
 
-    # ── React Flow Export ─────────────────────────────────────────────────────
-
     def to_react_flow_format(self) -> ReactFlowGraph:
         """Convert the lineage graph to React Flow visualization format.
 
@@ -604,9 +500,6 @@ class LineageRecorder:
         position. Nodes are assigned layers by their position in the
         topological ordering, and distributed evenly on the Y axis
         within each layer.
-
-        Returns:
-            ReactFlowGraph with positioned nodes and styled edges.
         """
         nodes = self._build_react_flow_nodes()
         edges = self._build_react_flow_edges()
@@ -689,14 +582,11 @@ class LineageRecorder:
 
         return edges
 
-    # ── Serialization ─────────────────────────────────────────────────────────
-
     def serialize(self) -> Dict[str, Any]:
         """Serialize the lineage graph for database storage.
 
-        Returns:
-            Dictionary containing both raw graph data (node-link format)
-            and pre-computed React Flow layout for fast API responses.
+        Returns both raw graph data (node-link format) and pre-computed
+        React Flow layout for fast API responses.
         """
         react_flow = self.to_react_flow_format()
         return {
@@ -723,8 +613,6 @@ class LineageRecorder:
                 ],
             },
         }
-
-    # ── Private Helpers ───────────────────────────────────────────────────────
 
     def _add_node(self, node_id: str, attrs: Dict[str, Any]) -> None:
         """Add a node to the graph with the given attributes."""

@@ -29,7 +29,6 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
 
   const currentLayout = workspaces[activeWorkspaceId];
 
-  // Check if widget is in the current layout tree
   const isWidgetInLayout = (node: unknown, id: string): boolean => {
     if (!node || typeof node !== 'object') return false;
     const n = node as Record<string, unknown>;
@@ -128,7 +127,6 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--widget-border)' }}>
           <Search className="w-5 h-5 shrink-0" style={{ color: 'var(--text-secondary)' }} />
           <input
@@ -145,7 +143,6 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
           </button>
         </div>
 
-        {/* Results */}
         <div className="max-h-72 overflow-y-auto py-2">
           {filtered.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
@@ -171,7 +168,6 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
           )}
         </div>
 
-        {/* Footer hint */}
         <div
           className="px-4 py-2 border-t text-xs flex gap-4"
           style={{ borderColor: 'var(--widget-border)', color: 'var(--text-secondary)' }}

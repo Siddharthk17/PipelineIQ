@@ -66,7 +66,6 @@ export function WidgetShell({ config, isActive, onClick, onPointerEnter, onPoint
           boxShadow: isDragOver ? "0 0 15px var(--interactive-active)" : isActive ? "0 0 15px var(--interactive-hover)" : "var(--widget-shadow)",
         }}
       >
-        {/* Header */}
         <div
           draggable
           onDragStart={handleDragStart}
@@ -88,7 +87,6 @@ export function WidgetShell({ config, isActive, onClick, onPointerEnter, onPoint
           </div>
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-hidden relative p-3">
           {children}
         </div>

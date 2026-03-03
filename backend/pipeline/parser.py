@@ -6,27 +6,19 @@ set of rules. Returns structured validation results with actionable
 error messages and suggestions.
 """
 
-# Standard library
 import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Literal, Optional, Set, Union
 
-# Third-party packages
 import yaml
 
-# Internal modules
 from backend.config import settings
 from backend.pipeline.exceptions import InvalidYAMLError, MissingRequiredFieldError
 from backend.utils.string_utils import find_closest_column, is_valid_identifier
 
 logger = logging.getLogger(__name__)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ENUMS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class StepType(str, Enum):
@@ -78,11 +70,6 @@ class SortOrder(str, Enum):
 VALID_AGGREGATION_FUNCTIONS = frozenset({
     "sum", "mean", "min", "max", "count", "median", "std", "var", "first", "last",
 })
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP CONFIG DATACLASSES
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 @dataclass
@@ -163,11 +150,6 @@ class SaveStepConfig(StepConfig):
     filename: str = ""
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PIPELINE CONFIG
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 @dataclass
 class PipelineConfig:
     """Fully typed pipeline configuration parsed from YAML."""
@@ -175,11 +157,6 @@ class PipelineConfig:
     name: str
     description: Optional[str]
     steps: List[StepConfig]
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# VALIDATION RESULT
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 @dataclass
@@ -209,10 +186,6 @@ class ValidationResult:
     warnings: List[ValidationWarning] = field(default_factory=list)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# STEP TYPE → CONFIG CLASS MAPPING
-# ═══════════════════════════════════════════════════════════════════════════════
-
 _STEP_CONFIG_MAP: Dict[StepType, type] = {
     StepType.LOAD: LoadStepConfig,
     StepType.FILTER: FilterStepConfig,
@@ -225,11 +198,6 @@ _STEP_CONFIG_MAP: Dict[StepType, type] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PARSER
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 class PipelineParser:
     """Parses YAML pipeline configurations into typed PipelineConfig objects.
 
@@ -240,13 +208,6 @@ class PipelineParser:
 
     def parse(self, yaml_string: str) -> PipelineConfig:
         """Parse a YAML string into a typed PipelineConfig.
-
-        Args:
-            yaml_string: Complete YAML pipeline configuration.
-
-        Returns:
-            Fully typed PipelineConfig with all steps parsed into their
-            specific dataclass types.
 
         Raises:
             InvalidYAMLError: If the YAML cannot be parsed.
@@ -262,18 +223,8 @@ class PipelineParser:
     ) -> ValidationResult:
         """Run all validation checks on a parsed pipeline configuration.
 
-        Performs 13 validation checks covering naming, references, types,
-        operators, aggregations, and structural constraints. Returns a
-        ValidationResult with errors and warnings rather than raising,
+        Returns a ValidationResult with errors and warnings rather than raising,
         so all issues can be reported at once.
-
-        Args:
-            config: Parsed pipeline configuration to validate.
-            registered_file_ids: Set of file IDs that have been uploaded
-                and are available for load steps.
-
-        Returns:
-            ValidationResult with is_valid, errors, and warnings.
         """
         errors: List[ValidationError] = []
         warnings: List[ValidationWarning] = []
@@ -296,8 +247,6 @@ class PipelineParser:
             errors=errors,
             warnings=warnings,
         )
-
-    # ── YAML Parsing ──────────────────────────────────────────────────────────
 
     def _parse_yaml(self, yaml_string: str) -> dict:
         """Parse raw YAML string into a dictionary."""
@@ -478,8 +427,6 @@ class PipelineParser:
             by=raw.get("by", ""),
             order=order,
         )
-
-    # ── Validation Checks ─────────────────────────────────────────────────────
 
     def _check_pipeline_name(
         self, config: PipelineConfig, errors: List[ValidationError]

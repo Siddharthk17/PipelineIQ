@@ -7,7 +7,6 @@ know how progress is reported (Redis pub/sub, SSE, logs) — pure
 business logic with no infrastructure coupling.
 """
 
-# Standard library
 import logging
 import time
 import uuid
@@ -15,10 +14,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 
-# Third-party packages
 import pandas as pd
 
-# Internal modules
 from backend.pipeline.exceptions import StepExecutionError
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import (
@@ -30,11 +27,6 @@ from backend.pipeline.steps import StepExecutionResult, StepExecutor
 from backend.utils.time_utils import format_duration, measure_ms
 
 logger = logging.getLogger(__name__)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# ENUMS & DATA CLASSES
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 class PipelineStatus(str, Enum):
@@ -88,11 +80,6 @@ class PipelineExecutionSummary:
     error: Optional[StepExecutionError] = None
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PIPELINE RUNNER
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
 def _noop_progress_callback(event: StepProgressEvent) -> None:
     """Default no-op progress callback used when none is provided."""
     pass
@@ -122,21 +109,7 @@ class PipelineRunner:
         run_id: Optional[str] = None,
         progress_callback: Optional[ProgressCallback] = None,
     ) -> PipelineExecutionSummary:
-        """Execute a complete pipeline from a parsed configuration.
-
-        Args:
-            config: Parsed and validated PipelineConfig.
-            file_paths: Mapping of file_id → storage path for load steps.
-            file_metadata: Mapping of file_id → metadata dict for load steps.
-            run_id: Unique run identifier. Generated if not provided.
-            progress_callback: Optional callback for progress events.
-                Follows dependency inversion — the runner doesn't know
-                how progress is reported.
-
-        Returns:
-            PipelineExecutionSummary with all step results, lineage,
-            timing, and error information.
-        """
+        """Execute a complete pipeline from a parsed configuration."""
         run_id = run_id or str(uuid.uuid4())
         callback = progress_callback or _noop_progress_callback
         recorder = LineageRecorder()

@@ -4,13 +4,11 @@ Provides deterministic sample DataFrames, in-memory SQLite DB sessions,
 FastAPI test clients, and pre-configured LineageRecorder instances.
 """
 
-# Standard library
 import io
 import os
 from typing import Generator
 from unittest.mock import MagicMock, patch
 
-# Third-party packages
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -18,16 +16,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-# Internal modules
 from backend.database import Base, get_db
 from backend.main import app
 import backend.models  # noqa: F401 — ensure ORM models are registered with Base.metadata
 from backend.pipeline.lineage import LineageRecorder
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# DATABASE FIXTURES
-# ═══════════════════════════════════════════════════════════════════════════════
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
@@ -81,10 +74,6 @@ def client(test_db: Session, tmp_path) -> TestClient:
 
     app.dependency_overrides.clear()
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# SAMPLE DATA FIXTURES
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 @pytest.fixture()
@@ -172,10 +161,6 @@ def sample_products_df() -> pd.DataFrame:
     })
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# CSV / JSON BYTE FIXTURES
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 @pytest.fixture()
 def sales_csv_bytes(sample_sales_df: pd.DataFrame) -> bytes:
@@ -195,20 +180,12 @@ def sample_json_bytes() -> bytes:
     return b'[{"id":1,"name":"Alice","value":100},{"id":2,"name":"Bob","value":200}]'
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# LINEAGE FIXTURE
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 @pytest.fixture()
 def lineage_recorder() -> LineageRecorder:
     """Fresh LineageRecorder instance for each test."""
     return LineageRecorder()
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# FILE UPLOAD HELPERS
-# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def upload_file(client: TestClient, csv_bytes: bytes, filename: str = "test.csv") -> str:
