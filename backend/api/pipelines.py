@@ -11,7 +11,7 @@ import uuid
 from typing import AsyncGenerator
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ from backend.dependencies import get_db_dependency
 from backend.models import PipelineRun, PipelineStatus, UploadedFile
 from datetime import timezone
 from backend.pipeline.parser import PipelineParser
+from backend.pipeline.planner import generate_execution_plan
 from backend.schemas import (
     PipelineRunListResponse,
     PipelineRunResponse,
@@ -32,8 +33,15 @@ from backend.schemas import (
     ValidationWarningDetail,
 )
 from backend.tasks.pipeline_tasks import execute_pipeline_task
+from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
+
+
+def _as_uuid(val):
+    """Convert str or uuid.UUID to uuid.UUID for DB queries."""
+    return val if isinstance(val, uuid.UUID) else uuid.UUID(val)
+
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -52,15 +60,18 @@ _TERMINAL_EVENT_TYPES = frozenset({
     summary="Validate pipeline configuration",
     description="Validate a YAML pipeline configuration without executing it.",
 )
+@limiter.limit(settings.RATE_LIMIT_VALIDATION)
 def validate_pipeline(
-    request: ValidatePipelineRequest,
+    request: Request,
+    body: ValidatePipelineRequest,
+    response: Response,
     db: Session = get_db_dependency(),
 ) -> ValidatePipelineResponse:
     """Validate a pipeline configuration against registered files."""
     parser = PipelineParser()
-    config = parser.parse(request.yaml_config)
+    config = parser.parse(body.yaml_config)
 
-    registered_ids = {f.id for f in db.query(UploadedFile).all()}
+    registered_ids = {str(f.id) for f in db.query(UploadedFile).all()}
     result = parser.validate(config, registered_ids)
 
     return ValidatePipelineResponse(
@@ -85,35 +96,78 @@ def validate_pipeline(
 
 
 @router.post(
+    "/plan",
+    summary="Generate dry-run execution plan",
+    description="Generate an execution plan without actually running the pipeline.",
+)
+@limiter.limit(settings.RATE_LIMIT_VALIDATION)
+def plan_pipeline(
+    request: Request,
+    body: ValidatePipelineRequest,
+    response: Response,
+    db: Session = get_db_dependency(),
+):
+    """Generate a dry-run execution plan for a pipeline."""
+    plan = generate_execution_plan(body.yaml_config, db)
+
+    return {
+        "pipeline_name": plan.pipeline_name,
+        "total_steps": plan.total_steps,
+        "estimated_total_duration_ms": plan.estimated_total_duration_ms,
+        "files_read": plan.files_read,
+        "files_written": plan.files_written,
+        "estimated_rows_processed": plan.estimated_rows_processed,
+        "will_succeed": plan.will_succeed,
+        "warnings": plan.warnings,
+        "steps": [
+            {
+                "step_index": s.step_index,
+                "step_name": s.step_name,
+                "step_type": s.step_type,
+                "input_step": s.input_step,
+                "input_file_id": s.input_file_id,
+                "estimated_rows_in": s.estimated_rows_in,
+                "estimated_rows_out": s.estimated_rows_out,
+                "estimated_columns": s.estimated_columns,
+                "estimated_duration_ms": s.estimated_duration_ms,
+                "warnings": s.warnings,
+                "will_fail": s.will_fail,
+                "fail_reason": s.fail_reason,
+            }
+            for s in plan.steps
+        ],
+    }
+
+
+@router.post(
     "/run",
     response_model=RunPipelineResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start a pipeline run",
     description="Queue a pipeline for asynchronous execution. Returns immediately.",
 )
+@limiter.limit(settings.RATE_LIMIT_PIPELINE_RUN)
 def run_pipeline(
-    request: RunPipelineRequest,
+    request: Request,
+    body: RunPipelineRequest,
+    response: Response,
     db: Session = get_db_dependency(),
 ) -> RunPipelineResponse:
-    """Create a pipeline run record and queue it for execution.
-
-    The endpoint returns immediately with a run_id and PENDING status.
-    The actual execution happens asynchronously via a Celery worker.
-    """
+    """Create a pipeline run record and queue it for execution."""
     parser = PipelineParser()
-    config = parser.parse(request.yaml_config)
-    pipeline_name = request.name or config.name
+    config = parser.parse(body.yaml_config)
+    pipeline_name = body.name or config.name
 
     pipeline_run = PipelineRun(
         name=pipeline_name,
         status=PipelineStatus.PENDING,
-        yaml_config=request.yaml_config,
+        yaml_config=body.yaml_config,
     )
     db.add(pipeline_run)
     db.commit()
     db.refresh(pipeline_run)
 
-    execute_pipeline_task.delay(pipeline_run.id)
+    execute_pipeline_task.delay(str(pipeline_run.id))
 
     logger.info(
         "Pipeline run queued: id=%s, name=%s",
@@ -121,7 +175,7 @@ def run_pipeline(
     )
 
     return RunPipelineResponse(
-        run_id=pipeline_run.id,
+        run_id=str(pipeline_run.id),
         status=pipeline_run.status.value,
     )
 
@@ -131,7 +185,10 @@ def run_pipeline(
     response_model=PipelineRunListResponse,
     summary="List pipeline runs",
 )
+@limiter.limit(settings.RATE_LIMIT_READ)
 def list_pipeline_runs(
+    request: Request,
+    response: Response,
     db: Session = get_db_dependency(),
 ) -> PipelineRunListResponse:
     """List all pipeline runs ordered by creation time."""
@@ -151,13 +208,16 @@ def list_pipeline_runs(
     response_model=PipelineRunResponse,
     summary="Get pipeline run details",
 )
+@limiter.limit(settings.RATE_LIMIT_READ)
 def get_pipeline_run(
     run_id: str,
+    request: Request,
+    response: Response,
     db: Session = get_db_dependency(),
 ) -> PipelineRunResponse:
     """Get full details of a specific pipeline run."""
     _validate_uuid_format(run_id)
-    pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -177,7 +237,7 @@ async def stream_pipeline_progress(
 ) -> StreamingResponse:
     """Stream real-time pipeline execution progress via Server-Sent Events."""
     _validate_uuid_format(run_id)
-    pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -249,7 +309,7 @@ async def _completed_event_generator(
         else "pipeline_failed"
     )
     data = json.dumps({
-        "run_id": pipeline_run.id,
+        "run_id": str(pipeline_run.id),
         "event_type": event_type,
         "status": pipeline_run.status.value,
     })
@@ -304,7 +364,7 @@ def _ensure_utc(dt):
 def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
     """Convert a PipelineRun ORM model to an API response."""
     return PipelineRunResponse(
-        id=pipeline_run.id,
+        id=str(pipeline_run.id),
         name=pipeline_run.name,
         status=pipeline_run.status.value,
         created_at=_ensure_utc(pipeline_run.created_at),

@@ -2,6 +2,7 @@
 
 Provides endpoints for retrieving the React Flow lineage graph,
 tracing column ancestry, and performing forward impact analysis.
+Results are cached in Redis for performance.
 """
 
 import logging
@@ -11,6 +12,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.dependencies import get_db_dependency
 from backend.models import LineageGraph, PipelineRun
 from backend.pipeline.lineage import LineageRecorder
@@ -22,8 +24,15 @@ from backend.schemas import (
     ReactFlowNodeResponse,
     TransformationStepResponse,
 )
+from backend.utils.cache import cache_delete, cache_delete_pattern, cache_get, cache_set
 
 logger = logging.getLogger(__name__)
+
+
+def _as_uuid(val):
+    """Convert str or uuid.UUID to uuid.UUID for DB queries."""
+    return val if isinstance(val, uuid.UUID) else uuid.UUID(val)
+
 
 router = APIRouter(prefix="/lineage", tags=["lineage"])
 
@@ -38,12 +47,18 @@ def get_lineage_graph(
     run_id: str,
     db: Session = get_db_dependency(),
 ) -> LineageGraphResponse:
-    """Retrieve the pre-computed React Flow lineage graph."""
+    """Retrieve the pre-computed React Flow lineage graph. Cached permanently."""
     _validate_uuid_format(run_id)
+
+    cache_key = f"lineage:graph:{run_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return LineageGraphResponse(**cached)
+
     lineage_graph = _get_lineage_record(run_id, db)
     react_flow_data = lineage_graph.react_flow_data
 
-    return LineageGraphResponse(
+    response = LineageGraphResponse(
         nodes=[
             ReactFlowNodeResponse(
                 id=n["id"],
@@ -65,6 +80,9 @@ def get_lineage_graph(
         ],
     )
 
+    cache_set(cache_key, response.model_dump())
+    return response
+
 
 @router.get(
     "/{run_id}/column",
@@ -78,8 +96,14 @@ def get_column_lineage(
     column: str = Query(..., description="Column name to trace"),
     db: Session = get_db_dependency(),
 ) -> ColumnLineageResponse:
-    """Trace a column's ancestry back to its source file."""
+    """Trace a column's ancestry back to its source file. Cached permanently."""
     _validate_uuid_format(run_id)
+
+    cache_key = f"lineage:column:{run_id}:{step}:{column}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return ColumnLineageResponse(**cached)
+
     recorder = _reconstruct_recorder(run_id, db)
 
     try:
@@ -93,7 +117,7 @@ def get_column_lineage(
             ),
         ) from exc
 
-    return ColumnLineageResponse(
+    response = ColumnLineageResponse(
         column_name=lineage.column_name,
         source_file=lineage.source_file,
         source_column=lineage.source_column,
@@ -108,6 +132,9 @@ def get_column_lineage(
         total_steps=lineage.total_steps,
     )
 
+    cache_set(cache_key, response.model_dump())
+    return response
+
 
 @router.get(
     "/{run_id}/impact",
@@ -121,8 +148,14 @@ def get_impact_analysis(
     column: str = Query(..., description="Column name to analyze"),
     db: Session = get_db_dependency(),
 ) -> ImpactAnalysisResponse:
-    """Analyze the downstream impact of a column."""
+    """Analyze the downstream impact of a column. Cached permanently."""
     _validate_uuid_format(run_id)
+
+    cache_key = f"lineage:impact:{run_id}:{step}:{column}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return ImpactAnalysisResponse(**cached)
+
     recorder = _reconstruct_recorder(run_id, db)
 
     try:
@@ -136,12 +169,15 @@ def get_impact_analysis(
             ),
         ) from exc
 
-    return ImpactAnalysisResponse(
+    response = ImpactAnalysisResponse(
         source_step=impact.source_step,
         source_column=impact.source_column,
         affected_steps=impact.affected_steps,
         affected_output_columns=impact.affected_output_columns,
     )
+
+    cache_set(cache_key, response.model_dump())
+    return response
 
 
 def _get_lineage_record(run_id: str, db: Session) -> LineageGraph:
@@ -150,7 +186,7 @@ def _get_lineage_record(run_id: str, db: Session) -> LineageGraph:
 
     lineage_graph = (
         db.query(LineageGraph)
-        .filter(LineageGraph.pipeline_run_id == run_id)
+        .filter(LineageGraph.pipeline_run_id == _as_uuid(run_id))
         .first()
     )
     if lineage_graph is None:
@@ -166,7 +202,7 @@ def _get_lineage_record(run_id: str, db: Session) -> LineageGraph:
 
 def _validate_run_exists(run_id: str, db: Session) -> None:
     """Raise 404 if the pipeline run does not exist."""
-    exists = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    exists = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
     if exists is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

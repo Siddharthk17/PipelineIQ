@@ -1,8 +1,7 @@
 """SQLAlchemy ORM models for PipelineIQ.
 
 All models use UUID primary keys, timezone-aware timestamps, and explicit
-column length limits. JSON columns use the native JSON type for structured
-data storage and querying.
+column length limits. Uses JSONB on PostgreSQL and JSON on SQLite.
 """
 
 import uuid
@@ -15,14 +14,20 @@ from sqlalchemy import (
     Enum as SQLEnum,
     ForeignKey,
     Integer,
-    JSON,
     String,
     Text,
+    UniqueConstraint,
+    Uuid,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
+
+# Dialect-aware JSONB: native JSONB on PostgreSQL, JSON fallback on SQLite
+PgJSONB = JSONB().with_variant(JSON(), "sqlite")
 
 
 class PipelineStatus(str, PyEnum):
@@ -44,8 +49,8 @@ class StepStatus(str, PyEnum):
     SKIPPED = "SKIPPED"
 
 
-def _generate_uuid() -> str:
-    return str(uuid.uuid4())
+def _generate_uuid() -> uuid.UUID:
+    return uuid.uuid4()
 
 
 class PipelineRun(Base):
@@ -59,7 +64,7 @@ class PipelineRun(Base):
     __tablename__ = "pipeline_runs"
 
     id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=_generate_uuid
+        Uuid, primary_key=True, default=_generate_uuid
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[PipelineStatus] = mapped_column(
@@ -111,10 +116,10 @@ class StepResult(Base):
     __tablename__ = "step_results"
 
     id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=_generate_uuid
+        Uuid, primary_key=True, default=_generate_uuid
     )
     pipeline_run_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("pipeline_runs.id"), nullable=False
+        Uuid, ForeignKey("pipeline_runs.id"), nullable=False
     )
     step_name: Mapped[str] = mapped_column(String(255), nullable=False)
     step_type: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -124,10 +129,10 @@ class StepResult(Base):
     )
     rows_in: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     rows_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    columns_in: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-    columns_out: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    columns_in: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
+    columns_out: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    warnings: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    warnings: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -149,13 +154,13 @@ class LineageGraph(Base):
     __tablename__ = "lineage_graphs"
 
     id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=_generate_uuid
+        Uuid, primary_key=True, default=_generate_uuid
     )
     pipeline_run_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("pipeline_runs.id"), nullable=False, unique=True
+        Uuid, ForeignKey("pipeline_runs.id"), nullable=False, unique=True
     )
-    graph_data: Mapped[dict] = mapped_column(JSON, nullable=False)
-    react_flow_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    graph_data: Mapped[dict] = mapped_column(PgJSONB, nullable=False)
+    react_flow_data: Mapped[dict] = mapped_column(PgJSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -176,15 +181,69 @@ class UploadedFile(Base):
     __tablename__ = "uploaded_files"
 
     id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=_generate_uuid
+        Uuid, primary_key=True, default=_generate_uuid
     )
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_path: Mapped[str] = mapped_column(String(512), nullable=False)
     file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     row_count: Mapped[int] = mapped_column(Integer, nullable=False)
     column_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    columns: Mapped[list] = mapped_column(JSON, nullable=False)
-    dtypes: Mapped[dict] = mapped_column(JSON, nullable=False)
+    columns: Mapped[list] = mapped_column(PgJSONB, nullable=False)
+    dtypes: Mapped[dict] = mapped_column(PgJSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+    schema_snapshots: Mapped[List["SchemaSnapshot"]] = relationship(
+        "SchemaSnapshot", back_populates="file", cascade="all, delete-orphan"
+    )
+
+
+class SchemaSnapshot(Base):
+    """Records the schema of a file at a specific point in time for drift detection."""
+
+    __tablename__ = "schema_snapshots"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid
+    )
+    file_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("uploaded_files.id"), nullable=False
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        Uuid, ForeignKey("pipeline_runs.id"), nullable=True
+    )
+    columns: Mapped[list] = mapped_column(PgJSONB, nullable=False)
+    dtypes: Mapped[dict] = mapped_column(PgJSONB, nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    file: Mapped["UploadedFile"] = relationship(
+        "UploadedFile", back_populates="schema_snapshots"
+    )
+
+
+class PipelineVersion(Base):
+    """Stores versioned pipeline YAML configurations for diffing and restoring."""
+
+    __tablename__ = "pipeline_versions"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid
+    )
+    pipeline_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    yaml_config: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        Uuid, ForeignKey("pipeline_runs.id"), nullable=True
+    )
+    change_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("pipeline_name", "version_number"),
     )

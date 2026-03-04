@@ -36,6 +36,7 @@ from backend.pipeline.parser import (
     SortStepConfig,
     StepConfig,
     StepType,
+    ValidateStepConfig,
 )
 from backend.utils.time_utils import measure_ms
 
@@ -98,6 +99,7 @@ class StepExecutor:
             StepType.AGGREGATE: self.execute_aggregate,
             StepType.SORT: self.execute_sort,
             StepType.SAVE: self.execute_save,
+            StepType.VALIDATE: self.execute_validate,
         }
 
     def execute(
@@ -544,6 +546,49 @@ class StepExecutor:
             columns_in=columns,
             columns_out=columns,
             duration_ms=measure_ms(start),
+        )
+
+    def execute_validate(
+        self,
+        df_registry: Dict[str, pd.DataFrame],
+        config: ValidateStepConfig,
+        recorder: LineageRecorder,
+    ) -> StepExecutionResult:
+        """Run data quality validation rules against the input DataFrame."""
+        from backend.pipeline.validators import execute_validate as run_validate
+
+        start = time.perf_counter()
+        input_df = df_registry[config.input]
+        columns = list(input_df.columns)
+        warnings: List[str] = []
+
+        result = run_validate(input_df, config.rules, config.name)
+
+        if not result.passed:
+            warnings.append(
+                f"Validation failed: {result.error_count} errors, "
+                f"{result.warning_count} warnings"
+            )
+        elif result.warning_count > 0:
+            warnings.append(f"Validation passed with {result.warning_count} warnings")
+
+        recorder.record_passthrough(
+            step_name=config.name,
+            step_type="validate",
+            input_step=config.input,
+            columns=columns,
+        )
+
+        return StepExecutionResult(
+            step_name=config.name,
+            step_type="validate",
+            output_df=result.output_df,
+            rows_in=len(input_df),
+            rows_out=len(result.output_df),
+            columns_in=columns,
+            columns_out=columns,
+            duration_ms=measure_ms(start),
+            warnings=warnings,
         )
 
     def _validate_column_exists(

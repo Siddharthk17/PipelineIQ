@@ -6,6 +6,10 @@ import type {
   ReactFlowGraph,
   ColumnLineage,
   ImpactAnalysis,
+  ExecutionPlan,
+  PipelineVersion,
+  PipelineDiff,
+  SchemaSnapshot,
 } from "./types";
 
 export class ApiError extends Error {
@@ -109,4 +113,38 @@ export async function checkHealth(): Promise<{ status: string; version: string; 
   const res = await fetch(`${API_BASE_URL}/health`);
   if (!res.ok) throw new ApiError(res.status, res.statusText);
   return res.json();
+}
+
+// Week 2 API functions
+
+export async function getPipelinePlan(yamlConfig: string): Promise<ExecutionPlan> {
+  return fetchApi<ExecutionPlan>("/pipelines/plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ yaml_config: yamlConfig }),
+  });
+}
+
+export async function getPipelineVersions(pipelineName: string): Promise<PipelineVersion[]> {
+  const data = await fetchApi<{ pipeline_name: string; total_versions: number; versions: PipelineVersion[] }>(`/versions/${pipelineName}`);
+  return data.versions;
+}
+
+export async function getPipelineVersion(name: string, version: number): Promise<PipelineVersion> {
+  return fetchApi<PipelineVersion>(`/versions/${name}/${version}`);
+}
+
+export async function getPipelineDiff(name: string, v1: number, v2: number): Promise<PipelineDiff> {
+  return fetchApi<PipelineDiff>(`/versions/${name}/diff/${v1}/${v2}`);
+}
+
+export async function restorePipelineVersion(name: string, version: number): Promise<{ yaml_config: string }> {
+  return fetchApi<{ yaml_config: string }>(`/versions/${name}/restore/${version}`, {
+    method: "POST",
+  });
+}
+
+export async function getSchemaHistory(fileId: string): Promise<SchemaSnapshot[]> {
+  const data = await fetchApi<{ file_id: string; total_snapshots: number; snapshots: SchemaSnapshot[] }>(`/files/${fileId}/schema/history`);
+  return data.snapshots;
 }

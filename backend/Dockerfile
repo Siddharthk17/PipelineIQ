@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application source (context is backend/, copy into /app/backend/)
 COPY . ./backend/
 
+# Copy alembic.ini to project root for migration commands
+COPY alembic.ini /app/alembic.ini
+
 # Create upload and data directories
 RUN mkdir -p /app/uploads /app/data && chown -R appuser:appuser /app
 
@@ -23,5 +26,5 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Use exec form for proper signal handling
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run migrations then start the app
+CMD ["sh", "-c", "python -m alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port 8000"]

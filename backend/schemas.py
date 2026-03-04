@@ -12,6 +12,27 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 
+class ColumnDriftResponse(BaseModel):
+    """A single schema drift item."""
+
+    column: str = Field(..., description="Column name affected")
+    drift_type: str = Field(..., description="Type of drift: added, removed, type_changed")
+    old_value: Optional[str] = Field(None, description="Previous type (for type_changed)")
+    new_value: Optional[str] = Field(None, description="New type (for type_changed)")
+    severity: str = Field(..., description="Severity: breaking, warning, info")
+
+
+class SchemaDriftResponse(BaseModel):
+    """Schema drift report between uploads of the same file."""
+
+    has_drift: bool = Field(..., description="Whether drift was detected")
+    breaking_changes: int = Field(0, description="Number of breaking changes")
+    warnings: int = Field(0, description="Number of warnings")
+    drift_items: List[ColumnDriftResponse] = Field(
+        default_factory=list, description="Individual drift items"
+    )
+
+
 class FileUploadResponse(BaseModel):
     """Response returned after a successful file upload."""
 
@@ -24,6 +45,9 @@ class FileUploadResponse(BaseModel):
         ..., description="Mapping of column name to pandas dtype"
     )
     file_size_bytes: int = Field(..., description="File size in bytes")
+    schema_drift: Optional[SchemaDriftResponse] = Field(
+        None, description="Schema drift report (null for first upload of a file)"
+    )
 
     model_config = {
         "json_schema_extra": {

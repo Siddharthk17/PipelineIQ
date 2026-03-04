@@ -20,9 +20,17 @@ from backend.database import Base, get_db
 from backend.main import app
 import backend.models  # noqa: F401 — ensure ORM models are registered with Base.metadata
 from backend.pipeline.lineage import LineageRecorder
+from backend.utils.rate_limiter import limiter
 
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Reset rate limiter storage between ALL tests."""
+    limiter.reset()
+    yield
 
 
 @pytest.fixture()
@@ -66,7 +74,7 @@ def client(test_db: Session, tmp_path) -> TestClient:
          patch("backend.api.pipelines.execute_pipeline_task") as mock_task:
         mock_settings.UPLOAD_DIR = upload_dir
         mock_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
-        mock_settings.MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
+        mock_settings.MAX_UPLOAD_SIZE = 50 * 1024 * 1024
         mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
         test_client = TestClient(app)
         test_client._mock_task = mock_task

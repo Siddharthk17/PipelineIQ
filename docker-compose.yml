@@ -1,4 +1,22 @@
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: pipelineiq-db
+    environment:
+      POSTGRES_DB: pipelineiq
+      POSTGRES_USER: pipelineiq
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipelineiq"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
   api:
     build:
       context: ./backend
@@ -9,14 +27,15 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=sqlite:////app/data/pipelineiq.db
+      - DATABASE_URL=postgresql://pipelineiq:${POSTGRES_PASSWORD}@db:5432/pipelineiq
       - REDIS_URL=redis://redis:6379/0
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
       - uploads:/app/uploads
-      - db_data:/app/data
     restart: unless-stopped
 
   worker:
@@ -28,14 +47,15 @@ services:
     env_file:
       - .env
     environment:
-      - DATABASE_URL=sqlite:////app/data/pipelineiq.db
+      - DATABASE_URL=postgresql://pipelineiq:${POSTGRES_PASSWORD}@db:5432/pipelineiq
       - REDIS_URL=redis://redis:6379/0
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
       - uploads:/app/uploads
-      - db_data:/app/data
     restart: unless-stopped
 
   redis:

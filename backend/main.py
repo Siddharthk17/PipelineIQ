@@ -16,11 +16,14 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from backend.api.router import api_router
 from backend.config import settings
 from backend.database import create_all_tables, engine
 from backend.pipeline.exceptions import PipelineIQError
+from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -62,18 +65,28 @@ def _validate_upload_dir() -> None:
 
 app = FastAPI(
     title="PipelineIQ API",
-    description=(
-        "Data pipeline orchestration engine with automatic column-level "
-        "lineage tracking. Define transformation pipelines in YAML, execute "
-        "them, and visualize every column's journey as a directed graph."
-    ),
-    version=settings.APP_VERSION,
+    description="""
+    Data pipeline orchestration with column-level lineage tracking.
+
+    ## Features
+    - YAML pipeline definition with 9 step types
+    - Column-level lineage tracking and impact analysis
+    - Schema drift detection between pipeline runs
+    - Pipeline versioning with diff view
+    - Dry-run execution planning
+    - Real-time execution via Server-Sent Events
+    - Data quality validation rules engine
+    """,
+    version="2.0.0",
     lifespan=lifespan,
     contact={
         "name": "PipelineIQ Team",
         "url": "https://github.com/pipelineiq",
     },
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 @app.exception_handler(PipelineIQError)

@@ -173,7 +173,7 @@ Docker-related testing requires a running Docker environment. The codebase inclu
 
 ## Remaining Recommendations (Non-blocking)
 
-1. **Rate limiting** — No API rate limiting exists; add for production deployment
+1. ~~**Rate limiting** — No API rate limiting exists; add for production deployment~~ ✅ **RESOLVED in Week 2** — slowapi rate limiting on all endpoints
 2. **Authentication** — No auth on any endpoints; add JWT/OAuth for production
 3. **Redis connection in SSE** — `stream_pipeline_progress` doesn't handle non-CancelledError exceptions cleanly; may leak Redis connections
 4. **MIME type validation** — Currently extension-only; add `python-magic` for content-based validation
@@ -182,3 +182,97 @@ Docker-related testing requires a running Docker environment. The codebase inclu
 ---
 
 **Audit Complete.** 97/97 tests passing. All critical bugs and security vulnerabilities resolved.
+
+---
+
+## Week 2 — Production Features Summary
+
+**Date:** 2026-03-03  
+**Version:** 2.0.0  
+**New Tests:** 83 | **Total:** 180/180 passing
+
+### Pre-Week-3 Audit Results
+
+| Section | Topic | Result |
+|---------|-------|--------|
+| A | Project Structure | ✅ PASS |
+| B | Git & Environment | ✅ PASS |
+| C | Docker Infrastructure (5 services) | ✅ PASS |
+| D | Backend Code Quality | ✅ PASS |
+| E | Test Suite (180/180) | ✅ PASS |
+| F | PostgreSQL (UUID/JSONB, pool config) | ✅ PASS |
+| G | Redis Caching | ✅ PASS |
+| H | Rate Limiting (X-RateLimit headers) | ✅ PASS |
+| I | Backend API Live (all endpoints) | ✅ PASS |
+| J | Security (path traversal, YAML bomb, SQLi, CORS) | ✅ PASS |
+| K | Performance Benchmarks | ✅ PASS |
+| L | Week 2 Feature Depth | ✅ PASS |
+| M | Frontend (TypeScript zero errors) | ✅ PASS |
+| N | Full Stack Integration | ✅ PASS |
+| O | Log Quality (zero errors) | ✅ PASS |
+| P | Audit Report | ✅ PASS |
+
+### Bugs Found & Fixed During Pre-Week-3 Audit
+
+| File | Issue | Fix |
+|------|-------|-----|
+| `models.py` | String(36) PKs not native PostgreSQL | Migrated to `sqlalchemy.Uuid` type |
+| `models.py` | JSON columns not using PostgreSQL JSONB | Changed to `JSONB().with_variant(JSON(), "sqlite")` |
+| `api/files.py` | `file_id` generated as string, not UUID | Changed to `uuid.uuid4()` |
+| `api/files.py`, `pipelines.py`, `lineage.py` | String IDs passed to Uuid column filters | Added `_as_uuid()` helpers |
+| `api/files.py` | Schema drift not in upload response | Added `schema_drift` field to `FileUploadResponse` |
+| `api/files.py` | Drift detection used file_id (unique per upload) | Changed to match by `original_filename` |
+| `pipeline/parser.py` | `ValidateStepConfig` not built for validate steps | Added `StepType.VALIDATE` case in `_build_typed_step` |
+| `pipeline/parser.py` | No validation of check types in validate rules | Added `_check_validate_rules()` method |
+| `tasks/pipeline_tasks.py` | Versioning used request name, not YAML pipeline name | Changed to parse and use `config.name` |
+| `main.py` | SlowAPIMiddleware caused test failures | Removed; added `response: Response` param to rate-limited endpoints |
+| `.env` | DATABASE_URL pointed to SQLite | Changed to PostgreSQL |
+| `config.py` | Missing `SECRET_KEY` field | Added |
+| Various | `MAX_UPLOAD_SIZE_BYTES` naming inconsistency | Renamed to `MAX_UPLOAD_SIZE` everywhere |
+| `frontend/lib/types.ts` | Missing Week 2 types | Added SchemaDrift, ExecutionPlan, PipelineVersion, etc. |
+| `frontend/lib/api.ts` | Missing Week 2 API functions | Added getPipelinePlan, getPipelineVersions, etc. |
+
+### Deliverables Completed
+
+| # | Feature | Status | Files Changed/Created |
+|---|---------|--------|-----------------------|
+| 1 | PostgreSQL Migration | ✅ COMPLETE | docker-compose.yml, database.py, config.py, models.py |
+| 2 | Alembic Migrations | ✅ COMPLETE | alembic/, alembic.ini, Dockerfile |
+| 3 | Redis Caching | ✅ COMPLETE | utils/cache.py, api/lineage.py |
+| 4 | Rate Limiting | ✅ COMPLETE | utils/rate_limiter.py, main.py, api/pipelines.py, api/files.py |
+| 5 | Schema Drift Detection | ✅ COMPLETE | pipeline/schema_drift.py, api/files.py, models.py |
+| 6 | Data Quality Validation | ✅ COMPLETE | pipeline/validators.py, pipeline/parser.py, pipeline/steps.py |
+| 7 | Pipeline Versioning | ✅ COMPLETE | pipeline/versioning.py, api/versions.py, tasks/pipeline_tasks.py |
+| 8 | Dry-Run Planning | ✅ COMPLETE | pipeline/planner.py, api/pipelines.py |
+
+### New Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/pipelines/plan` | Dry-run execution plan |
+| GET | `/api/v1/versions/{name}` | List pipeline versions |
+| GET | `/api/v1/versions/{name}/{version}` | Get specific version |
+| GET | `/api/v1/versions/{name}/diff/{v1}/{v2}` | Diff two versions |
+| POST | `/api/v1/versions/{name}/restore/{version}` | Restore old version |
+| GET | `/api/v1/files/{id}/schema/history` | Schema snapshot history |
+| GET | `/api/v1/files/{id}/schema/diff` | Schema drift comparison |
+
+### New Step Type
+
+**`validate`** — Data quality validation with 12 check types:
+`not_null`, `not_empty`, `greater_than`, `less_than`, `between`, `in_values`, `matches_pattern`, `no_duplicates`, `min_rows`, `max_rows`, `date_format`, `positive`
+
+### Test Coverage
+
+| Test File | Tests | Description |
+|-----------|-------|-------------|
+| test_schema_drift.py | 10 | Schema drift detection |
+| test_validators.py | 22 | Data quality validation |
+| test_versioning.py | 12 | Pipeline versioning & diffs |
+| test_planner.py | 15 | Dry-run execution planning |
+| test_rate_limiting.py | 6 | Rate limiting enforcement |
+| test_caching.py | 8 | Redis caching operations |
+| test_api.py (new) | 10 | New endpoint integration |
+| **Total new** | **83** | |
+| **Original** | **97** | Zero regressions |
+| **Grand total** | **180** | All passing |

@@ -30,18 +30,19 @@ class Settings(BaseSettings):
     )
 
     APP_NAME: str = "PipelineIQ"
-    APP_VERSION: str = "1.0.0"
+    APP_VERSION: str = "2.0.0"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
-    DATABASE_URL: str = "sqlite:///./pipelineiq.db"
+    DATABASE_URL: str = "postgresql://postgres:pipelineiq_dev_password@localhost:5432/pipelineiq"
+    SECRET_KEY: str = "change-me-in-production"
 
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
 
     UPLOAD_DIR: Path = Path("./uploads")
-    MAX_UPLOAD_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
+    MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50 MB
     ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json"})
 
     MAX_PIPELINE_STEPS: int = 50
@@ -50,6 +51,24 @@ class Settings(BaseSettings):
 
     API_PREFIX: str = "/api/v1"
     CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+
+    # Caching
+    CACHE_TTL_STATS: int = 30
+
+    # Rate Limiting
+    RATE_LIMIT_PIPELINE_RUN: str = "10/minute"
+    RATE_LIMIT_FILE_UPLOAD: str = "30/minute"
+    RATE_LIMIT_VALIDATION: str = "60/minute"
+    RATE_LIMIT_READ: str = "120/minute"
+
+    # Schema Drift
+    DRIFT_DETECTION_ENABLED: bool = True
+
+    # Versioning
+    MAX_VERSIONS_PER_PIPELINE: int = 50
+
+    # PostgreSQL (used by docker-compose, not directly by app)
+    POSTGRES_PASSWORD: str = ""
 
     @field_validator("LOG_LEVEL")
     @classmethod

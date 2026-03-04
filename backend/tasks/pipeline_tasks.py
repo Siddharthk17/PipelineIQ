@@ -34,6 +34,7 @@ from backend.pipeline.runner import (
 )
 from backend.pipeline.runner import PipelineStatus as RunnerPipelineStatus
 from backend.pipeline.runner import StepStatus as RunnerStepStatus
+from backend.pipeline.versioning import save_version
 from backend.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -161,20 +162,20 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
     config = parser.parse(pipeline_run.yaml_config)
 
     uploaded_files = db.query(UploadedFile).all()
-    file_paths = {f.id: f.stored_path for f in uploaded_files}
+    file_paths = {str(f.id): f.stored_path for f in uploaded_files}
     file_metadata = {
-        f.id: {"original_filename": f.original_filename}
+        str(f.id): {"original_filename": f.original_filename}
         for f in uploaded_files
     }
 
     runner = PipelineRunner()
-    progress_callback = make_redis_progress_callback(pipeline_run.id)
+    progress_callback = make_redis_progress_callback(str(pipeline_run.id))
 
     return runner.execute(
         config=config,
         file_paths=file_paths,
         file_metadata=file_metadata,
-        run_id=pipeline_run.id,
+        run_id=str(pipeline_run.id),
         progress_callback=progress_callback,
     )
 
@@ -183,12 +184,12 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     """Persist pipeline execution results to the database."""
     if summary.status == RunnerPipelineStatus.COMPLETED:
         pipeline_run.status = PipelineStatus.COMPLETED
-        _publish_terminal_event(pipeline_run.id, "pipeline_completed")
+        _publish_terminal_event(str(pipeline_run.id), "pipeline_completed")
     else:
         pipeline_run.status = PipelineStatus.FAILED
         pipeline_run.error_message = str(summary.error) if summary.error else None
         _publish_terminal_event(
-            pipeline_run.id, "pipeline_failed",
+            str(pipeline_run.id), "pipeline_failed",
             str(summary.error) if summary.error else "",
         )
 
@@ -223,6 +224,21 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     db.add(lineage_record)
 
     db.commit()
+
+    # Save pipeline version for versioning/diff tracking
+    # Use the pipeline name from the YAML config (not the run's display name)
+    try:
+        parser = PipelineParser()
+        config = parser.parse(pipeline_run.yaml_config)
+        save_version(
+            pipeline_name=config.name,
+            yaml_config=pipeline_run.yaml_config,
+            run_id=pipeline_run.id,
+            db=db,
+        )
+    except Exception as exc:
+        logger.warning("Failed to save pipeline version: %s", exc)
+
     logger.info(
         "Pipeline run %s results persisted: status=%s, duration=%dms",
         pipeline_run.id, pipeline_run.status.value, summary.total_duration_ms,

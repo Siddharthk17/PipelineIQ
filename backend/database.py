@@ -3,6 +3,8 @@
 Provides a single source of truth for database connectivity.
 Sessions are created per-request via dependency injection in FastAPI
 and must never be shared across threads or async boundaries.
+
+Supports both PostgreSQL (production) and SQLite (testing).
 """
 
 from typing import Generator
@@ -13,15 +15,27 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from backend.config import settings
 
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    connect_args=(
-        {"check_same_thread": False}
-        if settings.DATABASE_URL.startswith("sqlite")
-        else {}
-    ),
-)
+def _build_engine():
+    """Build the SQLAlchemy engine based on DATABASE_URL."""
+    url = settings.DATABASE_URL
+    if url.startswith("sqlite"):
+        return create_engine(
+            url,
+            echo=settings.DEBUG,
+            connect_args={"check_same_thread": False},
+        )
+    # PostgreSQL with connection pooling
+    return create_engine(
+        url,
+        echo=settings.DEBUG,
+        pool_size=20,
+        max_overflow=10,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+    )
+
+
+engine = _build_engine()
 
 SessionLocal = sessionmaker(
     autocommit=False,

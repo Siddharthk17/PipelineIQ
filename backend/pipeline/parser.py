@@ -32,6 +32,7 @@ class StepType(str, Enum):
     AGGREGATE = "aggregate"
     SORT = "sort"
     SAVE = "save"
+    VALIDATE = "validate"
 
 
 class FilterOperator(str, Enum):
@@ -151,6 +152,14 @@ class SaveStepConfig(StepConfig):
 
 
 @dataclass
+class ValidateStepConfig(StepConfig):
+    """Configuration for data quality validation step."""
+
+    input: str = ""
+    rules: List[dict] = field(default_factory=list)
+
+
+@dataclass
 class PipelineConfig:
     """Fully typed pipeline configuration parsed from YAML."""
 
@@ -195,6 +204,7 @@ _STEP_CONFIG_MAP: Dict[StepType, type] = {
     StepType.AGGREGATE: AggregateStepConfig,
     StepType.SORT: SortStepConfig,
     StepType.SAVE: SaveStepConfig,
+    StepType.VALIDATE: ValidateStepConfig,
 }
 
 
@@ -241,6 +251,7 @@ class PipelineParser:
         self._check_join_configs(config, errors, warnings)
         self._check_aggregate_configs(config, errors)
         self._check_has_save_step(config, errors, warnings)
+        self._check_validate_rules(config, errors)
 
         return ValidationResult(
             is_valid=len(errors) == 0,
@@ -365,6 +376,13 @@ class PipelineParser:
                 step_type=step_type,
                 input=raw.get("input", ""),
                 filename=raw.get("filename", ""),
+            )
+        if step_type == StepType.VALIDATE:
+            return ValidateStepConfig(
+                name=name,
+                step_type=step_type,
+                input=raw.get("input", ""),
+                rules=raw.get("rules", []),
             )
         # Unreachable, but satisfies type checkers
         return StepConfig(name=name, step_type=step_type)
@@ -660,3 +678,26 @@ class PipelineParser:
                     "but not persisted to an output file."
                 ),
             ))
+
+    def _check_validate_rules(
+        self,
+        config: PipelineConfig,
+        errors: List[ValidationError],
+    ) -> None:
+        """Check 12: Validate step rules use supported check types."""
+        from backend.pipeline.validators import SUPPORTED_CHECKS
+
+        for step in config.steps:
+            if not isinstance(step, ValidateStepConfig):
+                continue
+            for rule in step.rules:
+                check = rule.get("check", "")
+                if check not in SUPPORTED_CHECKS:
+                    errors.append(ValidationError(
+                        step_name=step.name,
+                        field="rules",
+                        message=(
+                            f"Unknown check type '{check}'. "
+                            f"Supported: {', '.join(sorted(SUPPORTED_CHECKS))}"
+                        ),
+                    ))

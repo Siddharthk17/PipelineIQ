@@ -12,13 +12,24 @@ from pathlib import Path
 from typing import List
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, UploadFile, status
+from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.dependencies import get_db_dependency
-from backend.models import UploadedFile
-from backend.schemas import FileListResponse, FileUploadResponse
+from backend.models import SchemaSnapshot, UploadedFile
+from backend.pipeline.schema_drift import detect_schema_drift
+
+def _as_uuid(val):
+    """Convert str or uuid.UUID to uuid.UUID for DB queries."""
+    return val if isinstance(val, uuid.UUID) else uuid.UUID(val)
+from backend.schemas import (
+    ColumnDriftResponse,
+    FileListResponse,
+    FileUploadResponse,
+    SchemaDriftResponse,
+)
+from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +43,11 @@ router = APIRouter(prefix="/files", tags=["files"])
     summary="Upload a data file",
     description="Upload a CSV or JSON file for use in pipeline steps.",
 )
+@limiter.limit(settings.RATE_LIMIT_FILE_UPLOAD)
 async def upload_file(
+    request: Request,
     file: UploadFile,
+    response: Response,
     db: Session = get_db_dependency(),
 ) -> FileUploadResponse:
     """Upload a data file and store its metadata."""
@@ -43,8 +57,8 @@ async def upload_file(
     # Stream-read with size enforcement to prevent OOM
     content = await _read_with_size_limit(file)
 
-    file_id = str(uuid.uuid4())
-    stored_path = _store_file(file_id, original_filename, content)
+    file_id = uuid.uuid4()
+    stored_path = _store_file(str(file_id), original_filename, content)
     df = _parse_file_content(original_filename, stored_path)
 
     columns = list(df.columns)
@@ -63,19 +77,79 @@ async def upload_file(
     db.add(uploaded_file)
     db.commit()
 
+    # Save schema snapshot for drift detection
+    snapshot = SchemaSnapshot(
+        file_id=file_id,
+        columns=columns,
+        dtypes=dtypes,
+        row_count=len(df),
+    )
+    db.add(snapshot)
+    db.commit()
+
+    # Check for schema drift against previous snapshot of same filename
+    drift_report = None
+    previous_snapshot = (
+        db.query(SchemaSnapshot)
+        .join(UploadedFile, SchemaSnapshot.file_id == UploadedFile.id)
+        .filter(
+            UploadedFile.original_filename == original_filename,
+            SchemaSnapshot.file_id != _as_uuid(file_id),
+        )
+        .order_by(SchemaSnapshot.captured_at.desc())
+        .first()
+    )
+    if previous_snapshot:
+        drift_report = detect_schema_drift(
+            old_columns=previous_snapshot.columns,
+            old_dtypes=previous_snapshot.dtypes,
+            new_columns=columns,
+            new_dtypes=dtypes,
+        )
+
+    # Build schema drift response
+    schema_drift_response = None
+    if drift_report is not None:
+        drift_items = []
+        for col in drift_report.columns_removed:
+            drift_items.append(ColumnDriftResponse(
+                column=col, drift_type="removed",
+                old_value=None, new_value=None, severity="breaking",
+            ))
+        for col in drift_report.columns_added:
+            drift_items.append(ColumnDriftResponse(
+                column=col, drift_type="added",
+                old_value=None, new_value=None, severity="info",
+            ))
+        for tc in drift_report.type_changes:
+            drift_items.append(ColumnDriftResponse(
+                column=tc.column, drift_type="type_changed",
+                old_value=tc.old_type, new_value=tc.new_type,
+                severity="warning",
+            ))
+        breaking = sum(1 for d in drift_items if d.severity == "breaking")
+        warns = sum(1 for d in drift_items if d.severity == "warning")
+        schema_drift_response = SchemaDriftResponse(
+            has_drift=drift_report.has_drift,
+            breaking_changes=breaking,
+            warnings=warns,
+            drift_items=drift_items,
+        )
+
     logger.info(
         "File uploaded: id=%s, name=%s, rows=%d, columns=%d",
         file_id, original_filename, len(df), len(columns),
     )
 
     return FileUploadResponse(
-        id=file_id,
+        id=str(file_id),
         original_filename=original_filename,
         row_count=len(df),
         column_count=len(columns),
         columns=columns,
         dtypes=dtypes,
         file_size_bytes=len(content),
+        schema_drift=schema_drift_response,
     )
 
 
@@ -90,7 +164,7 @@ def list_files(db: Session = get_db_dependency()) -> FileListResponse:
     files = db.query(UploadedFile).all()
     file_responses = [
         FileUploadResponse(
-            id=f.id,
+            id=str(f.id),
             original_filename=f.original_filename,
             row_count=f.row_count,
             column_count=f.column_count,
@@ -115,14 +189,14 @@ def get_file(
 ) -> FileUploadResponse:
     """Get metadata for a specific uploaded file."""
     _validate_uuid_format(file_id)
-    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
     if uploaded_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File '{file_id}' not found",
         )
     return FileUploadResponse(
-        id=uploaded_file.id,
+        id=str(uploaded_file.id),
         original_filename=uploaded_file.original_filename,
         row_count=uploaded_file.row_count,
         column_count=uploaded_file.column_count,
@@ -143,7 +217,7 @@ def delete_file(
 ) -> dict:
     """Delete an uploaded file from disk and database."""
     _validate_uuid_format(file_id)
-    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
     if uploaded_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -173,7 +247,7 @@ def preview_file(
 ) -> dict:
     """Return the first N rows of an uploaded file."""
     _validate_uuid_format(file_id)
-    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
     if uploaded_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -223,7 +297,7 @@ def _validate_file_extension(filename: str) -> None:
 
 async def _read_with_size_limit(file: UploadFile) -> bytes:
     """Read file content with streaming size enforcement to prevent OOM."""
-    max_size = settings.MAX_UPLOAD_SIZE_BYTES
+    max_size = settings.MAX_UPLOAD_SIZE
     chunks: list[bytes] = []
     total_read = 0
     chunk_size = 1024 * 1024
@@ -278,3 +352,103 @@ def _parse_file_content(filename: str, stored_path: Path) -> pd.DataFrame:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
+
+
+@router.get(
+    "/{file_id}/schema/history",
+    summary="Get schema snapshot history",
+    description="Returns all schema snapshots for a file, newest first.",
+)
+def get_schema_history(
+    file_id: str,
+    db: Session = get_db_dependency(),
+) -> dict:
+    """Get schema snapshot history for a file."""
+    _validate_uuid_format(file_id)
+    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
+    if uploaded_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File '{file_id}' not found",
+        )
+
+    snapshots = (
+        db.query(SchemaSnapshot)
+        .filter(SchemaSnapshot.file_id == _as_uuid(file_id))
+        .order_by(SchemaSnapshot.captured_at.desc())
+        .all()
+    )
+
+    return {
+        "file_id": file_id,
+        "total_snapshots": len(snapshots),
+        "snapshots": [
+            {
+                "id": str(s.id),
+                "columns": s.columns,
+                "dtypes": s.dtypes,
+                "row_count": s.row_count,
+                "captured_at": s.captured_at.isoformat() if s.captured_at else None,
+            }
+            for s in snapshots
+        ],
+    }
+
+
+@router.get(
+    "/{file_id}/schema/diff",
+    summary="Get schema drift between latest snapshots",
+    description="Compares the two most recent schema snapshots for drift.",
+)
+def get_schema_diff(
+    file_id: str,
+    db: Session = get_db_dependency(),
+) -> dict:
+    """Get schema drift between the two most recent snapshots."""
+    _validate_uuid_format(file_id)
+    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
+    if uploaded_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File '{file_id}' not found",
+        )
+
+    snapshots = (
+        db.query(SchemaSnapshot)
+        .filter(SchemaSnapshot.file_id == _as_uuid(file_id))
+        .order_by(SchemaSnapshot.captured_at.desc())
+        .limit(2)
+        .all()
+    )
+
+    if len(snapshots) < 2:
+        return {
+            "file_id": file_id,
+            "has_drift": False,
+            "message": "Not enough snapshots for comparison",
+        }
+
+    current = snapshots[0]
+    previous = snapshots[1]
+    report = detect_schema_drift(
+        old_columns=previous.columns,
+        old_dtypes=previous.dtypes,
+        new_columns=current.columns,
+        new_dtypes=current.dtypes,
+    )
+
+    return {
+        "file_id": file_id,
+        "has_drift": report.has_drift,
+        "columns_added": report.columns_added,
+        "columns_removed": report.columns_removed,
+        "type_changes": [
+            {
+                "column": d.column,
+                "old_type": d.old_type,
+                "new_type": d.new_type,
+            }
+            for d in report.type_changes
+        ],
+        "summary": report.summary,
+    }

@@ -8,6 +8,7 @@ export interface UploadedFile {
   columns: string[];
   dtypes: Record<string, string>;
   file_size_bytes: number;
+  schema_drift: SchemaDrift | null;
 }
 
 export interface PipelineRun {
@@ -92,4 +93,79 @@ export interface WidgetConfig {
   minWidth: number;
   minHeight: number;
   locked: boolean;
+}
+
+// Week 2 Types
+
+export interface ColumnDrift {
+  column: string;
+  drift_type: "added" | "removed" | "type_changed";
+  old_value: string | null;
+  new_value: string | null;
+  severity: "breaking" | "warning" | "info";
+}
+
+export interface SchemaDrift {
+  has_drift: boolean;
+  breaking_changes: number;
+  warnings: number;
+  drift_items: ColumnDrift[];
+}
+
+export interface SchemaDriftReport {
+  file_id: string;
+  has_drift: boolean;
+  drift_items: ColumnDrift[];
+  breaking_changes: number;
+  warnings: number;
+}
+
+export interface StepPlan {
+  step_index: number;
+  step_name: string;
+  step_type: string;
+  estimated_rows_in: number | null;
+  estimated_rows_out: number | null;
+  estimated_columns: string[];
+  will_fail: boolean;
+  warnings: string[];
+}
+
+export interface ExecutionPlan {
+  pipeline_name: string;
+  total_steps: number;
+  estimated_total_duration_ms: number;
+  steps: StepPlan[];
+  files_read: string[];
+  files_written: string[];
+  will_succeed: boolean;
+}
+
+export interface PipelineVersion {
+  id: string;
+  pipeline_name: string;
+  version_number: number;
+  yaml_config: string;
+  created_at: string;
+  change_summary: string | null;
+}
+
+export interface PipelineDiff {
+  version_a: number;
+  version_b: number;
+  pipeline_name: string;
+  has_changes: boolean;
+  steps_added: string[];
+  steps_removed: string[];
+  steps_modified: { step_name: string; changed_fields: string[] }[];
+  unified_diff: string;
+  change_summary: string;
+}
+
+export interface SchemaSnapshot {
+  id: string;
+  columns: string[];
+  dtypes: Record<string, string>;
+  row_count: number;
+  captured_at: string;
 }

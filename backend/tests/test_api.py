@@ -249,3 +249,91 @@ class TestLineageEndpoints:
         """GET /lineage/{id} with invalid UUID returns 422."""
         response = client.get("/api/v1/lineage/not-a-uuid")
         assert response.status_code == 422
+
+
+class TestPlanEndpoint:
+    """Tests for the /pipelines/plan endpoint."""
+
+    def test_plan_returns_step_estimates(self, client, sales_csv_bytes):
+        """Plan endpoint returns step-level estimates."""
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+        yaml_config = build_simple_pipeline_yaml(file_id)
+        response = client.post(
+            "/api/v1/pipelines/plan",
+            json={"yaml_config": yaml_config},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_steps"] == 3
+        assert len(data["steps"]) == 3
+        assert data["will_succeed"] is True
+
+    def test_plan_includes_files_read(self, client, sales_csv_bytes):
+        """Plan includes file IDs that will be read."""
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+        yaml_config = build_simple_pipeline_yaml(file_id)
+        response = client.post(
+            "/api/v1/pipelines/plan",
+            json={"yaml_config": yaml_config},
+        )
+        data = response.json()
+        assert file_id in data["files_read"]
+
+    def test_plan_includes_files_written(self, client, sales_csv_bytes):
+        """Plan includes output filenames."""
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+        yaml_config = build_simple_pipeline_yaml(file_id)
+        response = client.post(
+            "/api/v1/pipelines/plan",
+            json={"yaml_config": yaml_config},
+        )
+        data = response.json()
+        assert "output.csv" in data["files_written"]
+
+
+class TestVersionsEndpoint:
+    """Tests for version API endpoints."""
+
+    def test_list_versions_empty(self, client):
+        """List versions returns empty for unknown pipeline."""
+        response = client.get("/api/v1/versions/unknown_pipeline")
+        assert response.status_code == 200
+        assert response.json()["total_versions"] == 0
+
+    def test_get_nonexistent_version_returns_404(self, client):
+        """Getting a nonexistent version returns 404."""
+        response = client.get("/api/v1/versions/my_pipeline/999")
+        assert response.status_code == 404
+
+    def test_restore_nonexistent_version_returns_404(self, client):
+        """Restoring a nonexistent version returns 404."""
+        response = client.post("/api/v1/versions/my_pipeline/restore/999")
+        assert response.status_code == 404
+
+    def test_diff_nonexistent_versions_returns_404(self, client):
+        """Diffing nonexistent versions returns 404."""
+        response = client.get("/api/v1/versions/my_pipeline/diff/1/2")
+        assert response.status_code == 404
+
+
+class TestSchemaEndpoints:
+    """Tests for schema drift endpoints."""
+
+    def test_schema_history_after_upload(self, client, sales_csv_bytes):
+        """Schema history is populated after file upload."""
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+        response = client.get(f"/api/v1/files/{file_id}/schema/history")
+        assert response.status_code == 200
+        assert response.json()["total_snapshots"] >= 1
+
+    def test_schema_diff_no_drift_single_upload(self, client, sales_csv_bytes):
+        """Schema diff with single upload shows no drift."""
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+        response = client.get(f"/api/v1/files/{file_id}/schema/diff")
+        assert response.status_code == 200
+        assert response.json()["has_drift"] is False
+
+    def test_schema_history_nonexistent_file_returns_404(self, client):
+        """Schema history for nonexistent file returns 404."""
+        response = client.get("/api/v1/files/00000000-0000-0000-0000-000000000000/schema/history")
+        assert response.status_code == 404
