@@ -11,13 +11,14 @@ import uuid
 from typing import AsyncGenerator
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from backend.auth import get_current_user, get_optional_user
 from backend.config import settings
 from backend.dependencies import get_db_dependency
-from backend.models import PipelineRun, PipelineStatus, UploadedFile
+from backend.models import PipelineRun, PipelineStatus, UploadedFile, User
 from datetime import timezone
 from backend.pipeline.parser import PipelineParser
 from backend.pipeline.planner import generate_execution_plan
@@ -66,6 +67,7 @@ def validate_pipeline(
     body: ValidatePipelineRequest,
     response: Response,
     db: Session = get_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> ValidatePipelineResponse:
     """Validate a pipeline configuration against registered files."""
     parser = PipelineParser()
@@ -106,6 +108,7 @@ def plan_pipeline(
     body: ValidatePipelineRequest,
     response: Response,
     db: Session = get_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ):
     """Generate a dry-run execution plan for a pipeline."""
     plan = generate_execution_plan(body.yaml_config, db)
@@ -152,6 +155,7 @@ def run_pipeline(
     body: RunPipelineRequest,
     response: Response,
     db: Session = get_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> RunPipelineResponse:
     """Create a pipeline run record and queue it for execution."""
     parser = PipelineParser()
@@ -162,12 +166,18 @@ def run_pipeline(
         name=pipeline_name,
         status=PipelineStatus.PENDING,
         yaml_config=body.yaml_config,
+        user_id=current_user.id if current_user else None,
     )
     db.add(pipeline_run)
     db.commit()
     db.refresh(pipeline_run)
 
     execute_pipeline_task.delay(str(pipeline_run.id))
+
+    from backend.services.audit_service import log_action
+    log_action(db, "pipeline_run", user_id=current_user.id if current_user else None,
+               resource_type="pipeline", resource_id=pipeline_run.id,
+               details={"name": pipeline_name}, request=request)
 
     logger.info(
         "Pipeline run queued: id=%s, name=%s",

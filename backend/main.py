@@ -12,20 +12,42 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import redis
+import sentry_sdk
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Counter, Histogram, Gauge
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from backend.api.router import api_router
+from backend.api.auth import router as auth_router
+from backend.api.webhooks import router as webhooks_router
+from backend.api.audit import router as audit_router
 from backend.config import settings
 from backend.database import create_all_tables, engine
 from backend.pipeline.exceptions import PipelineIQError
 from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
+
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        integrations=[
+            FastApiIntegration(transaction_style="endpoint"),
+            SqlalchemyIntegration(),
+        ],
+        traces_sample_rate=0.1,
+        profiles_sample_rate=0.1,
+        environment=settings.ENVIRONMENT,
+        release=f"pipelineiq@{settings.APP_VERSION}",
+        send_default_pii=False,
+    )
 
 
 @asynccontextmanager
@@ -87,6 +109,37 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ── Prometheus metrics ──────────────────────────────────────────────
+
+PIPELINE_RUNS_TOTAL = Counter(
+    "pipelineiq_pipeline_runs_total",
+    "Total number of pipeline runs",
+    ["status"],
+)
+PIPELINE_DURATION_SECONDS = Histogram(
+    "pipelineiq_pipeline_duration_seconds",
+    "Pipeline execution duration in seconds",
+    buckets=[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0],
+)
+FILES_UPLOADED_TOTAL = Counter(
+    "pipelineiq_files_uploaded_total",
+    "Total files uploaded",
+)
+ACTIVE_USERS = Gauge(
+    "pipelineiq_active_users_total",
+    "Total registered users",
+)
+CELERY_QUEUE_DEPTH = Gauge(
+    "pipelineiq_celery_queue_depth",
+    "Current Celery task queue depth",
+)
+
+Instrumentator(
+    should_group_status_codes=False,
+    should_ignore_untemplated=True,
+    excluded_handlers=["/metrics"],
+).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 @app.exception_handler(PipelineIQError)
@@ -187,6 +240,13 @@ async def timing_middleware(request: Request, call_next):
 
 
 app.include_router(api_router, prefix=settings.API_PREFIX)
+app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
+app.include_router(webhooks_router)
+app.include_router(audit_router)
+
+if settings.ENVIRONMENT != "production":
+    from backend.api.debug import router as debug_router
+    app.include_router(debug_router)
 
 
 @app.get(

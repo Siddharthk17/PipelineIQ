@@ -1,0 +1,309 @@
+{
+  "info": {
+    "name": "PipelineIQ",
+    "description": "PipelineIQ API — data pipeline orchestration with column-level lineage",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost" },
+    { "key": "token", "value": "" },
+    { "key": "run_id", "value": "" },
+    { "key": "file_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Register (first user → admin)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"email\": \"admin@pipelineiq.dev\", \"username\": \"admin\", \"password\": \"SecurePass123!\"}" },
+            "url": "{{base_url}}/auth/register"
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["var json = pm.response.json();", "pm.environment.set('token', json.access_token);"] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\"email\": \"admin@pipelineiq.dev\", \"password\": \"SecurePass123!\"}" },
+            "url": "{{base_url}}/auth/login"
+          }
+        },
+        {
+          "name": "Get Me",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/auth/me"
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/auth/logout"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Files",
+      "item": [
+        {
+          "name": "Upload File",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["var json = pm.response.json();", "pm.environment.set('file_id', json.id);"] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": { "mode": "formdata", "formdata": [{ "key": "file", "type": "file", "src": "" }] },
+            "url": "{{base_url}}/api/v1/files/upload"
+          }
+        },
+        {
+          "name": "List Files",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/files/"
+          }
+        },
+        {
+          "name": "File Preview",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/files/{{file_id}}/preview"
+          }
+        },
+        {
+          "name": "Schema History",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/files/{{file_id}}/schema/history"
+          }
+        },
+        {
+          "name": "Delete File",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/api/v1/files/{{file_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pipelines",
+      "item": [
+        {
+          "name": "Validate YAML",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": { "mode": "raw", "raw": "{\"yaml_config\": \"pipeline:\\n  name: test\\n  steps:\\n    - name: load\\n      type: load\\n      file_id: {{file_id}}\"}" },
+            "url": "{{base_url}}/api/v1/pipelines/validate"
+          }
+        },
+        {
+          "name": "Dry-Run Plan",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": { "mode": "raw", "raw": "{\"yaml_config\": \"pipeline:\\n  name: test\\n  steps:\\n    - name: load\\n      type: load\\n      file_id: {{file_id}}\"}" },
+            "url": "{{base_url}}/api/v1/pipelines/plan"
+          }
+        },
+        {
+          "name": "Run Pipeline",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["var json = pm.response.json();", "pm.environment.set('run_id', json.run_id);"] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": { "mode": "raw", "raw": "{\"yaml_config\": \"pipeline:\\n  name: test\\n  steps:\\n    - name: load\\n      type: load\\n      file_id: {{file_id}}\"}" },
+            "url": "{{base_url}}/api/v1/pipelines/run"
+          }
+        },
+        {
+          "name": "Get Pipeline Run",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/pipelines/{{run_id}}"
+          }
+        },
+        {
+          "name": "List Pipelines",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/pipelines/?page=1&limit=50"
+          }
+        },
+        {
+          "name": "Pipeline Stream (SSE)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/pipelines/{{run_id}}/stream"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Lineage",
+      "item": [
+        {
+          "name": "Full Lineage Graph",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/lineage/{{run_id}}"
+          }
+        },
+        {
+          "name": "Column Lineage",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/lineage/{{run_id}}/column?step=load&column=id"
+          }
+        },
+        {
+          "name": "Impact Analysis",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/lineage/{{run_id}}/impact?step=load&column=id"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Versioning",
+      "item": [
+        {
+          "name": "Pipeline Versions",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/pipelines/versions/my_pipeline"
+          }
+        },
+        {
+          "name": "Specific Version",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/pipelines/versions/my_pipeline/1"
+          }
+        },
+        {
+          "name": "Version Diff",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/pipelines/versions/my_pipeline/diff?v1=1&v2=2"
+          }
+        },
+        {
+          "name": "Restore Version",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/api/v1/pipelines/versions/my_pipeline/1/restore"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "item": [
+        {
+          "name": "Create Webhook",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": { "mode": "raw", "raw": "{\"url\": \"https://webhook.site/test\", \"events\": [\"pipeline_completed\", \"pipeline_failed\"]}" },
+            "url": "{{base_url}}/webhooks/"
+          }
+        },
+        {
+          "name": "List Webhooks",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/webhooks/"
+          }
+        },
+        {
+          "name": "Test Webhook",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/webhooks/{{webhook_id}}/test"
+          }
+        },
+        {
+          "name": "Webhook Deliveries",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/webhooks/{{webhook_id}}/deliveries"
+          }
+        },
+        {
+          "name": "Delete Webhook",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/webhooks/{{webhook_id}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Observability",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health"
+          }
+        },
+        {
+          "name": "Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/metrics"
+          }
+        },
+        {
+          "name": "Audit Logs (admin)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/audit/logs?page=1&limit=50"
+          }
+        },
+        {
+          "name": "My Audit Logs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{base_url}}/audit/logs/mine"
+          }
+        }
+      ]
+    }
+  ]
+}

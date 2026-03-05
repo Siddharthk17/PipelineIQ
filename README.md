@@ -1,12 +1,126 @@
 # PipelineIQ
 
 ![CI](https://github.com/Siddharthk17/PipelineIQ/actions/workflows/ci.yml/badge.svg)
-![Tests](https://img.shields.io/badge/tests-180%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-206%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Next.js](https://img.shields.io/badge/Next.js-15-black)
 
-A data pipeline orchestration engine with **automatic column-level lineage tracking**.
+> A production-grade data pipeline orchestration platform with column-level lineage tracking, real-time execution monitoring, schema drift detection, JWT authentication, and full observability.
+
+## ✨ Features
+
+- **8 pipeline step types** — load, filter, join, aggregate, sort, rename, validate, save
+- **Column-level data lineage** tracking with impact analysis
+- **Real-time execution streaming** via Server-Sent Events (SSE)
+- **Schema drift detection** with breaking/warning/info severities
+- **Data quality validation** with 12 check types (not_null, unique, range, regex, etc.)
+- **Pipeline versioning** with git-style diffs and restore
+- **Dry-run execution planner** with 8 heuristics and row estimates
+- **JWT authentication** with role-based access control (admin/viewer)
+- **Redis caching** (3x speedup on lineage queries)
+- **Rate limiting** with 4 tiers per endpoint type
+- **Celery async execution** with Flower monitoring dashboard
+- **Prometheus metrics** + Grafana dashboards (10 panels)
+- **Sentry error tracking** with Celery integration
+- **Webhook system** with HMAC SHA256 signatures and retry logic
+- **Immutable audit logging** with database-level enforcement
+- **Nginx reverse proxy** with SSE-safe configuration
+- **GitHub Actions CI/CD** pipeline
+
+## 🏗️ Architecture
+
+```
+Browser → Nginx (:80)
+            ├── /api/    → FastAPI (:8000)
+            │              ├── PostgreSQL (:5432)
+            │              ├── Redis (:6379) [cache + broker]
+            │              └── Celery Worker
+            ├── /        → Next.js (:3000)
+            ├── /flower/ → Flower (:5555)
+            └── /grafana/→ Grafana (:3001)
+                            └── Prometheus (:9090)
+```
+
+## 🛠️ Tech Stack
+
+| Category | Technology | Version | Purpose |
+|----------|-----------|---------|---------|
+| Backend | FastAPI | 0.109 | REST API + SSE |
+| Frontend | Next.js | 15 | React dashboard |
+| Database | PostgreSQL | 15 | UUID PKs, JSONB |
+| Cache/Queue | Redis | 7 | Caching + Celery broker |
+| Task Queue | Celery | 5.3 | Async pipeline execution |
+| Reverse Proxy | Nginx | latest | Port 80, SSE support |
+| Monitoring | Prometheus + Grafana | 2.48 / 10.2 | Metrics + dashboards |
+| Error Tracking | Sentry | 1.39 | Error monitoring |
+| Auth | python-jose + passlib | - | JWT + bcrypt |
+| Testing | pytest | 7.4 | 206+ tests |
+| CI/CD | GitHub Actions | - | Auto test + deploy |
+
+## 🚀 Quick Start (Local)
+
+**Prerequisites:** Docker, Docker Compose, Git
+
+```bash
+git clone https://github.com/Siddharthk17/PipelineIQ.git
+cd PipelineIQ
+cp .env.example .env        # Edit with your values
+docker-compose up -d
+```
+
+Visit **http://localhost** — first registered user becomes admin.
+
+## 📋 Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://pipelineiq:...@db:5432/pipelineiq` |
+| `REDIS_URL` | Redis connection string | `redis://redis:6379/0` |
+| `SECRET_KEY` | JWT signing key (min 32 chars) | `change-me-in-production` |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT token expiry | `1440` (24h) |
+| `POSTGRES_PASSWORD` | Database password | - |
+| `FLOWER_USER` / `FLOWER_PASSWORD` | Flower dashboard credentials | `admin` / - |
+| `GRAFANA_USER` / `GRAFANA_PASSWORD` | Grafana dashboard credentials | `admin` / - |
+| `SENTRY_DSN` | Sentry DSN (optional) | empty |
+| `ENVIRONMENT` | `development` or `production` | `development` |
+
+## 🧪 Running Tests
+
+```bash
+docker-compose exec api pytest backend/tests/ -v
+```
+
+Expected: **206+ tests, 0 failures**
+
+## 📡 API Reference
+
+- **Swagger UI**: http://localhost/docs
+- **ReDoc**: http://localhost/redoc
+
+## 📊 Observability
+
+- **Metrics**: http://localhost/metrics
+- **Grafana**: http://localhost/grafana/ (credentials from .env)
+- **Flower**: http://localhost:5555/flower/ (credentials from .env)
+
+## 🔐 Authentication
+
+First registered user becomes **admin** automatically. Subsequent users are **viewers**.
+
+- `POST /auth/register` — Create account
+- `POST /auth/login` — Get JWT token
+- `GET /auth/me` — Current user profile
+- Protected routes require `Authorization: Bearer <token>` header
+
+## 📄 License
+
+Apache 2.0 — see [LICENSE](LICENSE)
+
+## 👨‍💻 Author
+
+**Siddharth Kulkarni** — 3rd year IT, PCCOE Pune
+GitHub: [@Siddharthk17](https://github.com/Siddharthk17)
 
 ## What It Does
 

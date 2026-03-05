@@ -182,22 +182,45 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
 
 def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     """Persist pipeline execution results to the database."""
+    from backend.main import PIPELINE_RUNS_TOTAL, PIPELINE_DURATION_SECONDS
+
     if summary.status == RunnerPipelineStatus.COMPLETED:
         pipeline_run.status = PipelineStatus.COMPLETED
+        PIPELINE_RUNS_TOTAL.labels(status="success").inc()
         _publish_terminal_event(str(pipeline_run.id), "pipeline_completed")
     else:
         pipeline_run.status = PipelineStatus.FAILED
         pipeline_run.error_message = str(summary.error) if summary.error else None
+        PIPELINE_RUNS_TOTAL.labels(status="failed").inc()
         _publish_terminal_event(
             str(pipeline_run.id), "pipeline_failed",
             str(summary.error) if summary.error else "",
         )
 
     pipeline_run.completed_at = utcnow()
+    if pipeline_run.started_at and pipeline_run.completed_at:
+        duration = (pipeline_run.completed_at - pipeline_run.started_at).total_seconds()
+        PIPELINE_DURATION_SECONDS.observe(duration)
     pipeline_run.total_rows_in = summary.total_rows_processed
     pipeline_run.total_rows_out = (
         summary.step_results[-1].rows_out if summary.step_results else 0
     )
+
+    # Fire webhooks
+    try:
+        from backend.services.webhook_service import trigger_webhooks_for_run
+        status_str = "completed" if summary.status == RunnerPipelineStatus.COMPLETED else "failed"
+        duration_ms = int(duration * 1000) if pipeline_run.started_at and pipeline_run.completed_at else 0
+        trigger_webhooks_for_run(
+            run_id=str(pipeline_run.id),
+            status=status_str,
+            pipeline_name=pipeline_run.name or "",
+            duration_ms=duration_ms,
+            steps_count=len(summary.step_results),
+            rows_processed=summary.total_rows_processed or 0,
+        )
+    except Exception as exc:
+        logger.error("Webhook trigger failed for run %s: %s", pipeline_run.id, exc)
 
     for idx, result in enumerate(summary.step_results):
         step_record = StepResult(

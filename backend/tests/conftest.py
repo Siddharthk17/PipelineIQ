@@ -60,12 +60,43 @@ def test_db(test_engine) -> Generator[Session, None, None]:
 
 @pytest.fixture()
 def client(test_db: Session, tmp_path) -> TestClient:
-    """FastAPI TestClient with the test database injected."""
+    """FastAPI TestClient with the test database injected.
+
+    Auth dependencies are overridden with a mock admin user so existing
+    tests that hit protected endpoints continue to work without tokens.
+    """
 
     def override_get_db() -> Generator[Session, None, None]:
         yield test_db
 
     app.dependency_overrides[get_db] = override_get_db
+
+    # Override auth dependencies with a mock admin user
+    from backend.auth import get_current_user, get_current_admin, get_optional_user
+    from backend.models import User
+    import uuid as _uuid
+
+    mock_user = User(
+        id=_uuid.uuid4(),
+        email="testadmin@test.com",
+        username="testadmin",
+        hashed_password="hashed",
+        role="admin",
+        is_active=True,
+    )
+
+    async def override_current_user():
+        return mock_user
+
+    async def override_current_admin():
+        return mock_user
+
+    def override_optional_user():
+        return mock_user
+
+    app.dependency_overrides[get_current_user] = override_current_user
+    app.dependency_overrides[get_current_admin] = override_current_admin
+    app.dependency_overrides[get_optional_user] = override_optional_user
 
     # Patch upload dir to use tmp_path
     upload_dir = tmp_path / "uploads"
@@ -83,7 +114,27 @@ def client(test_db: Session, tmp_path) -> TestClient:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture()
+def auth_client(test_db: Session, tmp_path) -> TestClient:
+    """TestClient WITHOUT auth overrides — for testing real auth flows."""
 
+    def override_get_db() -> Generator[Session, None, None]:
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    with patch("backend.api.files.settings") as mock_settings, \
+         patch("backend.api.pipelines.execute_pipeline_task") as mock_task:
+        mock_settings.UPLOAD_DIR = upload_dir
+        mock_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
+        mock_settings.MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+        mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
+        test_client = TestClient(app)
+        yield test_client
+
+    app.dependency_overrides.clear()
 @pytest.fixture()
 def sample_sales_df() -> pd.DataFrame:
     """Deterministic 20-row sales DataFrame for testing.

@@ -1,13 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useThemeStore } from "@/store/themeStore";
 import { useWidgetStore, getAllWidgets } from "@/store/widgetStore";
 import { useKeybindingStore } from "@/store/keybindingStore";
 import { checkHealth } from "@/lib/api";
-import { Activity, Clock, Command, LayoutDashboard, Palette, RefreshCw, Keyboard } from "lucide-react";
+import { Activity, Clock, Command, LayoutDashboard, Palette, RefreshCw, Keyboard, LogOut, User } from "lucide-react";
+import { AuthUser } from "@/lib/auth-context";
 
-export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings }: { onOpenTheme: () => void; onOpenCommand: () => void; onOpenKeybindings: () => void }) {
+export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, onLogout }: { onOpenTheme: () => void; onOpenCommand: () => void; onOpenKeybindings: () => void; user?: AuthUser | null; onLogout?: () => void }) {
+  const router = useRouter();
   const [time, setTime] = useState<Date | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const { resetLayout, workspaces, activeWorkspaceId, switchWorkspace } = useWidgetStore();
@@ -86,6 +89,28 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings }: { onOp
       </div>
 
       <div className="flex items-center gap-4 text-[var(--text-secondary)]">
+        {user && (
+          <>
+            <div className="flex items-center gap-2 text-xs">
+              <User className="w-4 h-4" />
+              {!user.isDemo && <span className="text-[var(--text-primary)] max-w-[96px] truncate">{user.username}</span>}
+              {user.isDemo ? (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-400">DEMO</span>
+              ) : user.role === "admin" ? (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-violet-500/20 text-violet-400">ADMIN</span>
+              ) : (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-400">VIEWER</span>
+              )}
+            </div>
+            {onLogout && (
+              <button onClick={onLogout} className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--accent-error)] transition-colors" title="Logout">
+                <LogOut className="w-3 h-3" />
+                Logout
+              </button>
+            )}
+            <div className="w-px h-4 bg-[var(--topbar-border)]" />
+          </>
+        )}
         <div className="flex items-center gap-2 text-xs mr-2">
           <div className={`w-2 h-2 rounded-full ${isConnected ? "bg-[var(--accent-success)]" : "bg-[var(--accent-error)]"} animate-pulse`} />
           <span className="text-[var(--text-secondary)]">{isConnected ? "Connected" : "Unreachable"}</span>

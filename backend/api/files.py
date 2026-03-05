@@ -12,12 +12,13 @@ from pathlib import Path
 from typing import List
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
+from backend.auth import get_current_user
 from backend.config import settings
 from backend.dependencies import get_db_dependency
-from backend.models import SchemaSnapshot, UploadedFile
+from backend.models import SchemaSnapshot, UploadedFile, User
 from backend.pipeline.schema_drift import detect_schema_drift
 
 def _as_uuid(val):
@@ -49,6 +50,7 @@ async def upload_file(
     file: UploadFile,
     response: Response,
     db: Session = get_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> FileUploadResponse:
     """Upload a data file and store its metadata."""
     original_filename = os.path.basename(file.filename or "upload.csv")
@@ -141,6 +143,14 @@ async def upload_file(
         file_id, original_filename, len(df), len(columns),
     )
 
+    from backend.main import FILES_UPLOADED_TOTAL
+    FILES_UPLOADED_TOTAL.inc()
+
+    from backend.services.audit_service import log_action
+    log_action(db, "file_uploaded", user_id=current_user.id, resource_type="file",
+               resource_id=file_id, details={"filename": original_filename, "row_count": len(df)},
+               request=request)
+
     return FileUploadResponse(
         id=str(file_id),
         original_filename=original_filename,
@@ -213,7 +223,9 @@ def get_file(
 )
 def delete_file(
     file_id: str,
+    request: Request,
     db: Session = get_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Delete an uploaded file from disk and database."""
     _validate_uuid_format(file_id)
@@ -230,6 +242,10 @@ def delete_file(
 
     db.delete(uploaded_file)
     db.commit()
+
+    from backend.services.audit_service import log_action
+    log_action(db, "file_deleted", user_id=current_user.id, resource_type="file",
+               resource_id=_as_uuid(file_id), request=request)
 
     logger.info("File deleted: id=%s", file_id)
     return {"detail": f"File '{file_id}' deleted"}

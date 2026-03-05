@@ -10,6 +10,7 @@ from enum import Enum as PyEnum
 from typing import List, Optional
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Enum as SQLEnum,
     ForeignKey,
@@ -83,6 +84,9 @@ class PipelineRun(Base):
     total_rows_in: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     total_rows_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    user_id: Mapped[Optional[str]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     step_results: Mapped[List["StepResult"]] = relationship(
         "StepResult",
@@ -246,4 +250,99 @@ class PipelineVersion(Base):
 
     __table_args__ = (
         UniqueConstraint("pipeline_name", "version_number"),
+    )
+
+
+class User(Base):
+    """Registered user with role-based access control."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid
+    )
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="viewer")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    webhooks = relationship("Webhook", back_populates="user", cascade="all, delete-orphan")
+
+
+class Webhook(Base):
+    """Webhook registration for pipeline event notifications."""
+
+    __tablename__ = "webhooks"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    secret: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    events = mapped_column(PgJSONB, nullable=False, default=lambda: ["pipeline_completed", "pipeline_failed"])
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    user = relationship("User", back_populates="webhooks")
+    deliveries = relationship("WebhookDelivery", back_populates="webhook", cascade="all, delete-orphan")
+
+
+class WebhookDelivery(Base):
+    """Record of a webhook delivery attempt."""
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid
+    )
+    webhook_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(Uuid, nullable=True)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    payload = mapped_column(PgJSONB, nullable=False)
+    response_status: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    response_body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    webhook = relationship("Webhook", back_populates="deliveries")
+
+
+class AuditLog(Base):
+    """Immutable audit log entry for tracking user actions."""
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid
+    )
+    user_id: Mapped[Optional[str]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    resource_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    resource_id: Mapped[Optional[str]] = mapped_column(Uuid, nullable=True)
+    details = mapped_column(PgJSONB, nullable=True, default=dict)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )

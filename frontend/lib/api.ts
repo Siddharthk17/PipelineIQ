@@ -22,12 +22,61 @@ export class ApiError extends Error {
   }
 }
 
+// ── Token management ───────────────────────────────────────────────
+
+export function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("pipelineiq_token");
+}
+
+export function setToken(token: string): void {
+  localStorage.setItem("pipelineiq_token", token);
+}
+
+export function clearToken(): void {
+  localStorage.removeItem("pipelineiq_token");
+}
+
+// ── Auth types ─────────────────────────────────────────────────────
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  username: string;
+  role: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  user: AuthUser;
+}
+
+// ── Core fetch with auth ───────────────────────────────────────────
+
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    ...(options?.headers as Record<string, string> || {}),
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   const res = await fetch(`${API_V1}${endpoint}`, {
     ...options,
+    headers,
     cache: "no-store",
   });
   if (!res.ok) {
+    if (res.status === 401 && token) {
+      clearToken();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+    }
     let detail;
     try {
       detail = await res.json();
@@ -147,4 +196,57 @@ export async function restorePipelineVersion(name: string, version: number): Pro
 export async function getSchemaHistory(fileId: string): Promise<SchemaSnapshot[]> {
   const data = await fetchApi<{ file_id: string; total_snapshots: number; snapshots: SchemaSnapshot[] }>(`/files/${fileId}/schema/history`);
   return data.snapshots;
+}
+
+// ── Auth API functions ─────────────────────────────────────────────
+
+async function fetchAuth<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    ...(options?.headers as Record<string, string> || {}),
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+    ...options,
+    headers,
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    if (res.status === 401 && token) {
+      clearToken();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+    }
+    let detail;
+    try { detail = await res.json(); } catch { detail = await res.text(); }
+    throw new ApiError(res.status, res.statusText, detail);
+  }
+  return res.json() as Promise<T>;
+}
+
+export async function login(email: string, password: string): Promise<LoginResponse> {
+  return fetchAuth<LoginResponse>("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function register(email: string, username: string, password: string): Promise<AuthUser> {
+  return fetchAuth<AuthUser>("/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, username, password }),
+  });
+}
+
+export async function getMe(): Promise<AuthUser> {
+  return fetchAuth<AuthUser>("/auth/me");
+}
+
+export function logout(): void {
+  clearToken();
 }

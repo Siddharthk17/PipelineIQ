@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { TopBar } from "@/components/layout/TopBar";
 import { WidgetGrid } from "@/components/layout/WidgetGrid";
 import { CommandPalette } from "@/components/layout/CommandPalette";
@@ -9,13 +10,27 @@ import { ThemeBuilder } from "@/components/theme/ThemeBuilder";
 import { TerminalLauncher } from "@/components/layout/TerminalLauncher";
 import { KeybindingsModal } from "@/components/layout/KeybindingsModal";
 import { useKeybindings } from "@/hooks/useKeybindings";
+import { useAuth } from "@/lib/auth-context";
 
 export default function Dashboard() {
+  const router = useRouter();
+  const { user, isLoading, logout } = useAuth();
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [isThemeSelectorOpen, setIsThemeSelectorOpen] = useState(false);
   const [isThemeBuilderOpen, setIsThemeBuilderOpen] = useState(false);
   const [isLauncherOpen, setIsLauncherOpen] = useState(false);
   const [isKeybindingsOpen, setIsKeybindingsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isLoading && !user) {
+      router.push("/login");
+    }
+  }, [isLoading, user, router]);
+
+  const handleLogout = () => {
+    logout();
+    router.push("/login");
+  };
 
   useEffect(() => {
     // Force focus on the window so keybindings work immediately without requiring a click
@@ -39,6 +54,18 @@ export default function Dashboard() {
     () => setIsKeybindingsOpen(true)
   );
 
+  if (isLoading || !user) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen w-screen bg-[var(--bg-base)]">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-8 h-8 rounded bg-[var(--accent-primary)] text-[var(--bg-base)] font-bold flex items-center justify-center text-lg">P</div>
+          <span className="text-xl font-bold text-[var(--text-primary)]">PipelineIQ</span>
+        </div>
+        <div className="w-5 h-5 border-2 border-[var(--text-secondary)] border-t-[var(--accent-primary)] rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <main 
       className="flex flex-col h-screen w-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)] outline-none"
@@ -54,6 +81,8 @@ export default function Dashboard() {
         onOpenTheme={() => setIsThemeSelectorOpen(!isThemeSelectorOpen)}
         onOpenCommand={() => setIsCommandOpen(true)}
         onOpenKeybindings={() => setIsKeybindingsOpen(true)}
+        user={user}
+        onLogout={handleLogout}
       />
       
       <div className="flex-1 relative overflow-hidden">

@@ -36,6 +36,7 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql://postgres:pipelineiq_dev_password@localhost:5432/pipelineiq"
     SECRET_KEY: str = "change-me-in-production"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_BROKER_URL: str = ""
@@ -50,7 +51,9 @@ class Settings(BaseSettings):
     STEP_TIMEOUT_SECONDS: int = 300
 
     API_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: List[str] = ["http://localhost:3000"]
+    CORS_ORIGINS: List[str] = [
+        "http://localhost", "http://localhost:80", "http://localhost:3000",
+    ]
 
     # Caching
     CACHE_TTL_STATS: int = 30
@@ -71,8 +74,18 @@ class Settings(BaseSettings):
     FLOWER_USER: str = "admin"
     FLOWER_PASSWORD: str = "change-me-in-production"
 
+    # Grafana
+    GRAFANA_USER: str = "admin"
+    GRAFANA_PASSWORD: str = "change-me-in-production"
+
+    # Sentry
+    SENTRY_DSN: str = ""
+    ENVIRONMENT: str = "development"
+
     # PostgreSQL (used by docker-compose, not directly by app)
     POSTGRES_PASSWORD: str = ""
+    POSTGRES_USER: str = "pipelineiq"
+    POSTGRES_DB: str = "pipelineiq"
 
     @field_validator("LOG_LEVEL")
     @classmethod

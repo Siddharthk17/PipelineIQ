@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useThemeStore } from "@/store/themeStore";
+import { AuthProvider } from "@/lib/auth-context";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,7 +44,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {mounted ? children : null}
+      <AuthProvider>
+        {mounted ? children : null}
+      </AuthProvider>
     </QueryClientProvider>
   );
 }
