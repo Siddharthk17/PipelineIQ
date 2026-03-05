@@ -13,17 +13,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    ports:
-      - "5432:5432"
     restart: unless-stopped
+    networks:
+      - pipelineiq-network
 
   api:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-api
-    ports:
-      - "8000:8000"
     env_file:
       - .env
     environment:
@@ -37,6 +35,8 @@ services:
     volumes:
       - uploads:/app/uploads
     restart: unless-stopped
+    networks:
+      - pipelineiq-network
 
   worker:
     build:
@@ -57,34 +57,77 @@ services:
     volumes:
       - uploads:/app/uploads
     restart: unless-stopped
+    networks:
+      - pipelineiq-network
 
   redis:
     image: redis:7-alpine
     container_name: pipelineiq-redis
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
     restart: unless-stopped
+    networks:
+      - pipelineiq-network
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: http://api:8000
+        NEXT_PUBLIC_API_URL: ""
     container_name: pipelineiq-frontend
-    ports:
-      - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://api:8000
+      - NEXT_PUBLIC_API_URL=
     depends_on:
       - api
     restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  flower:
+    build: ./backend
+    container_name: pipelineiq-flower
+    command: >
+      celery -A backend.celery_app:celery_app flower
+      --port=5555
+      --url_prefix=flower
+      --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://pipelineiq:${POSTGRES_PASSWORD}@db:5432/pipelineiq
+      - FLOWER_USER=${FLOWER_USER}
+      - FLOWER_PASSWORD=${FLOWER_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  nginx:
+    build: ./nginx
+    container_name: pipelineiq-nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+      - frontend
+      - flower
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
 
 volumes:
   uploads:
   db_data:
+
+networks:
+  pipelineiq-network:
+    driver: bridge

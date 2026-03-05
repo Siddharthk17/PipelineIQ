@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     # Versioning
     MAX_VERSIONS_PER_PIPELINE: int = 50
 
+    # Flower (Celery monitoring)
+    FLOWER_USER: str = "admin"
+    FLOWER_PASSWORD: str = "change-me-in-production"
+
     # PostgreSQL (used by docker-compose, not directly by app)
     POSTGRES_PASSWORD: str = ""
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { usePipelineRun } from "@/hooks/usePipelineRun";
 import { CheckCircle, XCircle, PlayCircle, Clock, AlertTriangle } from "lucide-react";
@@ -11,6 +11,16 @@ export function RunMonitorWidget() {
   
   // This hook connects to the SSE stream and updates the activeRun in the store
   usePipelineRun(activeRunId);
+
+  const [expandedValidations, setExpandedValidations] = useState<Set<number>>(new Set());
+  const toggleValidation = (idx: number) => {
+    setExpandedValidations(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
 
   if (!activeRunId || !activeRun) {
     return (
@@ -77,9 +87,11 @@ export function RunMonitorWidget() {
           
           const durationPercent = step.duration_ms ? Math.max(5, (step.duration_ms / maxDuration) * 100) : 0;
 
+          const isValidateStep = step.step_type === "validate";
+
           return (
+            <React.Fragment key={idx}>
             <motion.div 
-              key={idx}
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               className={`flex items-center p-2 rounded-lg transition-colors ${
@@ -98,8 +110,12 @@ export function RunMonitorWidget() {
                   <span className={`text-sm font-medium truncate ${isRunning ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}>
                     {step.step_name ?? "unknown"}
                   </span>
-                  <span className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">
-                    {step.step_type ?? "—"}
+                  <span className={`text-[10px] uppercase tracking-wider ${
+                    isValidateStep && isSuccess ? "text-[var(--accent-success)] font-semibold" :
+                    isValidateStep && isFailed ? "text-[var(--accent-error)] font-semibold" :
+                    "text-[var(--text-secondary)]"
+                  }`}>
+                    {isValidateStep && isSuccess ? "✓ Validated" : isValidateStep && isFailed ? "✗ Failed" : step.step_type ?? "—"}
                   </span>
                 </div>
 
@@ -130,6 +146,42 @@ export function RunMonitorWidget() {
                 </div>
               </div>
             </motion.div>
+            {isValidateStep && !isPending && (
+              <div className="ml-8 mr-2 mb-1">
+                <button
+                  onClick={() => toggleValidation(idx)}
+                  className="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors flex items-center gap-1 py-1"
+                >
+                  <span className="text-[10px]">{expandedValidations.has(idx) ? "▼" : "▶"}</span>
+                  <span>Validation Results</span>
+                </button>
+                {expandedValidations.has(idx) && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    className="pl-4 pb-2 text-xs space-y-1"
+                  >
+                    {isSuccess && (
+                      <span className="text-[var(--accent-success)] font-medium">✓ All checks passed</span>
+                    )}
+                    {isFailed && (
+                      <div className="space-y-1">
+                        <span className="text-[var(--accent-error)] font-medium">✗ Validation failed</span>
+                        {step.error_message && (
+                          <p className="text-[var(--text-secondary)] ml-4">{step.error_message}</p>
+                        )}
+                      </div>
+                    )}
+                    {step.rows_in != null && step.rows_out != null && step.rows_in !== step.rows_out && (
+                      <div className="text-[var(--text-secondary)]">
+                        Rows filtered: {step.rows_in} → {step.rows_out} ({step.rows_in - step.rows_out} removed)
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </div>
+            )}
+            </React.Fragment>
           );
         })}
       </div>

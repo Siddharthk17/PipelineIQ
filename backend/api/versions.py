@@ -153,6 +153,7 @@ def restore_version(
 
     return {
         "message": f"Restored to version {version_number}",
+        "yaml_config": new_version.yaml_config,
         "new_version": {
             "id": str(new_version.id),
             "version_number": new_version.version_number,

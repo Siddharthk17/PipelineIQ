@@ -1,5 +1,11 @@
 # PipelineIQ
 
+![CI](https://github.com/Siddharthk17/PipelineIQ/actions/workflows/ci.yml/badge.svg)
+![Tests](https://img.shields.io/badge/tests-180%20passing-brightgreen)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
+![Python](https://img.shields.io/badge/python-3.11-blue)
+![Next.js](https://img.shields.io/badge/Next.js-15-black)
+
 A data pipeline orchestration engine with **automatic column-level lineage tracking**.
 
 ## What It Does

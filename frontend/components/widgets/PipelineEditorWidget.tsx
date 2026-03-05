@@ -4,10 +4,10 @@ import React, { useState, useEffect, useCallback } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { validatePipeline, runPipeline, getFiles } from "@/lib/api";
+import { validatePipeline, runPipeline, getFiles, getPipelinePlan } from "@/lib/api";
 import { usePipelineStore } from "@/store/pipelineStore";
-import { CheckCircle, XCircle, Play, RefreshCw, FileText, Plus } from "lucide-react";
-import { ValidationResult } from "@/lib/types";
+import { CheckCircle, XCircle, Play, RefreshCw, FileText, Plus, X } from "lucide-react";
+import { ValidationResult, ExecutionPlan } from "@/lib/types";
 
 export function PipelineEditorWidget() {
   const queryClient = useQueryClient();
@@ -15,6 +15,9 @@ export function PipelineEditorWidget() {
   const [code, setCode] = useState(lastYamlConfig);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
+  const [plan, setPlan] = useState<ExecutionPlan | null>(null);
+  const [isPlanLoading, setIsPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
 
   const { data: files } = useQuery({ queryKey: ["files"], queryFn: getFiles });
 
@@ -80,6 +83,21 @@ export function PipelineEditorWidget() {
     });
   }, []);
 
+  const handlePlan = useCallback(async () => {
+    setIsPlanLoading(true);
+    setPlanError(null);
+    try {
+      const result = await getPipelinePlan(code);
+      setPlan(result);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to generate plan";
+      setPlanError(message);
+      setPlan(null);
+    } finally {
+      setIsPlanLoading(false);
+    }
+  }, [code]);
+
   return (
     <div className="flex h-full overflow-hidden">
       <div className="w-[60%] flex flex-col border-r" style={{ borderColor: "var(--widget-border)" }}>
@@ -110,6 +128,15 @@ export function PipelineEditorWidget() {
             >
               Clear
             </button>
+            <button
+              onClick={handlePlan}
+              disabled={isPlanLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ borderColor: "var(--widget-border)" }}
+            >
+              {isPlanLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <span>▷</span>}
+              Plan
+            </button>
           </div>
           <button 
             onClick={() => runMutation.mutate(code)}
@@ -120,6 +147,97 @@ export function PipelineEditorWidget() {
             Run Pipeline
           </button>
         </div>
+        {planError && (
+          <div className="p-2 border-t bg-[var(--bg-surface)] text-xs text-[var(--accent-error)]" style={{ borderColor: "var(--widget-border)" }}>
+            Plan error: {planError}
+          </div>
+        )}
+        {plan && (
+          <div className="border-t overflow-y-auto max-h-[50%] bg-[var(--bg-surface)]" style={{ borderColor: "var(--widget-border)" }}>
+            <div className="p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-[var(--text-primary)] uppercase tracking-wider">
+                  Execution Plan — {plan.pipeline_name}
+                </h3>
+                <button onClick={() => setPlan(null)} className="p-0.5 rounded hover:bg-[var(--interactive-hover)] text-[var(--text-secondary)]">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="flex items-center gap-3 text-xs">
+                {plan.will_succeed ? (
+                  <span className="flex items-center gap-1 text-[var(--accent-success)] font-medium">
+                    <CheckCircle className="w-3.5 h-3.5" /> ✓ Will Succeed
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-[var(--accent-error)] font-medium">
+                    <XCircle className="w-3.5 h-3.5" /> ✗ Will Fail
+                  </span>
+                )}
+                <span className="text-[var(--text-secondary)]">
+                  {plan.estimated_total_duration_ms > 1000
+                    ? `~${(plan.estimated_total_duration_ms / 1000).toFixed(1)}s`
+                    : `~${plan.estimated_total_duration_ms}ms`}
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-[var(--text-secondary)] border-b" style={{ borderColor: "var(--widget-border)" }}>
+                      <th className="py-1 pr-2 font-medium">Step</th>
+                      <th className="py-1 pr-2 font-medium">Type</th>
+                      <th className="py-1 pr-2 font-medium">Est. Rows In</th>
+                      <th className="py-1 pr-2 font-medium">Est. Rows Out</th>
+                      <th className="py-1 font-medium">Warnings</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plan.steps.map((step) => (
+                      <tr
+                        key={step.step_name}
+                        className={step.will_fail ? "bg-[var(--accent-error)]/10" : ""}
+                      >
+                        <td className="py-1 pr-2 text-[var(--text-primary)]">{step.step_name}</td>
+                        <td className="py-1 pr-2">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                            step.step_type === "load" ? "bg-blue-500/20 text-blue-400"
+                            : step.step_type === "transform" ? "bg-purple-500/20 text-purple-400"
+                            : step.step_type === "filter" ? "bg-amber-500/20 text-amber-400"
+                            : step.step_type === "join" ? "bg-cyan-500/20 text-cyan-400"
+                            : step.step_type === "export" ? "bg-green-500/20 text-green-400"
+                            : "bg-gray-500/20 text-gray-400"
+                          }`}>
+                            {step.step_type}
+                          </span>
+                        </td>
+                        <td className="py-1 pr-2 text-[var(--text-secondary)]">{step.estimated_rows_in ?? "—"}</td>
+                        <td className="py-1 pr-2 text-[var(--text-secondary)]">{step.estimated_rows_out ?? "—"}</td>
+                        <td className="py-1 text-amber-400">
+                          {step.warnings.length > 0 ? step.warnings.join("; ") : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {(plan.files_read.length > 0 || plan.files_written.length > 0) && (
+                <div className="flex gap-4 text-[10px] text-[var(--text-secondary)]">
+                  {plan.files_read.length > 0 && (
+                    <div>
+                      <span className="font-medium uppercase tracking-wider">Files Read:</span>{" "}
+                      {plan.files_read.join(", ")}
+                    </div>
+                  )}
+                  {plan.files_written.length > 0 && (
+                    <div>
+                      <span className="font-medium uppercase tracking-wider">Files Written:</span>{" "}
+                      {plan.files_written.join(", ")}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="w-[40%] flex flex-col bg-[var(--bg-surface)] overflow-hidden">

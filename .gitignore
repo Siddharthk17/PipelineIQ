@@ -20,3 +20,6 @@ frontend/.env.local
 .DS_Store
 .venv/
 venv/
+
+# Pre-downloaded pip packages for Docker builds
+backend/vendor/

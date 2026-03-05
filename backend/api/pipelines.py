@@ -204,6 +204,39 @@ def list_pipeline_runs(
 
 
 @router.get(
+    "/stats",
+    summary="Get pipeline statistics",
+)
+@limiter.limit(settings.RATE_LIMIT_READ)
+def get_pipeline_stats(
+    request: Request,
+    response: Response,
+    db: Session = get_db_dependency(),
+):
+    """Get aggregate pipeline statistics."""
+    from sqlalchemy import func
+    total_runs = db.query(func.count(PipelineRun.id)).scalar() or 0
+    completed = db.query(func.count(PipelineRun.id)).filter(
+        PipelineRun.status == PipelineStatus.COMPLETED
+    ).scalar() or 0
+    failed = db.query(func.count(PipelineRun.id)).filter(
+        PipelineRun.status == PipelineStatus.FAILED
+    ).scalar() or 0
+    pending = db.query(func.count(PipelineRun.id)).filter(
+        PipelineRun.status == PipelineStatus.PENDING
+    ).scalar() or 0
+    total_files = db.query(func.count(UploadedFile.id)).scalar() or 0
+    return {
+        "total_runs": total_runs,
+        "completed": completed,
+        "failed": failed,
+        "pending": pending,
+        "success_rate": round(completed / total_runs * 100, 1) if total_runs > 0 else 0,
+        "total_files": total_files,
+    }
+
+
+@router.get(
     "/{run_id}",
     response_model=PipelineRunResponse,
     summary="Get pipeline run details",

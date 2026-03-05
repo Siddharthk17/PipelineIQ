@@ -1,0 +1,287 @@
+name: PipelineIQ CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+
+jobs:
+  # ─────────────────────────────────────────────────────────
+  # JOB 1: Backend Tests (180 tests)
+  # ─────────────────────────────────────────────────────────
+  backend-tests:
+    name: Backend Tests (180)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: pipelineiq
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: pipelineiq_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Run Alembic migrations
+        env:
+          DATABASE_URL: postgresql://pipelineiq:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/pipelineiq_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          UPLOAD_DIR: /tmp/pipelineiq_uploads
+          MAX_UPLOAD_SIZE: 52428800
+          CACHE_TTL_STATS: 30
+          DRIFT_DETECTION_ENABLED: true
+          MAX_VERSIONS_PER_PIPELINE: 50
+        run: |
+          cd backend
+          alembic upgrade head
+
+      - name: Run full test suite
+        env:
+          DATABASE_URL: postgresql://pipelineiq:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/pipelineiq_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          UPLOAD_DIR: /tmp/pipelineiq_uploads
+          MAX_UPLOAD_SIZE: 52428800
+          CACHE_TTL_STATS: 30
+          RATE_LIMIT_PIPELINE_RUN: 10/minute
+          RATE_LIMIT_FILE_UPLOAD: 30/minute
+          RATE_LIMIT_VALIDATION: 60/minute
+          RATE_LIMIT_READ: 120/minute
+          DRIFT_DETECTION_ENABLED: true
+          MAX_VERSIONS_PER_PIPELINE: 50
+          FLOWER_USER: admin
+          FLOWER_PASSWORD: test_password
+        run: |
+          cd backend
+          pytest tests/ -v --tb=short --junitxml=test-results.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-results
+          path: backend/test-results.xml
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "## Backend Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "Tests run against PostgreSQL 15 + Redis 7" >> $GITHUB_STEP_SUMMARY
+
+  # ─────────────────────────────────────────────────────────
+  # JOB 2: Frontend Type Check + Build
+  # ─────────────────────────────────────────────────────────
+  frontend-check:
+    name: Frontend TypeScript + Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: TypeScript check
+        run: |
+          cd frontend
+          npx tsc --noEmit
+
+      - name: Build check
+        run: |
+          cd frontend
+          npm run build
+        env:
+          NEXT_PUBLIC_API_URL: ""
+
+  # ─────────────────────────────────────────────────────────
+  # JOB 3: Docker Compose Smoke Test
+  # ─────────────────────────────────────────────────────────
+  docker-smoke-test:
+    name: Docker Compose Smoke Test
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-check]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create .env for CI
+        run: |
+          cat > .env << EOF
+          DATABASE_URL=postgresql://pipelineiq:ci_password@db:5432/pipelineiq
+          POSTGRES_PASSWORD=ci_password
+          REDIS_URL=redis://redis:6379/0
+          SECRET_KEY=ci_secret_key_for_testing_only
+          UPLOAD_DIR=/app/backend/uploads
+          MAX_UPLOAD_SIZE=52428800
+          CACHE_TTL_STATS=30
+          RATE_LIMIT_PIPELINE_RUN=100/minute
+          RATE_LIMIT_FILE_UPLOAD=100/minute
+          RATE_LIMIT_VALIDATION=100/minute
+          RATE_LIMIT_READ=1000/minute
+          DRIFT_DETECTION_ENABLED=true
+          MAX_VERSIONS_PER_PIPELINE=50
+          FLOWER_USER=admin
+          FLOWER_PASSWORD=ci_flower_password
+          EOF
+
+      - name: Build and start all services
+        run: |
+          docker-compose build
+          docker-compose up -d
+          sleep 30
+
+      - name: Verify all services healthy
+        run: |
+          docker-compose ps
+          curl --retry 5 --retry-delay 3 -f http://localhost/health
+          echo "✓ API healthy through Nginx"
+          curl --retry 5 --retry-delay 3 -f http://localhost/
+          echo "✓ Frontend serving"
+
+      - name: Run smoke test
+        run: |
+          python3 << 'SMOKE'
+          import requests, time, json
+
+          BASE = "http://localhost"
+
+          # Health
+          r = requests.get(f"{BASE}/health")
+          assert r.status_code == 200
+          data = r.json()
+          assert data["status"] == "ok"
+          assert data["db"] == "ok"
+          assert data["redis"] == "ok"
+          print("✓ Health check passed")
+
+          # Upload file
+          import io, csv
+          output = io.StringIO()
+          writer = csv.writer(output)
+          writer.writerow(["id", "amount", "status"])
+          for i in range(10):
+              writer.writerow([i, i*100, "delivered"])
+          csv_data = output.getvalue().encode()
+
+          r = requests.post(f"{BASE}/api/v1/files/upload",
+              files={"file": ("smoke_test.csv", csv_data, "text/csv")})
+          assert r.status_code in [200, 201]
+          file_id = r.json()["id"]
+          print(f"✓ File upload passed: {file_id[:8]}...")
+
+          # Run pipeline
+          yaml = f"""pipeline:
+            name: ci_smoke_test
+            steps:
+              - name: load
+                type: load
+                file_id: "{file_id}"
+              - name: save
+                type: save
+                input: load
+                format: csv
+                filename: smoke_output
+          """
+          r = requests.post(f"{BASE}/api/v1/pipelines/run",
+              json={"yaml_config": yaml})
+          assert r.status_code in [200, 202]
+          run_id = r.json()["run_id"]
+          print(f"✓ Pipeline queued: {run_id[:8]}...")
+
+          # Wait for completion
+          for _ in range(30):
+              r = requests.get(f"{BASE}/api/v1/pipelines/{run_id}")
+              status = r.json().get("status")
+              if status in ["SUCCESS", "COMPLETED"]:
+                  break
+              elif status == "FAILED":
+                  raise Exception(f"Pipeline failed: {r.json()}")
+              time.sleep(1)
+
+          assert status in ["SUCCESS", "COMPLETED"]
+          print(f"✓ Pipeline completed: {status}")
+          print("✓ All smoke tests passed")
+          SMOKE
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker-compose logs --tail=50
+
+      - name: Tear down
+        if: always()
+        run: docker-compose down --volumes
+
+  # ─────────────────────────────────────────────────────────
+  # JOB 4: Deploy to Railway (main branch only)
+  # ─────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-check, docker-smoke-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Railway
+        run: railway up --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Deployment summary
+        run: |
+          echo "## Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Deployed to Railway from commit ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
