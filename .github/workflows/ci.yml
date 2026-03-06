@@ -23,7 +23,7 @@ jobs:
         image: postgres:15-alpine
         env:
           POSTGRES_USER: pipelineiq
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_PASSWORD: pipelineiq_ci
           POSTGRES_DB: pipelineiq_test
         options: >-
           --health-cmd pg_isready
@@ -61,23 +61,22 @@ jobs:
 
       - name: Run Alembic migrations
         env:
-          DATABASE_URL: postgresql://pipelineiq:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/pipelineiq_test
+          DATABASE_URL: postgresql://pipelineiq:pipelineiq_ci@localhost:5432/pipelineiq_test
           REDIS_URL: redis://localhost:6379/0
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          SECRET_KEY: ci_test_secret_key_not_for_production
           UPLOAD_DIR: /tmp/pipelineiq_uploads
           MAX_UPLOAD_SIZE: 52428800
           CACHE_TTL_STATS: 30
           DRIFT_DETECTION_ENABLED: true
           MAX_VERSIONS_PER_PIPELINE: 50
         run: |
-          cd backend
           alembic upgrade head
 
       - name: Run full test suite
         env:
-          DATABASE_URL: postgresql://pipelineiq:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/pipelineiq_test
+          DATABASE_URL: postgresql://pipelineiq:pipelineiq_ci@localhost:5432/pipelineiq_test
           REDIS_URL: redis://localhost:6379/0
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          SECRET_KEY: ci_test_secret_key_not_for_production
           UPLOAD_DIR: /tmp/pipelineiq_uploads
           MAX_UPLOAD_SIZE: 52428800
           CACHE_TTL_STATS: 30
@@ -91,7 +90,7 @@ jobs:
           FLOWER_PASSWORD: test_password
         run: |
           cd backend
-          pytest tests/ -v --tb=short --junitxml=test-results.xml
+          python -m pytest tests/ -v --tb=short --junitxml=test-results.xml
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
