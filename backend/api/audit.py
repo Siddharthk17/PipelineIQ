@@ -15,7 +15,6 @@ from backend.models import AuditLog, User
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/audit", tags=["Audit"])
 
-
 class AuditLogResponse(BaseModel):
     id: str
     user_id: Optional[str]
@@ -28,7 +27,6 @@ class AuditLogResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
 
 @router.get("/logs", response_model=List[AuditLogResponse])
 def get_audit_logs(
@@ -63,7 +61,6 @@ def get_audit_logs(
         )
         for l in logs
     ]
-
 
 @router.get("/logs/mine", response_model=List[AuditLogResponse])
 def get_my_audit_logs(

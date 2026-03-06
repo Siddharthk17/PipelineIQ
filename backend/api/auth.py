@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Authentication"])
 
 
-# ── Request / Response schemas ──────────────────────────────────────
+# Request / Response schemas
 
 class RegisterRequest(BaseModel):
     email: str
@@ -58,11 +58,9 @@ class RegisterRequest(BaseModel):
             raise ValueError("Password must be at least 8 characters")
         return v
 
-
 class LoginRequest(BaseModel):
     email: str
     password: str
-
 
 class UserResponse(BaseModel):
     id: str
@@ -75,13 +73,11 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
-
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
     user: UserResponse
-
 
 class RoleUpdateRequest(BaseModel):
     role: str
@@ -93,8 +89,7 @@ class RoleUpdateRequest(BaseModel):
             raise ValueError("Role must be 'admin' or 'viewer'")
         return v
 
-
-# ── Helpers ─────────────────────────────────────────────────────────
+# Helpers
 
 def _user_to_response(user: User) -> UserResponse:
     return UserResponse(
@@ -106,8 +101,7 @@ def _user_to_response(user: User) -> UserResponse:
         created_at=user.created_at.isoformat() if user.created_at else "",
     )
 
-
-# ── Endpoints ───────────────────────────────────────────────────────
+# Endpoints
 
 @router.post("/register", status_code=201)
 def register(body: RegisterRequest, request: Request, db: Session = Depends(get_db)):
@@ -144,7 +138,6 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
 
     return _user_to_response(user)
 
-
 @router.post("/login")
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     """Authenticate and return a JWT access token."""
@@ -173,19 +166,16 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
         user=_user_to_response(user),
     )
 
-
 @router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get the current authenticated user's profile."""
     return _user_to_response(current_user)
-
 
 @router.post("/logout")
 async def logout(current_user: User = Depends(get_current_user)):
     """Logout endpoint (client-side token removal)."""
     logger.info("User logged out: %s", current_user.username)
     return {"message": "Logged out successfully"}
-
 
 @router.get("/users")
 async def list_users(
@@ -195,7 +185,6 @@ async def list_users(
     """List all users (admin only)."""
     users = db.query(User).order_by(User.created_at).all()
     return [_user_to_response(u) for u in users]
-
 
 @router.patch("/users/{user_id}/role")
 async def update_user_role(

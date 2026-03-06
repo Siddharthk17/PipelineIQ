@@ -11,11 +11,9 @@ env:
   NODE_VERSION: "20"
 
 jobs:
-  # ─────────────────────────────────────────────────────────
-  # JOB 1: Backend Tests (180 tests)
-  # ─────────────────────────────────────────────────────────
+  # JOB 1: Backend Tests (206 tests)
   backend-tests:
-    name: Backend Tests (180)
+    name: Backend Tests (206)
     runs-on: ubuntu-latest
 
     services:
@@ -105,9 +103,7 @@ jobs:
           echo "## Backend Test Results" >> $GITHUB_STEP_SUMMARY
           echo "Tests run against PostgreSQL 15 + Redis 7" >> $GITHUB_STEP_SUMMARY
 
-  # ─────────────────────────────────────────────────────────
   # JOB 2: Frontend Type Check + Build
-  # ─────────────────────────────────────────────────────────
   frontend-check:
     name: Frontend TypeScript + Build
     runs-on: ubuntu-latest
@@ -140,9 +136,7 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: ""
 
-  # ─────────────────────────────────────────────────────────
   # JOB 3: Docker Compose Smoke Test
-  # ─────────────────────────────────────────────────────────
   docker-smoke-test:
     name: Docker Compose Smoke Test
     runs-on: ubuntu-latest
