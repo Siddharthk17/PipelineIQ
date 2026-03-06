@@ -174,13 +174,13 @@ jobs:
 
       - name: Build and start all services
         run: |
-          docker-compose build
-          docker-compose up -d
+          docker compose build
+          docker compose up -d
           sleep 30
 
       - name: Verify all services healthy
         run: |
-          docker-compose ps
+          docker compose ps
           curl --retry 5 --retry-delay 3 -f http://localhost/health
           echo "✓ API healthy through Nginx"
           curl --retry 5 --retry-delay 3 -f http://localhost/
@@ -262,8 +262,8 @@ jobs:
 
       - name: Show logs on failure
         if: failure()
-        run: docker-compose logs --tail=50
+        run: docker compose logs --tail=50
 
       - name: Tear down
         if: always()
-        run: docker-compose down --volumes
+        run: docker compose down --volumes
