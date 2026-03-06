@@ -153,7 +153,7 @@ jobs:
           POSTGRES_PASSWORD=ci_password
           REDIS_URL=redis://redis:6379/0
           SECRET_KEY=ci_secret_key_for_testing_only
-          UPLOAD_DIR=/app/backend/uploads
+          UPLOAD_DIR=/app/uploads
           MAX_UPLOAD_SIZE=52428800
           CACHE_TTL_STATS=30
           RATE_LIMIT_PIPELINE_RUN=100/minute
@@ -164,6 +164,8 @@ jobs:
           MAX_VERSIONS_PER_PIPELINE=50
           FLOWER_USER=admin
           FLOWER_PASSWORD=ci_flower_password
+          GRAFANA_USER=admin
+          GRAFANA_PASSWORD=ci_grafana_password
           EOF
 
       - name: Build and start all services

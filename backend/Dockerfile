@@ -18,7 +18,7 @@ COPY . ./backend/
 COPY alembic.ini /app/alembic.ini
 
 # Create upload and data directories (ephemeral storage for cloud deployment)
-RUN mkdir -p /tmp/uploads /app/data && chown -R appuser:appuser /app /tmp/uploads
+RUN mkdir -p /tmp/uploads /app/data /app/uploads && chown -R appuser:appuser /app /tmp/uploads
 
 # Switch to non-root user
 USER appuser
