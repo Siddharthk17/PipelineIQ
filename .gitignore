@@ -23,3 +23,8 @@ venv/
 
 # Pre-downloaded pip packages for Docker builds
 backend/vendor/
+
+# Test coverage
+.coverage
+htmlcov/
+.vercel

@@ -6,6 +6,22 @@
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Next.js](https://img.shields.io/badge/Next.js-15-black)
 
+## 🚀 Live Demo
+
+| Service | URL |
+|---------|-----|
+| **Frontend** | https://pipeline-iq0.vercel.app |
+| **API Docs** | https://pipelineiq-api.onrender.com/docs |
+| **Health** | https://pipelineiq-api.onrender.com/health |
+
+### Try it instantly
+Click "Try Demo" on the login page — no registration needed.
+Demo account has full admin access with pre-loaded sample data.
+
+### Demo Credentials (manual login)
+- Email: `demo@pipelineiq.app`
+- Password: `Demo1234!`
+
 > A production-grade data pipeline orchestration platform with column-level lineage tracking, real-time execution monitoring, schema drift detection, JWT authentication, and full observability.
 
 ## ✨ Features
