@@ -55,6 +55,7 @@ class Settings(BaseSettings):
         "http://localhost", "http://localhost:80", "http://localhost:3000",
         "https://pipelineiq.vercel.app",
         "https://pipelineiq-api.onrender.com",
+        "https://frontend-zeta-blue-67.vercel.app",
     ]
 
     # Caching
