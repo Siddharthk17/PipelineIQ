@@ -19,8 +19,8 @@ COPY . ./backend/
 # Copy alembic.ini to project root for migration commands
 COPY alembic.ini /app/alembic.ini
 
-# Create upload and data directories
-RUN mkdir -p /app/uploads /app/data && chown -R appuser:appuser /app
+# Create upload and data directories (use /tmp for ephemeral storage on Fly.io)
+RUN mkdir -p /tmp/uploads /app/data && chown -R appuser:appuser /app /tmp/uploads
 
 # Switch to non-root user
 USER appuser
@@ -28,5 +28,5 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Run migrations then start the app
-CMD ["sh", "-c", "python -m alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port 8000"]
+# Run migrations, seed demo data, then start API and worker
+CMD ["sh", "-c", "python -m alembic upgrade head && python -m backend.scripts.seed_demo || true && celery -A backend.celery_app:celery_app worker --loglevel=info --concurrency=1 & uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

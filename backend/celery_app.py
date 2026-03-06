@@ -5,6 +5,8 @@ and result backend. Task modules are auto-discovered from the
 tasks package.
 """
 
+import ssl
+
 import sentry_sdk
 from celery import Celery
 from sentry_sdk.integrations.celery import CeleryIntegration
@@ -38,5 +40,10 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
 )
+
+# Upstash Redis requires TLS — configure SSL for both broker and backend
+if settings.CELERY_BROKER_URL.startswith("rediss://"):
+    celery_app.conf.broker_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+    celery_app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="pipeline_tasks")

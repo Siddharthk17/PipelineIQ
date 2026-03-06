@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: pipelineiq-api
+    runtime: docker
+    region: singapore
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: APP_VERSION
+        value: "2.0.0"
+      - key: UPLOAD_DIR
+        value: /tmp/uploads
+      - key: FIRST_SUPERUSER_EMAIL
+        value: admin@pipelineiq.app
+      - key: FIRST_SUPERUSER_PASSWORD
+        sync: false
+      - key: CORS_ORIGINS
+        value: '["https://pipelineiq.vercel.app","https://pipelineiq-api.onrender.com"]'
+    healthCheckPath: /health

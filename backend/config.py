@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     API_PREFIX: str = "/api/v1"
     CORS_ORIGINS: List[str] = [
         "http://localhost", "http://localhost:80", "http://localhost:3000",
+        "https://pipelineiq.vercel.app",
+        "https://pipelineiq-api.onrender.com",
     ]
 
     # Caching
