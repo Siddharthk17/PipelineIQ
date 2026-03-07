@@ -110,7 +110,7 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# ── Prometheus metrics ──────────────────────────────────────────────
+# Prometheus metrics
 
 PIPELINE_RUNS_TOTAL = Counter(
     "pipelineiq_pipeline_runs_total",

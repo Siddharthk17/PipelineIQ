@@ -28,14 +28,11 @@ from backend.utils.cache import cache_delete, cache_delete_pattern, cache_get, c
 
 logger = logging.getLogger(__name__)
 
-
 def _as_uuid(val):
     """Convert str or uuid.UUID to uuid.UUID for DB queries."""
     return val if isinstance(val, uuid.UUID) else uuid.UUID(val)
 
-
 router = APIRouter(prefix="/lineage", tags=["lineage"])
-
 
 @router.get(
     "/{run_id}",
@@ -82,7 +79,6 @@ def get_lineage_graph(
 
     cache_set(cache_key, response.model_dump())
     return response
-
 
 @router.get(
     "/{run_id}/column",
@@ -135,7 +131,6 @@ def get_column_lineage(
     cache_set(cache_key, response.model_dump())
     return response
 
-
 @router.get(
     "/{run_id}/impact",
     response_model=ImpactAnalysisResponse,
@@ -179,7 +174,6 @@ def get_impact_analysis(
     cache_set(cache_key, response.model_dump())
     return response
 
-
 def _get_lineage_record(run_id: str, db: Session) -> LineageGraph:
     """Fetch the lineage graph record, raising 404 if not found."""
     _validate_run_exists(run_id, db)
@@ -199,7 +193,6 @@ def _get_lineage_record(run_id: str, db: Session) -> LineageGraph:
         )
     return lineage_graph
 
-
 def _validate_run_exists(run_id: str, db: Session) -> None:
     """Raise 404 if the pipeline run does not exist."""
     exists = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
@@ -208,7 +201,6 @@ def _validate_run_exists(run_id: str, db: Session) -> None:
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline run '{run_id}' not found",
         )
-
 
 def _validate_uuid_format(value: str) -> None:
     """Raise 422 if the value is not a valid UUID."""
@@ -219,7 +211,6 @@ def _validate_uuid_format(value: str) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid UUID format: '{value}'",
         )
-
 
 def _reconstruct_recorder(run_id: str, db: Session) -> LineageRecorder:
     """Reconstruct a LineageRecorder from stored graph data.

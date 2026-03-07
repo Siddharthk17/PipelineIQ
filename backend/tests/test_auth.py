@@ -9,7 +9,7 @@ from jose import jwt
 from backend.auth import ALGORITHM, get_password_hash, create_access_token
 
 
-# ── Helpers ─────────────────────────────────────────────────────────
+# Helpers
 
 def register_user(auth_client, email="test@example.com", username="testuser", password="Str0ngP@ss!"):
     return auth_client.post("/auth/register", json={
@@ -30,7 +30,7 @@ def auth_header(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-# ── Registration ────────────────────────────────────────────────────
+# Registration
 
 def test_register_first_user_becomes_admin(auth_client):
     r = register_user(auth_client, "admin1@test.com", "admin1")
@@ -67,7 +67,7 @@ def test_register_short_password_returns_422(auth_client):
     assert r.status_code == 422
 
 
-# ── Login ───────────────────────────────────────────────────────────
+# Login
 
 def test_login_valid_credentials_returns_token(auth_client):
     register_user(auth_client, "login@test.com", "loginuser")
@@ -91,7 +91,7 @@ def test_login_nonexistent_user_returns_401(auth_client):
     assert r.status_code == 401
 
 
-# ── Token / Profile ────────────────────────────────────────────────
+# Token / Profile
 
 def test_get_me_with_valid_token(auth_client):
     register_user(auth_client, "me@test.com", "meuser")
@@ -117,7 +117,7 @@ def test_get_me_with_expired_token_returns_401(auth_client):
     assert r.status_code == 401
 
 
-# ── Route protection ───────────────────────────────────────────────
+# Route protection
 
 def test_protected_route_without_token_returns_401(auth_client):
     r = auth_client.post("/api/v1/pipelines/validate", json={"yaml_config": "test"})
@@ -136,7 +136,7 @@ def test_protected_route_with_valid_token_succeeds(auth_client):
     assert r.status_code != 401
 
 
-# ── RBAC ────────────────────────────────────────────────────────────
+# RBAC
 
 def test_admin_route_with_viewer_token_returns_403(auth_client):
     register_user(auth_client, "adm@test.com", "admuser")  # admin (first)
@@ -153,7 +153,7 @@ def test_admin_route_with_admin_token_succeeds(auth_client):
     assert r.status_code == 200
 
 
-# ── Logout ──────────────────────────────────────────────────────────
+# Logout
 
 def test_logout_returns_200(auth_client):
     register_user(auth_client, "bye@test.com", "byeuser")

@@ -34,8 +34,6 @@ def recorder() -> LineageRecorder:
     """Fresh LineageRecorder instance."""
     return LineageRecorder()
 
-
-
 class TestFilterStep:
     """Tests for the filter step executor."""
 
@@ -173,8 +171,6 @@ class TestFilterStep:
         assert result.rows_out == 0
         assert len(result.warnings) > 0
 
-
-
 class TestSelectStep:
     """Tests for the select step executor."""
 
@@ -206,8 +202,6 @@ class TestSelectStep:
         )
         with pytest.raises(ColumnNotFoundError):
             executor.execute_select(df_registry, config, recorder)
-
-
 
 class TestRenameStep:
     """Tests for the rename step executor."""
@@ -258,8 +252,6 @@ class TestRenameStep:
         assert "order_id" in result.output_df.columns
         assert "customer_id" in result.output_df.columns
         assert "status" in result.output_df.columns
-
-
 
 class TestJoinStep:
     """Tests for the join step executor."""
@@ -339,8 +331,6 @@ class TestJoinStep:
             executor.execute_join(df_registry, config, recorder)
         assert exc_info.value.side == "right"
 
-
-
 class TestAggregateStep:
     """Tests for the aggregate step executor."""
 
@@ -379,8 +369,6 @@ class TestAggregateStep:
         )
         result = executor.execute_aggregate(df_registry, config, recorder)
         assert result.rows_out == sample_sales_df["region"].nunique()
-
-
 
 class TestSortStep:
     """Tests for the sort step executor."""
@@ -431,8 +419,6 @@ class TestSortStep:
         )
         with pytest.raises(ColumnNotFoundError):
             executor.execute_sort(df_registry, config, recorder)
-
-
 
 class TestExecutionResult:
     """Tests for StepExecutionResult metadata correctness."""

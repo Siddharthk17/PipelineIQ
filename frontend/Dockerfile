@@ -1,4 +1,4 @@
-# ── Stage 1: Build the application ────────────────────────────────────────────
+# Stage 1: Build the application
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json* ./
@@ -10,7 +10,7 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
 RUN npm run build
 
-# ── Stage 2: Production runner ──────────────────────────────────────────────
+# Stage 2: Production runner
 FROM node:20-alpine AS runner
 WORKDIR /app
 

@@ -10,8 +10,6 @@ from fastapi.testclient import TestClient
 
 from backend.tests.conftest import upload_file
 
-
-
 class TestFileUploadAttacks:
     """Security tests for the file upload endpoint."""
 
@@ -65,8 +63,6 @@ class TestFileUploadAttacks:
             files={"file": ("nullbytes.csv", null_content, "text/csv")},
         )
         assert response.status_code in [201, 400, 422]
-
-
 
 class TestAPIInjectionAttacks:
     """Security tests for API injection vectors."""

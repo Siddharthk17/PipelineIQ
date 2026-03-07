@@ -36,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/files", tags=["files"])
 
-
 @router.post(
     "/upload",
     response_model=FileUploadResponse,
@@ -162,7 +161,6 @@ async def upload_file(
         schema_drift=schema_drift_response,
     )
 
-
 @router.get(
     "/",
     response_model=FileListResponse,
@@ -185,7 +183,6 @@ def list_files(db: Session = get_db_dependency()) -> FileListResponse:
         for f in files
     ]
     return FileListResponse(files=file_responses, total=len(file_responses))
-
 
 @router.get(
     "/{file_id}",
@@ -214,7 +211,6 @@ def get_file(
         dtypes=uploaded_file.dtypes,
         file_size_bytes=uploaded_file.file_size_bytes,
     )
-
 
 @router.delete(
     "/{file_id}",
@@ -249,7 +245,6 @@ def delete_file(
 
     logger.info("File deleted: id=%s", file_id)
     return {"detail": f"File '{file_id}' deleted"}
-
 
 @router.get(
     "/{file_id}/preview",
@@ -286,7 +281,6 @@ def preview_file(
         "data": preview_df.to_dict(orient="records"),
     }
 
-
 def _validate_uuid_format(value: str) -> None:
     """Raise 422 if the value is not a valid UUID."""
     try:
@@ -296,7 +290,6 @@ def _validate_uuid_format(value: str) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid UUID format: '{value}'",
         )
-
 
 def _validate_file_extension(filename: str) -> None:
     """Raise 400 if the file extension is not in ALLOWED_EXTENSIONS."""
@@ -309,7 +302,6 @@ def _validate_file_extension(filename: str) -> None:
                 f"Allowed: {sorted(settings.ALLOWED_EXTENSIONS)}"
             ),
         )
-
 
 async def _read_with_size_limit(file: UploadFile) -> bytes:
     """Read file content with streaming size enforcement to prevent OOM."""
@@ -339,14 +331,12 @@ async def _read_with_size_limit(file: UploadFile) -> bytes:
         )
     return content
 
-
 def _store_file(file_id: str, original_filename: str, content: bytes) -> Path:
     """Write the file content to disk in the upload directory."""
     extension = Path(original_filename).suffix.lower()
     stored_path = settings.UPLOAD_DIR / f"{file_id}{extension}"
     stored_path.write_bytes(content)
     return stored_path
-
 
 def _parse_file_content(filename: str, stored_path: Path) -> pd.DataFrame:
     """Parse the stored file into a DataFrame for metadata extraction."""
@@ -368,7 +358,6 @@ def _parse_file_content(filename: str, stored_path: Path) -> pd.DataFrame:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
-
 
 @router.get(
     "/{file_id}/schema/history",
@@ -409,7 +398,6 @@ def get_schema_history(
             for s in snapshots
         ],
     }
-
 
 @router.get(
     "/{file_id}/schema/diff",

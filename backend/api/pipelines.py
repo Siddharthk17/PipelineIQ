@@ -43,7 +43,6 @@ def _as_uuid(val):
     """Convert str or uuid.UUID to uuid.UUID for DB queries."""
     return val if isinstance(val, uuid.UUID) else uuid.UUID(val)
 
-
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
 # Terminal event types that signal the SSE stream should close
@@ -53,7 +52,6 @@ _TERMINAL_EVENT_TYPES = frozenset({
     "COMPLETED",
     "FAILED",
 })
-
 
 @router.post(
     "/validate",
@@ -95,7 +93,6 @@ def validate_pipeline(
             for w in result.warnings
         ],
     )
-
 
 @router.post(
     "/plan",
@@ -140,7 +137,6 @@ def plan_pipeline(
             for s in plan.steps
         ],
     }
-
 
 @router.post(
     "/run",
@@ -189,7 +185,6 @@ def run_pipeline(
         status=pipeline_run.status.value,
     )
 
-
 @router.get(
     "/",
     response_model=PipelineRunListResponse,
@@ -211,7 +206,6 @@ def list_pipeline_runs(
         runs=[_run_to_response(r) for r in runs],
         total=len(runs),
     )
-
 
 @router.get(
     "/stats",
@@ -245,7 +239,6 @@ def get_pipeline_stats(
         "total_files": total_files,
     }
 
-
 @router.get(
     "/{run_id}",
     response_model=PipelineRunResponse,
@@ -267,7 +260,6 @@ def get_pipeline_run(
             detail=f"Pipeline run '{run_id}' not found",
         )
     return _run_to_response(pipeline_run)
-
 
 @router.get(
     "/{run_id}/stream",
@@ -300,7 +292,6 @@ async def stream_pipeline_progress(
         media_type="text/event-stream",
         headers=_sse_headers(),
     )
-
 
 async def _live_event_generator(run_id: str) -> AsyncGenerator[str, None]:
     """Subscribe to Redis and yield SSE events until pipeline completes."""
@@ -341,7 +332,6 @@ async def _live_event_generator(run_id: str) -> AsyncGenerator[str, None]:
         await pubsub.unsubscribe(channel)
         await redis_client.aclose()
 
-
 async def _completed_event_generator(
     pipeline_run: PipelineRun,
 ) -> AsyncGenerator[str, None]:
@@ -357,7 +347,6 @@ async def _completed_event_generator(
         "status": pipeline_run.status.value,
     })
     yield f"event: {event_type}\ndata: {data}\n\n"
-
 
 def _extract_event_type(data: str) -> str:
     """Extract the event type from a JSON message."""
@@ -376,7 +365,6 @@ def _extract_event_type(data: str) -> str:
     except (json.JSONDecodeError, AttributeError):
         return "progress"
 
-
 def _sse_headers() -> dict:
     """Standard headers for SSE responses."""
     return {
@@ -384,7 +372,6 @@ def _sse_headers() -> dict:
         "X-Accel-Buffering": "no",
         "Connection": "keep-alive",
     }
-
 
 def _validate_uuid_format(value: str) -> None:
     """Raise 422 if the value is not a valid UUID."""
@@ -396,13 +383,11 @@ def _validate_uuid_format(value: str) -> None:
             detail=f"Invalid UUID format: '{value}'",
         )
 
-
 def _ensure_utc(dt):
     """Attach UTC tzinfo to naive datetimes from SQLite."""
     if dt is not None and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
-
 
 def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
     """Convert a PipelineRun ORM model to an API response."""

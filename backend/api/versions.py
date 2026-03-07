@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/versions", tags=["versions"])
 
-
 @router.get("/{pipeline_name}")
 def list_versions(
     pipeline_name: str,
@@ -46,7 +45,6 @@ def list_versions(
         ],
     }
 
-
 @router.get("/{pipeline_name}/{version_number}")
 def get_version(
     pipeline_name: str,
@@ -74,7 +72,6 @@ def get_version(
         "change_summary": version.change_summary,
         "created_at": version.created_at.isoformat() if version.created_at else None,
     }
-
 
 @router.get("/{pipeline_name}/diff/{version_a}/{version_b}")
 def diff_versions(
@@ -124,7 +121,6 @@ def diff_versions(
         "unified_diff": diff.unified_diff,
         "change_summary": diff.change_summary,
     }
-
 
 @router.post("/{pipeline_name}/restore/{version_number}")
 def restore_version(

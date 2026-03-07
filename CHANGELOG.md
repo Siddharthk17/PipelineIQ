@@ -3,7 +3,7 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
-## [1.0.0] — Week 4: Auth, Observability, Deploy
+## [1.2.7] — Week 4: Auth, Observability, Deploy
 
 ### Added
 - JWT authentication (register, login, roles: admin/viewer)
@@ -20,7 +20,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - User info and logout in TopBar
 - Debug/sentry-test endpoint (non-production only)
 
-## [0.3.0] — Week 3: DevOps
+## [0.3.12] — Week 3: DevOps
 
 ### Added
 - Nginx reverse proxy (port 80, SSE-safe, security headers)
@@ -29,7 +29,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - Frontend Week 2 UI: schema drift badge, dry-run plan, version history,
   validate results display, schema history modal
 
-## [0.2.0] — Week 2: Data Platform
+## [0.2.3] — Week 2: Data Platform
 
 ### Added
 - PostgreSQL migration (UUID PKs, JSONB, connection pooling)
@@ -42,7 +42,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - Dry-run execution planner (8 heuristics)
 - 83 new tests (180 total)
 
-## [0.1.0] — Week 1: Foundation
+## [0.1.2] — Week 1: Foundation
 
 ### Added
 - FastAPI backend with 8 pipeline step types

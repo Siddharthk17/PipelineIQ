@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Authentication"])
 
-
 # Request / Response schemas
 
 class RegisterRequest(BaseModel):

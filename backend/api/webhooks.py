@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
-# ── Schemas ─────────────────────────────────────────────────────────
+# Schemas
 
 class WebhookCreate(BaseModel):
     url: str
@@ -74,7 +74,7 @@ def _as_uuid(val):
     return _uuid.UUID(str(val))
 
 
-# ── Endpoints ───────────────────────────────────────────────────────
+# Endpoints
 
 @router.post("/", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 def create_webhook(
