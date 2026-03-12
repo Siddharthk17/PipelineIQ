@@ -3,6 +3,28 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [1.3.9] — Frontend Testing
+
+### Added
+- Vitest + React Testing Library + jsdom test infrastructure
+- 93 frontend tests across 8 test files:
+  - API layer tests (26): token management, all API functions, error handling, 401 redirect
+  - Zustand store tests (26): pipeline, widget binary tree, theme, keybinding stores
+  - Page component tests (12): login/register forms, validation, error states, demo login
+  - Widget tests (11): QuickStats, FileUpload, RunHistory, FileRegistry
+  - Utility tests (7): cn() classname merging, API constants
+  - Middleware tests (4): auth redirect logic
+  - Auth context tests (4): AuthProvider login, logout, demo login
+  - Hook tests (3): widget layout toggle, workspace switching
+- `npm run test` and `npm run test:watch` scripts
+- CI pipeline now runs frontend tests (tsc → vitest → build)
+- Total project tests: 299 (206 backend + 93 frontend)
+
+### Changed
+- CI job renamed: "Frontend TypeScript + Build" → "Frontend TypeScript + Tests + Build"
+- README testing section split into Backend and Frontend subsections
+- AUDIT_REPORT test gaps updated: frontend unit tests now ✅
+
 ## [1.2.7] — Week 4: Auth, Observability, Deploy
 
 ### Added

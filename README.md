@@ -502,6 +502,8 @@ All shortcuts are rebindable through the Keybindings modal (`Alt+K`).
 
 ## Testing
 
+### Backend (206 tests)
+
 ```bash
 cd backend
 python -m pytest tests/ -v --tb=short
@@ -526,7 +528,29 @@ python -m pytest tests/ -v --tb=short
 | test_rate_limiting.py | 6 | Per-tier rate enforcement |
 | test_performance.py | 5 | Response time, concurrent load |
 
-Tests use SQLite in-memory for speed. CI runs against PostgreSQL 15 + Redis 7.
+Backend tests use SQLite in-memory for speed. CI runs against PostgreSQL 15 + Redis 7.
+
+### Frontend (93 tests)
+
+```bash
+cd frontend
+npm run test
+```
+
+**93 tests across 8 files:**
+
+| File | Tests | Coverage |
+|------|-------|----------|
+| api.test.ts | 26 | Token management, fetchApi, all API functions, error handling |
+| stores.test.ts | 26 | Pipeline, widget, theme, keybinding stores |
+| pages.test.tsx | 12 | Login/register forms, validation, error states |
+| widgets.test.tsx | 11 | QuickStats, FileUpload, RunHistory, FileRegistry widgets |
+| utils.test.ts | 7 | cn() utility, constants values |
+| middleware.test.ts | 4 | Auth redirect logic |
+| auth-context.test.tsx | 4 | AuthProvider login, logout, demo login |
+| hooks.test.ts | 3 | Widget layout toggle, workspace switching |
+
+Frontend tests use Vitest + React Testing Library + jsdom.
 
 ---
 

@@ -1,6 +1,6 @@
 # PipelineIQ — Technical Audit Report
 
-**Date:** March 2026
+**Date:** February 2026
 **Scope:** Full codebase review — backend, frontend, infrastructure, CI/CD, security, testing
 **Codebase:** ~16,000 lines across Python, TypeScript, YAML, Docker, and Nginx configs
 
@@ -39,7 +39,7 @@ The system covers a wide surface area for a single-developer project: 9-step pip
 - The YAML → typed dataclass parsing catches errors early with fuzzy suggestions for typos
 - Column-level lineage is implemented properly using NetworkX with topological layout for visualization
 - The frontend workspace system (binary tree layout with 5 independent workspaces) is more sophisticated than typical dashboards
-- 206 tests cover the core engine, API, auth, and edge cases
+- 206 backend tests + 93 frontend tests (299 total) cover the core engine, API, auth, stores, widgets, and edge cases
 - Docker Compose brings up 9 services with a single command
 - The CI pipeline does end-to-end smoke testing (login → upload → run → poll for completion)
 
@@ -458,7 +458,9 @@ The pipeline stream endpoint (`GET /pipelines/{id}/stream`) subscribes to a Redi
 
 ### Coverage
 
-**206 tests across 14 files** covering:
+**299 total tests (206 backend + 93 frontend) across 22 files.**
+
+#### Backend — 206 tests across 14 files
 
 | Category | Tests | Files | What's Tested |
 |----------|-------|-------|---------------|
@@ -477,22 +479,33 @@ The pipeline stream endpoint (`GET /pipelines/{id}/stream`) subscribes to a Redi
 | Rate limiting | 6 | 1 | Enforcement per tier |
 | Performance | 5 | 1 | Response times, concurrent load |
 
+#### Frontend — 93 tests across 8 files
+
+| Category | Tests | Files | What's Tested |
+|----------|-------|-------|---------------|
+| API layer | 26 | 1 | Token management, fetchApi, all 25+ API functions, error handling, 401 redirect |
+| Zustand stores | 26 | 1 | Pipeline, widget (binary tree), theme, keybinding stores |
+| Page components | 12 | 1 | Login/register forms, validation, error states, demo login |
+| Widget components | 11 | 1 | QuickStats, FileUpload, RunHistory, FileRegistry rendering and interaction |
+| Utilities | 7 | 1 | cn() classname merging, API constants |
+| Middleware | 4 | 1 | Auth redirect logic for unauthenticated users |
+| Auth context | 4 | 1 | AuthProvider login, logout, demo login, token persistence |
+| Hooks | 3 | 1 | Widget layout toggle, workspace switching |
+
 ### Test Infrastructure
 
-- **conftest.py** provides: SQLite in-memory engine, test DB session, authenticated TestClient (admin mock), sample DataFrames (sales 20 rows, customers 10 rows, products 5 rows), CSV/JSON byte fixtures, lineage recorder, file upload helpers
-- Tests run in isolation — each test gets a fresh database session
-- Rate limiter is reset before each test via fixture
-- The `client` fixture overrides auth to inject an admin user; `auth_client` tests real auth flows
+- **Backend:** conftest.py provides SQLite in-memory engine, test DB session, authenticated TestClient (admin mock), sample DataFrames (sales 20 rows, customers 10 rows, products 5 rows), CSV/JSON byte fixtures, lineage recorder, file upload helpers. Tests run in isolation — each test gets a fresh database session. Rate limiter is reset before each test via fixture. The `client` fixture overrides auth to inject an admin user; `auth_client` tests real auth flows.
+- **Frontend:** Vitest + React Testing Library + jsdom. Setup file provides jest-dom matchers, cleanup, mocks for next/navigation, next/link, EventSource, ResizeObserver. motion/react mocked to avoid animation issues. API calls mocked with vi.spyOn(globalThis, "fetch") or vi.mock().
 
 ### CI Test Execution
 
-Backend tests run in CI against real PostgreSQL 15 + Redis 7 (not SQLite). The CI also runs a Docker Compose smoke test that builds all 9 services and runs a Python script doing: health check → login → upload CSV → run pipeline → poll for completion.
+Backend tests run in CI against real PostgreSQL 15 + Redis 7 (not SQLite). Frontend tests run with Vitest in the CI pipeline (tsc → vitest → build). The CI also runs a Docker Compose smoke test that builds all 9 services and runs a Python script doing: health check → login → upload CSV → run pipeline → poll for completion.
 
 ### Test Gaps
 
 | Area | Status |
 |------|--------|
-| Frontend unit tests | ❌ None — no Jest/Vitest/Testing Library setup |
+| Frontend unit tests | ✅ 93 tests with Vitest + React Testing Library |
 | Frontend E2E tests | ❌ None — no Playwright/Cypress |
 | Load testing | Minimal — 5 tests in test_performance.py |
 | Celery task integration tests | ❌ Tasks tested through API, not directly |
