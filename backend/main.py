@@ -18,7 +18,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Counter, Histogram, Gauge
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -34,6 +33,9 @@ from backend.pipeline.exceptions import PipelineIQError
 from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
+
+# Module-level Redis connection pool for health checks (avoids leak on every call)
+_redis_pool = redis.ConnectionPool.from_url(settings.REDIS_URL)
 
 if settings.SENTRY_DSN:
     sentry_sdk.init(
@@ -99,40 +101,26 @@ app = FastAPI(
     - Real-time execution via Server-Sent Events
     - Data quality validation rules engine
     """,
-    version="2.0.0",
+    version="3.6.2",
     lifespan=lifespan,
     contact={
         "name": "PipelineIQ Team",
         "url": "https://github.com/pipelineiq",
     },
+    docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
+    redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
 )
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Prometheus metrics
-
-PIPELINE_RUNS_TOTAL = Counter(
-    "pipelineiq_pipeline_runs_total",
-    "Total number of pipeline runs",
-    ["status"],
-)
-PIPELINE_DURATION_SECONDS = Histogram(
-    "pipelineiq_pipeline_duration_seconds",
-    "Pipeline execution duration in seconds",
-    buckets=[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0],
-)
-FILES_UPLOADED_TOTAL = Counter(
-    "pipelineiq_files_uploaded_total",
-    "Total files uploaded",
-)
-ACTIVE_USERS = Gauge(
-    "pipelineiq_active_users_total",
-    "Total registered users",
-)
-CELERY_QUEUE_DEPTH = Gauge(
-    "pipelineiq_celery_queue_depth",
-    "Current Celery task queue depth",
+# Prometheus metrics — imported from centralized module to avoid circular imports
+from backend.metrics import (
+    PIPELINE_RUNS_TOTAL,
+    PIPELINE_DURATION_SECONDS,
+    FILES_UPLOADED_TOTAL,
+    ACTIVE_USERS,
+    CELERY_QUEUE_DEPTH,
 )
 
 Instrumentator(
@@ -220,6 +208,15 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def api_version_middleware(request: Request, call_next):
+    """Add API-Version header to all responses for version awareness."""
+    response = await call_next(request)
+    response.headers["X-API-Version"] = "v1"
+    response.headers["X-App-Version"] = settings.APP_VERSION
+    return response
+
+
+@app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     """Add a unique X-Request-ID header to every request and response."""
     request_id = str(uuid.uuid4())
@@ -283,9 +280,8 @@ def _check_db_health() -> str:
 def _check_redis_health() -> str:
     """Check Redis connectivity by sending a PING command."""
     try:
-        client = redis.Redis.from_url(settings.REDIS_URL)
+        client = redis.Redis(connection_pool=_redis_pool)
         client.ping()
-        client.close()
         return "ok"
     except Exception as exc:
         logger.warning("Redis health check failed: %s", exc)

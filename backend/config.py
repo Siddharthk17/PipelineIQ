@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     )
 
     APP_NAME: str = "PipelineIQ"
-    APP_VERSION: str = "2.0.0"
+    APP_VERSION: str = "3.6.2"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
@@ -115,6 +115,16 @@ class Settings(BaseSettings):
             self.CELERY_BROKER_URL = self.REDIS_URL
         if not self.CELERY_RESULT_BACKEND:
             self.CELERY_RESULT_BACKEND = self.REDIS_URL
+        return self
+
+    @model_validator(mode="after")
+    def validate_secret_key_in_production(self) -> "Settings":
+        """Prevent startup with default SECRET_KEY in production."""
+        if self.ENVIRONMENT == "production" and self.SECRET_KEY == "change-me-in-production":
+            raise ValueError(
+                "SECRET_KEY must be changed from the default value in production. "
+                "Set the SECRET_KEY environment variable to a strong random string."
+            )
         return self
 
 

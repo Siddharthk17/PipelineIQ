@@ -38,6 +38,7 @@ class PipelineStatus(str, PyEnum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class StepStatus(str, PyEnum):
@@ -194,6 +195,10 @@ class UploadedFile(Base):
     column_count: Mapped[int] = mapped_column(Integer, nullable=False)
     columns: Mapped[list] = mapped_column(PgJSONB, nullable=False)
     dtypes: Mapped[dict] = mapped_column(PgJSONB, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    previous_version_id: Mapped[Optional[str]] = mapped_column(
+        Uuid, ForeignKey("uploaded_files.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -345,4 +350,91 @@ class AuditLog(Base):
     user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class PermissionLevel(str, PyEnum):
+    """Permission levels for per-pipeline RBAC."""
+
+    OWNER = "owner"
+    RUNNER = "runner"
+    VIEWER = "viewer"
+
+
+class NotificationType(str, PyEnum):
+    """Supported notification channel types."""
+
+    SLACK = "slack"
+    EMAIL = "email"
+
+
+class PipelineSchedule(Base):
+    """Recurring schedule for automatic pipeline execution via Celery Beat."""
+
+    __tablename__ = "pipeline_schedules"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    pipeline_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    yaml_config: Mapped[str] = mapped_column(Text, nullable=False)
+    cron_expression: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class NotificationConfig(Base):
+    """User notification channel configuration (Slack, email, etc.)."""
+
+    __tablename__ = "notification_configs"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid
+    )
+    user_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    type: Mapped[NotificationType] = mapped_column(
+        SQLEnum(NotificationType), nullable=False
+    )
+    config = mapped_column(PgJSONB, nullable=False, default=dict)
+    events = mapped_column(PgJSONB, nullable=False, default=lambda: ["pipeline_completed", "pipeline_failed"])
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class PipelinePermission(Base):
+    """Per-pipeline role-based access control entry."""
+
+    __tablename__ = "pipeline_permissions"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid
+    )
+    pipeline_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    permission_level: Mapped[PermissionLevel] = mapped_column(
+        SQLEnum(PermissionLevel), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("pipeline_name", "user_id"),
     )

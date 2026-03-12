@@ -5,6 +5,7 @@ export const BUILT_IN_THEMES = [
   { id: "nord", name: "Nord" },
   { id: "rose-pine", name: "Rosé Pine" },
   { id: "pipelineiq-dark", name: "PipelineIQ Dark" },
+  { id: "pipelineiq-light", name: "PipelineIQ Light" },
 ] as const;
 
 export type ThemeId = (typeof BUILT_IN_THEMES)[number]["id"];

@@ -27,4 +27,4 @@ USER appuser
 EXPOSE 8000
 
 # Run migrations, seed demo data, then start API and worker
-CMD ["sh", "-c", "python -m alembic upgrade head && python -m backend.scripts.seed_demo || true && celery -A backend.celery_app:celery_app worker --loglevel=info --concurrency=1 & uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "python -m alembic upgrade head && (python -m backend.scripts.seed_demo || true) && celery -A backend.celery_app:celery_app worker --loglevel=info --concurrency=1 & uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

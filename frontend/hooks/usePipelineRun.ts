@@ -48,6 +48,9 @@ export function usePipelineRun(runId: string | null) {
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
+    let reconnectAttempts = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let currentEventSource: EventSource | null = null;
 
     // Immediately fetch full run data so RunMonitor has something to show
     getPipelineRun(runId)
@@ -55,7 +58,6 @@ export function usePipelineRun(runId: string | null) {
         if (!cancelled) usePipelineStore.setState({ activeRun: run });
       })
       .catch(() => {
-        // Run may not exist yet (race condition); set minimal stub
         if (!cancelled) {
           usePipelineStore.setState({
             activeRun: {
@@ -75,56 +77,79 @@ export function usePipelineRun(runId: string | null) {
         }
       });
 
-    const eventSource = new EventSource(`${API_V1}/pipelines/${runId}/stream`);
+    function connectSSE() {
+      if (cancelled) return;
 
-    const handleStepEvent = (e: MessageEvent) => {
-      const evt: StepEvent = JSON.parse(e.data);
-      usePipelineStore.setState((state) => {
-        if (!state.activeRun) return state;
-        return { activeRun: applyStepEvent(state.activeRun, evt) };
-      });
-    };
+      const eventSource = new EventSource(`${API_V1}/pipelines/${runId}/stream`);
+      currentEventSource = eventSource;
 
-    eventSource.addEventListener("step_started", handleStepEvent);
-    eventSource.addEventListener("step_completed", handleStepEvent);
-    eventSource.addEventListener("step_failed", handleStepEvent);
+      eventSource.onopen = () => {
+        reconnectAttempts = 0;
+      };
 
-    const handleTerminal = (status: PipelineRun["status"]) => (e: MessageEvent) => {
-      const data = JSON.parse(e.data);
-      // Re-fetch full run to get final state with all step results
-      getPipelineRun(runId).then((run) => {
-        if (!cancelled) usePipelineStore.setState({ activeRun: run });
-      }).catch(() => {
-        // Fallback: just update status
+      const handleStepEvent = (e: MessageEvent) => {
+        const evt: StepEvent = JSON.parse(e.data);
         usePipelineStore.setState((state) => {
           if (!state.activeRun) return state;
-          return { activeRun: { ...state.activeRun, status, error_message: data.error_message || null } };
+          return { activeRun: applyStepEvent(state.activeRun, evt) };
         });
-      });
-      eventSource.close();
-      queryClient.invalidateQueries({ queryKey: ["lineage", runId] });
-      queryClient.invalidateQueries({ queryKey: ["pipelineRuns"] });
-    };
+      };
 
-    eventSource.addEventListener("pipeline_completed", handleTerminal("COMPLETED"));
-    eventSource.addEventListener("pipeline_failed", handleTerminal("FAILED"));
+      eventSource.addEventListener("step_started", handleStepEvent);
+      eventSource.addEventListener("step_completed", handleStepEvent);
+      eventSource.addEventListener("step_failed", handleStepEvent);
 
-    eventSource.onerror = () => {
-      eventSource.close();
-      // Re-fetch to get actual state instead of assuming failure
-      getPipelineRun(runId).then((run) => {
-        if (!cancelled) usePipelineStore.setState({ activeRun: run });
-      }).catch(() => {
-        usePipelineStore.setState((state) => {
-          if (!state.activeRun) return state;
-          return { activeRun: { ...state.activeRun, status: "FAILED", error_message: "Connection lost to stream" } };
+      const handleTerminal = (status: PipelineRun["status"]) => (e: MessageEvent) => {
+        const data = JSON.parse(e.data);
+        getPipelineRun(runId!).then((run) => {
+          if (!cancelled) usePipelineStore.setState({ activeRun: run });
+        }).catch(() => {
+          usePipelineStore.setState((state) => {
+            if (!state.activeRun) return state;
+            return { activeRun: { ...state.activeRun, status, error_message: data.error_message || null } };
+          });
         });
-      });
-    };
+        eventSource.close();
+        queryClient.invalidateQueries({ queryKey: ["lineage", runId] });
+        queryClient.invalidateQueries({ queryKey: ["pipelineRuns"] });
+      };
+
+      eventSource.addEventListener("pipeline_completed", handleTerminal("COMPLETED"));
+      eventSource.addEventListener("pipeline_failed", handleTerminal("FAILED"));
+
+      eventSource.onerror = () => {
+        eventSource.close();
+        if (cancelled) return;
+
+        // Exponential backoff reconnect: 1s, 2s, 4s, 8s, 16s max
+        const maxDelay = 16000;
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), maxDelay);
+        reconnectAttempts++;
+
+        if (reconnectAttempts <= 5) {
+          reconnectTimer = setTimeout(() => {
+            if (!cancelled) connectSSE();
+          }, delay);
+        } else {
+          // After max retries, fetch final state
+          getPipelineRun(runId!).then((run) => {
+            if (!cancelled) usePipelineStore.setState({ activeRun: run });
+          }).catch(() => {
+            usePipelineStore.setState((state) => {
+              if (!state.activeRun) return state;
+              return { activeRun: { ...state.activeRun, status: "FAILED", error_message: "Connection lost to stream" } };
+            });
+          });
+        }
+      };
+    }
+
+    connectSSE();
 
     return () => {
       cancelled = true;
-      eventSource.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (currentEventSource) currentEventSource.close();
     };
   }, [runId, queryClient]);
 }

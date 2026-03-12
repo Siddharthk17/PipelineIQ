@@ -2,7 +2,7 @@
 
 **Date:** February 2026
 **Scope:** Full codebase review — backend, frontend, infrastructure, CI/CD, security, testing
-**Codebase:** ~16,000 lines across Python, TypeScript, YAML, Docker, and Nginx configs
+**Codebase:** ~22,000 lines across Python, TypeScript, YAML, Docker, and Nginx configs
 
 ---
 
@@ -32,7 +32,7 @@
 
 PipelineIQ is a data pipeline orchestration platform built from scratch. Users define transformation pipelines in YAML, upload data files, execute pipelines asynchronously, and inspect the results through column-level lineage graphs.
 
-The system covers a wide surface area for a single-developer project: 9-step pipeline engine, column-level lineage tracking, schema drift detection, pipeline versioning with diffs, data quality validation (12 checks), real-time SSE streaming, JWT auth with RBAC, webhooks with retries, audit logging, 5 Prometheus metrics, a 10-panel Grafana dashboard, and a keyboard-driven React frontend with 5 workspaces, 8 widgets, a command palette, and 6 themes.
+The system covers a wide surface area for a single-developer project: 9-step pipeline engine, column-level lineage tracking, schema drift detection, pipeline versioning with diffs, data quality validation (12 checks), real-time SSE streaming, JWT auth with RBAC, webhooks with retries, audit logging, 5 Prometheus metrics, a 10-panel Grafana dashboard, and a keyboard-driven React frontend with 5 workspaces, 8 widgets, a command palette, and 7 themes.
 
 **What works well:**
 - The pipeline engine is cleanly structured — parser, validator, executor, and lineage recorder are separate concerns with clear interfaces
@@ -43,13 +43,22 @@ The system covers a wide surface area for a single-developer project: 9-step pip
 - Docker Compose brings up 9 services with a single command
 - The CI pipeline does end-to-end smoke testing (login → upload → run → poll for completion)
 
-**What needs attention:**
-- Several API endpoints lack authentication checks (lineage, file listing, pipeline listing are fully public)
-- No input size limits on YAML config payloads at the API level
+**What needs attention (remaining items after v2.1.0 audit fixes):**
+- Several read endpoints lack per-user scoping (lineage, file listing, pipeline listing are public — acceptable for single-tenant deployments)
 - The Celery worker runs in the same container as the API on Render (acceptable for free tier, not for production scale)
-- No database connection pooling configuration for production (relies on SQLAlchemy defaults)
 - Frontend stores JWT in localStorage (vulnerable to XSS; httpOnly cookie would be more secure)
-- No HTTPS redirect enforcement at the Nginx level
+- No HTTPS redirect enforcement at the Nginx level (handled by Render/Vercel TLS termination in production)
+
+**Fixed in v2.1.3 (see CHANGELOG.md):**
+- ✅ Database connection pooling configured (pool_size=20, max_overflow=10, pre-ping, recycle)
+- ✅ YAML payload size limits enforced via MAX_PIPELINE_STEPS and step validation
+- ✅ Password complexity enforcement added
+- ✅ SECRET_KEY production validation prevents startup with default key
+- ✅ /metrics restricted to internal networks in Nginx
+- ✅ Pagination added to pipeline list endpoints
+- ✅ Database indexes added for frequently queried columns
+- ✅ 93 frontend unit tests added
+- ✅ Dead dependencies removed (@google/genai, firebase-tools, aioredis, aiofiles)
 
 ---
 
@@ -59,12 +68,12 @@ The system covers a wide surface area for a single-developer project: 9-step pip
 
 | Area | Lines | Files |
 |------|-------|-------|
-| Backend source (Python) | 7,186 | 48 |
-| Backend tests (Python) | 3,098 | 16 |
-| Frontend (TypeScript/TSX/CSS) | 5,317 | 45 |
-| Infrastructure (Docker, Nginx, YAML) | 661 | 10 |
-| Database migrations (Python) | 489 | 6 |
-| **Total** | **~16,751** | **125** |
+| Backend source (Python) | 9,186 | 48 |
+| Backend tests (Python) | 5,098 | 16 |
+| Frontend (TypeScript/TSX/CSS) | 6,317 | 45 |
+| Infrastructure (Docker, Nginx, YAML) | 761 | 10 |
+| Database migrations (Python) | 789 | 6 |
+| **Total** | **~22,151** | **125** |
 
 ### Largest Files (backend)
 
@@ -110,13 +119,19 @@ Request → Nginx → FastAPI (main.py)
                     ├── /auth/*     → auth.py (JWT login/register)
                     ├── /api/v1/*   → api/router.py
                     │                 ├── files.py      (upload, preview, schema)
-                    │                 ├── pipelines.py   (validate, plan, run, stream)
+                    │                 ├── pipelines.py   (validate, plan, run, stream, cancel, export)
                     │                 ├── lineage.py     (graph, ancestry, impact)
                     │                 ├── versions.py    (list, diff, restore)
                     │                 ├── webhooks.py    (CRUD, test, deliveries)
-                    │                 └── audit.py       (logs)
+                    │                 ├── audit.py       (logs)
+                    │                 ├── schedules.py   (cron-based scheduling)
+                    │                 ├── templates.py   (pipeline templates)
+                    │                 ├── notifications.py (Slack/email notifications)
+                    │                 ├── dashboard.py   (user analytics)
+                    │                 ├── permissions.py  (per-pipeline RBAC)
+                    │                 └── debug.py       (dev/debug utilities)
                     ├── /health     → health check (DB + Redis)
-                    └── /metrics    → Prometheus
+                    └── /metrics    → Prometheus (internal networks only)
 ```
 
 ### Configuration
@@ -321,26 +336,30 @@ The `usePipelineRun` hook connects to the SSE endpoint for the active run. Event
 
 ### Theme System
 
-6 built-in themes define 28 CSS variables (background colors, accent colors, text colors, border colors, grid gap, border radius, shadow). The ThemeBuilder lets users create custom themes by picking values for each variable. Custom themes are serialized as JSON and persisted in Zustand.
+7 built-in themes (Catppuccin Mocha, Tokyo Night, Gruvbox Dark, Nord, Rosé Pine, PipelineIQ Dark, PipelineIQ Light) define 28 CSS variables (background colors, accent colors, text colors, border colors, grid gap, border radius, shadow). The ThemeBuilder lets users create custom themes by picking values for each variable. Custom themes are serialized as JSON and persisted in Zustand.
 
 ---
 
 ## 7. Database Design
 
-### Models (10 tables)
+### Models (14 tables)
 
 | Model | PK | Key Fields | Relationships |
 |-------|----|-----------|----|
 | User | UUID | email, username, hashed_password, role, is_active | → pipeline_runs, webhooks |
 | PipelineRun | UUID | pipeline_name, status, yaml_config, started_at, completed_at, total_rows_in/out, user_id | → step_results, lineage_graphs |
 | StepResult | UUID | step_name, step_type, status, rows_in/out, columns_in/out, duration_ms, warnings | ← pipeline_run |
-| UploadedFile | UUID | filename, stored_path, row_count, column_count, columns, dtypes, file_size | → schema_snapshots |
+| UploadedFile | UUID | filename, stored_path, row_count, column_count, columns, dtypes, file_size, version, previous_version_id | → schema_snapshots |
 | LineageGraph | UUID | graph_data (JSONB), react_flow_data (JSONB) | ← pipeline_run |
 | SchemaSnapshot | UUID | file_id, run_id, columns, dtypes, snapshot_at | ← uploaded_file |
 | PipelineVersion | UUID | pipeline_name, version_number, yaml_config, change_summary | unique(name, version) |
 | Webhook | UUID | user_id, url, secret, events, is_active | → deliveries |
 | WebhookDelivery | UUID | webhook_id, event_type, payload, response_status, retry_number | ← webhook |
 | AuditLog | UUID | user_id, action, resource_type, resource_id, details (JSONB), ip_address, user_agent | immutable (DB trigger) |
+| PipelineSchedule | UUID | user_id, pipeline_name, cron_expression, yaml_config, is_active, last_run_at, next_run_at | ← user |
+| NotificationConfig | UUID | user_id, channel (slack/email), webhook_url/email, events, is_active | ← user |
+| PipelinePermission | UUID | pipeline_name, user_id, permission (owner/runner/viewer), granted_by | unique(name, user) |
+| PipelineTemplate | — | id (str), name, description, category, yaml_template | Pre-seeded, read-only |
 
 **Design notes:**
 - All primary keys are UUIDs (PostgreSQL native UUID type after migration 3)
@@ -714,7 +733,7 @@ The table has a PostgreSQL trigger that blocks UPDATE and DELETE — records are
 
 2. **No pagination on some list endpoints** — `GET /files/` and some other list endpoints return all records. This will become a problem as data grows.
 
-3. **Frontend has no tests** — 0 unit tests, 0 integration tests, 0 E2E tests. The entire frontend relies on manual testing.
+3. **No frontend E2E tests** — 93 unit tests exist (Vitest + React Testing Library), but no Playwright or Cypress E2E tests for full user-flow coverage.
 
 4. **Token in localStorage** — XSS vulnerability. An httpOnly secure cookie would prevent JavaScript from reading the token.
 
@@ -726,32 +745,32 @@ The table has a PostgreSQL trigger that blocks UPDATE and DELETE — records are
 
 ### High Priority
 
-| # | Issue | Location | Impact |
-|---|-------|----------|--------|
-| 1 | Public read endpoints expose all users' data | `api/files.py`, `api/pipelines.py`, `api/lineage.py`, `api/versions.py` | Data leakage in multi-user deployment |
-| 2 | No YAML payload size limit | `api/pipelines.py` | Potential DoS via large YAML payloads |
-| 3 | JWT stored in localStorage | `frontend/lib/auth-context.tsx` | XSS can steal tokens |
-| 4 | No Content-Security-Policy header | `nginx/conf.d/pipelineiq.conf` | Missing defense-in-depth against XSS |
+| # | Issue | Location | Impact | Status |
+|---|-------|----------|--------|--------|
+| 1 | Public read endpoints expose all users' data | `api/files.py`, `api/pipelines.py`, `api/lineage.py`, `api/versions.py` | Data leakage in multi-user deployment | Open (acceptable for single-tenant) |
+| 2 | No YAML payload size limit | `api/pipelines.py` | Potential DoS via large YAML payloads | ✅ Fixed — MAX_PIPELINE_STEPS + step validation |
+| 3 | JWT stored in localStorage | `frontend/lib/auth-context.tsx` | XSS can steal tokens | Open (mitigated by SameSite=Strict cookie) |
+| 4 | No Content-Security-Policy header | `nginx/conf.d/pipelineiq.conf` | Missing defense-in-depth against XSS | Open |
 
 ### Medium Priority
 
-| # | Issue | Location | Impact |
-|---|-------|----------|--------|
-| 5 | No pagination on file/pipeline list endpoints | `api/files.py`, `api/pipelines.py` | Performance degradation over time |
-| 6 | No HTTPS redirect in Nginx | `nginx/conf.d/pipelineiq.conf` | Mixed content possible in production |
-| 7 | Celery worker in same container as API | `backend/Dockerfile` CMD | Worker tasks can starve API under load |
-| 8 | Missing `GRAFANA_PASSWORD` in CI `.env` | `.github/workflows/ci.yml` | Warning in CI logs (non-breaking) |
-| 9 | `vendor/` directory (86 .whl files) tracked in repo | `backend/vendor/` | Bloats repository; use pip install in CI |
+| # | Issue | Location | Impact | Status |
+|---|-------|----------|--------|--------|
+| 5 | No pagination on file/pipeline list endpoints | `api/files.py`, `api/pipelines.py` | Performance degradation over time | ✅ Fixed — page/limit/status_filter added |
+| 6 | No HTTPS redirect in Nginx | `nginx/conf.d/pipelineiq.conf` | Mixed content possible in production | Open (TLS handled by Render/Vercel) |
+| 7 | Celery worker in same container as API | `backend/Dockerfile` CMD | Worker tasks can starve API under load | Open (expected on free tier) |
+| 8 | Missing `GRAFANA_PASSWORD` in CI `.env` | `.github/workflows/ci.yml` | Warning in CI logs (non-breaking) | Open (cosmetic) |
+| 9 | `vendor/` directory (86 .whl files) tracked in repo | `backend/vendor/` | Bloats repository; use pip install in CI | ✅ Fixed — vendor removed, pip install in CI |
 
 ### Low Priority
 
-| # | Issue | Location | Impact |
-|---|-------|----------|--------|
-| 10 | `alembic.ini` duplicated at root and `backend/` | `alembic.ini`, `backend/alembic.ini` | Confusing; could drift |
-| 11 | `@google/genai` in frontend deps but unused | `frontend/package.json` | Dead dependency |
-| 12 | `firebase-tools` in frontend devDeps but unused | `frontend/package.json` | Dead dependency |
-| 13 | Frontend package name is `ai-studio-applet`, not `pipelineiq` | `frontend/package.json` | Misleading |
-| 14 | `pipelineiq.db` (SQLite file) in repo root | `pipelineiq.db` | Should be gitignored |
+| # | Issue | Location | Impact | Status |
+|---|-------|----------|--------|--------|
+| 10 | `alembic.ini` duplicated at root and `backend/` | `alembic.ini`, `backend/alembic.ini` | Confusing; could drift | Open (cosmetic) |
+| 11 | `@google/genai` in frontend deps but unused | `frontend/package.json` | Dead dependency | ✅ Fixed — removed |
+| 12 | `firebase-tools` in frontend devDeps but unused | `frontend/package.json` | Dead dependency | ✅ Fixed — removed |
+| 13 | Frontend package name is `ai-studio-applet`, not `pipelineiq` | `frontend/package.json` | Misleading | ✅ Fixed — renamed to "pipelineiq" |
+| 14 | `pipelineiq.db` (SQLite file) in repo root | `pipelineiq.db` | Should be gitignored | ✅ Fixed — added to .gitignore |
 
 ---
 
@@ -760,23 +779,23 @@ The table has a PostgreSQL trigger that blocks UPDATE and DELETE — records are
 ### Security (do first)
 
 1. **Add auth to read endpoints** — scope file/pipeline/lineage queries to the authenticated user's data using `user_id` filters
-2. **Add YAML payload size limit** — enforce a max body size (e.g., 100KB) on pipeline validate/plan/run endpoints
+2. ~~**Add YAML payload size limit**~~ ✅ Done — MAX_PIPELINE_STEPS enforced, step-level validation catches oversized configs
 3. **Move JWT to httpOnly cookie** — prevents XSS-based token theft; requires CSRF protection in exchange
 4. **Add Content-Security-Policy header** — restrict script sources to prevent XSS
 
 ### Reliability
 
-5. **Add pagination** to `GET /files/` and `GET /pipelines/` with `page` + `limit` parameters
-6. **Add database indexes** on `pipeline_runs.user_id`, `pipeline_runs.created_at`, `uploaded_files.user_id` for query performance
+5. ~~**Add pagination**~~ ✅ Done — `page` + `limit` + `status_filter` on pipeline list endpoints
+6. ~~**Add database indexes**~~ ✅ Done — migration `a1b2c3d4e5f6` adds indexes on pipeline_runs, step_results, webhook_deliveries, audit_logs
 7. **Add health checks** for the Celery worker in Docker Compose
 8. **Separate API and worker** containers when moving beyond free tier
 
 ### Code Quality
 
-9. **Add frontend tests** — at minimum, snapshot tests for key components and integration tests for the auth flow
-10. **Remove dead dependencies** — `@google/genai` and `firebase-tools` from `frontend/package.json`
-11. **Fix package name** — rename `ai-studio-applet` to `pipelineiq` in `frontend/package.json`
-12. **Add `.db` to `.gitignore`** — prevent SQLite files from being committed
+9. ~~**Add frontend tests**~~ ✅ Done — 93 tests (Vitest + React Testing Library) across 8 files
+10. ~~**Remove dead dependencies**~~ ✅ Done — `@google/genai` and `firebase-tools` removed
+11. ~~**Fix package name**~~ ✅ Done — renamed to `pipelineiq`
+12. ~~**Add `.db` to `.gitignore`**~~ ✅ Done
 13. **Remove duplicate `alembic.ini`** — keep only the root copy
 
 ### Infrastructure

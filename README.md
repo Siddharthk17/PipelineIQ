@@ -50,7 +50,7 @@ pipeline:
 
 PipelineIQ takes that YAML, validates it, queues it for async execution, runs each step with Pandas, streams progress to the browser in real time via SSE, builds a column-level lineage graph with NetworkX, detects schema drift when files change, and versions every pipeline config with git-style diffs.
 
-The frontend is a keyboard-driven workspace with draggable widgets, 6 built-in themes, and a command palette.
+The frontend is a keyboard-driven workspace with draggable widgets, 7 built-in themes (including light mode), mobile responsive layout, and a command palette.
 
 ---
 
@@ -187,30 +187,41 @@ Pipeline progress flows through: Celery worker → Redis pub/sub → FastAPI SSE
 
 ### Auth, Webhooks, and Audit
 
-- **JWT tokens** — HS256, 24-hour expiry, bcrypt password hashing
+- **JWT tokens** — HS256, 24-hour expiry, bcrypt password hashing, password complexity enforcement (uppercase, number, special character required)
 - **Two roles** — `admin` (full access) and `viewer` (read-only); first registered user is auto-admin
-- **Webhooks** — HMAC-SHA256 signed payloads, 3-attempt retry (0s / 60s / 300s backoff), delivery tracking
+- **Per-pipeline RBAC** — owner, runner, viewer permissions per pipeline; admins override
+- **Webhooks** — HMAC-SHA256 signed payloads, async delivery via dedicated Celery task, delivery tracking
 - **Audit log** — every action recorded with user, IP, user agent, timestamp; immutable via database trigger
+- **Pipeline scheduling** — cron-based recurring execution via Celery Beat
+- **Notifications** — Slack integration with configurable event subscriptions
+- **Pipeline templates** — 5 pre-built templates (ETL, cleaning, validation, aggregation, merge/join)
+- **Pipeline cancellation** — cancel running pipelines with Celery task revocation
+- **Export** — download pipeline output files directly from the API
 
 ### Observability
 
-- **5 custom Prometheus metrics** — `pipeline_runs_total`, `pipeline_duration_seconds`, `files_uploaded_total`, `active_users_total`, `celery_queue_depth`
+- **5 custom Prometheus metrics** — `pipeline_runs_total`, `pipeline_duration_seconds`, `files_uploaded_total`, `active_users_total`, `celery_queue_depth` (centralized in `metrics.py` to avoid circular imports)
 - **10-panel Grafana dashboard** — pipeline rate, API latency p95, success rate gauge, queue depth, error rate, active connections
 - **Sentry integration** — error tracking for FastAPI, Celery, and SQLAlchemy
-- **Request headers** — every response gets `X-Request-ID` and `X-Process-Time`
+- **Request headers** — every response gets `X-Request-ID`, `X-Process-Time`, `X-API-Version`, and `X-App-Version`
 
 ### Frontend
 
 - **5 workspaces** (Alt+1 through Alt+5) with independent widget layouts
 - **8 widgets** — Quick Stats, Pipeline Editor, Run Monitor, File Registry, File Upload, Lineage Graph, Run History, Version History
 - **Binary tree layout** — widgets split horizontally/vertically, drag-and-drop to swap positions
+- **Mobile responsive** — stacked single-column layout on mobile devices
 - **Command palette** (Ctrl+K) — fuzzy search for commands
 - **Terminal launcher** (Alt+Enter) — quick-add widgets to current workspace
-- **6 built-in themes** — Catppuccin Mocha, Tokyo Night, Gruvbox Dark, Nord, Rosé Pine, PipelineIQ Dark
+- **7 built-in themes** — Catppuccin Mocha, Tokyo Night, Gruvbox Dark, Nord, Rosé Pine, PipelineIQ Dark, PipelineIQ Light
 - **Custom theme builder** — 25+ CSS variables, export as JSON
 - **18 rebindable keyboard shortcuts**
 - **YAML editor** — CodeMirror with syntax highlighting, debounced validation (800ms), inline plan preview
-- **Live run monitor** — SSE-powered step progress with animated duration bars
+- **Step DAG visualization** — horizontal flow diagram showing step dependencies in the pipeline editor
+- **Data preview** — preview sample data at each pipeline step from the editor
+- **Live run monitor** — SSE-powered step progress with animated duration bars and exponential backoff reconnection
+- **Error boundaries** — graceful per-widget error handling prevents full-app crashes
+- **Presence indicators** — shows current user online status (WebSocket-ready)
 
 ---
 
@@ -297,11 +308,14 @@ Base path: `/api/v1` — proxied through Nginx (Docker) or Next.js rewrites (Ver
 |--------|------|-------------|------|------------|
 | POST | `/api/v1/pipelines/validate` | Validate YAML config | Yes | 60/min |
 | POST | `/api/v1/pipelines/plan` | Dry-run execution plan | Yes | 60/min |
+| POST | `/api/v1/pipelines/preview` | Preview sample data at step | Yes | 60/min |
 | POST | `/api/v1/pipelines/run` | Execute pipeline (async) | Yes | 10/min |
-| GET | `/api/v1/pipelines/` | List all runs | No | 120/min |
+| GET | `/api/v1/pipelines/` | List all runs (paginated) | No | 120/min |
 | GET | `/api/v1/pipelines/stats` | Aggregate stats | No | 120/min |
 | GET | `/api/v1/pipelines/{id}` | Run details + step results | No | 120/min |
 | GET | `/api/v1/pipelines/{id}/stream` | SSE progress stream | No | — |
+| POST | `/api/v1/pipelines/{id}/cancel` | Cancel running pipeline | Yes | — |
+| GET | `/api/v1/pipelines/{id}/export` | Download output file | Yes | — |
 
 ### Lineage
 
@@ -337,7 +351,46 @@ Base path: `/api/v1` — proxied through Nginx (Docker) or Next.js rewrites (Ver
 | GET | `/api/v1/audit/logs` | All audit logs (paginated) | Admin |
 | GET | `/api/v1/audit/logs/mine` | Current user's logs | Yes |
 | GET | `/health` | DB + Redis status | No |
-| GET | `/metrics` | Prometheus metrics | No |
+| GET | `/metrics` | Prometheus metrics | Internal only |
+
+### Schedules
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/api/v1/schedules/` | Create cron-based pipeline schedule | Yes |
+| GET | `/api/v1/schedules/` | List user's schedules | Yes |
+| PATCH | `/api/v1/schedules/{id}/toggle` | Enable/disable schedule | Yes |
+| DELETE | `/api/v1/schedules/{id}` | Delete schedule | Yes |
+
+### Templates
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/api/v1/templates/` | List pipeline templates | No |
+| GET | `/api/v1/templates/{id}` | Get template with YAML | No |
+
+### Notifications
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/api/v1/notifications/` | Create Slack/email notification config | Yes |
+| GET | `/api/v1/notifications/` | List notification configs | Yes |
+| DELETE | `/api/v1/notifications/{id}` | Delete notification config | Yes |
+| POST | `/api/v1/notifications/{id}/test` | Send test notification | Yes |
+
+### Dashboard
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| GET | `/api/v1/dashboard/stats` | Personal analytics & activity | Yes |
+
+### Per-Pipeline Permissions
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| POST | `/api/v1/pipelines/{name}/permissions` | Grant permission | Owner/Admin |
+| GET | `/api/v1/pipelines/{name}/permissions` | List permissions | Yes |
+| DELETE | `/api/v1/pipelines/{name}/permissions/{user_id}` | Revoke permission | Owner/Admin |
 
 ---
 
@@ -572,6 +625,8 @@ alembic downgrade -1           # Rollback one step
 | 4 | `d4e6f8a1b2c3` | Users table + user_id FK on pipeline_runs |
 | 5 | `e5f6a7b8c9d0` | Webhooks + webhook_deliveries |
 | 6 | `f6a7b8c9d0e1` | Audit logs with immutable trigger (blocks UPDATE/DELETE) |
+| 7 | `a1b2c3d4e5f6` | Performance indexes on pipeline_runs, step_results, webhook_deliveries, audit_logs |
+| 8 | `b2c3d4e5f6a7` | CANCELLED pipeline status, pipeline_schedules, notification_configs, pipeline_permissions, file versioning |
 
 ---
 
@@ -616,35 +671,36 @@ GitHub Actions runs on every push to `main`/`develop` and every PR to `main`:
 ```
 PipelineIQ/
 ├── backend/
-│   ├── api/                    # FastAPI routers (8 modules)
+│   ├── api/                    # FastAPI routers (13 modules)
 │   ├── pipeline/               # Core engine (parser, steps, runner, lineage, validators, drift, versioning, planner)
-│   ├── services/               # Webhook delivery, audit logging
-│   ├── tasks/                  # Celery task: execute_pipeline
-│   ├── utils/                  # Cache, rate limiter, string/time helpers
+│   ├── services/               # Webhook delivery, audit logging, notification service
+│   ├── tasks/                  # Celery tasks: pipeline execution, webhook delivery, schedule checker
+│   ├── utils/                  # Cache, rate limiter, UUID utils, string/time helpers
 │   ├── tests/                  # 206 tests, 14 files
-│   ├── alembic/                # 6 database migrations
+│   ├── alembic/                # 8 database migrations
 │   ├── scripts/                # seed_demo.py
 │   ├── sample_data/            # 4 CSVs + 3 pipeline YAMLs
 │   ├── main.py                 # App factory, middleware, health
-│   ├── config.py               # 55+ env vars via Pydantic
-│   ├── models.py               # 10 SQLAlchemy models
+│   ├── config.py               # 55+ env vars via Pydantic (production secret key validation)
+│   ├── models.py               # 14 SQLAlchemy models
 │   ├── schemas.py              # 20+ Pydantic schemas
+│   ├── metrics.py              # Centralized Prometheus metric definitions
 │   ├── auth.py                 # JWT + bcrypt
-│   ├── celery_app.py           # Celery config + Redis SSL
+│   ├── celery_app.py           # Celery config + Redis SSL + Beat schedule
 │   ├── database.py             # Engine + session factory
 │   └── Dockerfile
 ├── frontend/
 │   ├── app/                    # Next.js pages (dashboard, login, register)
 │   ├── components/
-│   │   ├── layout/             # TopBar, WidgetGrid, CommandPalette, TerminalLauncher, KeybindingsModal
-│   │   ├── widgets/            # 8 widgets + WidgetShell wrapper
+│   │   ├── layout/             # TopBar, WidgetGrid, CommandPalette, TerminalLauncher, PresenceIndicator, KeybindingsModal
+│   │   ├── widgets/            # 8 widgets + WidgetShell wrapper + StepDAG
 │   │   ├── lineage/            # LineageGraph, sidebar, 4 custom ReactFlow nodes
 │   │   └── theme/              # ThemeSelector, ThemeBuilder
-│   ├── hooks/                  # useKeybindings, usePipelineRun (SSE), useLineage, useTheme
+│   ├── hooks/                  # useKeybindings, usePipelineRun (SSE + reconnect), useLineage, useTheme, useIsMobile
 │   ├── store/                  # Zustand (theme, widgets, pipeline, keybindings)
 │   ├── lib/                    # API client, auth context, types, constants
 │   └── Dockerfile
-├── nginx/                      # Reverse proxy (SSE-safe, security headers)
+├── nginx/                      # Reverse proxy (SSE-safe, security headers, /metrics restricted)
 ├── grafana/                    # 10-panel dashboard
 ├── prometheus/                 # Scrape config
 ├── postman/                    # 23-request API collection

@@ -16,7 +16,7 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: APP_VERSION
-        value: "2.0.0"
+        value: "3.6.2"
       - key: UPLOAD_DIR
         value: /tmp/uploads
       - key: FIRST_SUPERUSER_EMAIL

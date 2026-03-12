@@ -161,7 +161,25 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
     parser = PipelineParser()
     config = parser.parse(pipeline_run.yaml_config)
 
-    uploaded_files = db.query(UploadedFile).all()
+    # Only load files referenced in the pipeline config (not all files)
+    referenced_file_ids = set()
+    for step in config.steps:
+        file_id = getattr(step, "file_id", None) or (step.params.get("file_id") if hasattr(step, "params") else None)
+        if file_id:
+            referenced_file_ids.add(file_id)
+
+    if referenced_file_ids:
+        from backend.utils.uuid_utils import as_uuid
+        uuid_ids = []
+        for fid in referenced_file_ids:
+            try:
+                uuid_ids.append(as_uuid(fid))
+            except (ValueError, AttributeError):
+                pass
+        uploaded_files = db.query(UploadedFile).filter(UploadedFile.id.in_(uuid_ids)).all() if uuid_ids else []
+    else:
+        uploaded_files = db.query(UploadedFile).all()
+
     file_paths = {str(f.id): f.stored_path for f in uploaded_files}
     file_metadata = {
         str(f.id): {"original_filename": f.original_filename}
@@ -182,7 +200,7 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
 
 def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     """Persist pipeline execution results to the database."""
-    from backend.main import PIPELINE_RUNS_TOTAL, PIPELINE_DURATION_SECONDS
+    from backend.metrics import PIPELINE_RUNS_TOTAL, PIPELINE_DURATION_SECONDS
 
     if summary.status == RunnerPipelineStatus.COMPLETED:
         pipeline_run.status = PipelineStatus.COMPLETED
@@ -206,12 +224,12 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         summary.step_results[-1].rows_out if summary.step_results else 0
     )
 
-    # Fire webhooks
+    # Fire webhooks asynchronously via separate Celery task
     try:
-        from backend.services.webhook_service import trigger_webhooks_for_run
+        from backend.tasks.webhook_tasks import deliver_webhooks_task
         status_str = "completed" if summary.status == RunnerPipelineStatus.COMPLETED else "failed"
         duration_ms = int(duration * 1000) if pipeline_run.started_at and pipeline_run.completed_at else 0
-        trigger_webhooks_for_run(
+        deliver_webhooks_task.delay(
             run_id=str(pipeline_run.id),
             status=status_str,
             pipeline_name=pipeline_run.name or "",
@@ -220,7 +238,7 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             rows_processed=summary.total_rows_processed or 0,
         )
     except Exception as exc:
-        logger.error("Webhook trigger failed for run %s: %s", pipeline_run.id, exc)
+        logger.error("Failed to queue webhook task for run %s: %s", pipeline_run.id, exc)
 
     for idx, result in enumerate(summary.step_results):
         step_record = StepResult(

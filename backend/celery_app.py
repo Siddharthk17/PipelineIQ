@@ -47,3 +47,12 @@ if settings.CELERY_BROKER_URL.startswith("rediss://"):
     celery_app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="pipeline_tasks")
+celery_app.autodiscover_tasks(["backend.tasks"], related_name="webhook_tasks")
+celery_app.autodiscover_tasks(["backend.tasks"], related_name="schedule_tasks")
+
+celery_app.conf.beat_schedule = {
+    "check-pipeline-schedules": {
+        "task": "schedules.check",
+        "schedule": 60.0,
+    },
+}

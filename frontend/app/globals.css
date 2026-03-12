@@ -207,6 +207,36 @@
   --scrollbar-track: #0d1117;
 }
 
+[data-theme="pipelineiq-light"] {
+  --bg-base: #ffffff;
+  --bg-surface: #f6f8fa;
+  --bg-elevated: #eaeef2;
+  --widget-bg: rgba(246, 248, 250, 0.9);
+  --widget-border: #d0d7de;
+  --widget-radius: 6px;
+  --widget-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --widget-header-bg: rgba(255, 255, 255, 0.95);
+  --text-primary: #1f2328;
+  --text-secondary: #656d76;
+  --text-accent: #0969da;
+  --text-code: #1f2328;
+  --accent-primary: #0969da;
+  --accent-secondary: #8250df;
+  --accent-success: #1a7f37;
+  --accent-warning: #9a6700;
+  --accent-error: #cf222e;
+  --interactive-hover: rgba(9, 105, 218, 0.08);
+  --interactive-active: rgba(9, 105, 218, 0.15);
+  --interactive-focus: #0969da;
+  --grid-gap: 10px;
+  --grid-bg: #f0f2f5;
+  --topbar-bg: rgba(255, 255, 255, 0.97);
+  --topbar-border: #d0d7de;
+  --topbar-height: 48px;
+  --scrollbar-thumb: #c1c8cd;
+  --scrollbar-track: #f6f8fa;
+}
+
 body {
   background-color: var(--bg-base);
   color: var(--text-primary);

@@ -52,10 +52,14 @@ def cache_delete(key: str) -> None:
 
 
 def cache_delete_pattern(pattern: str) -> None:
-    """Delete all keys matching a glob pattern."""
+    """Delete all keys matching a glob pattern using SCAN (non-blocking)."""
     try:
-        keys = redis_client.keys(pattern)
-        if keys:
-            redis_client.delete(*keys)
+        cursor = 0
+        while True:
+            cursor, keys = redis_client.scan(cursor=cursor, match=pattern, count=100)
+            if keys:
+                redis_client.delete(*keys)
+            if cursor == 0:
+                break
     except redis.RedisError:
         logger.warning("Redis cache_delete_pattern failed for pattern: %s", pattern)

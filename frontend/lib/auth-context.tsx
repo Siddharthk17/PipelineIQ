@@ -51,7 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then((me) => {
         const isDemo = me.email === DEMO_EMAIL;
         setUser(toAuthUser(me, isDemo));
-        document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=Lax";
+        document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=Strict";
       })
       .catch(() => {
         clearToken();
@@ -65,7 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await apiLogin(email, password);
     setToken(res.access_token);
     setTokenState(res.access_token);
-    document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=Lax";
+    document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=Strict";
     const me = await getMe();
     const isDemo = me.email === DEMO_EMAIL;
     setUser(toAuthUser(me, isDemo));

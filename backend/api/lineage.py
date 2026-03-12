@@ -25,12 +25,9 @@ from backend.schemas import (
     TransformationStepResponse,
 )
 from backend.utils.cache import cache_delete, cache_delete_pattern, cache_get, cache_set
+from backend.utils.uuid_utils import validate_uuid_format as _validate_uuid_format, as_uuid as _as_uuid
 
 logger = logging.getLogger(__name__)
-
-def _as_uuid(val):
-    """Convert str or uuid.UUID to uuid.UUID for DB queries."""
-    return val if isinstance(val, uuid.UUID) else uuid.UUID(val)
 
 router = APIRouter(prefix="/lineage", tags=["lineage"])
 
@@ -77,7 +74,7 @@ def get_lineage_graph(
         ],
     )
 
-    cache_set(cache_key, response.model_dump())
+    cache_set(cache_key, response.model_dump(), ttl=3600)
     return response
 
 @router.get(
@@ -128,7 +125,7 @@ def get_column_lineage(
         total_steps=lineage.total_steps,
     )
 
-    cache_set(cache_key, response.model_dump())
+    cache_set(cache_key, response.model_dump(), ttl=3600)
     return response
 
 @router.get(
@@ -171,7 +168,7 @@ def get_impact_analysis(
         affected_output_columns=impact.affected_output_columns,
     )
 
-    cache_set(cache_key, response.model_dump())
+    cache_set(cache_key, response.model_dump(), ttl=3600)
     return response
 
 def _get_lineage_record(run_id: str, db: Session) -> LineageGraph:
@@ -200,16 +197,6 @@ def _validate_run_exists(run_id: str, db: Session) -> None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline run '{run_id}' not found",
-        )
-
-def _validate_uuid_format(value: str) -> None:
-    """Raise 422 if the value is not a valid UUID."""
-    try:
-        uuid.UUID(value)
-    except (ValueError, AttributeError):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid UUID format: '{value}'",
         )
 
 def _reconstruct_recorder(run_id: str, db: Session) -> LineageRecorder:

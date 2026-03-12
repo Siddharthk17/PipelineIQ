@@ -21,6 +21,7 @@ from backend.auth import (
     get_current_admin,
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
+from backend.services.audit_service import log_action
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,12 @@ class RegisterRequest(BaseModel):
     def validate_password(cls, v: str) -> str:
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one number")
+        if not any(c in "!@#$%^&*()_+-=[]{}|;:',.<>?/`~" for c in v):
+            raise ValueError("Password must contain at least one special character")
         return v
 
 class LoginRequest(BaseModel):
@@ -131,7 +138,6 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     db.refresh(user)
     logger.info("User registered: %s (role=%s)", user.username, user.role)
 
-    from backend.services.audit_service import log_action
     log_action(db, "user_registered", user_id=user.id, resource_type="user",
                resource_id=user.id, details={"email": user.email, "role": user.role}, request=request)
 
@@ -155,7 +161,6 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     token = create_access_token(data={"sub": str(user.id), "role": user.role})
     logger.info("User logged in: %s", user.username)
 
-    from backend.services.audit_service import log_action
     log_action(db, "user_login", user_id=user.id, resource_type="user",
                resource_id=user.id, details={"email": user.email}, request=request)
 

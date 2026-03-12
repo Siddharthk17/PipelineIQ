@@ -20,10 +20,8 @@ from backend.config import settings
 from backend.dependencies import get_db_dependency
 from backend.models import SchemaSnapshot, UploadedFile, User
 from backend.pipeline.schema_drift import detect_schema_drift
+from backend.utils.uuid_utils import validate_uuid_format as _validate_uuid_format, as_uuid as _as_uuid
 
-def _as_uuid(val):
-    """Convert str or uuid.UUID to uuid.UUID for DB queries."""
-    return val if isinstance(val, uuid.UUID) else uuid.UUID(val)
 from backend.schemas import (
     ColumnDriftResponse,
     FileListResponse,
@@ -31,6 +29,7 @@ from backend.schemas import (
     SchemaDriftResponse,
 )
 from backend.utils.rate_limiter import limiter
+from backend.services.audit_service import log_action
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +141,9 @@ async def upload_file(
         file_id, original_filename, len(df), len(columns),
     )
 
-    from backend.main import FILES_UPLOADED_TOTAL
+    from backend.metrics import FILES_UPLOADED_TOTAL
     FILES_UPLOADED_TOTAL.inc()
 
-    from backend.services.audit_service import log_action
     log_action(db, "file_uploaded", user_id=current_user.id, resource_type="file",
                resource_id=file_id, details={"filename": original_filename, "row_count": len(df)},
                request=request)
@@ -239,7 +237,6 @@ def delete_file(
     db.delete(uploaded_file)
     db.commit()
 
-    from backend.services.audit_service import log_action
     log_action(db, "file_deleted", user_id=current_user.id, resource_type="file",
                resource_id=_as_uuid(file_id), request=request)
 
@@ -270,26 +267,15 @@ def preview_file(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File data not found on disk for '{file_id}'",
         )
-    df = _parse_file_content(uploaded_file.original_filename, stored_path)
-    preview_df = df.head(min(rows, 100))
+    df = _parse_file_preview(uploaded_file.original_filename, stored_path, min(rows, 100))
     return {
         "file_id": file_id,
         "filename": uploaded_file.original_filename,
-        "total_rows": len(df),
-        "preview_rows": len(preview_df),
+        "total_rows": uploaded_file.row_count,
+        "preview_rows": len(df),
         "columns": list(df.columns),
-        "data": preview_df.to_dict(orient="records"),
+        "data": df.to_dict(orient="records"),
     }
-
-def _validate_uuid_format(value: str) -> None:
-    """Raise 422 if the value is not a valid UUID."""
-    try:
-        uuid.UUID(value)
-    except (ValueError, AttributeError):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Invalid UUID format: '{value}'",
-        )
 
 def _validate_file_extension(filename: str) -> None:
     """Raise 400 if the file extension is not in ALLOWED_EXTENSIONS."""
@@ -346,6 +332,29 @@ def _parse_file_content(filename: str, stored_path: Path) -> pd.DataFrame:
             return pd.read_csv(stored_path)
         elif extension == ".json":
             return pd.read_json(stored_path)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot parse file with extension '{extension}'",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': {exc}",
+        ) from exc
+
+
+def _parse_file_preview(filename: str, stored_path: Path, nrows: int) -> pd.DataFrame:
+    """Parse only the first N rows of a file for preview (avoids reading full file)."""
+    extension = stored_path.suffix.lower()
+    try:
+        if extension == ".csv":
+            return pd.read_csv(stored_path, nrows=nrows)
+        elif extension == ".json":
+            df = pd.read_json(stored_path)
+            return df.head(nrows)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

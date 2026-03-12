@@ -270,7 +270,7 @@ export default function RegisterPage() {
               </Link>
             </p>
             <span className="text-[10px]" style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)", opacity: 0.4 }}>
-              v2.0.0
+              v3.6.2
             </span>
           </div>
         </div>

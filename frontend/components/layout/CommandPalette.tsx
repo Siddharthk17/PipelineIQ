@@ -36,7 +36,7 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
     return isWidgetInLayout(n.first, id) || isWidgetInLayout(n.second, id);
   };
 
-  const themes = ['catppuccin-mocha', 'tokyo-night', 'gruvbox-dark', 'nord', 'rose-pine', 'pipelineiq-dark'];
+  const themes = ['catppuccin-mocha', 'tokyo-night', 'gruvbox-dark', 'nord', 'rose-pine', 'pipelineiq-dark', 'pipelineiq-light'];
 
   const commands: Command[] = [
     ...ALL_WIDGETS.map((w) => {

@@ -141,6 +141,16 @@ export interface ExecutionPlan {
   will_succeed: boolean;
 }
 
+export interface PipelinePreview {
+  step_name: string;
+  columns: string[];
+  data: Record<string, unknown>[];
+  note?: string;
+  step_type?: string;
+  estimated_rows_in?: number | null;
+  estimated_rows_out?: number | null;
+}
+
 export interface PipelineVersion {
   id: string;
   pipeline_name: string;

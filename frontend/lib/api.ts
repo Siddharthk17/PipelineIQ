@@ -7,6 +7,7 @@ import type {
   ColumnLineage,
   ImpactAnalysis,
   ExecutionPlan,
+  PipelinePreview,
   PipelineVersion,
   PipelineDiff,
   SchemaSnapshot,
@@ -57,7 +58,7 @@ export interface LoginResponse {
 
 // ── Core fetch with auth ───────────────────────────────────────────
 
-async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: RequestInit): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     ...(options?.headers as Record<string, string> || {}),
@@ -65,7 +66,7 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  const res = await fetch(`${API_V1}${endpoint}`, {
+  const res = await fetch(`${baseUrl}${endpoint}`, {
     ...options,
     headers,
     cache: "no-store",
@@ -86,6 +87,14 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
     throw new ApiError(res.status, res.statusText, detail);
   }
   return res.json() as Promise<T>;
+}
+
+async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  return fetchWithAuth<T>(API_V1, endpoint, options);
+}
+
+async function fetchAuth<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  return fetchWithAuth<T>(API_BASE_URL, endpoint, options);
 }
 
 export async function uploadFile(file: File): Promise<UploadedFile> {
@@ -198,34 +207,55 @@ export async function getSchemaHistory(fileId: string): Promise<SchemaSnapshot[]
   return data.snapshots;
 }
 
-// ── Auth API functions ─────────────────────────────────────────────
+// ── Pipeline preview ───────────────────────────────────────────────
 
-async function fetchAuth<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const token = getToken();
-  const headers: Record<string, string> = {
-    ...(options?.headers as Record<string, string> || {}),
-  };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  const res = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers,
-    cache: "no-store",
+type PipelinePreviewApiResponse = {
+  step_name?: string;
+  columns?: string[];
+  data?: Record<string, unknown>[];
+  note?: string;
+  step_preview?: undefined;
+} | {
+  pipeline_name: string;
+  step_index: number;
+  total_steps: number;
+  step_preview: {
+    step_name: string;
+    step_type: string;
+    estimated_rows_in: number | null;
+    estimated_rows_out: number | null;
+    estimated_columns: string[];
+  } | null;
+  note?: string;
+};
+
+export async function previewPipelineStep(yamlConfig: string, stepIndex: number = 0): Promise<PipelinePreview> {
+  const result = await fetchApi<PipelinePreviewApiResponse>(`/pipelines/preview?step_index=${stepIndex}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ yaml_config: yamlConfig }),
   });
-  if (!res.ok) {
-    if (res.status === 401 && token) {
-      clearToken();
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
-      }
-    }
-    let detail;
-    try { detail = await res.json(); } catch { detail = await res.text(); }
-    throw new ApiError(res.status, res.statusText, detail);
+  if ("step_preview" in result) {
+    const preview = result.step_preview;
+    return {
+      step_name: preview?.step_name ?? `Step ${stepIndex + 1}`,
+      columns: preview?.estimated_columns ?? [],
+      data: [],
+      note: result.note,
+      step_type: preview?.step_type,
+      estimated_rows_in: preview?.estimated_rows_in ?? null,
+      estimated_rows_out: preview?.estimated_rows_out ?? null,
+    };
   }
-  return res.json() as Promise<T>;
+  return {
+    step_name: result.step_name ?? `Step ${stepIndex + 1}`,
+    columns: result.columns ?? [],
+    data: result.data ?? [],
+    note: result.note,
+  };
 }
+
+// ── Auth API functions ─────────────────────────────────────────────
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
   return fetchAuth<LoginResponse>("/auth/login", {

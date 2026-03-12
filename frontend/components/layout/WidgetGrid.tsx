@@ -2,6 +2,7 @@
 
 import React from "react";
 import { useWidgetStore, LayoutNode, getAllWidgets } from "@/store/widgetStore";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { WidgetShell } from "../widgets/WidgetShell";
 
 import { QuickStatsWidget } from "../widgets/QuickStatsWidget";
@@ -58,17 +59,49 @@ function DwindleNode({ node }: { node: LayoutNode }) {
   );
 }
 
+function MobileWidgetList({ node }: { node: LayoutNode }) {
+  const { widgets, activeWidgetId, setActiveWidget } = useWidgetStore();
+  const ids = getAllWidgets(node);
+
+  return (
+    <div className="flex flex-col gap-[var(--grid-gap)] w-full">
+      {ids.map((id) => {
+        const config = widgets.find(w => w.id === id);
+        const Component = WIDGET_COMPONENTS[id];
+        if (!config || !Component) return null;
+
+        return (
+          <div key={id} className="w-full" style={{ minHeight: "320px" }}>
+            <WidgetShell
+              config={config}
+              isActive={activeWidgetId === id}
+              onClick={() => setActiveWidget(id)}
+              onPointerEnter={() => setActiveWidget(id)}
+              onPointerMove={() => setActiveWidget(id)}
+            >
+              <Component />
+            </WidgetShell>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function WidgetGrid() {
   const { workspaces, activeWorkspaceId, switchWorkspace } = useWidgetStore();
   const layout = workspaces[activeWorkspaceId];
+  const isMobile = useIsMobile();
 
   return (
     <div className="w-full h-full flex flex-col bg-[var(--grid-bg)] overflow-hidden">
-      <div className="flex-1 p-[var(--grid-gap)] overflow-hidden flex">
+      <div className={`flex-1 p-[var(--grid-gap)] ${isMobile ? "overflow-y-auto" : "overflow-hidden flex"}`}>
         {!layout ? (
           <div className="flex items-center justify-center w-full h-full text-[var(--text-secondary)] font-mono text-sm">
             Workspace {activeWorkspaceId} is empty. Press <kbd className="px-2 py-1 mx-2 rounded bg-[var(--bg-surface)] border border-[var(--widget-border)]">Alt+Enter</kbd> to launch.
           </div>
+        ) : isMobile ? (
+          <MobileWidgetList node={layout} />
         ) : (
           <DwindleNode node={layout} />
         )}

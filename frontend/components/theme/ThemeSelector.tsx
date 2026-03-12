@@ -10,6 +10,7 @@ const BUILT_IN_THEMES = [
   { id: "nord", name: "Nord", colors: ["#2e3440", "#88c0d0", "#a3be8c", "#ebcb8b", "#bf616a"] },
   { id: "rose-pine", name: "Rosé Pine", colors: ["#191724", "#ebbcba", "#31748f", "#f6c177", "#eb6f92"] },
   { id: "pipelineiq-dark", name: "PipelineIQ Dark", colors: ["#0d1117", "#00d9ff", "#3fb950", "#d29922", "#f85149"] },
+  { id: "pipelineiq-light", name: "PipelineIQ Light", colors: ["#f6f8fa", "#0969da", "#1a7f37", "#9a6700", "#cf222e"] },
 ];
 
 export function ThemeSelector({ isOpen, onClose, onOpenBuilder }: { isOpen: boolean; onClose: () => void; onOpenBuilder: () => void }) {

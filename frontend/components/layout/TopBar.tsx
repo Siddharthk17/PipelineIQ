@@ -8,6 +8,7 @@ import { useKeybindingStore } from "@/store/keybindingStore";
 import { checkHealth } from "@/lib/api";
 import { Activity, Clock, Command, LayoutDashboard, Palette, RefreshCw, Keyboard, LogOut, User } from "lucide-react";
 import { AuthUser } from "@/lib/auth-context";
+import { PresenceIndicator } from "./PresenceIndicator";
 
 export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, onLogout }: { onOpenTheme: () => void; onOpenCommand: () => void; onOpenKeybindings: () => void; user?: AuthUser | null; onLogout?: () => void }) {
   const router = useRouter();
@@ -111,6 +112,7 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, on
             <div className="w-px h-4 bg-[var(--topbar-border)]" />
           </>
         )}
+        {user && !user.isDemo && <PresenceIndicator username={user.username} />}
         <div className="flex items-center gap-2 text-xs mr-2">
           <div className={`w-2 h-2 rounded-full ${isConnected ? "bg-[var(--accent-success)]" : "bg-[var(--accent-error)]"} animate-pulse`} />
           <span className="text-[var(--text-secondary)]">{isConnected ? "Connected" : "Unreachable"}</span>

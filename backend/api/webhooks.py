@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 from backend.auth import get_current_user
 from backend.dependencies import get_db_dependency
 from backend.models import User, Webhook, WebhookDelivery
+from backend.utils.uuid_utils import as_uuid as _as_uuid
+from backend.services.audit_service import log_action
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
@@ -42,6 +44,7 @@ class WebhookResponse(BaseModel):
     events: list
     is_active: bool
     created_at: datetime
+    has_secret: bool = False
 
     class Config:
         from_attributes = True
@@ -67,13 +70,6 @@ class TestWebhookResponse(BaseModel):
     error: Optional[str] = None
 
 
-def _as_uuid(val):
-    import uuid as _uuid
-    if isinstance(val, _uuid.UUID):
-        return val
-    return _uuid.UUID(str(val))
-
-
 # Endpoints
 
 @router.post("/", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
@@ -97,7 +93,6 @@ def create_webhook(
     db.commit()
     db.refresh(webhook)
 
-    from backend.services.audit_service import log_action
     log_action(db, "webhook_created", user_id=current_user.id, resource_type="webhook",
                resource_id=webhook.id, details={"url": body.url})
 
@@ -107,6 +102,7 @@ def create_webhook(
         events=webhook.events,
         is_active=webhook.is_active,
         created_at=webhook.created_at,
+        has_secret=webhook.secret is not None,
     )
 
 
@@ -121,6 +117,7 @@ def list_webhooks(
         WebhookResponse(
             id=str(w.id), url=w.url, events=w.events,
             is_active=w.is_active, created_at=w.created_at,
+            has_secret=w.secret is not None,
         )
         for w in webhooks
     ]
@@ -141,7 +138,6 @@ def delete_webhook(
     if str(webhook.user_id) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not your webhook")
 
-    from backend.services.audit_service import log_action
     log_action(db, "webhook_deleted", user_id=current_user.id, resource_type="webhook",
                resource_id=webhook.id)
 

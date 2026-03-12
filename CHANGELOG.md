@@ -3,7 +3,74 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
-## [1.3.9] — Frontend Testing
+## [2.1.4] — Post-Audit Polish
+
+### Bug Fixes
+- **ThemeSelector missing theme** — added "PipelineIQ Light" to `BUILT_IN_THEMES` array in `ThemeSelector.tsx` (was only 6 of 7 themes)
+- **CommandPalette missing theme** — added `'pipelineiq-light'` to themes array in `CommandPalette.tsx` (was only 6 of 7 themes)
+
+### Documentation
+- **AUDIT_REPORT.md** — updated to reflect all v2.1.0+ fixes: 7 themes (was 6), 14 models (was 10), 13 API routers (was 6), 93 frontend tests acknowledged, fixed issues marked with ✅ status, recommendations updated
+- **CHANGELOG.md** — added v2.1.4 entry for post-audit fixes
+
+## [2.1.3] — Codebase Audit: 43 Items Implemented
+
+### Bug Fixes
+- **Pagination** — `list_pipeline_runs` now uses `page`, `limit`, and `status_filter` query params with proper `OFFSET`/`LIMIT` (was loading all runs with `.all()`)
+- **UTC datetime** — replaced deprecated `datetime.utcnow()` with `datetime.now(timezone.utc)` in auth token creation
+- **Shared UUID utils** — extracted duplicated `_validate_uuid_format` and `_as_uuid` to `backend/utils/uuid_utils.py` (was copy-pasted 3-4 times)
+- **Redis connection pool** — health check now reuses a module-level `redis.ConnectionPool` instead of creating a new client per call
+- **Unified fetch** — merged duplicate `fetchApi`/`fetchAuth` into a single `fetchWithAuth` function parameterized by base URL
+- **Package name** — fixed `package.json` name from `ai-studio-applet` to `pipelineiq`
+
+### Security
+- **Metrics restricted** — `/metrics` endpoint restricted to internal networks (10.x, 172.16.x, 192.168.x, 127.0.0.1) in nginx
+- **Docs disabled in production** — `/docs` and `/redoc` set to `None` when `ENVIRONMENT=production`
+- **SameSite=Strict** — `piq_auth` cookie changed from `Lax` to `Strict`
+- **Webhook secrets hidden** — `WebhookResponse` now returns `has_secret: bool` instead of the raw secret
+- **Password complexity** — registration requires uppercase letter, number, and special character
+- **Secret key validation** — `config.py` model validator fails startup if default `SECRET_KEY` is used in production
+
+### Performance
+- **ID-only query** — `validate_pipeline` now queries `db.query(UploadedFile.id).all()` instead of loading full objects
+- **Referenced file loading** — pipeline tasks only load files referenced in the YAML config, not all files
+- **Database indexes** — added Alembic migration with indexes on `pipeline_runs.status`, `pipeline_runs.created_at`, `step_results.pipeline_run_id`, `webhook_deliveries.webhook_id`, and `audit_logs.user_id + created_at`
+- **Cache TTL** — all lineage cache entries now expire after 1 hour (`ttl=3600`)
+- **SCAN over KEYS** — `cache_delete_pattern` uses `SCAN` with cursor iteration instead of blocking `KEYS` command
+- **Preview optimization** — file preview uses `pd.read_csv(nrows=N)` instead of reading the entire file
+
+### Architecture
+- **Error boundaries** — React `ErrorBoundary` and `WidgetErrorBoundary` components wrap the app and individual widgets
+- **SSE reconnect** — exponential backoff (1s → 2s → 4s → 8s → 16s, max 5 retries) on SSE disconnect
+- **Async webhook delivery** — webhook HTTP calls run in a separate Celery task (`webhook_tasks.py`)
+- **API versioning headers** — `X-API-Version` and `X-App-Version` response headers via middleware
+- **Centralized metrics** — all Prometheus metric definitions extracted to `backend/metrics.py` (resolves circular import)
+- **Top-level audit imports** — `from backend.services.audit_service import log_action` moved to module top level
+
+### New Features
+- **Pipeline scheduling** — cron-based recurring execution via Celery Beat with CRUD endpoints
+- **Pipeline templates** — 5 pre-built templates (ETL, cleaning, validation, aggregation, merge/join)
+- **Slack notifications** — notification config with webhook URL, event subscriptions, and test endpoint
+- **Data preview in editor** — preview button shows sample data at each pipeline step
+- **Step DAG visualization** — horizontal flow diagram showing step execution order with status colors
+- **Multi-file pipeline outputs** — support for multiple save steps writing to different files
+- **User dashboard** — personal analytics (runs, success rate, most-used pipelines, recent activity)
+- **Per-pipeline RBAC** — owner/runner/viewer permissions per pipeline with admin override
+- **Pipeline cancellation** — cancel running pipelines with `CANCELLED` status and Celery task revocation
+- **File versioning** — version counter and `previous_version_id` FK on uploaded files
+- **Export pipeline results** — download output CSV/JSON from completed pipeline runs
+- **Light mode** — PipelineIQ Light theme added (7 total themes)
+- **Mobile responsive** — stacked single-column widget layout on mobile devices
+- **Presence indicators** — online user indicator in top bar (WebSocket-ready)
+
+### Dependency Cleanup
+- Removed `@google/genai` from frontend dependencies (unused, 500KB+ savings)
+- Removed `firebase-tools` from devDependencies (unused)
+- Removed `aioredis` from requirements.txt (deprecated, replaced by `redis.asyncio`)
+- Removed `aiofiles` from requirements.txt (not imported anywhere)
+- Added `croniter==2.0.1` for cron expression parsing
+
+## [1.3.9] — Week 5: Frontend Testing
 
 ### Added
 - Vitest + React Testing Library + jsdom test infrastructure

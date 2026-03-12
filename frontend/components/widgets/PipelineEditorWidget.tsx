@@ -4,10 +4,11 @@ import React, { useState, useEffect, useCallback } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { validatePipeline, runPipeline, getFiles, getPipelinePlan } from "@/lib/api";
+import { validatePipeline, runPipeline, getFiles, getPipelinePlan, previewPipelineStep } from "@/lib/api";
 import { usePipelineStore } from "@/store/pipelineStore";
-import { CheckCircle, XCircle, Play, RefreshCw, FileText, Plus, X } from "lucide-react";
-import { ValidationResult, ExecutionPlan } from "@/lib/types";
+import { CheckCircle, XCircle, Play, RefreshCw, FileText, Plus, X, Eye } from "lucide-react";
+import { ValidationResult, ExecutionPlan, PipelinePreview } from "@/lib/types";
+import { StepDAG } from "./StepDAG";
 
 export function PipelineEditorWidget() {
   const queryClient = useQueryClient();
@@ -18,6 +19,9 @@ export function PipelineEditorWidget() {
   const [plan, setPlan] = useState<ExecutionPlan | null>(null);
   const [isPlanLoading, setIsPlanLoading] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PipelinePreview | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const { data: files } = useQuery({ queryKey: ["files"], queryFn: getFiles });
 
@@ -98,6 +102,24 @@ export function PipelineEditorWidget() {
     }
   }, [code]);
 
+  const handlePreview = useCallback(async () => {
+    setIsPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const result = await previewPipelineStep(code, 0);
+      setPreview(result);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to load preview";
+      setPreviewError(message);
+      setPreview(null);
+    } finally {
+      setIsPreviewLoading(false);
+    }
+  }, [code]);
+
+  const previewColumns = preview?.columns ?? [];
+  const previewRows = preview?.data ?? [];
+
   return (
     <div className="flex h-full overflow-hidden">
       <div className="w-[60%] flex flex-col border-r" style={{ borderColor: "var(--widget-border)" }}>
@@ -136,6 +158,15 @@ export function PipelineEditorWidget() {
             >
               {isPlanLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <span>▷</span>}
               Plan
+            </button>
+            <button
+              onClick={handlePreview}
+              disabled={isPreviewLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ borderColor: "var(--widget-border)" }}
+            >
+              {isPreviewLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
+              Preview
             </button>
           </div>
           <button 
@@ -233,6 +264,69 @@ export function PipelineEditorWidget() {
                       {plan.files_written.join(", ")}
                     </div>
                   )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {plan && (
+          <div className="border-t bg-[var(--bg-surface)] px-3 py-2" style={{ borderColor: "var(--widget-border)" }}>
+            <h4 className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-1">Step Flow</h4>
+            <StepDAG steps={plan.steps} />
+          </div>
+        )}
+        {previewError && (
+          <div className="p-2 border-t bg-[var(--bg-surface)] text-xs text-[var(--accent-error)]" style={{ borderColor: "var(--widget-border)" }}>
+            Preview error: {previewError}
+          </div>
+        )}
+        {preview && (
+          <div className="border-t overflow-y-auto max-h-[30%] bg-[var(--bg-surface)]" style={{ borderColor: "var(--widget-border)" }}>
+            <div className="p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-[var(--text-primary)] uppercase tracking-wider">
+                  Data Preview — {preview.step_name}
+                </h3>
+                <button onClick={() => setPreview(null)} className="p-0.5 rounded hover:bg-[var(--interactive-hover)] text-[var(--text-secondary)]">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {previewColumns.length === 0 ? (
+                <div className="text-xs text-[var(--text-secondary)]">
+                  No preview columns available for this step yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-[var(--text-secondary)] border-b" style={{ borderColor: "var(--widget-border)" }}>
+                        {previewColumns.map((col) => (
+                          <th key={col} className="py-1 pr-3 font-medium whitespace-nowrap">{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewRows.slice(0, 10).map((row, i) => (
+                        <tr key={i} className="border-b border-[var(--widget-border)]/30">
+                          {previewColumns.map((col) => (
+                            <td key={col} className="py-1 pr-3 text-[var(--text-primary)] whitespace-nowrap font-mono">
+                              {row[col] != null ? String(row[col]) : "—"}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {previewRows.length > 10 && (
+                <div className="text-[10px] text-[var(--text-secondary)]">
+                  Showing 10 of {previewRows.length} rows
+                </div>
+              )}
+              {preview.note && (
+                <div className="text-[10px] text-[var(--text-secondary)]">
+                  {preview.note}
                 </div>
               )}
             </div>
