@@ -5,11 +5,15 @@ matching notification configs for pipeline events.
 """
 
 import logging
+import smtplib
+import ssl
 from typing import Optional
 
 import httpx
+from email.message import EmailMessage
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.models import NotificationConfig, NotificationType
 
 logger = logging.getLogger(__name__)
@@ -20,6 +24,9 @@ def send_slack_notification(webhook_url: str, message: str) -> bool:
 
     Returns True on success, False on failure.
     """
+    if not webhook_url:
+        logger.info("Slack notification skipped: webhook URL not configured")
+        return False
     try:
         response = httpx.post(
             webhook_url,
@@ -38,6 +45,66 @@ def send_slack_notification(webhook_url: str, message: str) -> bool:
     except httpx.HTTPError as exc:
         logger.error("Slack notification error: %s", exc)
         return False
+
+
+def send_email_notification(recipients: list[str], subject: str, body: str) -> bool:
+    """Send a plain-text email notification via SMTP."""
+    if not recipients:
+        logger.info("Email notification skipped: no recipients provided")
+        return False
+    if not settings.SMTP_HOST:
+        logger.info("Email notification skipped: SMTP_HOST is not configured")
+        return False
+    if not settings.SMTP_FROM:
+        logger.info("Email notification skipped: SMTP_FROM is not configured")
+        return False
+
+    message = EmailMessage()
+    message["From"] = settings.SMTP_FROM
+    message["To"] = ", ".join(recipients)
+    message["Subject"] = subject
+    message.set_content(body)
+
+    try:
+        if settings.SMTP_USE_SSL:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(
+                settings.SMTP_HOST,
+                settings.SMTP_PORT,
+                timeout=settings.SMTP_TIMEOUT,
+                context=context,
+            ) as server:
+                if settings.SMTP_USER:
+                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP(
+                settings.SMTP_HOST,
+                settings.SMTP_PORT,
+                timeout=settings.SMTP_TIMEOUT,
+            ) as server:
+                server.ehlo()
+                if settings.SMTP_USE_TLS:
+                    context = ssl.create_default_context()
+                    server.starttls(context=context)
+                    server.ehlo()
+                if settings.SMTP_USER:
+                    server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                server.send_message(message)
+        logger.info("Email notification sent to %s", ", ".join(recipients))
+        return True
+    except Exception as exc:
+        logger.error("Email notification error: %s", exc)
+        return False
+
+
+def _normalize_email_recipients(config: dict) -> list[str]:
+    value = (config or {}).get("email_to")
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str) and v]
+    return []
 
 
 def notify_pipeline_event(
@@ -70,7 +137,12 @@ def notify_pipeline_event(
             webhook_url = (config.config or {}).get("slack_webhook_url")
             if webhook_url and send_slack_notification(webhook_url, message):
                 sent += 1
-        # Email support can be added here in the future
+        elif config.type == NotificationType.EMAIL:
+            recipients = _normalize_email_recipients(config.config or {})
+            if recipients:
+                subject = f"PipelineIQ: {event_type.replace('_', ' ').title()}"
+                if send_email_notification(recipients, subject, message):
+                    sent += 1
 
     return sent
 

@@ -52,7 +52,7 @@ export function LineageGraphWidget() {
       </div>
 
       <div className="flex-1 relative">
-        <LineageGraph runId={activeRunId} mode={mode} />
+        <LineageGraph key={`${mode}:${activeRunId ?? "none"}`} runId={activeRunId} mode={mode} />
       </div>
     </div>
   );

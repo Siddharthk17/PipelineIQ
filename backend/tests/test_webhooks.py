@@ -15,11 +15,11 @@ def _register_and_login(client):
     client.post("/auth/register", json={
         "email": "webhook_user@test.com",
         "username": "webhook_user",
-        "password": "testpass123",
+        "password": "Testpass123!",
     })
     resp = client.post("/auth/login", json={
         "email": "webhook_user@test.com",
-        "password": "testpass123",
+        "password": "Testpass123!",
     })
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
@@ -56,17 +56,17 @@ def test_list_webhooks_returns_own_only(auth_client):
     """Users can only see their own webhooks."""
     # Create user 1 with webhook
     auth_client.post("/auth/register", json={
-        "email": "wh_user1@test.com", "username": "wh_user1", "password": "testpass123",
+        "email": "wh_user1@test.com", "username": "wh_user1", "password": "Testpass123!",
     })
-    r1 = auth_client.post("/auth/login", json={"email": "wh_user1@test.com", "password": "testpass123"})
+    r1 = auth_client.post("/auth/login", json={"email": "wh_user1@test.com", "password": "Testpass123!"})
     h1 = {"Authorization": f"Bearer {r1.json()['access_token']}"}
     auth_client.post("/webhooks/", json={"url": "https://user1.com/hook"}, headers=h1)
 
     # Create user 2
     auth_client.post("/auth/register", json={
-        "email": "wh_user2@test.com", "username": "wh_user2", "password": "testpass123",
+        "email": "wh_user2@test.com", "username": "wh_user2", "password": "Testpass123!",
     })
-    r2 = auth_client.post("/auth/login", json={"email": "wh_user2@test.com", "password": "testpass123"})
+    r2 = auth_client.post("/auth/login", json={"email": "wh_user2@test.com", "password": "Testpass123!"})
     h2 = {"Authorization": f"Bearer {r2.json()['access_token']}"}
 
     # User 2 should see no webhooks
@@ -89,18 +89,18 @@ def test_delete_webhook_others_returns_403(auth_client):
     """Users cannot delete other users' webhooks."""
     # Create user 1 with webhook
     auth_client.post("/auth/register", json={
-        "email": "del_user1@test.com", "username": "del_user1", "password": "testpass123",
+        "email": "del_user1@test.com", "username": "del_user1", "password": "Testpass123!",
     })
-    r1 = auth_client.post("/auth/login", json={"email": "del_user1@test.com", "password": "testpass123"})
+    r1 = auth_client.post("/auth/login", json={"email": "del_user1@test.com", "password": "Testpass123!"})
     h1 = {"Authorization": f"Bearer {r1.json()['access_token']}"}
     create_resp = auth_client.post("/webhooks/", json={"url": "https://user1.com/hook"}, headers=h1)
     webhook_id = create_resp.json()["id"]
 
     # Create user 2
     auth_client.post("/auth/register", json={
-        "email": "del_user2@test.com", "username": "del_user2", "password": "testpass123",
+        "email": "del_user2@test.com", "username": "del_user2", "password": "Testpass123!",
     })
-    r2 = auth_client.post("/auth/login", json={"email": "del_user2@test.com", "password": "testpass123"})
+    r2 = auth_client.post("/auth/login", json={"email": "del_user2@test.com", "password": "Testpass123!"})
     h2 = {"Authorization": f"Bearer {r2.json()['access_token']}"}
 
     resp = auth_client.delete(f"/webhooks/{webhook_id}", headers=h2)

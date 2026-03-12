@@ -5,13 +5,25 @@ import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // Mock motion/react to avoid animation issues in tests
-vi.mock("motion/react", () => ({
-  motion: {
-    div: React.forwardRef(({ children, ...props }: any, ref: any) => <div ref={ref} {...props}>{children}</div>),
-    span: React.forwardRef(({ children, ...props }: any, ref: any) => <span ref={ref} {...props}>{children}</span>),
-  },
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-}));
+vi.mock("motion/react", () => {
+  const MotionDiv = React.forwardRef(({ children, ...props }: any, ref: any) => (
+    <div ref={ref} {...props}>{children}</div>
+  ));
+  MotionDiv.displayName = "MotionDiv";
+
+  const MotionSpan = React.forwardRef(({ children, ...props }: any, ref: any) => (
+    <span ref={ref} {...props}>{children}</span>
+  ));
+  MotionSpan.displayName = "MotionSpan";
+
+  return {
+    motion: {
+      div: MotionDiv,
+      span: MotionSpan,
+    },
+    AnimatePresence: ({ children }: any) => <>{children}</>,
+  };
+});
 
 // Mock the API module
 vi.mock("@/lib/api", () => ({

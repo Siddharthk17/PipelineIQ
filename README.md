@@ -208,7 +208,7 @@ Pipeline progress flows through: Celery worker → Redis pub/sub → FastAPI SSE
 ### Frontend
 
 - **5 workspaces** (Alt+1 through Alt+5) with independent widget layouts
-- **8 widgets** — Quick Stats, Pipeline Editor, Run Monitor, File Registry, File Upload, Lineage Graph, Run History, Version History
+- **9 widgets** — Quick Stats, Pipeline Editor, Run Monitor, File Registry, File Upload, Lineage Graph, Run History, Version History, Manage Connections
 - **Binary tree layout** — widgets split horizontally/vertically, drag-and-drop to swap positions
 - **Mobile responsive** — stacked single-column layout on mobile devices
 - **Command palette** (Ctrl+K) — fuzzy search for commands
@@ -731,6 +731,13 @@ Full list in `.env.example`. Key variables:
 | `RATE_LIMIT_FILE_UPLOAD` | `30/minute` | Upload rate limit |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | 24h token lifetime |
 | `SENTRY_DSN` | — | Optional error tracking |
+| `SMTP_HOST` | — | SMTP server for email notifications |
+| `SMTP_PORT` | `587` | SMTP port |
+| `SMTP_USER` | — | SMTP username |
+| `SMTP_PASSWORD` | — | SMTP password |
+| `SMTP_FROM` | — | From address for notifications |
+| `SMTP_USE_TLS` | `true` | Enable STARTTLS |
+| `SMTP_USE_SSL` | `false` | Use SSL instead of STARTTLS |
 
 ---
 

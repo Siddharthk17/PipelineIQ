@@ -8,6 +8,8 @@ import type {
   ImpactAnalysis,
   ExecutionPlan,
   PipelinePreview,
+  NotificationConfig,
+  NotificationType,
   PipelineVersion,
   PipelineDiff,
   SchemaSnapshot,
@@ -205,6 +207,33 @@ export async function restorePipelineVersion(name: string, version: number): Pro
 export async function getSchemaHistory(fileId: string): Promise<SchemaSnapshot[]> {
   const data = await fetchApi<{ file_id: string; total_snapshots: number; snapshots: SchemaSnapshot[] }>(`/files/${fileId}/schema/history`);
   return data.snapshots;
+}
+
+// ── Notifications ────────────────────────────────────────────────
+
+export async function listNotificationConfigs(): Promise<NotificationConfig[]> {
+  const data = await fetchApi<{ configs: NotificationConfig[]; total: number }>("/notifications/");
+  return data.configs;
+}
+
+export async function createNotificationConfig(
+  type: NotificationType,
+  config: Record<string, unknown>,
+  events: string[] = ["pipeline_completed", "pipeline_failed"],
+): Promise<NotificationConfig> {
+  return fetchApi<NotificationConfig>("/notifications/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type, config, events }),
+  });
+}
+
+export async function deleteNotificationConfig(configId: string): Promise<void> {
+  await fetchApi<void>(`/notifications/${configId}`, { method: "DELETE" });
+}
+
+export async function testNotificationConfig(configId: string): Promise<{ detail: string }> {
+  return fetchApi<{ detail: string }>(`/notifications/${configId}/test`, { method: "POST" });
 }
 
 // ── Pipeline preview ───────────────────────────────────────────────

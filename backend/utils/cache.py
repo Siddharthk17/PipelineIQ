@@ -56,10 +56,16 @@ def cache_delete_pattern(pattern: str) -> None:
     try:
         cursor = 0
         while True:
-            cursor, keys = redis_client.scan(cursor=cursor, match=pattern, count=100)
+            result = redis_client.scan(cursor=cursor, match=pattern, count=100)
+            if not isinstance(result, (list, tuple)) or len(result) != 2:
+                keys = redis_client.keys(pattern)
+                if keys:
+                    redis_client.delete(*keys)
+                return
+            cursor, keys = result
             if keys:
                 redis_client.delete(*keys)
-            if cursor == 0:
+            if cursor == 0 or cursor == "0":
                 break
     except redis.RedisError:
         logger.warning("Redis cache_delete_pattern failed for pattern: %s", pattern)

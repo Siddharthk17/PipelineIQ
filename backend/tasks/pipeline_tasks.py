@@ -205,13 +205,15 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     if summary.status == RunnerPipelineStatus.COMPLETED:
         pipeline_run.status = PipelineStatus.COMPLETED
         PIPELINE_RUNS_TOTAL.labels(status="success").inc()
-        _publish_terminal_event(str(pipeline_run.id), "pipeline_completed")
+        event_type = "pipeline_completed"
+        _publish_terminal_event(str(pipeline_run.id), event_type)
     else:
         pipeline_run.status = PipelineStatus.FAILED
         pipeline_run.error_message = str(summary.error) if summary.error else None
         PIPELINE_RUNS_TOTAL.labels(status="failed").inc()
+        event_type = "pipeline_failed"
         _publish_terminal_event(
-            str(pipeline_run.id), "pipeline_failed",
+            str(pipeline_run.id), event_type,
             str(summary.error) if summary.error else "",
         )
 
@@ -223,6 +225,19 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     pipeline_run.total_rows_out = (
         summary.step_results[-1].rows_out if summary.step_results else 0
     )
+
+    # Fire notifications asynchronously via separate Celery task
+    try:
+        from backend.tasks.notification_tasks import deliver_notifications_task
+        deliver_notifications_task.delay(
+            run_id=str(pipeline_run.id),
+            event_type=event_type,
+            pipeline_name=pipeline_run.name or "",
+            status=pipeline_run.status.value,
+            error_message=pipeline_run.error_message or "",
+        )
+    except Exception as exc:
+        logger.error("Failed to queue notification task for run %s: %s", pipeline_run.id, exc)
 
     # Fire webhooks asynchronously via separate Celery task
     try:

@@ -19,12 +19,12 @@ export function RunHistoryWidget() {
   const { setActiveRunId } = usePipelineStore();
 
   // Force refetch when activeRun status changes to a terminal state
-  const activeRun = usePipelineStore(s => s.activeRun);
+  const activeRunStatus = usePipelineStore(s => s.activeRun?.status);
   React.useEffect(() => {
-    if (activeRun && (activeRun.status === "COMPLETED" || activeRun.status === "FAILED")) {
+    if (activeRunStatus === "COMPLETED" || activeRunStatus === "FAILED") {
       queryClient.invalidateQueries({ queryKey: ["pipelineRuns"] });
     }
-  }, [activeRun?.status, queryClient]);
+  }, [activeRunStatus, queryClient]);
 
   if (isLoading) return <div className="p-4 text-[var(--text-secondary)]">Loading history...</div>;
 

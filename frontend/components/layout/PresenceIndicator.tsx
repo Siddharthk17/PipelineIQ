@@ -1,7 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
 interface PresenceUser {
   id: string;
   username: string;
@@ -22,30 +20,12 @@ function getPresenceColor(id: string): string {
 }
 
 export function PresenceIndicator({ username }: { username?: string }) {
-  const [users, setUsers] = useState<PresenceUser[]>([]);
-
-  useEffect(() => {
-    const currentUser: PresenceUser = {
-      id: "self",
-      username: username || "You",
-      color: getPresenceColor(username || "You"),
-    };
-    setUsers([currentUser]);
-
-    // Future WebSocket integration:
-    // const ws = new WebSocket(PRESENCE_WS_URL);
-    // ws.onmessage = (e) => {
-    //   const data = JSON.parse(e.data);
-    //   setUsers(data.users.map((u: any) => ({
-    //     id: u.id,
-    //     username: u.username,
-    //     color: getPresenceColor(u.id),
-    //   })));
-    // };
-    // return () => ws.close();
-  }, [username]);
-
-  if (users.length === 0) return null;
+  const displayName = username || "You";
+  const users: PresenceUser[] = [{
+    id: "self",
+    username: displayName,
+    color: getPresenceColor(displayName),
+  }];
 
   return (
     <div className="flex items-center gap-1.5">

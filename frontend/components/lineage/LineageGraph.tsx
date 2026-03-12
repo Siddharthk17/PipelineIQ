@@ -81,11 +81,6 @@ export function LineageGraph({ runId, mode }: LineageGraphProps) {
     setImpactData(null);
   }, [setEdges]);
 
-  // Reset when switching modes
-  useEffect(() => {
-    resetGraph();
-  }, [mode, resetGraph]);
-
   const applyImpactHighlight = useCallback((clickedNode: ReactFlowNode, impact: ImpactAnalysis) => {
     const steps = new Set(impact.affected_steps ?? []);
     const stepName = clickedNode.data?.stepName as string;

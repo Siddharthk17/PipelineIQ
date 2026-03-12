@@ -6,6 +6,7 @@ import { yaml } from "@codemirror/lang-yaml";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { validatePipeline, runPipeline, getFiles, getPipelinePlan, previewPipelineStep } from "@/lib/api";
 import { usePipelineStore } from "@/store/pipelineStore";
+import { useThemeStore } from "@/store/themeStore";
 import { CheckCircle, XCircle, Play, RefreshCw, FileText, Plus, X, Eye } from "lucide-react";
 import { ValidationResult, ExecutionPlan, PipelinePreview } from "@/lib/types";
 import { StepDAG } from "./StepDAG";
@@ -13,6 +14,7 @@ import { StepDAG } from "./StepDAG";
 export function PipelineEditorWidget() {
   const queryClient = useQueryClient();
   const { lastYamlConfig, setLastYamlConfig, setActiveRunId, setActiveRun } = usePipelineStore();
+  const { activeTheme } = useThemeStore();
   const [code, setCode] = useState(lastYamlConfig);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
@@ -120,6 +122,8 @@ export function PipelineEditorWidget() {
   const previewColumns = preview?.columns ?? [];
   const previewRows = preview?.data ?? [];
 
+  const isLightTheme = activeTheme.includes("light");
+
   return (
     <div className="flex h-full overflow-hidden">
       <div className="w-[60%] flex flex-col border-r" style={{ borderColor: "var(--widget-border)" }}>
@@ -128,7 +132,7 @@ export function PipelineEditorWidget() {
             value={code}
             height="100%"
             extensions={[yaml()]}
-            theme="dark"
+            theme={isLightTheme ? "light" : "dark"}
             onChange={(value) => setCode(value)}
             className="text-sm font-mono"
             style={{ backgroundColor: "var(--bg-base)" }}

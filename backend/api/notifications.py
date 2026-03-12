@@ -14,7 +14,7 @@ from backend.auth import get_current_user
 from backend.dependencies import get_db_dependency
 from backend.models import NotificationConfig, NotificationType, User
 from backend.services.audit_service import log_action
-from backend.services.notification_service import send_slack_notification
+from backend.services.notification_service import send_slack_notification, send_email_notification
 from backend.utils.uuid_utils import validate_uuid_format, as_uuid
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,13 @@ def create_notification_config(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Slack config requires 'slack_webhook_url'.",
+            )
+    elif notif_type == NotificationType.EMAIL:
+        email_to = body.config.get("email_to")
+        if not email_to:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email config requires 'email_to'.",
             )
 
     config = NotificationConfig(
@@ -197,6 +204,27 @@ def test_notification(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to send test notification to Slack",
             )
+
+    if config.type == NotificationType.EMAIL:
+        recipients = (config.config or {}).get("email_to")
+        if isinstance(recipients, str):
+            recipients = [recipients]
+        if not recipients:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No email_to configured",
+            )
+        success = send_email_notification(
+            [r for r in recipients if isinstance(r, str) and r],
+            "PipelineIQ Test Notification",
+            "This is a test message to verify your email notification settings.",
+        )
+        if success:
+            return {"detail": "Test email sent successfully"}
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to send test email",
+        )
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,

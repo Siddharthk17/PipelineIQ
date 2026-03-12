@@ -49,6 +49,7 @@ if settings.CELERY_BROKER_URL.startswith("rediss://"):
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="pipeline_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="webhook_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="schedule_tasks")
+celery_app.autodiscover_tasks(["backend.tasks"], related_name="notification_tasks")
 
 celery_app.conf.beat_schedule = {
     "check-pipeline-schedules": {

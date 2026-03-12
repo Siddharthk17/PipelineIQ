@@ -151,6 +151,17 @@ export interface PipelinePreview {
   estimated_rows_out?: number | null;
 }
 
+export type NotificationType = "slack" | "email";
+
+export interface NotificationConfig {
+  id: string;
+  type: NotificationType;
+  config: Record<string, unknown>;
+  events: string[];
+  is_active: boolean;
+  created_at: string | null;
+}
+
 export interface PipelineVersion {
   id: string;
   pipeline_name: string;

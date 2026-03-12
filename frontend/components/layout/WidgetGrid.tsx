@@ -13,6 +13,7 @@ import { RunMonitorWidget } from "../widgets/RunMonitorWidget";
 import { LineageGraphWidget } from "../widgets/LineageGraphWidget";
 import { RunHistoryWidget } from "../widgets/RunHistoryWidget";
 import { VersionHistoryWidget } from "../widgets/VersionHistoryWidget";
+import { ManageConnectionsWidget } from "../widgets/ManageConnectionsWidget";
 
 // Widget components have heterogeneous props; Record<string, React.FC<any>> is the simplest safe mapping
 const WIDGET_COMPONENTS: Record<string, React.FC<any>> = {
@@ -24,6 +25,7 @@ const WIDGET_COMPONENTS: Record<string, React.FC<any>> = {
   "lineage-graph": LineageGraphWidget,
   "run-history": RunHistoryWidget,
   "version-history": VersionHistoryWidget,
+  "manage-connections": ManageConnectionsWidget,
 };
 
 function DwindleNode({ node }: { node: LayoutNode }) {

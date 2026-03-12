@@ -37,29 +37,32 @@ const DEMO_PASSWORD = "Demo1234!";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setTokenState] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [token, setTokenState] = useState<string | null>(() => getToken());
+  const [isLoading, setIsLoading] = useState(() => Boolean(getToken()));
 
   useEffect(() => {
-    const stored = getToken();
-    if (!stored) {
-      setIsLoading(false);
-      return;
-    }
-    setTokenState(stored);
+    if (!token) return;
+    let cancelled = false;
     getMe()
       .then((me) => {
+        if (cancelled) return;
         const isDemo = me.email === DEMO_EMAIL;
         setUser(toAuthUser(me, isDemo));
         document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=Strict";
       })
       .catch(() => {
+        if (cancelled) return;
         clearToken();
         setTokenState(null);
         document.cookie = "piq_auth=; path=/; max-age=0";
       })
-      .finally(() => setIsLoading(false));
-  }, []);
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await apiLogin(email, password);

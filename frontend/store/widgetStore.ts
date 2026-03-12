@@ -15,6 +15,7 @@ export const ALL_WIDGETS: WidgetConfig[] = [
   { id: "file-upload", title: "File Upload", icon: "upload-cloud", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
   { id: "run-history", title: "Run History", icon: "history", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
   { id: "version-history", title: "Pipeline Versions", icon: "history", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
+  { id: "manage-connections", title: "Manage Connections", icon: "link", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
 ];
 
 const DEFAULT_LAYOUT: LayoutNode = {
