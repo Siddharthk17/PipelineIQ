@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { getToken, setToken, clearToken, login as apiLogin, getMe, AuthUser as ApiAuthUser } from "./api";
+import { ApiError, getToken, setToken, clearToken, login as apiLogin, getMe, AuthUser as ApiAuthUser } from "./api";
 
 export interface AuthUser {
   id: string;
@@ -48,13 +48,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         const isDemo = me.email === DEMO_EMAIL;
         setUser(toAuthUser(me, isDemo));
-        document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=Strict";
+        document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=None; Secure";
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
-        clearToken();
-        setTokenState(null);
-        document.cookie = "piq_auth=; path=/; max-age=0";
+        if (err instanceof ApiError && err.status === 401) {
+          clearToken();
+          setTokenState(null);
+          document.cookie = "piq_auth=; path=/; max-age=0; SameSite=None; Secure";
+        }
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);
@@ -68,7 +70,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await apiLogin(email, password);
     setToken(res.access_token);
     setTokenState(res.access_token);
-    document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=Strict";
+    document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=None; Secure";
     const me = await getMe();
     const isDemo = me.email === DEMO_EMAIL;
     setUser(toAuthUser(me, isDemo));
@@ -82,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearToken();
     setTokenState(null);
     setUser(null);
-    document.cookie = "piq_auth=; path=/; max-age=0";
+    document.cookie = "piq_auth=; path=/; max-age=0; SameSite=None; Secure";
   }, []);
 
   return (
