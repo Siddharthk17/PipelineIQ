@@ -3,7 +3,7 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
-## [2.1.4] — Post-Audit Polish
+## [2.1.4] — Week 7: Post-Audit Polish
 
 ### Bug Fixes
 - **ThemeSelector missing theme** — added "PipelineIQ Light" to `BUILT_IN_THEMES` array in `ThemeSelector.tsx` (was only 6 of 7 themes)
@@ -13,7 +13,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - **AUDIT_REPORT.md** — updated to reflect all v2.1.0+ fixes: 7 themes (was 6), 14 models (was 10), 13 API routers (was 6), 93 frontend tests acknowledged, fixed issues marked with ✅ status, recommendations updated
 - **CHANGELOG.md** — added v2.1.4 entry for post-audit fixes
 
-## [2.1.3] — Codebase Audit: 43 Items Implemented
+## [2.1.3] — Week 6 & 7: Codebase Audit: 43 Items Implemented
 
 ### Bug Fixes
 - **Pagination** — `list_pipeline_runs` now uses `page`, `limit`, and `status_filter` query params with proper `OFFSET`/`LIMIT` (was loading all runs with `.all()`)
