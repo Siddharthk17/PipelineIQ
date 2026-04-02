@@ -74,7 +74,12 @@ async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: Req
     cache: "no-store",
   });
   if (!res.ok) {
-    // Do not auto-redirect on 401; surface the error so callers can decide.
+    if (res.status === 401 && token) {
+      clearToken();
+      if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
     let detail;
     try {
       detail = await res.json();
