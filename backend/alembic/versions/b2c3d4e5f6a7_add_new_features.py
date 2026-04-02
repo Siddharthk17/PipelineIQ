@@ -23,11 +23,11 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
     existing_tables = set(inspector.get_table_names())
 
-    # --- Add CANCELLED to PipelineStatus enum ---
+    # Add CANCELLED to PipelineStatus enum
     # PostgreSQL requires ALTER TYPE to add a new enum value
     op.execute("ALTER TYPE pipelinestatus ADD VALUE IF NOT EXISTS 'CANCELLED'")
 
-    # --- Add version and previous_version_id to uploaded_files ---
+    # Add version and previous_version_id to uploaded_files
     uploaded_columns = {column["name"] for column in inspector.get_columns("uploaded_files")}
     if "version" not in uploaded_columns:
         op.add_column(
@@ -54,7 +54,7 @@ def upgrade() -> None:
             ondelete="SET NULL",
         )
 
-    # --- Create pipeline_schedules table ---
+    # Create pipeline_schedules table
     if "pipeline_schedules" not in existing_tables:
         op.create_table(
             "pipeline_schedules",
@@ -69,7 +69,7 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         )
 
-    # --- Create notification_configs table ---
+    # Create notification_configs table
     from sqlalchemy.dialects import postgresql
 
     # Use create_type=False for Postgres to avoid 'type already exists' error in create_table
@@ -91,7 +91,7 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         )
 
-    # --- Create pipeline_permissions table ---
+    # Create pipeline_permissions table
     if op.get_bind().dialect.name == "postgresql":
         permission_level = postgresql.ENUM("owner", "runner", "viewer", name="permissionlevel", create_type=False)
         permission_level.create(op.get_bind(), checkfirst=True)

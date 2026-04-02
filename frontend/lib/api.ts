@@ -25,7 +25,7 @@ export class ApiError extends Error {
   }
 }
 
-// ── Token management ───────────────────────────────────────────────
+// Token management
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -40,7 +40,7 @@ export function clearToken(): void {
   localStorage.removeItem("pipelineiq_token");
 }
 
-// ── Auth types ─────────────────────────────────────────────────────
+// Auth types
 
 export interface AuthUser {
   id: string;
@@ -58,7 +58,7 @@ export interface LoginResponse {
   user: AuthUser;
 }
 
-// ── Core fetch with auth ───────────────────────────────────────────
+// Core fetch with auth
 
 async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: RequestInit): Promise<T> {
   const token = getToken();
@@ -74,12 +74,7 @@ async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: Req
     cache: "no-store",
   });
   if (!res.ok) {
-    if (res.status === 401 && token) {
-      clearToken();
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
-      }
-    }
+    // Do not auto-redirect on 401; surface the error so callers can decide.
     let detail;
     try {
       detail = await res.json();
@@ -209,7 +204,7 @@ export async function getSchemaHistory(fileId: string): Promise<SchemaSnapshot[]
   return data.snapshots;
 }
 
-// ── Notifications ────────────────────────────────────────────────
+// Notifications
 
 export async function listNotificationConfigs(): Promise<NotificationConfig[]> {
   const data = await fetchApi<{ configs: NotificationConfig[]; total: number }>("/notifications/");
@@ -236,7 +231,7 @@ export async function testNotificationConfig(configId: string): Promise<{ detail
   return fetchApi<{ detail: string }>(`/notifications/${configId}/test`, { method: "POST" });
 }
 
-// ── Pipeline preview ───────────────────────────────────────────────
+// Pipeline preview
 
 type PipelinePreviewApiResponse = {
   step_name?: string;
@@ -284,7 +279,7 @@ export async function previewPipelineStep(yamlConfig: string, stepIndex: number 
   };
 }
 
-// ── Auth API functions ─────────────────────────────────────────────
+// Auth API functions
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
   return fetchAuth<LoginResponse>("/auth/login", {
