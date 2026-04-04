@@ -8,7 +8,7 @@ via FastAPI's Depends() mechanism for clean testability.
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from backend.database import get_db
+from backend.database import get_db, get_read_db, get_write_db
 
 
 def get_db_dependency() -> Session:
@@ -18,3 +18,13 @@ def get_db_dependency() -> Session:
     in tests without patching the database module directly.
     """
     return Depends(get_db)
+
+
+def get_read_db_dependency() -> Session:
+    """Provide a read-only oriented database session dependency."""
+    return Depends(get_read_db)
+
+
+def get_write_db_dependency() -> Session:
+    """Provide a write-oriented database session dependency."""
+    return Depends(get_write_db)

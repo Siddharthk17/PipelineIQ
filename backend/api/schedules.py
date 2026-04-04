@@ -6,14 +6,13 @@ automatically via Celery Beat.
 
 import logging
 from datetime import datetime, timezone
-
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
-from backend.dependencies import get_db_dependency
+from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import PipelineSchedule, User
 from backend.services.audit_service import log_action
 from backend.utils.uuid_utils import validate_uuid_format, as_uuid
@@ -21,7 +20,6 @@ from backend.utils.uuid_utils import validate_uuid_format, as_uuid
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
-
 
 class CreateScheduleRequest(BaseModel):
     """Request body to create a pipeline schedule."""
@@ -40,7 +38,6 @@ class CreateScheduleRequest(BaseModel):
             raise ValueError(f"Invalid cron expression: {exc}") from exc
         return value
 
-
 class ScheduleResponse(BaseModel):
     """Response for a pipeline schedule."""
 
@@ -52,12 +49,10 @@ class ScheduleResponse(BaseModel):
     next_run_at: str | None = None
     created_at: str | None = None
 
-
 def _compute_next_run(cron_expression: str) -> datetime:
     """Compute the next run time from a cron expression."""
     cron = croniter(cron_expression, datetime.now(timezone.utc))
     return cron.get_next(datetime).replace(tzinfo=timezone.utc)
-
 
 def _schedule_to_response(schedule: PipelineSchedule) -> ScheduleResponse:
     return ScheduleResponse(
@@ -70,7 +65,6 @@ def _schedule_to_response(schedule: PipelineSchedule) -> ScheduleResponse:
         created_at=schedule.created_at.isoformat() if schedule.created_at else None,
     )
 
-
 @router.post(
     "/",
     response_model=ScheduleResponse,
@@ -80,7 +74,7 @@ def _schedule_to_response(schedule: PipelineSchedule) -> ScheduleResponse:
 def create_schedule(
     request: Request,
     body: CreateScheduleRequest,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> ScheduleResponse:
     """Create a new recurring pipeline schedule."""
@@ -108,14 +102,13 @@ def create_schedule(
 
     return _schedule_to_response(schedule)
 
-
 @router.get(
     "/",
     summary="List user's pipeline schedules",
 )
 def list_schedules(
     request: Request,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """List all schedules belonging to the authenticated user."""
@@ -130,7 +123,6 @@ def list_schedules(
         "total": len(schedules),
     }
 
-
 @router.delete(
     "/{schedule_id}",
     summary="Delete a pipeline schedule",
@@ -138,7 +130,7 @@ def list_schedules(
 def delete_schedule(
     schedule_id: str,
     request: Request,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Delete a pipeline schedule owned by the current user."""
@@ -163,7 +155,6 @@ def delete_schedule(
 
     return {"detail": f"Schedule '{schedule_id}' deleted"}
 
-
 @router.patch(
     "/{schedule_id}/toggle",
     response_model=ScheduleResponse,
@@ -172,7 +163,7 @@ def delete_schedule(
 def toggle_schedule(
     schedule_id: str,
     request: Request,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> ScheduleResponse:
     """Toggle the is_active flag of a pipeline schedule."""

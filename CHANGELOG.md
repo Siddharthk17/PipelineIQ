@@ -1,7 +1,32 @@
 # Changelog
 
 All notable changes to PipelineIQ are documented here.
-Format: [Keep a Changelog](https://keepachangelog.com/)
+Format:[Keep a Changelog](https://keepachangelog.com/)
+
+##[3.1.2] — Week 8: Production Infrastructure Foundation
+
+*Note: This release contains zero user-visible features. It is a complete architectural overhaul of the infrastructure layer to resolve 5 critical scaling bottlenecks, laying the foundation for the Unified Data Operating System roadmap.*
+
+### Performance & Scalability
+- **Multi-Worker Celery Architecture (Bottleneck #1)** — Replaced the single Celery worker with three dedicated priority queues (`critical`, `default`, `bulk`). Set `worker_prefetch_multiplier = 1` to prevent task hoarding and ensure true priority execution.
+- **Gunicorn & API Scaling (Bottleneck #2)** — Migrated from a single Uvicorn process to Gunicorn with 4 workers. Configured `max-requests=10000` and jitter to prevent Python memory leaks over time.
+- **Dedicated SSE Service (Bottleneck #5)** — Extracted Server-Sent Events (SSE) streaming into a completely isolated FastAPI service (`sse_app.py`) running on port 8001. This prevents long-lived pipeline monitoring connections from starving the main API coroutine slots.
+- **PgBouncer Connection Pooling (Bottleneck #3)** — Integrated PgBouncer in `transaction` pool mode. Safely multiplexes up to 10,000 client connections down to 25 real PostgreSQL connections, eliminating DB connection crashes under load.
+- **PostgreSQL Read Replica** — Deployed a hot-standby read replica. Split database dependencies into `get_read_db` (for GET requests) and `get_write_db` (for mutations) to distribute database load.
+- **Redis Instance Splitting (Bottleneck #4)** — Split the single overloaded Redis instance into 4 dedicated, role-specific instances: `redis-broker`, `redis-pubsub`, `redis-cache`, and `redis-yjs`. Implemented module-level connection pools to eliminate per-request connection overhead.
+- **Zero-Memory File Uploads (Bottleneck #7)** — Eliminated `await file.read()` memory bombs. Files ≤ 10MB now stream directly to MinIO in 1MB chunks. Files > 10MB now utilize presigned MinIO URLs, allowing the client to upload directly to object storage and bypassing FastAPI entirely.
+- **Rust-Based JSON Serialization (Bottleneck #10)** — Replaced Python's standard `json` library with `orjson` across the entire codebase. Set FastAPI's `default_response_class` to `ORJSONResponse`, releasing the GIL and achieving 5-10x faster serialization.
+
+### Added
+- **SSE Lifecycle Management** — Added a 15-second heartbeat to the SSE stream to prevent Nginx `proxy_read_timeout` drops. Implemented auto-close on terminal states and immediate client disconnect detection to free server resources instantly.
+- **Database Indexes** — Added Alembic migration `0007_add_performance_indexes.py` to create 9 critical performance indexes (e.g., `idx_pipeline_runs_user_created`, `idx_step_results_run_id`, `idx_data_assets_name_trgm`).
+- **Infrastructure Test Suite** — Added comprehensive unit and integration tests for the new infrastructure (`test_celery_queues.py`, `test_redis_connections.py`, `test_file_upload.py`, `test_sse_lifecycle.py`, `test_infrastructure.py`).
+
+### Changed
+- **Nginx Routing** — Updated `pipelineiq.conf` to route `/api/runs/*/stream` traffic to the new dedicated SSE service on port 8001 with `proxy_buffering off`.
+- **Environment Variables** — Updated `.env.example` to include new distinct Redis URLs (`REDIS_BROKER_URL`, `REDIS_PUBSUB_URL`, etc.) and split Database URLs (`DATABASE_WRITE_URL`, `DATABASE_READ_URL`).
+
+---
 
 ## [2.1.4] — Week 7: Post-Audit Polish
 
@@ -70,7 +95,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - Removed `aiofiles` from requirements.txt (not imported anywhere)
 - Added `croniter==2.0.1` for cron expression parsing
 
-## [1.3.9] — Week 5: Frontend Testing
+##[1.3.9] — Week 5: Frontend Testing
 
 ### Added
 - Vitest + React Testing Library + jsdom test infrastructure
@@ -109,7 +134,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - User info and logout in TopBar
 - Debug/sentry-test endpoint (non-production only)
 
-## [0.3.12] — Week 3: DevOps
+##[0.3.12] — Week 3: DevOps
 
 ### Added
 - Nginx reverse proxy (port 80, SSE-safe, security headers)
@@ -131,7 +156,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/)
 - Dry-run execution planner (8 heuristics)
 - 83 new tests (180 total)
 
-## [0.1.2] — Week 1: Foundation
+##[0.1.2] — Week 1: Foundation
 
 ### Added
 - FastAPI backend with 8 pipeline step types

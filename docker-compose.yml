@@ -1,18 +1,127 @@
 services:
-  db:
+  postgres:
     image: postgres:15-alpine
-    container_name: pipelineiq-db
+    container_name: pipelineiq-postgres
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=5
+      -c wal_keep_size=256MB
+      -c hot_standby=on
     environment:
       POSTGRES_DB: pipelineiq
-      POSTGRES_USER: pipelineiq
+      POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      REPLICATION_USER: ${REPLICATION_USER:-replicator}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-${POSTGRES_PASSWORD}}
+    expose:
+      - "5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+      - ./postgres/primary-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pipelineiq"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    networks:
+      pipelineiq-network:
+        aliases:
+          - db
+
+  postgres-replica:
+    image: postgres:15-alpine
+    container_name: pipelineiq-db-replica
+    entrypoint: ["/bin/sh", "/etc/postgres-replica/replica-entrypoint.sh"]
+    environment:
+      POSTGRES_DB: pipelineiq
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      REPLICATION_USER: ${REPLICATION_USER:-replicator}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-${POSTGRES_PASSWORD}}
+      PRIMARY_HOST: postgres
+    expose:
+      - "5432"
+    volumes:
+      - postgres_replica_data_v2:/var/lib/postgresql/data
+      - ./postgres/replica-entrypoint.sh:/etc/postgres-replica/replica-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - pipelineiq-network
+
+  pgbouncer:
+    build:
+      context: ./pgbouncer
+      dockerfile: Dockerfile
+    container_name: pipelineiq-pgbouncer
+    environment:
+      DATABASES_HOST: postgres
+      DATABASES_PORT: "5432"
+      DATABASES_DBNAME: pipelineiq
+      DATABASES_USER: ${POSTGRES_USER}
+      DATABASES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGBOUNCER_LISTEN_PORT: "5432"
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: "1000"
+      PGBOUNCER_DEFAULT_POOL_SIZE: "25"
+      PGBOUNCER_MIN_POOL_SIZE: "5"
+      PGBOUNCER_RESERVE_POOL_SIZE: "5"
+      PGBOUNCER_SERVER_IDLE_TIMEOUT: "600"
+      PGBOUNCER_CLIENT_IDLE_TIMEOUT: "0"
+      PGBOUNCER_LOG_POOLER_ERRORS: "1"
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d pipelineiq"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  pgbouncer-replica:
+    build:
+      context: ./pgbouncer
+      dockerfile: Dockerfile
+    container_name: pipelineiq-pgbouncer-replica
+    environment:
+      DATABASES_HOST: postgres-replica
+      DATABASES_PORT: "5432"
+      DATABASES_DBNAME: pipelineiq
+      DATABASES_USER: ${POSTGRES_USER}
+      DATABASES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGBOUNCER_LISTEN_PORT: "5432"
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: "1000"
+      PGBOUNCER_DEFAULT_POOL_SIZE: "25"
+      PGBOUNCER_MIN_POOL_SIZE: "5"
+      PGBOUNCER_RESERVE_POOL_SIZE: "5"
+      PGBOUNCER_SERVER_IDLE_TIMEOUT: "600"
+      PGBOUNCER_CLIENT_IDLE_TIMEOUT: "0"
+      PGBOUNCER_LOG_POOLER_ERRORS: "1"
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d pipelineiq"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres-replica:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - pipelineiq-network
@@ -22,43 +131,134 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-api
-    command: >
-      sh -c "python -m alembic upgrade head &&
-             (python -m backend.scripts.seed_demo || true) &&
-             uvicorn backend.main:app --host 0.0.0.0 --port 8000"
+    command:
+      - sh
+      - -c
+      - "python -m alembic upgrade head && (python -m backend.scripts.seed_demo || true) && exec gunicorn backend.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --worker-connections 1000 --max-requests 10000 --max-requests-jitter 1000 --timeout 30 --graceful-timeout 30 --bind 0.0.0.0:8000 --access-logfile - --error-logfile - --log-level info"
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://pipelineiq:${POSTGRES_PASSWORD}@db:5432/pipelineiq
-      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - REDIS_URL=redis://redis-broker:6379/0
+      - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
+      - REDIS_CACHE_URL=redis://redis-cache:6379/0
+      - REDIS_YJS_URL=redis://redis-yjs:6379/0
     depends_on:
-      db:
+      pgbouncer:
         condition: service_healthy
-      redis:
+      pgbouncer-replica:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+      redis-pubsub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-yjs:
         condition: service_healthy
     volumes:
       - uploads:/app/uploads
+      - ./backend:/app/backend
+      - ./alembic.ini:/app/alembic.ini
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  sse-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pipelineiq-sse-service
+    command: >
+      gunicorn backend.sse_app:sse_app
+      --workers 2
+      --worker-class uvicorn.workers.UvicornWorker
+      --worker-connections 5000
+      --timeout 600
+      --graceful-timeout 10
+      --bind 0.0.0.0:8001
+      --access-logfile -
+      --error-logfile -
+      --log-level info
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - REDIS_URL=redis://redis-broker:6379/0
+      - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
+      - REDIS_CACHE_URL=redis://redis-cache:6379/0
+      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-replica:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+      redis-pubsub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-yjs:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    volumes:
       - ./backend:/app/backend
       - ./alembic.ini:/app/alembic.ini
     restart: unless-stopped
     networks:
       - pipelineiq-network
 
-  worker:
+  worker-critical:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: pipelineiq-worker
-    command: celery -A backend.celery_app:celery_app worker --loglevel=info --concurrency=2
+    container_name: pipelineiq-worker-critical
+    command: >
+      celery -A backend.celery_app:celery_app worker
+      --queues=critical
+      --concurrency=${CELERY_WORKERS_CRITICAL:-2}
+      --prefetch-multiplier=1
+      --hostname=critical@%h
+      --loglevel=info
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://pipelineiq:${POSTGRES_PASSWORD}@db:5432/pipelineiq
-      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - REDIS_URL=redis://redis-broker:6379/0
+      - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
+      - REDIS_CACHE_URL=redis://redis-cache:6379/0
+      - REDIS_YJS_URL=redis://redis-yjs:6379/0
     depends_on:
-      db:
+      pgbouncer:
         condition: service_healthy
-      redis:
+      pgbouncer-replica:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+      redis-pubsub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-yjs:
         condition: service_healthy
     volumes:
       - uploads:/app/uploads
@@ -67,14 +267,241 @@ services:
     networks:
       - pipelineiq-network
 
-  redis:
+  worker-default:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pipelineiq-worker-default
+    command: >
+      celery -A backend.celery_app:celery_app worker
+      --queues=critical,default
+      --concurrency=${CELERY_WORKERS_DEFAULT:-3}
+      --prefetch-multiplier=1
+      --hostname=default@%h
+      --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - REDIS_URL=redis://redis-broker:6379/0
+      - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
+      - REDIS_CACHE_URL=redis://redis-cache:6379/0
+      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-replica:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+      redis-pubsub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-yjs:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+      - ./backend:/app/backend
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  worker-bulk:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pipelineiq-worker-bulk
+    command: >
+      celery -A backend.celery_app:celery_app worker
+      --queues=bulk
+      --concurrency=${CELERY_WORKERS_BULK:-2}
+      --prefetch-multiplier=1
+      --hostname=bulk@%h
+      --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - REDIS_URL=redis://redis-broker:6379/0
+      - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
+      - REDIS_CACHE_URL=redis://redis-cache:6379/0
+      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-replica:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+      redis-pubsub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-yjs:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+      - ./backend:/app/backend
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pipelineiq-celery-beat
+    command: >
+      celery -A backend.celery_app:celery_app beat
+      --loglevel=info
+      --scheduler celery.beat.PersistentScheduler
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - REDIS_URL=redis://redis-broker:6379/0
+      - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
+      - REDIS_CACHE_URL=redis://redis-cache:6379/0
+      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-replica:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+      redis-pubsub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-yjs:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  redis-broker:
     image: redis:7-alpine
-    container_name: pipelineiq-redis
+    container_name: pipelineiq-redis-broker
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+      --loglevel notice
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_broker_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  redis-pubsub:
+    image: redis:7-alpine
+    container_name: pipelineiq-redis-pubsub
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --save ""
+      --appendonly no
+      --loglevel notice
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  redis-cache:
+    image: redis:7-alpine
+    container_name: pipelineiq-redis-cache
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --appendonly yes
+      --loglevel notice
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis_cache_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  redis-yjs:
+    image: redis:7-alpine
+    container_name: pipelineiq-redis-yjs
+    command: >
+      redis-server
+      --maxmemory 128mb
+      --appendonly yes
+      --loglevel notice
+    ports:
+      - "6382:6379"
+    volumes:
+      - redis_yjs_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    container_name: pipelineiq-minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-pipelineiq}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-pipelineiq123}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
     networks:
       - pipelineiq-network
@@ -105,14 +532,30 @@ services:
     ports:
       - "5555:5555"
     environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://pipelineiq:${POSTGRES_PASSWORD}@db:5432/pipelineiq
+      - REDIS_URL=redis://redis-broker:6379/0
+      - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
+      - REDIS_CACHE_URL=redis://redis-cache:6379/0
+      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - FLOWER_USER=${FLOWER_USER}
       - FLOWER_PASSWORD=${FLOWER_PASSWORD}
     depends_on:
-      redis:
+      pgbouncer:
         condition: service_healthy
-      db:
+      pgbouncer-replica:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+      redis-pubsub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-yjs:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -125,6 +568,7 @@ services:
       - "80:80"
     depends_on:
       - api
+      - sse-service
       - frontend
       - flower
       - grafana
@@ -172,6 +616,11 @@ services:
 volumes:
   uploads:
   db_data:
+  postgres_replica_data_v2:
+  redis_broker_data:
+  redis_cache_data:
+  redis_yjs_data:
+  minio_data:
   prometheus_data:
   grafana_data:
 

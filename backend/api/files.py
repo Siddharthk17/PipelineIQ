@@ -5,19 +5,23 @@ extension, and content parsing. Uploaded files are stored on disk
 with metadata persisted to the database.
 """
 
+import csv
 import logging
 import os
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
+import orjson
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, UploadFile, status
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.config import settings
-from backend.dependencies import get_db_dependency
+from backend.db.redis_pools import get_cache_redis
+from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import SchemaSnapshot, UploadedFile, User
 from backend.pipeline.schema_drift import detect_schema_drift
 from backend.utils.uuid_utils import validate_uuid_format as _validate_uuid_format, as_uuid as _as_uuid
@@ -27,6 +31,8 @@ from backend.schemas import (
     FileListResponse,
     FileUploadResponse,
     SchemaDriftResponse,
+    UploadUrlRequest,
+    UploadUrlResponse,
 )
 from backend.utils.rate_limiter import limiter
 from backend.services.audit_service import log_action
@@ -34,6 +40,203 @@ from backend.services.audit_service import log_action
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/files", tags=["files"])
+legacy_router = APIRouter(prefix="/files", tags=["files-legacy"])
+
+LARGE_FILE_THRESHOLD = 10 * 1024 * 1024
+DIRECT_UPLOAD_TTL_SECONDS = 30 * 60
+MAX_DIRECT_UPLOAD_SIZE = settings.MAX_UPLOAD_SIZE
+PENDING_UPLOAD_PREFIX = "files:pending-upload:"
+
+
+def _pending_upload_key(file_id: str) -> str:
+    return f"{PENDING_UPLOAD_PREFIX}{file_id}"
+
+
+def _cache_pending_upload(file_id: str, payload: dict) -> None:
+    try:
+        get_cache_redis().setex(
+            _pending_upload_key(file_id),
+            DIRECT_UPLOAD_TTL_SECONDS,
+            orjson.dumps(payload),
+        )
+    except RedisError:
+        logger.warning("Failed to cache pending upload state for file_id=%s", file_id)
+
+
+def _get_pending_upload(file_id: str) -> Optional[dict]:
+    try:
+        raw = get_cache_redis().get(_pending_upload_key(file_id))
+    except RedisError:
+        logger.warning("Failed to read pending upload state for file_id=%s", file_id)
+        return None
+    if not raw:
+        return None
+    try:
+        return orjson.loads(raw)
+    except Exception:
+        logger.warning("Invalid pending upload payload for file_id=%s", file_id)
+        return None
+
+
+def _clear_pending_upload(file_id: str) -> None:
+    try:
+        get_cache_redis().delete(_pending_upload_key(file_id))
+    except RedisError:
+        logger.warning("Failed to clear pending upload state for file_id=%s", file_id)
+
+
+@router.post(
+    "/request-upload-url",
+    response_model=UploadUrlResponse,
+    summary="Negotiate upload strategy",
+    description="Returns API upload path for small files and direct upload details for large files.",
+)
+@limiter.limit(settings.RATE_LIMIT_FILE_UPLOAD)
+async def request_upload_url(
+    request: Request,
+    response: Response,
+    body: Optional[UploadUrlRequest] = Body(default=None),
+    filename: Optional[str] = Query(default=None),
+    file_size: Optional[int] = Query(default=None, ge=1),
+    current_user: User = Depends(get_current_user),
+) -> UploadUrlResponse:
+    """Negotiate file upload method based on file size."""
+    request_payload = _resolve_upload_request_payload(body, filename, file_size)
+
+    filename = os.path.basename(request_payload.filename or "")
+    if not filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Filename is required",
+        )
+    _validate_file_extension(filename)
+
+    if request_payload.file_size > MAX_DIRECT_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum ({MAX_DIRECT_UPLOAD_SIZE // (1024 * 1024)} MB)",
+        )
+
+    file_id = str(uuid.uuid4())
+    extension = Path(filename).suffix.lower()
+    stored_path = settings.UPLOAD_DIR / f"{file_id}{extension}"
+
+    request_path = request.url.path
+    is_legacy_api = request_path.startswith("/api/files/")
+    api_prefix = "/api/files" if is_legacy_api else "/api/v1/files"
+    absolute_api_prefix = f"{str(request.base_url).rstrip('/')}{api_prefix}"
+
+    if request_payload.file_size > LARGE_FILE_THRESHOLD:
+        _cache_pending_upload(
+            file_id,
+            {
+                "filename": filename,
+                "expected_size": request_payload.file_size,
+                "stored_path": str(stored_path),
+                "user_id": str(current_user.id),
+            },
+        )
+        return UploadUrlResponse(
+            method="direct",
+            file_id=file_id,
+            upload_url=(
+                f"{absolute_api_prefix}/direct-upload/{file_id}"
+                if is_legacy_api
+                else f"{api_prefix}/direct-upload/{file_id}"
+            ),
+            confirm_endpoint=(
+                f"{absolute_api_prefix}/{file_id}/confirm"
+                if is_legacy_api
+                else f"{api_prefix}/{file_id}/confirm"
+            ),
+        )
+
+    return UploadUrlResponse(
+        method="api",
+        file_id=file_id,
+        upload_endpoint=(
+            f"{absolute_api_prefix}/upload"
+            if is_legacy_api
+            else f"{api_prefix}/upload"
+        ),
+    )
+
+
+@router.put(
+    "/direct-upload/{file_id}",
+    summary="Direct upload target",
+    description="Large-file direct upload target. Streams request body to storage path.",
+)
+@limiter.limit(settings.RATE_LIMIT_FILE_UPLOAD)
+async def direct_upload_file(
+    file_id: str,
+    request: Request,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Receive direct upload payload and stream it to disk without buffering entire content."""
+    _validate_uuid_format(file_id)
+    pending = _get_pending_upload(file_id)
+    if pending is None or pending.get("user_id") != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found or not pending confirmation",
+        )
+
+    stored_path = Path(pending["stored_path"])
+    expected_size = int(pending["expected_size"])
+    written = await _stream_request_to_path(request, stored_path, MAX_DIRECT_UPLOAD_SIZE)
+    if written != expected_size:
+        stored_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Uploaded size mismatch: expected {expected_size} bytes, got {written} bytes",
+        )
+    return {"file_id": file_id, "status": "uploaded", "size_bytes": written}
+
+
+@router.post(
+    "/{file_id}/confirm",
+    response_model=FileUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Confirm direct upload",
+    description="Confirms a prior direct upload and finalizes file metadata.",
+)
+@limiter.limit(settings.RATE_LIMIT_FILE_UPLOAD)
+async def confirm_direct_upload(
+    file_id: str,
+    request: Request,
+    response: Response,
+    db: Session = get_write_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> FileUploadResponse:
+    """Confirm a direct upload and persist its metadata."""
+    _validate_uuid_format(file_id)
+    pending = _get_pending_upload(file_id)
+    if pending is None or pending.get("user_id") != str(current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found or not pending confirmation",
+        )
+
+    stored_path = Path(pending["stored_path"])
+    if not stored_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found in storage. Upload may have failed.",
+        )
+
+    finalized = _finalize_uploaded_file(
+        db=db,
+        file_id=_as_uuid(file_id),
+        original_filename=pending["filename"],
+        stored_path=stored_path,
+        file_size_bytes=stored_path.stat().st_size,
+        request=request,
+        current_user=current_user,
+    )
+    _clear_pending_upload(file_id)
+    return finalized
 
 @router.post(
     "/upload",
@@ -47,116 +250,26 @@ async def upload_file(
     request: Request,
     file: UploadFile,
     response: Response,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> FileUploadResponse:
     """Upload a data file and store its metadata."""
     original_filename = os.path.basename(file.filename or "upload.csv")
     _validate_file_extension(original_filename)
 
-    # Stream-read with size enforcement to prevent OOM
-    content = await _read_with_size_limit(file)
-
     file_id = uuid.uuid4()
-    stored_path = _store_file(str(file_id), original_filename, content)
-    df = _parse_file_content(original_filename, stored_path)
+    extension = Path(original_filename).suffix.lower()
+    stored_path = settings.UPLOAD_DIR / f"{file_id}{extension}"
+    written = await _stream_upload_to_path(file, stored_path, LARGE_FILE_THRESHOLD)
 
-    columns = list(df.columns)
-    dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
-
-    uploaded_file = UploadedFile(
-        id=file_id,
-        original_filename=original_filename,
-        stored_path=str(stored_path),
-        file_size_bytes=len(content),
-        row_count=len(df),
-        column_count=len(columns),
-        columns=columns,
-        dtypes=dtypes,
-    )
-    db.add(uploaded_file)
-    db.commit()
-
-    # Save schema snapshot for drift detection
-    snapshot = SchemaSnapshot(
+    return _finalize_uploaded_file(
+        db=db,
         file_id=file_id,
-        columns=columns,
-        dtypes=dtypes,
-        row_count=len(df),
-    )
-    db.add(snapshot)
-    db.commit()
-
-    # Check for schema drift against previous snapshot of same filename
-    drift_report = None
-    previous_snapshot = (
-        db.query(SchemaSnapshot)
-        .join(UploadedFile, SchemaSnapshot.file_id == UploadedFile.id)
-        .filter(
-            UploadedFile.original_filename == original_filename,
-            SchemaSnapshot.file_id != _as_uuid(file_id),
-        )
-        .order_by(SchemaSnapshot.captured_at.desc())
-        .first()
-    )
-    if previous_snapshot:
-        drift_report = detect_schema_drift(
-            old_columns=previous_snapshot.columns,
-            old_dtypes=previous_snapshot.dtypes,
-            new_columns=columns,
-            new_dtypes=dtypes,
-        )
-
-    # Build schema drift response
-    schema_drift_response = None
-    if drift_report is not None:
-        drift_items = []
-        for col in drift_report.columns_removed:
-            drift_items.append(ColumnDriftResponse(
-                column=col, drift_type="removed",
-                old_value=None, new_value=None, severity="breaking",
-            ))
-        for col in drift_report.columns_added:
-            drift_items.append(ColumnDriftResponse(
-                column=col, drift_type="added",
-                old_value=None, new_value=None, severity="info",
-            ))
-        for tc in drift_report.type_changes:
-            drift_items.append(ColumnDriftResponse(
-                column=tc.column, drift_type="type_changed",
-                old_value=tc.old_type, new_value=tc.new_type,
-                severity="warning",
-            ))
-        breaking = sum(1 for d in drift_items if d.severity == "breaking")
-        warns = sum(1 for d in drift_items if d.severity == "warning")
-        schema_drift_response = SchemaDriftResponse(
-            has_drift=drift_report.has_drift,
-            breaking_changes=breaking,
-            warnings=warns,
-            drift_items=drift_items,
-        )
-
-    logger.info(
-        "File uploaded: id=%s, name=%s, rows=%d, columns=%d",
-        file_id, original_filename, len(df), len(columns),
-    )
-
-    from backend.metrics import FILES_UPLOADED_TOTAL
-    FILES_UPLOADED_TOTAL.inc()
-
-    log_action(db, "file_uploaded", user_id=current_user.id, resource_type="file",
-               resource_id=file_id, details={"filename": original_filename, "row_count": len(df)},
-               request=request)
-
-    return FileUploadResponse(
-        id=str(file_id),
         original_filename=original_filename,
-        row_count=len(df),
-        column_count=len(columns),
-        columns=columns,
-        dtypes=dtypes,
-        file_size_bytes=len(content),
-        schema_drift=schema_drift_response,
+        stored_path=stored_path,
+        file_size_bytes=written,
+        request=request,
+        current_user=current_user,
     )
 
 @router.get(
@@ -165,7 +278,7 @@ async def upload_file(
     summary="List uploaded files",
     description="Returns metadata for all uploaded files.",
 )
-def list_files(db: Session = get_db_dependency()) -> FileListResponse:
+def list_files(db: Session = get_read_db_dependency()) -> FileListResponse:
     """List all uploaded files with their metadata."""
     files = db.query(UploadedFile).all()
     file_responses = [
@@ -190,7 +303,7 @@ def list_files(db: Session = get_db_dependency()) -> FileListResponse:
 )
 def get_file(
     file_id: str,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ) -> FileUploadResponse:
     """Get metadata for a specific uploaded file."""
     _validate_uuid_format(file_id)
@@ -218,7 +331,7 @@ def get_file(
 def delete_file(
     file_id: str,
     request: Request,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Delete an uploaded file from disk and database."""
@@ -251,7 +364,7 @@ def delete_file(
 def preview_file(
     file_id: str,
     rows: int = 20,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ) -> dict:
     """Return the first N rows of an uploaded file."""
     _validate_uuid_format(file_id)
@@ -289,61 +402,295 @@ def _validate_file_extension(filename: str) -> None:
             ),
         )
 
-async def _read_with_size_limit(file: UploadFile) -> bytes:
-    """Read file content with streaming size enforcement to prevent OOM."""
-    max_size = settings.MAX_UPLOAD_SIZE
-    chunks: list[bytes] = []
-    total_read = 0
+
+def _resolve_upload_request_payload(
+    body: Optional[UploadUrlRequest],
+    filename: Optional[str],
+    file_size: Optional[int],
+) -> UploadUrlRequest:
+    """Support both JSON body and query-parameter upload negotiation contracts."""
+    if body is not None:
+        return body
+    if filename is None or file_size is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="filename and file_size are required",
+        )
+    return UploadUrlRequest(filename=filename, file_size=file_size)
+
+
+async def _stream_upload_to_path(file: UploadFile, stored_path: Path, max_size: int) -> int:
+    """Stream UploadFile content to disk with a strict size cap."""
     chunk_size = 1024 * 1024
-
-    while True:
-        chunk = await file.read(chunk_size)
-        if not chunk:
-            break
-        total_read += len(chunk)
-        if total_read > max_size:
-            max_mb = max_size / (1024 * 1024)
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File size exceeds maximum ({max_mb:.0f} MB)",
-            )
-        chunks.append(chunk)
-
-    content = b"".join(chunks)
-    if len(content) == 0:
+    total_read = 0
+    with stored_path.open("wb") as output:
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            total_read += len(chunk)
+            if total_read > max_size:
+                output.close()
+                stored_path.unlink(missing_ok=True)
+                max_mb = max_size / (1024 * 1024)
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"File size exceeds maximum ({max_mb:.0f} MB)",
+                )
+            output.write(chunk)
+    if total_read == 0:
+        stored_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty",
         )
-    return content
+    return total_read
 
-def _store_file(file_id: str, original_filename: str, content: bytes) -> Path:
-    """Write the file content to disk in the upload directory."""
-    extension = Path(original_filename).suffix.lower()
-    stored_path = settings.UPLOAD_DIR / f"{file_id}{extension}"
-    stored_path.write_bytes(content)
-    return stored_path
 
-def _parse_file_content(filename: str, stored_path: Path) -> pd.DataFrame:
-    """Parse the stored file into a DataFrame for metadata extraction."""
+async def _stream_request_to_path(request: Request, stored_path: Path, max_size: int) -> int:
+    """Stream raw request body to disk with size enforcement."""
+    total_read = 0
+    with stored_path.open("wb") as output:
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            total_read += len(chunk)
+            if total_read > max_size:
+                output.close()
+                stored_path.unlink(missing_ok=True)
+                max_mb = max_size / (1024 * 1024)
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"File size exceeds maximum ({max_mb:.0f} MB)",
+                )
+            output.write(chunk)
+    if total_read == 0:
+        stored_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+    return total_read
+
+def _extract_file_metadata(filename: str, stored_path: Path) -> tuple[int, list[str], dict[str, str]]:
+    """Extract row/column metadata with streaming for CSV uploads."""
     extension = stored_path.suffix.lower()
+    if extension == ".csv":
+        return _extract_csv_metadata(stored_path)
+    if extension == ".json":
+        return _extract_json_metadata(filename, stored_path)
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Cannot parse file with extension '{extension}'",
+    )
+
+
+def _extract_csv_metadata(stored_path: Path) -> tuple[int, list[str], dict[str, str]]:
+    """Read CSV metadata with bounded memory usage."""
     try:
-        if extension == ".csv":
-            return pd.read_csv(stored_path)
-        elif extension == ".json":
-            return pd.read_json(stored_path)
-        else:
+        with stored_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            header = next(reader, None)
+            if header is None:
+                return 0, [], {}
+            row_count = sum(1 for _ in reader)
+            columns = [str(column) for column in header]
+    except UnicodeDecodeError:
+        try:
+            with stored_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.reader(handle)
+                header = next(reader, None)
+                if header is None:
+                    return 0, [], {}
+                row_count = sum(1 for _ in reader)
+                columns = [str(column) for column in header]
+        except Exception as exc:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot parse file with extension '{extension}'",
-            )
-    except HTTPException:
-        raise
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Failed to parse file '{stored_path.name}': {exc}",
+            ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{stored_path.name}': {exc}",
+        ) from exc
+
+    if not columns:
+        return row_count, columns, {}
+
+    sample_rows = max(1, min(1000, row_count))
+    sample_df = pd.read_csv(stored_path, nrows=sample_rows)
+    dtypes = {column: str(dtype) for column, dtype in sample_df.dtypes.items()}
+    return row_count, columns, dtypes
+
+
+def _extract_json_metadata(filename: str, stored_path: Path) -> tuple[int, list[str], dict[str, str]]:
+    """Extract metadata for JSON uploads."""
+    try:
+        try:
+            df = pd.read_json(stored_path)
+        except ValueError:
+            df = pd.read_json(stored_path, lines=True)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
+
+    columns = list(df.columns)
+    dtypes = {column: str(dtype) for column, dtype in df.dtypes.items()}
+    return len(df), columns, dtypes
+
+
+def _build_schema_drift_response(
+    db: Session,
+    file_id,
+    original_filename: str,
+    columns: list[str],
+    dtypes: dict,
+) -> Optional[SchemaDriftResponse]:
+    drift_report = None
+    previous_snapshot = (
+        db.query(SchemaSnapshot)
+        .join(UploadedFile, SchemaSnapshot.file_id == UploadedFile.id)
+        .filter(
+            UploadedFile.original_filename == original_filename,
+            SchemaSnapshot.file_id != _as_uuid(file_id),
+        )
+        .order_by(SchemaSnapshot.captured_at.desc())
+        .first()
+    )
+    if previous_snapshot:
+        drift_report = detect_schema_drift(
+            old_columns=previous_snapshot.columns,
+            old_dtypes=previous_snapshot.dtypes,
+            new_columns=columns,
+            new_dtypes=dtypes,
+        )
+    if drift_report is None:
+        return None
+
+    drift_items = []
+    for col in drift_report.columns_removed:
+        drift_items.append(
+            ColumnDriftResponse(
+                column=col,
+                drift_type="removed",
+                old_value=None,
+                new_value=None,
+                severity="breaking",
+            )
+        )
+    for col in drift_report.columns_added:
+        drift_items.append(
+            ColumnDriftResponse(
+                column=col,
+                drift_type="added",
+                old_value=None,
+                new_value=None,
+                severity="info",
+            )
+        )
+    for tc in drift_report.type_changes:
+        drift_items.append(
+            ColumnDriftResponse(
+                column=tc.column,
+                drift_type="type_changed",
+                old_value=tc.old_type,
+                new_value=tc.new_type,
+                severity="warning",
+            )
+        )
+
+    breaking = sum(1 for d in drift_items if d.severity == "breaking")
+    warns = sum(1 for d in drift_items if d.severity == "warning")
+    return SchemaDriftResponse(
+        has_drift=drift_report.has_drift,
+        breaking_changes=breaking,
+        warnings=warns,
+        drift_items=drift_items,
+    )
+
+
+def _finalize_uploaded_file(
+    db: Session,
+    file_id,
+    original_filename: str,
+    stored_path: Path,
+    file_size_bytes: int,
+    request: Request,
+    current_user: User,
+) -> FileUploadResponse:
+    """Persist uploaded file metadata, snapshot, and optional drift report."""
+    row_count, columns, dtypes = _extract_file_metadata(original_filename, stored_path)
+    if row_count > settings.MAX_ROWS_PER_FILE:
+        stored_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
+        )
+
+    uploaded_file = UploadedFile(
+        id=file_id,
+        original_filename=original_filename,
+        stored_path=str(stored_path),
+        file_size_bytes=file_size_bytes,
+        row_count=row_count,
+        column_count=len(columns),
+        columns=columns,
+        dtypes=dtypes,
+    )
+    db.add(uploaded_file)
+    db.commit()
+
+    snapshot = SchemaSnapshot(
+        file_id=file_id,
+        columns=columns,
+        dtypes=dtypes,
+        row_count=row_count,
+    )
+    db.add(snapshot)
+    db.commit()
+
+    schema_drift_response = _build_schema_drift_response(
+        db=db,
+        file_id=file_id,
+        original_filename=original_filename,
+        columns=columns,
+        dtypes=dtypes,
+    )
+
+    logger.info(
+        "File uploaded: id=%s, name=%s, rows=%d, columns=%d",
+        file_id,
+        original_filename,
+        row_count,
+        len(columns),
+    )
+
+    from backend.metrics import FILES_UPLOADED_TOTAL
+
+    FILES_UPLOADED_TOTAL.inc()
+    log_action(
+        db,
+        "file_uploaded",
+        user_id=current_user.id,
+        resource_type="file",
+        resource_id=file_id,
+        details={"filename": original_filename, "row_count": row_count},
+        request=request,
+    )
+
+    return FileUploadResponse(
+        id=str(file_id),
+        original_filename=original_filename,
+        row_count=row_count,
+        column_count=len(columns),
+        columns=columns,
+        dtypes=dtypes,
+        file_size_bytes=file_size_bytes,
+        schema_drift=schema_drift_response,
+    )
 
 
 def _parse_file_preview(filename: str, stored_path: Path, nrows: int) -> pd.DataFrame:
@@ -375,7 +722,7 @@ def _parse_file_preview(filename: str, stored_path: Path, nrows: int) -> pd.Data
 )
 def get_schema_history(
     file_id: str,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ) -> dict:
     """Get schema snapshot history for a file."""
     _validate_uuid_format(file_id)
@@ -415,7 +762,7 @@ def get_schema_history(
 )
 def get_schema_diff(
     file_id: str,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ) -> dict:
     """Get schema drift between the two most recent snapshots."""
     _validate_uuid_format(file_id)
@@ -465,3 +812,73 @@ def get_schema_diff(
         ],
         "summary": report.summary,
     }
+
+
+# Legacy compatibility endpoints used by Week-1 verification prompt.
+legacy_router.add_api_route(
+    "/request-upload-url",
+    request_upload_url,
+    methods=["POST"],
+    response_model=UploadUrlResponse,
+    summary="Negotiate upload strategy (legacy)",
+)
+legacy_router.add_api_route(
+    "/direct-upload/{file_id}",
+    direct_upload_file,
+    methods=["PUT"],
+    summary="Direct upload target (legacy)",
+)
+legacy_router.add_api_route(
+    "/{file_id}/confirm",
+    confirm_direct_upload,
+    methods=["POST"],
+    response_model=FileUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Confirm direct upload (legacy)",
+)
+legacy_router.add_api_route(
+    "/upload",
+    upload_file,
+    methods=["POST"],
+    response_model=FileUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload file (legacy)",
+)
+legacy_router.add_api_route(
+    "/",
+    list_files,
+    methods=["GET"],
+    response_model=FileListResponse,
+    summary="List uploaded files (legacy)",
+)
+legacy_router.add_api_route(
+    "/{file_id}",
+    get_file,
+    methods=["GET"],
+    response_model=FileUploadResponse,
+    summary="Get file metadata (legacy)",
+)
+legacy_router.add_api_route(
+    "/{file_id}",
+    delete_file,
+    methods=["DELETE"],
+    summary="Delete file (legacy)",
+)
+legacy_router.add_api_route(
+    "/{file_id}/preview",
+    preview_file,
+    methods=["GET"],
+    summary="Preview file data (legacy)",
+)
+legacy_router.add_api_route(
+    "/{file_id}/schema/history",
+    get_schema_history,
+    methods=["GET"],
+    summary="Schema history (legacy)",
+)
+legacy_router.add_api_route(
+    "/{file_id}/schema/diff",
+    get_schema_diff,
+    methods=["GET"],
+    summary="Schema diff (legacy)",
+)

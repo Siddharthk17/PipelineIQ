@@ -23,8 +23,9 @@ RUN mkdir -p /tmp/uploads /app/data /app/uploads && chown -R appuser:appuser /ap
 # Switch to non-root user
 USER appuser
 
-# Expose port
+# Expose API and SSE ports
 EXPOSE 8000
+EXPOSE 8001
 
-# Run migrations, seed demo data, then start API and worker
-CMD ["sh", "-c", "python -m alembic upgrade head && (python -m backend.scripts.seed_demo || true) && celery -A backend.celery_app:celery_app worker --loglevel=info --concurrency=1 & uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Run API with Gunicorn + Uvicorn workers
+CMD ["gunicorn", "backend.main:app", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--worker-connections", "1000", "--max-requests", "10000", "--max-requests-jitter", "1000", "--timeout", "30", "--graceful-timeout", "30", "--bind", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info"]

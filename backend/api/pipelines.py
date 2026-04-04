@@ -1,23 +1,18 @@
-"""Pipeline execution API endpoints with SSE streaming.
+"""Pipeline execution API endpoints.
 
 Provides endpoints for pipeline validation, execution (async via Celery),
-result retrieval, and real-time progress streaming via Server-Sent Events.
+result retrieval, cancellation, and export.
 """
 
-import asyncio
-import json
 import logging
-import uuid
-from typing import AsyncGenerator
-
-import redis.asyncio as aioredis
+import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from fastapi.responses import StreamingResponse
+from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_user, get_optional_user
+from backend.auth import get_current_user
 from backend.config import settings
-from backend.dependencies import get_db_dependency
+from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import PipelineRun, PipelineStatus, UploadedFile, User
 from datetime import timezone
 from backend.pipeline.parser import PipelineParser
@@ -34,6 +29,7 @@ from backend.schemas import (
     ValidationWarningDetail,
 )
 from backend.tasks.pipeline_tasks import execute_pipeline_task
+from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.utils.rate_limiter import limiter
 from backend.services.audit_service import log_action
 from backend.utils.uuid_utils import validate_uuid_format as _validate_uuid_format, as_uuid as _as_uuid
@@ -41,14 +37,46 @@ from backend.utils.uuid_utils import validate_uuid_format as _validate_uuid_form
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
+legacy_runs_router = APIRouter(prefix="/runs", tags=["runs"])
 
-# Terminal event types that signal the SSE stream should close
-_TERMINAL_EVENT_TYPES = frozenset({
-    "pipeline_completed",
-    "pipeline_failed",
-    "COMPLETED",
-    "FAILED",
-})
+
+def _create_and_queue_pipeline_run(
+    *,
+    yaml_config: str,
+    name: str | None,
+    request: Request,
+    db: Session,
+    current_user: User,
+) -> RunPipelineResponse:
+    """Create a PipelineRun record and queue Celery execution."""
+    parser = PipelineParser()
+    config = parser.parse(yaml_config)
+    pipeline_name = name or config.name
+
+    pipeline_run = PipelineRun(
+        name=pipeline_name,
+        status=PipelineStatus.PENDING,
+        yaml_config=yaml_config,
+        user_id=current_user.id if current_user else None,
+    )
+    db.add(pipeline_run)
+    db.commit()
+    db.refresh(pipeline_run)
+
+    execute_pipeline_task.delay(str(pipeline_run.id))
+
+    log_action(
+        db,
+        "pipeline_run",
+        user_id=current_user.id if current_user else None,
+        resource_type="pipeline",
+        resource_id=pipeline_run.id,
+        details={"name": pipeline_name},
+        request=request,
+    )
+
+    logger.info("Pipeline run queued: id=%s, name=%s", pipeline_run.id, pipeline_name)
+    return RunPipelineResponse(run_id=str(pipeline_run.id), status=pipeline_run.status.value)
 
 @router.post(
     "/validate",
@@ -61,7 +89,7 @@ def validate_pipeline(
     request: Request,
     body: ValidatePipelineRequest,
     response: Response,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> ValidatePipelineResponse:
     """Validate a pipeline configuration against registered files."""
@@ -101,7 +129,7 @@ def plan_pipeline(
     request: Request,
     body: ValidatePipelineRequest,
     response: Response,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """Generate a dry-run execution plan for a pipeline."""
@@ -147,38 +175,64 @@ def run_pipeline(
     request: Request,
     body: RunPipelineRequest,
     response: Response,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> RunPipelineResponse:
     """Create a pipeline run record and queue it for execution."""
-    parser = PipelineParser()
-    config = parser.parse(body.yaml_config)
-    pipeline_name = body.name or config.name
-
-    pipeline_run = PipelineRun(
-        name=pipeline_name,
-        status=PipelineStatus.PENDING,
+    return _create_and_queue_pipeline_run(
         yaml_config=body.yaml_config,
-        user_id=current_user.id if current_user else None,
-    )
-    db.add(pipeline_run)
-    db.commit()
-    db.refresh(pipeline_run)
-
-    execute_pipeline_task.delay(str(pipeline_run.id))
-
-    log_action(db, "pipeline_run", user_id=current_user.id if current_user else None,
-               resource_type="pipeline", resource_id=pipeline_run.id,
-               details={"name": pipeline_name}, request=request)
-
-    logger.info(
-        "Pipeline run queued: id=%s, name=%s",
-        pipeline_run.id, pipeline_name,
+        name=body.name,
+        request=request,
+        db=db,
+        current_user=current_user,
     )
 
-    return RunPipelineResponse(
-        run_id=str(pipeline_run.id),
-        status=pipeline_run.status.value,
+
+@legacy_runs_router.post(
+    "",
+    response_model=RunPipelineResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start a pipeline run (legacy)",
+    description="Legacy compatibility endpoint that accepts either yaml or yaml_config.",
+)
+@limiter.limit(settings.RATE_LIMIT_PIPELINE_RUN)
+async def run_pipeline_legacy(
+    request: Request,
+    response: Response,
+    db: Session = get_write_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> RunPipelineResponse:
+    """Legacy endpoint for prompt compatibility: POST /api/runs."""
+    payload: dict = {}
+    raw_body = await request.body()
+    if raw_body:
+        try:
+            parsed = orjson.loads(raw_body)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except orjson.JSONDecodeError:
+            payload = {}
+
+    yaml_config = payload.get("yaml_config")
+    if yaml_config is None:
+        yaml_config = payload.get("yaml")
+    if not isinstance(yaml_config, str) or not yaml_config.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Request body must include 'yaml_config' (or legacy 'yaml')",
+        )
+    name = payload.get("name")
+    if name is not None and not isinstance(name, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="'name' must be a string when provided",
+        )
+    return _create_and_queue_pipeline_run(
+        yaml_config=yaml_config,
+        name=name,
+        request=request,
+        db=db,
+        current_user=current_user,
     )
 
 @router.get(
@@ -193,7 +247,7 @@ def list_pipeline_runs(
     page: int = 1,
     limit: int = 20,
     status_filter: str = None,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ) -> PipelineRunListResponse:
     """List pipeline runs with pagination, ordered by creation time."""
     page = max(1, page)
@@ -228,7 +282,7 @@ def list_pipeline_runs(
 def get_pipeline_stats(
     request: Request,
     response: Response,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ):
     """Get aggregate pipeline statistics."""
     from sqlalchemy import func
@@ -262,7 +316,7 @@ def get_pipeline_run(
     run_id: str,
     request: Request,
     response: Response,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ) -> PipelineRunResponse:
     """Get full details of a specific pipeline run."""
     _validate_uuid_format(run_id)
@@ -273,118 +327,6 @@ def get_pipeline_run(
             detail=f"Pipeline run '{run_id}' not found",
         )
     return _run_to_response(pipeline_run)
-
-@router.get(
-    "/{run_id}/stream",
-    summary="Stream pipeline progress via SSE",
-    description="Server-Sent Events stream for real-time pipeline progress.",
-)
-async def stream_pipeline_progress(
-    run_id: str,
-    db: Session = get_db_dependency(),
-) -> StreamingResponse:
-    """Stream real-time pipeline execution progress via Server-Sent Events."""
-    _validate_uuid_format(run_id)
-    pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
-    if pipeline_run is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Pipeline run '{run_id}' not found",
-        )
-
-    # If already completed/failed, send a single terminal event
-    if pipeline_run.status in (PipelineStatus.COMPLETED, PipelineStatus.FAILED):
-        return StreamingResponse(
-            _completed_event_generator(pipeline_run),
-            media_type="text/event-stream",
-            headers=_sse_headers(),
-        )
-
-    return StreamingResponse(
-        _live_event_generator(run_id),
-        media_type="text/event-stream",
-        headers=_sse_headers(),
-    )
-
-async def _live_event_generator(run_id: str) -> AsyncGenerator[str, None]:
-    """Subscribe to Redis and yield SSE events until pipeline completes."""
-    redis_client = aioredis.from_url(settings.REDIS_URL)
-    pubsub = redis_client.pubsub()
-    channel = f"pipeline_progress:{run_id}"
-
-    try:
-        await pubsub.subscribe(channel)
-        logger.info("SSE stream connected: run_id=%s", run_id)
-
-        while True:
-            message = await pubsub.get_message(
-                ignore_subscribe_messages=True, timeout=1.0
-            )
-            if message is None:
-                # Send keepalive comment to prevent proxy timeouts
-                yield ": keepalive\n\n"
-                await asyncio.sleep(0.5)
-                continue
-
-            data = message.get("data")
-            if isinstance(data, bytes):
-                data = data.decode("utf-8")
-            if not isinstance(data, str):
-                continue
-
-            event_type = _extract_event_type(data)
-            yield f"event: {event_type}\ndata: {data}\n\n"
-
-            if event_type in _TERMINAL_EVENT_TYPES:
-                logger.info("SSE stream closing: run_id=%s, event=%s", run_id, event_type)
-                break
-
-    except asyncio.CancelledError:
-        logger.info("SSE stream cancelled by client: run_id=%s", run_id)
-    finally:
-        await pubsub.unsubscribe(channel)
-        await redis_client.aclose()
-
-async def _completed_event_generator(
-    pipeline_run: PipelineRun,
-) -> AsyncGenerator[str, None]:
-    """Yield a single terminal event for an already-completed pipeline."""
-    event_type = (
-        "pipeline_completed"
-        if pipeline_run.status == PipelineStatus.COMPLETED
-        else "pipeline_failed"
-    )
-    data = json.dumps({
-        "run_id": str(pipeline_run.id),
-        "event_type": event_type,
-        "status": pipeline_run.status.value,
-    })
-    yield f"event: {event_type}\ndata: {data}\n\n"
-
-def _extract_event_type(data: str) -> str:
-    """Extract the event type from a JSON message."""
-    try:
-        parsed = json.loads(data)
-        event_type = parsed.get("event_type", "")
-        if event_type:
-            return event_type
-        step_status = parsed.get("status", "")
-        status_to_event = {
-            "RUNNING": "step_started",
-            "COMPLETED": "step_completed",
-            "FAILED": "step_failed",
-        }
-        return status_to_event.get(step_status, "progress")
-    except (json.JSONDecodeError, AttributeError):
-        return "progress"
-
-def _sse_headers() -> dict:
-    """Standard headers for SSE responses."""
-    return {
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    }
 
 def _ensure_utc(dt):
     """Attach UTC tzinfo to naive datetimes from SQLite."""
@@ -423,6 +365,8 @@ def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
         ],
     )
 
+def _status_cache_key(run_id: str) -> str:
+    return f"pipeline_progress:last:{run_id}"
 
 @router.post(
     "/{run_id}/cancel",
@@ -432,7 +376,7 @@ def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
 def cancel_pipeline_run(
     run_id: str,
     request: Request,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Cancel a pipeline run by setting status to CANCELLED and revoking the task."""
@@ -460,13 +404,27 @@ def cancel_pipeline_run(
     pipeline_run.error_message = "Cancelled by user"
     db.commit()
 
+    cancel_payload = {
+        "run_id": run_id,
+        "event_type": "pipeline_cancelled",
+        "status": PipelineStatus.CANCELLED.value,
+        "error_message": "Cancelled by user",
+    }
+    try:
+        get_pubsub_redis().publish(
+            f"pipeline_progress:{run_id}",
+            orjson.dumps(cancel_payload),
+        )
+        get_cache_redis().setex(_status_cache_key(run_id), 3600, orjson.dumps(cancel_payload))
+    except RedisError:
+        logger.warning("Failed to publish cancellation SSE event for run_id=%s", run_id)
+
     log_action(db, "pipeline_cancelled", user_id=current_user.id,
                resource_type="pipeline", resource_id=pipeline_run.id,
                request=request)
 
     logger.info("Pipeline run cancelled: id=%s", run_id)
     return {"run_id": run_id, "status": "CANCELLED"}
-
 
 @router.post(
     "/preview",
@@ -479,7 +437,7 @@ def preview_pipeline_step(
     body: ValidatePipelineRequest,
     response: Response,
     step_index: int = 0,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Preview sample data at a specific step of a pipeline."""
@@ -513,7 +471,6 @@ def preview_pipeline_step(
         "note": "Full sample data preview requires pipeline execution. Use /plan for detailed estimates.",
     }
 
-
 @router.get(
     "/{run_id}/export",
     summary="Export pipeline run output",
@@ -522,7 +479,7 @@ def preview_pipeline_step(
 def export_pipeline_output(
     run_id: str,
     request: Request,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> Response:
     """Export/download the output file from a completed pipeline run."""

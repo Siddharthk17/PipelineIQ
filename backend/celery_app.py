@@ -29,17 +29,7 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
 )
 
-celery_app.conf.update(
-    task_serializer="json",
-    result_serializer="json",
-    accept_content=["json"],
-    timezone="UTC",
-    enable_utc=True,
-    task_track_started=True,
-    task_acks_late=True,
-    worker_prefetch_multiplier=1,
-    broker_connection_retry_on_startup=True,
-)
+celery_app.config_from_object("backend.celery_config")
 
 # Upstash Redis requires TLS — configure SSL for both broker and backend
 if settings.CELERY_BROKER_URL.startswith("rediss://"):
@@ -50,10 +40,3 @@ celery_app.autodiscover_tasks(["backend.tasks"], related_name="pipeline_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="webhook_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="schedule_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="notification_tasks")
-
-celery_app.conf.beat_schedule = {
-    "check-pipeline-schedules": {
-        "task": "schedules.check",
-        "schedule": 60.0,
-    },
-}

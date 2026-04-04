@@ -5,11 +5,10 @@ Provides access to pipeline version history, diffs, and restore.
 
 import logging
 from typing import List
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.database import get_db
+from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import PipelineVersion
 from backend.pipeline.versioning import diff_pipelines, save_version
 
@@ -20,7 +19,7 @@ router = APIRouter(prefix="/versions", tags=["versions"])
 @router.get("/{pipeline_name}")
 def list_versions(
     pipeline_name: str,
-    db: Session = Depends(get_db),
+    db: Session = get_read_db_dependency(),
 ):
     """List all versions of a pipeline."""
     versions = (
@@ -49,7 +48,7 @@ def list_versions(
 def get_version(
     pipeline_name: str,
     version_number: int,
-    db: Session = Depends(get_db),
+    db: Session = get_read_db_dependency(),
 ):
     """Get a specific pipeline version."""
     version = (
@@ -78,7 +77,7 @@ def diff_versions(
     pipeline_name: str,
     version_a: int,
     version_b: int,
-    db: Session = Depends(get_db),
+    db: Session = get_read_db_dependency(),
 ):
     """Diff two versions of a pipeline."""
     va = (
@@ -126,7 +125,7 @@ def diff_versions(
 def restore_version(
     pipeline_name: str,
     version_number: int,
-    db: Session = Depends(get_db),
+    db: Session = get_write_db_dependency(),
 ):
     """Restore a pipeline to a previous version by creating a new version."""
     old_version = (

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user, get_current_admin
-from backend.dependencies import get_db_dependency
+from backend.dependencies import get_read_db_dependency
 from backend.models import AuditLog, User
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ def get_audit_logs(
     limit: int = Query(50, ge=1, le=100),
     action: Optional[str] = None,
     user_id: Optional[str] = None,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_admin),
 ):
     """Get audit logs (admin only)."""
@@ -66,7 +66,7 @@ def get_audit_logs(
 def get_my_audit_logs(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """Get current user's audit logs."""

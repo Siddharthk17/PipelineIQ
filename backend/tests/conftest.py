@@ -16,7 +16,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend.database import Base, get_db
+from backend.database import Base, get_db, get_read_db, get_write_db
 from backend.main import app
 import backend.models  # noqa: F401 — ensure ORM models are registered with Base.metadata
 from backend.pipeline.lineage import LineageRecorder
@@ -70,6 +70,8 @@ def client(test_db: Session, tmp_path) -> TestClient:
         yield test_db
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_read_db] = override_get_db
+    app.dependency_overrides[get_write_db] = override_get_db
 
     # Override auth dependencies with a mock admin user
     from backend.auth import get_current_user, get_current_admin, get_optional_user
@@ -122,6 +124,8 @@ def auth_client(test_db: Session, tmp_path) -> TestClient:
         yield test_db
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_read_db] = override_get_db
+    app.dependency_overrides[get_write_db] = override_get_db
 
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()

@@ -11,9 +11,9 @@ env:
   NODE_VERSION: "20"
 
 jobs:
-  # JOB 1: Backend Tests (206 tests)
+  # JOB 1: Backend Tests 
   backend-tests:
-    name: Backend Tests (206)
+    name: Backend Tests
     runs-on: ubuntu-latest
 
     services:

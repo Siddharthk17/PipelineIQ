@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Authentication"])
 
 # Request / Response schemas
-
 class RegisterRequest(BaseModel):
     email: str
     username: str
@@ -108,7 +107,6 @@ def _user_to_response(user: User) -> UserResponse:
     )
 
 # Endpoints
-
 @router.post("/register", status_code=201)
 def register(body: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     """Register a new user. First user becomes admin automatically."""

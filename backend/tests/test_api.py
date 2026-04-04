@@ -75,6 +75,88 @@ class TestFileUpload:
             data = response.json()
             assert ".." not in data.get("original_filename", "")
 
+    def test_request_upload_url_small_file_returns_api_method(self, client):
+        """Small-file negotiation should return API upload method."""
+        response = client.post(
+            "/api/v1/files/request-upload-url",
+            json={"filename": "small.csv", "file_size": 1024},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["method"] == "api"
+        assert data["upload_endpoint"] == "/api/v1/files/upload"
+        assert "file_id" in data
+
+    def test_request_upload_url_large_file_returns_direct_method(self, client):
+        """Large-file negotiation should return direct upload method."""
+        response = client.post(
+            "/api/v1/files/request-upload-url",
+            json={"filename": "large.csv", "file_size": 12 * 1024 * 1024},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["method"] == "direct"
+        assert data["upload_url"].startswith("/api/v1/files/direct-upload/")
+        assert data["confirm_endpoint"].startswith("/api/v1/files/")
+
+    def test_direct_upload_then_confirm_returns_file_metadata(self, client, monkeypatch):
+        """Direct upload flow should allow PUT + confirm to finalize metadata."""
+        # Lower threshold for this unit test so tiny payloads take the direct path.
+        monkeypatch.setattr("backend.api.files.LARGE_FILE_THRESHOLD", 7)
+        pending_uploads = {}
+
+        def _cache_pending_upload(file_id, payload):
+            pending_uploads[file_id] = payload
+
+        def _get_pending_upload(file_id):
+            return pending_uploads.get(file_id)
+
+        def _clear_pending_upload(file_id):
+            pending_uploads.pop(file_id, None)
+
+        monkeypatch.setattr("backend.api.files._cache_pending_upload", _cache_pending_upload)
+        monkeypatch.setattr("backend.api.files._get_pending_upload", _get_pending_upload)
+        monkeypatch.setattr("backend.api.files._clear_pending_upload", _clear_pending_upload)
+        payload_bytes = b"a,b\n1,2\n"
+
+        # Mismatch should fail and remove staged file.
+        negotiate = client.post(
+            "/api/v1/files/request-upload-url",
+            json={"filename": "large.csv", "file_size": len(payload_bytes) + 1},
+        )
+        assert negotiate.status_code == 200
+        mismatch = negotiate.json()
+        assert mismatch["method"] == "direct"
+
+        put_resp = client.put(
+            mismatch["upload_url"],
+            content=payload_bytes,
+            headers={"content-type": "text/csv"},
+        )
+        assert put_resp.status_code == 400
+
+        # Exact size succeeds and can be confirmed.
+        negotiate = client.post(
+            "/api/v1/files/request-upload-url",
+            json={"filename": "large.csv", "file_size": len(payload_bytes)},
+        )
+        payload = negotiate.json()
+        assert payload["method"] == "direct"
+
+        put_resp = client.put(
+            payload["upload_url"],
+            content=payload_bytes,
+            headers={"content-type": "text/csv"},
+        )
+        assert put_resp.status_code == 200
+
+        confirm_resp = client.post(payload["confirm_endpoint"])
+        assert confirm_resp.status_code == 201
+        confirmed = confirm_resp.json()
+        assert confirmed["original_filename"] == "large.csv"
+        assert confirmed["row_count"] == 1
+        assert confirmed["column_count"] == 2
+
 
 class TestFileGet:
     """Tests for file retrieval endpoints."""

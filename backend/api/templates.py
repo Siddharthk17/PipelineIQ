@@ -144,7 +144,6 @@ PIPELINE_TEMPLATES = [
 
 _TEMPLATES_BY_ID = {t["id"]: t for t in PIPELINE_TEMPLATES}
 
-
 @router.get(
     "/",
     summary="List all pipeline templates",
@@ -164,7 +163,6 @@ def list_templates() -> dict:
         ],
         "total": len(PIPELINE_TEMPLATES),
     }
-
 
 @router.get(
     "/{template_id}",

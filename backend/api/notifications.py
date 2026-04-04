@@ -5,13 +5,12 @@ a test endpoint to verify webhook connectivity.
 """
 
 import logging
-
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
-from backend.dependencies import get_db_dependency
+from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import NotificationConfig, NotificationType, User
 from backend.services.audit_service import log_action
 from backend.services.notification_service import send_slack_notification, send_email_notification
@@ -20,7 +19,6 @@ from backend.utils.uuid_utils import validate_uuid_format, as_uuid
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
-
 
 class CreateNotificationConfigRequest(BaseModel):
     """Request body to create a notification config."""
@@ -32,7 +30,6 @@ class CreateNotificationConfigRequest(BaseModel):
         description="Events to subscribe to",
     )
 
-
 class NotificationConfigResponse(BaseModel):
     """Response for a notification config."""
 
@@ -42,7 +39,6 @@ class NotificationConfigResponse(BaseModel):
     events: list[str]
     is_active: bool
     created_at: str | None = None
-
 
 def _config_to_response(config: NotificationConfig) -> NotificationConfigResponse:
     return NotificationConfigResponse(
@@ -54,7 +50,6 @@ def _config_to_response(config: NotificationConfig) -> NotificationConfigRespons
         created_at=config.created_at.isoformat() if config.created_at else None,
     )
 
-
 @router.post(
     "/",
     response_model=NotificationConfigResponse,
@@ -64,7 +59,7 @@ def _config_to_response(config: NotificationConfig) -> NotificationConfigRespons
 def create_notification_config(
     request: Request,
     body: CreateNotificationConfigRequest,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> NotificationConfigResponse:
     """Create a new notification channel configuration."""
@@ -107,14 +102,13 @@ def create_notification_config(
 
     return _config_to_response(config)
 
-
 @router.get(
     "/",
     summary="List notification configs",
 )
 def list_notification_configs(
     request: Request,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """List all notification configs for the authenticated user."""
@@ -129,7 +123,6 @@ def list_notification_configs(
         "total": len(configs),
     }
 
-
 @router.delete(
     "/{config_id}",
     summary="Delete a notification config",
@@ -137,7 +130,7 @@ def list_notification_configs(
 def delete_notification_config(
     config_id: str,
     request: Request,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Delete a notification config owned by the current user."""
@@ -162,7 +155,6 @@ def delete_notification_config(
 
     return {"detail": f"Notification config '{config_id}' deleted"}
 
-
 @router.post(
     "/{config_id}/test",
     summary="Send a test notification",
@@ -170,7 +162,7 @@ def delete_notification_config(
 def test_notification(
     config_id: str,
     request: Request,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Send a test notification using the specified config."""

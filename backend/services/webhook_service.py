@@ -2,13 +2,13 @@
 
 import hashlib
 import hmac
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
 import httpx
+import orjson
 
 from backend.database import SessionLocal
 from backend.models import Webhook, WebhookDelivery
@@ -19,9 +19,10 @@ MAX_ATTEMPTS = 3
 RETRY_DELAYS = [0, 60, 300]  # seconds
 
 
-def _sign_payload(secret: str, body: str) -> str:
+def _sign_payload(secret: str, body: str | bytes) -> str:
     """Generate HMAC SHA256 signature."""
-    return hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+    body_bytes = body if isinstance(body, bytes) else body.encode()
+    return hmac.new(secret.encode(), body_bytes, hashlib.sha256).hexdigest()
 
 
 def deliver_webhook(
@@ -35,7 +36,7 @@ def deliver_webhook(
     if own_session:
         db = SessionLocal()
 
-    body = json.dumps(payload)
+    body = orjson.dumps(payload)
     headers = {
         "Content-Type": "application/json",
         "X-PipelineIQ-Event": event_type,
@@ -87,7 +88,7 @@ def deliver_with_retry(
         if not webhook or not webhook.is_active:
             return
 
-        body = json.dumps(payload)
+        body = orjson.dumps(payload)
         headers = {
             "Content-Type": "application/json",
             "X-PipelineIQ-Event": event_type,

@@ -11,6 +11,19 @@ export interface UploadedFile {
   schema_drift: SchemaDrift | null;
 }
 
+export interface UploadUrlRequest {
+  filename: string;
+  file_size: number;
+}
+
+export interface UploadUrlResponse {
+  method: "api" | "direct";
+  file_id: string;
+  upload_url?: string;
+  upload_endpoint?: string;
+  confirm_endpoint?: string;
+}
+
 export interface PipelineRun {
   id: string;
   name: string;

@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getPipelineRun } from "@/lib/api";
 import { API_V1 } from "@/lib/constants";
 import type { PipelineRun, StepResult } from "@/lib/types";
+import { getToken } from "@/lib/api";
 
 /**
  * SSE step events have this shape (not a PipelineRun):
@@ -80,7 +81,11 @@ export function usePipelineRun(runId: string | null) {
     function connectSSE() {
       if (cancelled) return;
 
-      const eventSource = new EventSource(`${API_V1}/pipelines/${runId}/stream`);
+      const token = getToken();
+      const streamUrl = token
+        ? `${API_V1}/pipelines/${runId}/stream?token=${encodeURIComponent(token)}`
+        : `${API_V1}/pipelines/${runId}/stream`;
+      const eventSource = new EventSource(streamUrl);
       currentEventSource = eventSource;
 
       eventSource.onopen = () => {

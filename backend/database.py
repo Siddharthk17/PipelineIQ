@@ -15,9 +15,8 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from backend.config import settings
 
 
-def _build_engine():
-    """Build the SQLAlchemy engine based on DATABASE_URL."""
-    url = settings.DATABASE_URL
+def _build_engine(url: str):
+    """Build a SQLAlchemy engine for a provided URL."""
     if url.startswith("sqlite"):
         return create_engine(
             url,
@@ -35,13 +34,32 @@ def _build_engine():
     )
 
 
-engine = _build_engine()
+write_engine = _build_engine(settings.DATABASE_WRITE_URL)
+read_engine = (
+    write_engine
+    if settings.DATABASE_READ_URL == settings.DATABASE_WRITE_URL
+    else _build_engine(settings.DATABASE_READ_URL)
+)
 
-SessionLocal = sessionmaker(
+WriteSessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,
-    bind=engine,
+    bind=write_engine,
 )
+
+ReadSessionLocal = (
+    WriteSessionLocal
+    if read_engine is write_engine
+    else sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=read_engine,
+    )
+)
+
+# Backward-compat aliases
+engine = write_engine
+SessionLocal = WriteSessionLocal
 
 
 class Base(DeclarativeBase):
@@ -56,7 +74,25 @@ def get_db() -> Generator[Session, None, None]:
     This is the canonical dependency for FastAPI route handlers.
     The session is rolled back implicitly on exceptions and always closed.
     """
-    db = SessionLocal()
+    db = WriteSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_write_db() -> Generator[Session, None, None]:
+    """Yield a write database session and ensure it is closed."""
+    db = WriteSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_read_db() -> Generator[Session, None, None]:
+    """Yield a read database session and ensure it is closed."""
+    db = ReadSessionLocal()
     try:
         yield db
     finally:
@@ -68,4 +104,4 @@ def create_all_tables() -> None:
 
     Called once at application startup. In production, prefer Alembic migrations.
     """
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=write_engine)

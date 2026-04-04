@@ -11,31 +11,28 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-import redis
 import sentry_sdk
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, ORJSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from backend.api.router import api_router
+from backend.api.router import api_router, legacy_api_router
 from backend.api.auth import router as auth_router
 from backend.api.webhooks import router as webhooks_router
 from backend.api.audit import router as audit_router
 from backend.config import settings
-from backend.database import create_all_tables, engine
+from backend.database import create_all_tables, write_engine, read_engine
+from backend.db.redis_pools import get_cache_redis
 from backend.pipeline.exceptions import PipelineIQError
 from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
-
-# Module-level Redis connection pool for health checks (avoids leak on every call)
-_redis_pool = redis.ConnectionPool.from_url(settings.REDIS_URL)
 
 if settings.SENTRY_DSN:
     sentry_sdk.init(
@@ -67,7 +64,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info("Shutting down %s", settings.APP_NAME)
-    engine.dispose()
+    if read_engine is write_engine:
+        write_engine.dispose()
+    else:
+        read_engine.dispose()
+        write_engine.dispose()
     logger.info("Application shutdown complete")
 
 
@@ -75,7 +76,8 @@ def _validate_upload_dir() -> None:
     """Ensure the upload directory exists and is writable."""
     upload_dir = settings.UPLOAD_DIR
     upload_dir.mkdir(parents=True, exist_ok=True)
-    test_file = upload_dir / ".write_test"
+    # Unique probe filename avoids worker races under multi-process startup.
+    test_file = upload_dir / f".write_test_{uuid.uuid4().hex}"
     try:
         test_file.touch()
         test_file.unlink()
@@ -102,6 +104,7 @@ app = FastAPI(
     - Data quality validation rules engine
     """,
     version="3.6.2",
+    default_response_class=ORJSONResponse,
     lifespan=lifespan,
     contact={
         "name": "PipelineIQ Team",
@@ -237,6 +240,7 @@ async def timing_middleware(request: Request, call_next):
 
 
 app.include_router(api_router, prefix=settings.API_PREFIX)
+app.include_router(legacy_api_router, prefix="/api")
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(webhooks_router)
 app.include_router(audit_router)
@@ -269,7 +273,7 @@ def health_check() -> dict:
 def _check_db_health() -> str:
     """Check database connectivity by executing a simple query."""
     try:
-        with engine.connect() as conn:
+        with write_engine.connect() as conn:
             conn.exec_driver_sql("SELECT 1")
         return "ok"
     except Exception as exc:
@@ -280,7 +284,7 @@ def _check_db_health() -> str:
 def _check_redis_health() -> str:
     """Check Redis connectivity by sending a PING command."""
     try:
-        client = redis.Redis(connection_pool=_redis_pool)
+        client = get_cache_redis()
         client.ping()
         return "ok"
     except Exception as exc:

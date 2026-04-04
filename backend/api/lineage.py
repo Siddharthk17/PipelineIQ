@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.config import settings
-from backend.dependencies import get_db_dependency
+from backend.dependencies import get_read_db_dependency
 from backend.models import LineageGraph, PipelineRun
 from backend.pipeline.lineage import LineageRecorder
 from backend.schemas import (
@@ -39,7 +39,7 @@ router = APIRouter(prefix="/lineage", tags=["lineage"])
 )
 def get_lineage_graph(
     run_id: str,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ) -> LineageGraphResponse:
     """Retrieve the pre-computed React Flow lineage graph. Cached permanently."""
     _validate_uuid_format(run_id)
@@ -87,7 +87,7 @@ def get_column_lineage(
     run_id: str,
     step: str = Query(..., description="Step name containing the column"),
     column: str = Query(..., description="Column name to trace"),
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ) -> ColumnLineageResponse:
     """Trace a column's ancestry back to its source file. Cached permanently."""
     _validate_uuid_format(run_id)
@@ -138,7 +138,7 @@ def get_impact_analysis(
     run_id: str,
     step: str = Query(..., description="Step name containing the source column"),
     column: str = Query(..., description="Column name to analyze"),
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
 ) -> ImpactAnalysisResponse:
     """Analyze the downstream impact of a column. Cached permanently."""
     _validate_uuid_format(run_id)

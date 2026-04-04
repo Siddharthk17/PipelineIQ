@@ -37,7 +37,7 @@ pipelineiq/
 │   ├── tasks/          ← pipeline_tasks.py, webhook_tasks.py, schedule_tasks.py
 │   ├── utils/          ← cache.py, rate_limiter.py, uuid_utils.py, string_utils.py
 │   ├── alembic/        ← 8 migration revisions
-│   ├── tests/          ← 206 tests across 14 files
+│   ├── tests/          ← 259 tests across 20 executable files
 │   ├── scripts/        ← seed_demo.py
 │   ├── sample_data/    ← 4 CSVs + 3 YAML examples
 │   ├── main.py         ← App factory, middleware, health, Sentry init
@@ -868,10 +868,11 @@ token_expiry = datetime.utcnow() + timedelta(minutes=...)
 
 ### Test file structure
 
-```
+``` 
 backend/tests/
 ├── conftest.py           ← test_db, auth_client, sample_sales_df, pipeline YAML builders
-├── test_api.py           ← 34 endpoint integration tests
+├── integration/
+│   └── test_infrastructure.py ← 6 infra integration checks (gated by RUN_INTEGRATION_TESTS=1)
 ├── test_steps.py         ← 25 StepExecutor unit tests
 ├── test_validators.py    ← 22 validation check tests
 ├── test_parser.py        ← 18 YAML parsing tests
@@ -883,8 +884,15 @@ backend/tests/
 ├── test_webhooks.py      ← 9 webhook tests
 ├── test_caching.py       ← 8 cache tests
 ├── test_security.py      ← 7 security tests
+├── test_sse.py           ← 9 SSE endpoint tests
+├── test_api.py           ← 37 endpoint integration tests
 ├── test_rate_limiting.py ← 6 rate limit tests
-└── test_performance.py   ← 5 performance tests
+├── test_performance.py   ← 5 performance tests
+└── unit/infrastructure/
+    ├── test_celery_queues.py      ← 12 queue/routing invariants
+    ├── test_redis_connections.py  ← 11 Redis role/pool invariants
+    ├── test_sse_lifecycle.py      ← 8 SSE protocol lifecycle invariants
+    └── test_file_upload.py        ← 4 upload-path/ORJSON safety checks
 ```
 
 Test database is always SQLite via `conftest.py`'s `test_db` fixture.
@@ -1249,7 +1257,7 @@ it("calls setError when API returns 401", () => {
 ```bash
 # Backend
 cd backend
-pytest tests/ -v                              # All 206+ tests pass, zero new failures
+pytest tests/ -v                              # Latest baseline: 253 passed, 6 skipped
 python -m py_compile main.py                  # No syntax errors in main
 
 # Frontend

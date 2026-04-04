@@ -2,19 +2,19 @@
 
 import hmac
 import hashlib
-import json
 import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
 import httpx
+import orjson
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
-from backend.dependencies import get_db_dependency
+from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User, Webhook, WebhookDelivery
 from backend.utils.uuid_utils import as_uuid as _as_uuid
 from backend.services.audit_service import log_action
@@ -22,9 +22,7 @@ from backend.services.audit_service import log_action
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
-
 # Schemas
-
 class WebhookCreate(BaseModel):
     url: str
     secret: Optional[str] = None
@@ -37,7 +35,6 @@ class WebhookCreate(BaseModel):
             raise ValueError("URL must start with http:// or https://")
         return v
 
-
 class WebhookResponse(BaseModel):
     id: str
     url: str
@@ -48,7 +45,6 @@ class WebhookResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
 
 class DeliveryResponse(BaseModel):
     id: str
@@ -63,19 +59,16 @@ class DeliveryResponse(BaseModel):
     class Config:
         from_attributes = True
 
-
 class TestWebhookResponse(BaseModel):
     delivered: bool
     response_status: Optional[int] = None
     error: Optional[str] = None
 
-
 # Endpoints
-
 @router.post("/", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 def create_webhook(
     body: WebhookCreate,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """Register a new webhook URL."""
@@ -105,10 +98,9 @@ def create_webhook(
         has_secret=webhook.secret is not None,
     )
 
-
 @router.get("/", response_model=List[WebhookResponse])
 def list_webhooks(
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """List current user's webhooks."""
@@ -122,11 +114,10 @@ def list_webhooks(
         for w in webhooks
     ]
 
-
 @router.delete("/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_webhook(
     webhook_id: str,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """Delete a webhook (own only)."""
@@ -144,11 +135,10 @@ def delete_webhook(
     db.delete(webhook)
     db.commit()
 
-
 @router.get("/{webhook_id}/deliveries", response_model=List[DeliveryResponse])
 def list_deliveries(
     webhook_id: str,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """List delivery attempts for a webhook."""
@@ -178,11 +168,10 @@ def list_deliveries(
         for d in deliveries
     ]
 
-
 @router.post("/{webhook_id}/test", response_model=TestWebhookResponse)
 def test_webhook(
     webhook_id: str,
-    db: Session = get_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """Send a test payload to a webhook URL."""
@@ -199,13 +188,13 @@ def test_webhook(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "data": {"message": "This is a test webhook from PipelineIQ"},
     }
-    body = json.dumps(payload)
+    body = orjson.dumps(payload)
     headers = {
         "Content-Type": "application/json",
         "X-PipelineIQ-Event": "test",
     }
     if webhook.secret:
-        sig = hmac.new(webhook.secret.encode(), body.encode(), hashlib.sha256).hexdigest()
+        sig = hmac.new(webhook.secret.encode(), body, hashlib.sha256).hexdigest()
         headers["X-PipelineIQ-Signature"] = f"sha256={sig}"
 
     try:

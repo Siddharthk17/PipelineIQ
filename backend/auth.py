@@ -9,7 +9,7 @@ from typing import Optional
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -85,6 +85,51 @@ async def get_current_admin(current_user: User = Depends(get_current_user)) -> U
             detail="Admin role required",
         )
     return current_user
+
+
+async def get_current_user_sse(
+    token: Optional[str] = Query(
+        default=None,
+        description="JWT token for SSE EventSource clients that cannot set headers",
+    ),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+) -> User:
+    """Authenticate SSE clients via query token or standard Bearer header."""
+    raw_token = token
+    if raw_token is None and credentials is not None:
+        raw_token = credentials.credentials
+
+    if raw_token is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    payload = verify_token(raw_token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    try:
+        import uuid as _uuid
+
+        uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    user = db.query(User).filter(User.id == uid, User.is_active == True).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+    return user
 
 
 def get_optional_user(

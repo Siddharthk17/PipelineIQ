@@ -10,7 +10,7 @@
 > **SYSTEM METRICS & STATE:**
 > • **Authoritative Version:** `2.1.4` (per `CHANGELOG.md`)
 > • **Known Anomaly:** `render.yaml` currently declares `APP_VERSION: "3.6.2"`. This is a documented configuration bug. Ignore it. `2.1.4` is the absolute truth.
-> • **Scale:** `~22,151` lines of code │ `186` tracked files │ `125` text files
+> • **Scale:** `~22,151` lines of code │ `189` tracked files │ `184` text files
 
 ---
 ## Table of Contents
@@ -27,7 +27,7 @@
 10. [Pipeline Engine — Complete Deep Reference](#10-pipeline-engine--complete-deep-reference)
 11. [Business Logic — Every Rule Documented](#11-business-logic--every-rule-documented)
 12. [Configuration Reference — All 55+ Variables](#12-configuration-reference--all-55-variables)
-13. [Testing — All 299 Tests](#13-testing--all-299-tests)
+13. [Testing — All 352 Tests](#13-testing--all-352-tests)
 14. [Frontend Architecture — Complete Reference](#14-frontend-architecture--complete-reference)
 15. [Infrastructure and Deployment](#15-infrastructure-and-deployment)
 16. [Observability — Metrics, Logs, Dashboards](#16-observability--metrics-logs-dashboards)
@@ -321,7 +321,7 @@ Step 12: Async side effects dispatched as separate Celery tasks:
 | `flower` | 2.0.1 | Celery monitoring web UI. Port 5555. |
 | `prometheus-fastapi-instrumentator` | 6.1.0 | Auto-instruments FastAPI with HTTP metrics. |
 | `sentry-sdk[fastapi]` | 1.39.1 | Error tracking. FastAPI + Celery + SQLAlchemy integrations. |
-| `pytest` | 7.4.4 | Backend test runner. 206 tests. |
+| `pytest` | 7.4.4 | Backend test runner. 259 tests. |
 | `pytest-asyncio` | 0.23.3 | Async test support. |
 | `factory-boy` | 3.3.0 | Test factory pattern for model creation. |
 
@@ -486,9 +486,10 @@ pipelineiq/                              ← Project root
 │   │       ├── f6a7b8c9d0e1_audit_logs.py
 │   │       ├── a1b2c3d4e5f6_performance_indexes.py
 │   │       └── b2c3d4e5f6a7_feature_expansion.py
-│   ├── tests/                           ← 206 backend tests across 14 test files
+│   ├── tests/                           ← 259 backend tests across 20 executable test files
 │   │   ├── conftest.py                  ← All fixtures: test_db, clients, sample data
-│   │   ├── test_api.py                  ← 34 API integration tests
+│   │   ├── integration/
+│   │   │   └── test_infrastructure.py   ← 6 infra integration checks (gated by RUN_INTEGRATION_TESTS=1)
 │   │   ├── test_steps.py                ← 25 StepExecutor unit tests
 │   │   ├── test_validators.py           ← 22 validation check tests
 │   │   ├── test_parser.py               ← 18 YAML parsing tests
@@ -500,8 +501,15 @@ pipelineiq/                              ← Project root
 │   │   ├── test_webhooks.py             ← 9 webhook tests
 │   │   ├── test_caching.py              ← 8 Redis cache tests
 │   │   ├── test_security.py             ← 7 security penetration tests
+│   │   ├── test_sse.py                  ← 9 SSE endpoint tests
+│   │   ├── test_api.py                  ← 37 API integration tests
 │   │   ├── test_rate_limiting.py        ← 6 rate limit enforcement tests
-│   │   └── test_performance.py          ← 5 performance benchmark tests
+│   │   ├── test_performance.py          ← 5 performance benchmark tests
+│   │   └── unit/infrastructure/
+│   │       ├── test_celery_queues.py    ← 12 queue/routing invariants
+│   │       ├── test_redis_connections.py← 11 Redis role/pool invariants
+│   │       ├── test_sse_lifecycle.py    ← 8 SSE protocol lifecycle invariants
+│   │       └── test_file_upload.py      ← 4 upload-path/ORJSON safety checks
 │   ├── scripts/
 │   │   ├── __init__.py
 │   │   └── seed_demo.py                 ← Creates demo user + sample files for development
@@ -4006,9 +4014,9 @@ These variables are used by `docker-compose.yml` for service configuration:
 
 ---
 
-## 13. Testing — All 299 Tests
+## 13. Testing — All 352 Tests
 
-### Backend — 206 Tests Across 14 Files
+### Backend — 259 Tests Across 20 Executable Files
 
 **Test infrastructure:**
 - Framework: `pytest` 7.4.4
@@ -4037,7 +4045,7 @@ lineage_recorder    # Fresh LineageRecorder instance
 
 | File | Tests | What is covered |
 |---|---|---|
-| `test_api.py` | 34 | All REST endpoints, error codes, response shapes, auth enforcement |
+| `test_api.py` | 37 | All REST endpoints, error codes, response shapes, auth enforcement |
 | `test_steps.py` | 25 | All 9 step types, edge cases (empty DF, null columns, type errors) |
 | `test_validators.py` | 22 | All 12 check types, error severity, edge cases (empty DF, null values) |
 | `test_parser.py` | 18 | Valid YAML, invalid YAML, all 13 validation rules, fuzzy suggestions |
@@ -4047,10 +4055,16 @@ lineage_recorder    # Fresh LineageRecorder instance
 | `test_versioning.py` | 12 | Version creation, list, diff between versions, restore |
 | `test_schema_drift.py` | 10 | Column added/removed/type-changed detection, severity classification |
 | `test_webhooks.py` | 9 | CRUD, HMAC signature verification, delivery simulation, retry |
+| `test_sse.py` | 9 | SSE stream endpoint behavior and lifecycle |
 | `test_caching.py` | 8 | Redis get/set/delete/pattern operations, TTL, error handling |
 | `test_security.py` | 7 | Auth bypass attempts, path traversal, SQL injection, header injection |
 | `test_rate_limiting.py` | 6 | Enforcement of each of the 4 rate limit tiers |
 | `test_performance.py` | 5 | Response time thresholds, concurrent upload stability |
+| `integration/test_infrastructure.py` | 6 | Gated integration checks for compose/SSE/queue wiring |
+| `unit/infrastructure/test_celery_queues.py` | 12 | Queue names/routes, delivery semantics, route coverage |
+| `unit/infrastructure/test_redis_connections.py` | 11 | Redis role URL and shared pool invariants |
+| `unit/infrastructure/test_sse_lifecycle.py` | 8 | SSE event/terminal lifecycle and headers |
+| `unit/infrastructure/test_file_upload.py` | 4 | Upload constants, ORJSON default response, bounded-read guard |
 
 **Test naming conventions:**
 
@@ -5196,7 +5210,7 @@ A step with no test ships untested code to production.
 ```bash
 # Backend
 cd backend
-pytest tests/ -v                   # All 206+ tests pass, zero new failures
+pytest tests/ -v                   # Latest baseline: 253 passed, 6 skipped
 python -c "from backend.main import app"  # No circular import errors
 
 # Frontend

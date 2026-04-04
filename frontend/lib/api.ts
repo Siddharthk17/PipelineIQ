@@ -1,6 +1,7 @@
 import { API_V1, API_BASE_URL } from "./constants";
 import type {
   UploadedFile,
+  UploadUrlResponse,
   ValidationResult,
   PipelineRun,
   ReactFlowGraph,
@@ -100,6 +101,40 @@ async function fetchAuth<T>(endpoint: string, options?: RequestInit): Promise<T>
 }
 
 export async function uploadFile(file: File): Promise<UploadedFile> {
+  const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024;
+  if (file.size > LARGE_FILE_THRESHOLD) {
+    const negotiated = await fetchApi<UploadUrlResponse>("/files/request-upload-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: file.name,
+        file_size: file.size,
+      }),
+    });
+
+    if (
+      negotiated.method === "direct" &&
+      negotiated.upload_url &&
+      negotiated.confirm_endpoint
+    ) {
+      const token = getToken();
+      const directRes = await fetch(negotiated.upload_url, {
+        method: "PUT",
+        body: file,
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!directRes.ok) {
+        throw new ApiError(directRes.status, directRes.statusText);
+      }
+      return fetchApi<UploadedFile>(negotiated.confirm_endpoint, {
+        method: "POST",
+      });
+    }
+  }
+
   const formData = new FormData();
   formData.append("file", file);
   return fetchApi<UploadedFile>("/files/upload", {

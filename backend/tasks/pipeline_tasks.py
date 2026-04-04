@@ -9,15 +9,15 @@ Task idempotency: if the same run_id is submitted twice, the task
 checks the current status and only proceeds if PENDING.
 """
 
-import json
 import logging
 from typing import Dict
 
-import redis
+import orjson
+from redis.exceptions import RedisError
 
 from backend.celery_app import celery_app
-from backend.config import settings
 from backend.database import SessionLocal
+from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.models import (
     LineageGraph,
     PipelineRun,
@@ -40,18 +40,31 @@ from backend.utils.time_utils import utcnow
 logger = logging.getLogger(__name__)
 
 
+def _status_cache_key(run_id: str) -> str:
+    return f"pipeline_progress:last:{run_id}"
+
+
+def _cache_progress_payload(run_id: str, payload: dict) -> None:
+    """Cache latest progress payload for reconnecting SSE clients."""
+    cache_client = get_cache_redis()
+    try:
+        cache_client.setex(_status_cache_key(run_id), 3600, orjson.dumps(payload))
+    except RedisError:
+        logger.warning("Failed to cache SSE progress payload for run_id=%s", run_id)
+
+
 def make_redis_progress_callback(run_id: str) -> ProgressCallback:
     """Create a closure that publishes StepProgressEvent to a Redis channel.
 
     Channel name: f"pipeline_progress:{run_id}"
     Message format: JSON-serialized StepProgressEvent fields.
     """
-    redis_client = redis.Redis.from_url(settings.REDIS_URL)
+    redis_client = get_pubsub_redis()
     channel = f"pipeline_progress:{run_id}"
 
     def callback(event: StepProgressEvent) -> None:
         """Publish a progress event to Redis."""
-        message = json.dumps({
+        payload = {
             "run_id": event.run_id,
             "step_name": event.step_name,
             "step_index": event.step_index,
@@ -61,8 +74,10 @@ def make_redis_progress_callback(run_id: str) -> ProgressCallback:
             "rows_out": event.rows_out,
             "duration_ms": event.duration_ms,
             "error_message": event.error_message,
-        })
+        }
+        message = orjson.dumps(payload)
         redis_client.publish(channel, message)
+        _cache_progress_payload(run_id, payload)
 
     return callback
 
@@ -73,14 +88,25 @@ def _publish_terminal_event(
     error_message: str = "",
 ) -> None:
     """Publish a terminal pipeline event (completed/failed) to Redis."""
-    redis_client = redis.Redis.from_url(settings.REDIS_URL)
+    redis_client = get_pubsub_redis()
     channel = f"pipeline_progress:{run_id}"
-    message = json.dumps({
+    payload = {
         "run_id": run_id,
         "event_type": event_type,
         "error_message": error_message,
-    })
+        "status": _event_type_to_status(event_type),
+    }
+    message = orjson.dumps(payload)
     redis_client.publish(channel, message)
+    _cache_progress_payload(run_id, payload)
+
+
+def _event_type_to_status(event_type: str) -> str:
+    if event_type == "pipeline_completed":
+        return PipelineStatus.COMPLETED.value
+    if event_type == "pipeline_cancelled":
+        return PipelineStatus.CANCELLED.value
+    return PipelineStatus.FAILED.value
 
 
 @celery_app.task(
@@ -140,6 +166,14 @@ def _mark_running(db, pipeline_run: PipelineRun) -> None:
     pipeline_run.status = PipelineStatus.RUNNING
     pipeline_run.started_at = utcnow()
     db.commit()
+    _cache_progress_payload(
+        str(pipeline_run.id),
+        {
+            "run_id": str(pipeline_run.id),
+            "event_type": "pipeline_started",
+            "status": PipelineStatus.RUNNING.value,
+        },
+    )
 
 
 def _mark_failed(db, run_id: str, error_message: str) -> None:
@@ -151,6 +185,15 @@ def _mark_failed(db, run_id: str, error_message: str) -> None:
             pipeline_run.completed_at = utcnow()
             pipeline_run.error_message = error_message
             db.commit()
+            _cache_progress_payload(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "event_type": "pipeline_failed",
+                    "status": PipelineStatus.FAILED.value,
+                    "error_message": error_message,
+                },
+            )
     except Exception as exc:
         logger.error("Failed to mark pipeline %s as FAILED: %s", run_id, exc)
         db.rollback()

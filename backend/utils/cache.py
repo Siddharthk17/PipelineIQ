@@ -4,17 +4,17 @@ Provides simple get/set/delete operations with optional TTL.
 Used to cache expensive lineage computations and stats.
 """
 
-import json
 import logging
 from typing import Any, Optional
 
+import orjson
 import redis
 
-from backend.config import settings
+from backend.db.redis_pools import get_cache_redis
 
 logger = logging.getLogger(__name__)
 
-redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+redis_client = get_cache_redis()
 
 
 def cache_get(key: str) -> Optional[Any]:
@@ -28,13 +28,13 @@ def cache_get(key: str) -> Optional[Any]:
         logger.debug("Cache MISS: %s", key)
         return None
     logger.debug("Cache HIT: %s", key)
-    return json.loads(value)
+    return orjson.loads(value)
 
 
 def cache_set(key: str, value: Any, ttl: Optional[int] = None) -> None:
     """Set a cached value. If ttl is given (seconds), key expires after ttl."""
     try:
-        serialized = json.dumps(value)
+        serialized = orjson.dumps(value)
         if ttl:
             redis_client.setex(key, ttl, serialized)
         else:

@@ -70,6 +70,29 @@ class FileUploadResponse(BaseModel):
     }
 
 
+class UploadUrlRequest(BaseModel):
+    """Request body for upload URL negotiation."""
+
+    filename: str = Field(..., description="Original filename to upload")
+    file_size: int = Field(..., description="Client-reported file size in bytes", ge=1)
+
+
+class UploadUrlResponse(BaseModel):
+    """Response for upload URL negotiation."""
+
+    method: str = Field(..., description="Upload method: api or direct")
+    file_id: str = Field(..., description="Reserved file identifier")
+    upload_url: Optional[str] = Field(
+        None, description="Direct upload URL for large files"
+    )
+    upload_endpoint: Optional[str] = Field(
+        None, description="API upload endpoint for small files"
+    )
+    confirm_endpoint: Optional[str] = Field(
+        None, description="Confirmation endpoint after direct upload"
+    )
+
+
 class FileListResponse(BaseModel):
     """Response listing all uploaded files."""
 

@@ -35,12 +35,22 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     DATABASE_URL: str = "postgresql://postgres:pipelineiq_dev_password@localhost:5432/pipelineiq"
+    DATABASE_WRITE_URL: str = ""
+    DATABASE_READ_URL: str = ""
+    READ_REPLICA_HOST: str = "localhost"
     SECRET_KEY: str = "change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
     REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_BROKER_URL: str = ""
+    REDIS_PUBSUB_URL: str = ""
+    REDIS_CACHE_URL: str = ""
+    REDIS_YJS_URL: str = ""
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
+    CELERY_WORKERS_CRITICAL: int = 2
+    CELERY_WORKERS_DEFAULT: int = 3
+    CELERY_WORKERS_BULK: int = 2
 
     UPLOAD_DIR: Path = Path("./uploads")
     MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50 MB
@@ -119,12 +129,34 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
+    def set_database_defaults(self) -> "Settings":
+        """Default read/write database URLs to DATABASE_URL when not set."""
+        if not self.DATABASE_WRITE_URL:
+            self.DATABASE_WRITE_URL = self.DATABASE_URL
+        if not self.DATABASE_READ_URL:
+            self.DATABASE_READ_URL = self.DATABASE_WRITE_URL
+        return self
+
+    @model_validator(mode="after")
+    def set_redis_defaults(self) -> "Settings":
+        """Default role-specific Redis URLs to REDIS_URL if not set."""
+        if not self.REDIS_BROKER_URL:
+            self.REDIS_BROKER_URL = self.REDIS_URL
+        if not self.REDIS_PUBSUB_URL:
+            self.REDIS_PUBSUB_URL = self.REDIS_URL
+        if not self.REDIS_CACHE_URL:
+            self.REDIS_CACHE_URL = self.REDIS_URL
+        if not self.REDIS_YJS_URL:
+            self.REDIS_YJS_URL = self.REDIS_URL
+        return self
+
+    @model_validator(mode="after")
     def set_celery_defaults(self) -> "Settings":
-        """Default Celery broker and backend URLs to REDIS_URL if not set."""
+        """Default Celery broker and backend URLs to REDIS_BROKER_URL."""
         if not self.CELERY_BROKER_URL:
-            self.CELERY_BROKER_URL = self.REDIS_URL
+            self.CELERY_BROKER_URL = self.REDIS_BROKER_URL
         if not self.CELERY_RESULT_BACKEND:
-            self.CELERY_RESULT_BACKEND = self.REDIS_URL
+            self.CELERY_RESULT_BACKEND = self.REDIS_BROKER_URL
         return self
 
     @model_validator(mode="after")

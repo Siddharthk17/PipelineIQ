@@ -5,13 +5,12 @@ authenticated user's pipeline runs, files, and audit history.
 """
 
 import logging
-
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
-from backend.dependencies import get_db_dependency
+from backend.dependencies import get_read_db_dependency
 from backend.models import AuditLog, PipelineRun, PipelineStatus, UploadedFile, User
 from backend.utils.rate_limiter import limiter
 from backend.config import settings
@@ -30,7 +29,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 def get_dashboard_stats(
     request: Request,
     response: Response,
-    db: Session = get_db_dependency(),
+    db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Get dashboard statistics for the current user."""
