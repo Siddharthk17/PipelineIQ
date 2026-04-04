@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     # Sentry
     SENTRY_DSN: str = ""
     ENVIRONMENT: str = "development"
+    MINIO_IMAGE_TAG: str = "latest"
 
     # Email (SMTP)
     SMTP_HOST: str = ""

@@ -580,7 +580,19 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=/api/v1
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
     networks:
       - pipelineiq-network
@@ -631,11 +643,16 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - api
-      - sse-service
-      - frontend
-      - flower
-      - grafana
+      api:
+        condition: service_healthy
+      sse-service:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+      flower:
+        condition: service_started
+      grafana:
+        condition: service_started
     restart: unless-stopped
     networks:
       - pipelineiq-network

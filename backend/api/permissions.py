@@ -6,7 +6,7 @@ allowing owners to grant runner or viewer access to other users.
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
@@ -24,6 +24,12 @@ class GrantPermissionRequest(BaseModel):
 
     user_id: str = Field(..., description="UUID of the user to grant permission to")
     permission_level: str = Field(..., description="Permission level: 'owner', 'runner', or 'viewer'")
+
+    @field_validator("permission_level")
+    @classmethod
+    def normalize_permission_level(cls, value: str) -> str:
+        """Accept case-insensitive permission levels from clients."""
+        return value.strip().lower()
 
 class PermissionResponse(BaseModel):
     """Response for a pipeline permission entry."""

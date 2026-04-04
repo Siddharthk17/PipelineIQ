@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from backend.tests.conftest import build_simple_pipeline_yaml, upload_file
 
 
-
 class TestHealthEndpoint:
     """Tests for the /health endpoint."""
 
@@ -22,7 +21,6 @@ class TestHealthEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] in ("ok", "degraded")
-
 
 
 class TestFileUpload:
@@ -419,3 +417,47 @@ class TestSchemaEndpoints:
         """Schema history for nonexistent file returns 404."""
         response = client.get("/api/v1/files/00000000-0000-0000-0000-000000000000/schema/history")
         assert response.status_code == 404
+
+
+class TestNotificationEndpoints:
+    """Tests for notification configuration endpoints."""
+
+    def test_create_notification_config_accepts_uppercase_type(self, client):
+        """Notification type parsing should be case-insensitive."""
+        response = client.post(
+            "/api/v1/notifications/",
+            json={
+                "type": "EMAIL",
+                "config": {"email_to": "alerts@example.com"},
+                "events": ["pipeline_completed"],
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["type"] == "email"
+
+
+class TestPermissionEndpoints:
+    """Tests for pipeline permission endpoints."""
+
+    def test_grant_permission_accepts_uppercase_level(self, client):
+        """Permission level parsing should be case-insensitive."""
+        register_response = client.post(
+            "/auth/register",
+            json={
+                "email": "runner@example.com",
+                "username": "runner_user",
+                "password": "DemoPass123!",
+            },
+        )
+        assert register_response.status_code == 201
+        target_user_id = register_response.json()["id"]
+
+        response = client.post(
+            "/api/v1/pipelines/sample_pipeline/permissions",
+            json={
+                "user_id": target_user_id,
+                "permission_level": "RUNNER",
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()["permission_level"] == "runner"

@@ -31,6 +31,11 @@ from backend.database import Base
 PgJSONB = JSONB().with_variant(JSON(), "sqlite")
 
 
+def _enum_values(enum_class: type[PyEnum]) -> list[str]:
+    """Persist Python Enum values (not names) in database enum columns."""
+    return [member.value for member in enum_class]
+
+
 class PipelineStatus(str, PyEnum):
     """Lifecycle states for a pipeline run."""
 
@@ -406,7 +411,13 @@ class NotificationConfig(Base):
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     type: Mapped[NotificationType] = mapped_column(
-        SQLEnum(NotificationType), nullable=False
+        SQLEnum(
+            NotificationType,
+            name="notificationtype",
+            values_callable=_enum_values,
+            validate_strings=True,
+        ),
+        nullable=False,
     )
     config = mapped_column(PgJSONB, nullable=False, default=dict)
     events = mapped_column(PgJSONB, nullable=False, default=lambda: ["pipeline_completed", "pipeline_failed"])
@@ -429,7 +440,13 @@ class PipelinePermission(Base):
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     permission_level: Mapped[PermissionLevel] = mapped_column(
-        SQLEnum(PermissionLevel), nullable=False
+        SQLEnum(
+            PermissionLevel,
+            name="permissionlevel",
+            values_callable=_enum_values,
+            validate_strings=True,
+        ),
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

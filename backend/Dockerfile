@@ -20,6 +20,8 @@ COPY alembic.ini /app/alembic.ini
 # Create upload/data directories and expose tests at /app/tests for compose exec parity
 RUN mkdir -p /tmp/uploads /app/data /app/uploads && \
     ln -sfn /app/backend/tests /app/tests && \
+    ln -sfn /app/backend/scripts /app/scripts && \
+    ln -sfn /app/backend/celery_app.py /app/celery_app.py && \
     chown -R appuser:appuser /app /tmp/uploads
 
 # Switch to non-root user
@@ -29,5 +31,5 @@ USER appuser
 EXPOSE 8000
 EXPOSE 8001
 
-# Run API with Gunicorn + Uvicorn workers
-CMD ["gunicorn", "backend.main:app", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--worker-connections", "1000", "--max-requests", "10000", "--max-requests-jitter", "1000", "--timeout", "30", "--graceful-timeout", "30", "--bind", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info"]
+# Run migrations, seed data, background worker, then API
+CMD ["sh", "-c", "alembic upgrade head && python scripts/seed_demo.py && celery -A celery_app worker --loglevel=info -D && gunicorn backend.main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 120 --bind 0.0.0.0:${PORT:-8000}"]

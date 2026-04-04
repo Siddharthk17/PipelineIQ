@@ -6,7 +6,7 @@ a test endpoint to verify webhook connectivity.
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
@@ -29,6 +29,12 @@ class CreateNotificationConfigRequest(BaseModel):
         default=["pipeline_completed", "pipeline_failed"],
         description="Events to subscribe to",
     )
+
+    @field_validator("type")
+    @classmethod
+    def normalize_type(cls, value: str) -> str:
+        """Accept case-insensitive notification types from clients."""
+        return value.strip().lower()
 
 class NotificationConfigResponse(BaseModel):
     """Response for a notification config."""
