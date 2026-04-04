@@ -17,8 +17,10 @@ COPY . ./backend/
 # Copy alembic.ini to project root for migration commands
 COPY alembic.ini /app/alembic.ini
 
-# Create upload and data directories (ephemeral storage for cloud deployment)
-RUN mkdir -p /tmp/uploads /app/data /app/uploads && chown -R appuser:appuser /app /tmp/uploads
+# Create upload/data directories and expose tests at /app/tests for compose exec parity
+RUN mkdir -p /tmp/uploads /app/data /app/uploads && \
+    ln -sfn /app/backend/tests /app/tests && \
+    chown -R appuser:appuser /app /tmp/uploads
 
 # Switch to non-root user
 USER appuser

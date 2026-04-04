@@ -103,11 +103,14 @@ def client(test_db: Session, tmp_path) -> TestClient:
     # Patch upload dir to use tmp_path
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()
-    with patch("backend.api.files.settings") as mock_settings, \
-         patch("backend.api.pipelines.execute_pipeline_task") as mock_task:
+    with (
+        patch("backend.api.files.settings") as mock_settings,
+        patch("backend.api.pipelines.execute_pipeline_task") as mock_task,
+    ):
         mock_settings.UPLOAD_DIR = upload_dir
         mock_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
         mock_settings.MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+        mock_settings.MAX_ROWS_PER_FILE = 1000000
         mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
         test_client = TestClient(app)
         test_client._mock_task = mock_task
@@ -129,16 +132,21 @@ def auth_client(test_db: Session, tmp_path) -> TestClient:
 
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()
-    with patch("backend.api.files.settings") as mock_settings, \
-         patch("backend.api.pipelines.execute_pipeline_task") as mock_task:
+    with (
+        patch("backend.api.files.settings") as mock_settings,
+        patch("backend.api.pipelines.execute_pipeline_task") as mock_task,
+    ):
         mock_settings.UPLOAD_DIR = upload_dir
         mock_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
         mock_settings.MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+        mock_settings.MAX_ROWS_PER_FILE = 1000000
         mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
         test_client = TestClient(app)
         yield test_client
 
     app.dependency_overrides.clear()
+
+
 @pytest.fixture()
 def sample_sales_df() -> pd.DataFrame:
     """Deterministic 20-row sales DataFrame for testing.
@@ -146,83 +154,209 @@ def sample_sales_df() -> pd.DataFrame:
     8 delivered, 6 cancelled, 6 pending.
     Columns: order_id, customer_id, amount, status, region, date.
     """
-    return pd.DataFrame({
-        "order_id": list(range(1001, 1021)),
-        "customer_id": [
-            "C001", "C002", "C003", "C004", "C005",
-            "C001", "C002", "C003", "C004", "C005",
-            "C006", "C007", "C008", "C009", "C010",
-            "C006", "C007", "C008", "C009", "C010",
-        ],
-        "amount": [
-            150.0, 250.0, 350.0, 100.0, 200.0,
-            300.0, 175.0, 225.0, 275.0, 125.0,
-            450.0, 550.0, 150.0, 350.0, 250.0,
-            175.0, 325.0, 425.0, 50.0, 75.0,
-        ],
-        "status": [
-            "delivered", "delivered", "cancelled", "delivered", "pending",
-            "delivered", "cancelled", "pending", "delivered", "cancelled",
-            "pending", "delivered", "cancelled", "pending", "delivered",
-            "cancelled", "pending", "delivered", "cancelled", "pending",
-        ],
-        "region": [
-            "North", "South", "East", "West", "North",
-            "South", "East", "West", "North", "South",
-            "East", "West", "North", "South", "East",
-            "West", "North", "South", "East", "West",
-        ],
-        "date": [
-            "2024-01-05", "2024-01-06", "2024-01-07", "2024-01-08", "2024-01-09",
-            "2024-01-10", "2024-01-11", "2024-01-12", "2024-01-13", "2024-01-14",
-            "2024-01-15", "2024-01-16", "2024-01-17", "2024-01-18", "2024-01-19",
-            "2024-01-20", "2024-01-21", "2024-01-22", "2024-01-23", "2024-01-24",
-        ],
-    })
+    return pd.DataFrame(
+        {
+            "order_id": list(range(1001, 1021)),
+            "customer_id": [
+                "C001",
+                "C002",
+                "C003",
+                "C004",
+                "C005",
+                "C001",
+                "C002",
+                "C003",
+                "C004",
+                "C005",
+                "C006",
+                "C007",
+                "C008",
+                "C009",
+                "C010",
+                "C006",
+                "C007",
+                "C008",
+                "C009",
+                "C010",
+            ],
+            "amount": [
+                150.0,
+                250.0,
+                350.0,
+                100.0,
+                200.0,
+                300.0,
+                175.0,
+                225.0,
+                275.0,
+                125.0,
+                450.0,
+                550.0,
+                150.0,
+                350.0,
+                250.0,
+                175.0,
+                325.0,
+                425.0,
+                50.0,
+                75.0,
+            ],
+            "status": [
+                "delivered",
+                "delivered",
+                "cancelled",
+                "delivered",
+                "pending",
+                "delivered",
+                "cancelled",
+                "pending",
+                "delivered",
+                "cancelled",
+                "pending",
+                "delivered",
+                "cancelled",
+                "pending",
+                "delivered",
+                "cancelled",
+                "pending",
+                "delivered",
+                "cancelled",
+                "pending",
+            ],
+            "region": [
+                "North",
+                "South",
+                "East",
+                "West",
+                "North",
+                "South",
+                "East",
+                "West",
+                "North",
+                "South",
+                "East",
+                "West",
+                "North",
+                "South",
+                "East",
+                "West",
+                "North",
+                "South",
+                "East",
+                "West",
+            ],
+            "date": [
+                "2024-01-05",
+                "2024-01-06",
+                "2024-01-07",
+                "2024-01-08",
+                "2024-01-09",
+                "2024-01-10",
+                "2024-01-11",
+                "2024-01-12",
+                "2024-01-13",
+                "2024-01-14",
+                "2024-01-15",
+                "2024-01-16",
+                "2024-01-17",
+                "2024-01-18",
+                "2024-01-19",
+                "2024-01-20",
+                "2024-01-21",
+                "2024-01-22",
+                "2024-01-23",
+                "2024-01-24",
+            ],
+        }
+    )
 
 
 @pytest.fixture()
 def sample_customers_df() -> pd.DataFrame:
     """Deterministic 10-row customers DataFrame for testing."""
-    return pd.DataFrame({
-        "customer_id": [
-            "C001", "C002", "C003", "C004", "C005",
-            "C006", "C007", "C008", "C009", "C010",
-        ],
-        "customer_name": [
-            "Alice Johnson", "Bob Smith", "Charlie Brown", "Diana Ross",
-            "Eve Wilson", "Frank Miller", "Grace Lee", "Henry Davis",
-            "Ivy Chen", "Jack Taylor",
-        ],
-        "email": [
-            "alice@example.com", "bob@example.com", "charlie@example.com",
-            "diana@example.com", "eve@example.com", "frank@example.com",
-            "grace@example.com", "henry@example.com", "ivy@example.com",
-            "jack@example.com",
-        ],
-        "region": [
-            "North", "South", "East", "West", "North",
-            "South", "East", "West", "North", "South",
-        ],
-        "tier": [
-            "gold", "silver", "bronze", "gold", "silver",
-            "bronze", "gold", "silver", "bronze", "gold",
-        ],
-    })
+    return pd.DataFrame(
+        {
+            "customer_id": [
+                "C001",
+                "C002",
+                "C003",
+                "C004",
+                "C005",
+                "C006",
+                "C007",
+                "C008",
+                "C009",
+                "C010",
+            ],
+            "customer_name": [
+                "Alice Johnson",
+                "Bob Smith",
+                "Charlie Brown",
+                "Diana Ross",
+                "Eve Wilson",
+                "Frank Miller",
+                "Grace Lee",
+                "Henry Davis",
+                "Ivy Chen",
+                "Jack Taylor",
+            ],
+            "email": [
+                "alice@example.com",
+                "bob@example.com",
+                "charlie@example.com",
+                "diana@example.com",
+                "eve@example.com",
+                "frank@example.com",
+                "grace@example.com",
+                "henry@example.com",
+                "ivy@example.com",
+                "jack@example.com",
+            ],
+            "region": [
+                "North",
+                "South",
+                "East",
+                "West",
+                "North",
+                "South",
+                "East",
+                "West",
+                "North",
+                "South",
+            ],
+            "tier": [
+                "gold",
+                "silver",
+                "bronze",
+                "gold",
+                "silver",
+                "bronze",
+                "gold",
+                "silver",
+                "bronze",
+                "gold",
+            ],
+        }
+    )
 
 
 @pytest.fixture()
 def sample_products_df() -> pd.DataFrame:
     """Deterministic 5-row products DataFrame for testing."""
-    return pd.DataFrame({
-        "product_id": [101, 102, 103, 104, 105],
-        "product_name": [
-            "Widget A", "Widget B", "Gadget C", "Gadget D", "Tool E",
-        ],
-        "category": ["widgets", "widgets", "gadgets", "gadgets", "tools"],
-        "price": [49.99, 99.99, 149.99, 199.99, 29.99],
-    })
-
+    return pd.DataFrame(
+        {
+            "product_id": [101, 102, 103, 104, 105],
+            "product_name": [
+                "Widget A",
+                "Widget B",
+                "Gadget C",
+                "Gadget D",
+                "Tool E",
+            ],
+            "category": ["widgets", "widgets", "gadgets", "gadgets", "tools"],
+            "price": [49.99, 99.99, 149.99, 199.99, 29.99],
+        }
+    )
 
 
 @pytest.fixture()
@@ -243,15 +377,15 @@ def sample_json_bytes() -> bytes:
     return b'[{"id":1,"name":"Alice","value":100},{"id":2,"name":"Bob","value":200}]'
 
 
-
 @pytest.fixture()
 def lineage_recorder() -> LineageRecorder:
     """Fresh LineageRecorder instance for each test."""
     return LineageRecorder()
 
 
-
-def upload_file(client: TestClient, csv_bytes: bytes, filename: str = "test.csv") -> str:
+def upload_file(
+    client: TestClient, csv_bytes: bytes, filename: str = "test.csv"
+) -> str:
     """Upload a CSV file and return its file_id."""
     response = client.post(
         "/api/v1/files/upload",

@@ -69,6 +69,7 @@ services:
       DATABASES_DBNAME: pipelineiq
       DATABASES_USER: ${POSTGRES_USER}
       DATABASES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASES_CLIENT_ALIAS_USER: pipelineiq_user
       PGBOUNCER_LISTEN_PORT: "5432"
       PGBOUNCER_POOL_MODE: transaction
       PGBOUNCER_MAX_CLIENT_CONN: "1000"
@@ -103,6 +104,7 @@ services:
       DATABASES_DBNAME: pipelineiq
       DATABASES_USER: ${POSTGRES_USER}
       DATABASES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASES_CLIENT_ALIAS_USER: pipelineiq_user
       PGBOUNCER_LISTEN_PORT: "5432"
       PGBOUNCER_POOL_MODE: transaction
       PGBOUNCER_MAX_CLIENT_CONN: "1000"
@@ -143,9 +145,9 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
-      - REDIS_CACHE_URL=redis://redis-cache:6379/0
-      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://redis-cache:6381/0
+      - REDIS_YJS_URL=redis://redis-yjs:6382/0
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -165,8 +167,22 @@ services:
       - uploads:/app/uploads
       - ./backend:/app/backend
       - ./alembic.ini:/app/alembic.ini
+      - ./nginx/conf.d:/app/nginx/conf.d:ro
+      - ./docker-compose.yml:/app/docker-compose.yml:ro
+      - ./nginx:/app/nginx:ro
     ports:
       - "8000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
     networks:
       - pipelineiq-network
@@ -195,9 +211,9 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
-      - REDIS_CACHE_URL=redis://redis-cache:6379/0
-      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://redis-cache:6381/0
+      - REDIS_YJS_URL=redis://redis-yjs:6382/0
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -215,6 +231,17 @@ services:
         condition: service_healthy
     ports:
       - "8001:8001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     volumes:
       - ./backend:/app/backend
       - ./alembic.ini:/app/alembic.ini
@@ -242,9 +269,9 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
-      - REDIS_CACHE_URL=redis://redis-cache:6379/0
-      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://redis-cache:6381/0
+      - REDIS_YJS_URL=redis://redis-yjs:6382/0
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -263,6 +290,17 @@ services:
     volumes:
       - uploads:/app/uploads
       - ./backend:/app/backend
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import pathlib,sys; sys.exit(0 if b'celery' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
     networks:
       - pipelineiq-network
@@ -287,9 +325,9 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
-      - REDIS_CACHE_URL=redis://redis-cache:6379/0
-      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://redis-cache:6381/0
+      - REDIS_YJS_URL=redis://redis-yjs:6382/0
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -308,6 +346,17 @@ services:
     volumes:
       - uploads:/app/uploads
       - ./backend:/app/backend
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import pathlib,sys; sys.exit(0 if b'celery' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
     networks:
       - pipelineiq-network
@@ -332,9 +381,9 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
-      - REDIS_CACHE_URL=redis://redis-cache:6379/0
-      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://redis-cache:6381/0
+      - REDIS_YJS_URL=redis://redis-yjs:6382/0
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -353,6 +402,17 @@ services:
     volumes:
       - uploads:/app/uploads
       - ./backend:/app/backend
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import pathlib,sys; sys.exit(0 if b'celery' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
     networks:
       - pipelineiq-network
@@ -374,9 +434,9 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
-      - REDIS_CACHE_URL=redis://redis-cache:6379/0
-      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://redis-cache:6381/0
+      - REDIS_YJS_URL=redis://redis-yjs:6382/0
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -426,14 +486,15 @@ services:
     container_name: pipelineiq-redis-pubsub
     command: >
       redis-server
+      --port 6380
       --maxmemory 256mb
       --save ""
       --appendonly no
       --loglevel notice
     ports:
-      - "6380:6379"
+      - "6380:6380"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "6380", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -446,17 +507,18 @@ services:
     container_name: pipelineiq-redis-cache
     command: >
       redis-server
+      --port 6381
       --maxmemory 512mb
       --maxmemory-policy allkeys-lru
       --save 60 1000
       --appendonly yes
       --loglevel notice
     ports:
-      - "6381:6379"
+      - "6381:6381"
     volumes:
       - redis_cache_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "6381", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -469,15 +531,16 @@ services:
     container_name: pipelineiq-redis-yjs
     command: >
       redis-server
+      --port 6382
       --maxmemory 128mb
       --appendonly yes
       --loglevel notice
     ports:
-      - "6382:6379"
+      - "6382:6382"
     volumes:
       - redis_yjs_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "6382", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -486,7 +549,7 @@ services:
       - pipelineiq-network
 
   minio:
-    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    image: minio/minio:RELEASE.2024-12-06T15-50-33Z
     container_name: pipelineiq-minio
     command: server /data --console-address ":9001"
     environment:
@@ -498,7 +561,7 @@ services:
     volumes:
       - minio_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      test: ["CMD", "/minio", "--help"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -534,9 +597,9 @@ services:
     environment:
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6379/0
-      - REDIS_CACHE_URL=redis://redis-cache:6379/0
-      - REDIS_YJS_URL=redis://redis-yjs:6379/0
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://redis-cache:6381/0
+      - REDIS_YJS_URL=redis://redis-yjs:6382/0
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq

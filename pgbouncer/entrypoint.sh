@@ -6,6 +6,7 @@ DB_PORT="${DATABASES_PORT:-5432}"
 DB_NAME="${DATABASES_DBNAME:-pipelineiq}"
 DB_USER="${DATABASES_USER:-pipelineiq}"
 DB_PASSWORD="${DATABASES_PASSWORD:-}"
+DB_CLIENT_ALIAS_USER="${DATABASES_CLIENT_ALIAS_USER:-pipelineiq_user}"
 
 LISTEN_PORT="${PGBOUNCER_LISTEN_PORT:-5432}"
 POOL_MODE="${PGBOUNCER_POOL_MODE:-transaction}"
@@ -44,6 +45,9 @@ EOF
 cat > /etc/pgbouncer/userlist.txt <<EOF
 "${DB_USER}" "${DB_PASSWORD}"
 EOF
+if [ "${DB_CLIENT_ALIAS_USER}" != "${DB_USER}" ]; then
+  printf '"%s" "%s"\n' "${DB_CLIENT_ALIAS_USER}" "${DB_PASSWORD}" >> /etc/pgbouncer/userlist.txt
+fi
 
 chown postgres:postgres /etc/pgbouncer/pgbouncer.ini /etc/pgbouncer/userlist.txt
 chmod 600 /etc/pgbouncer/userlist.txt

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
-from backend.database import get_db
+from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User
 from backend.auth import (
     get_password_hash,
@@ -108,7 +108,7 @@ def _user_to_response(user: User) -> UserResponse:
 
 # Endpoints
 @router.post("/register", status_code=201)
-def register(body: RegisterRequest, request: Request, db: Session = Depends(get_db)):
+def register(body: RegisterRequest, request: Request, db: Session = get_write_db_dependency()):
     """Register a new user. First user becomes admin automatically."""
     # Check uniqueness
     existing = db.query(User).filter(
@@ -142,7 +142,7 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     return _user_to_response(user)
 
 @router.post("/login")
-def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, db: Session = get_write_db_dependency()):
     """Authenticate and return a JWT access token."""
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not verify_password(body.password, user.hashed_password):
@@ -182,7 +182,7 @@ async def logout(current_user: User = Depends(get_current_user)):
 @router.get("/users")
 async def list_users(
     current_user: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: Session = get_read_db_dependency(),
 ):
     """List all users (admin only)."""
     users = db.query(User).order_by(User.created_at).all()
@@ -193,7 +193,7 @@ async def update_user_role(
     user_id: str,
     body: RoleUpdateRequest,
     current_user: User = Depends(get_current_admin),
-    db: Session = Depends(get_db),
+    db: Session = get_write_db_dependency(),
 ):
     """Update a user's role (admin only)."""
     user = db.query(User).filter(User.id == user_id).first()

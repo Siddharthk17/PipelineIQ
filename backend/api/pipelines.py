@@ -89,7 +89,7 @@ def validate_pipeline(
     request: Request,
     body: ValidatePipelineRequest,
     response: Response,
-    db: Session = get_read_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> ValidatePipelineResponse:
     """Validate a pipeline configuration against registered files."""
@@ -129,7 +129,7 @@ def plan_pipeline(
     request: Request,
     body: ValidatePipelineRequest,
     response: Response,
-    db: Session = get_read_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """Generate a dry-run execution plan for a pipeline."""
@@ -437,7 +437,7 @@ def preview_pipeline_step(
     body: ValidatePipelineRequest,
     response: Response,
     step_index: int = 0,
-    db: Session = get_read_db_dependency(),
+    db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Preview sample data at a specific step of a pipeline."""
