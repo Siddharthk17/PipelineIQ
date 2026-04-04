@@ -155,7 +155,10 @@ jobs:
         run: |
           cat > .env << EOF
           DATABASE_URL=postgresql://pipelineiq:ci_password@db:5432/pipelineiq
+          POSTGRES_USER=pipelineiq
           POSTGRES_PASSWORD=ci_password
+          POSTGRES_DB=pipelineiq
+          MINIO_IMAGE_TAG=latest
           REDIS_URL=redis://redis:6379/0
           SECRET_KEY=ci_secret_key_for_testing_only
           UPLOAD_DIR=/app/uploads

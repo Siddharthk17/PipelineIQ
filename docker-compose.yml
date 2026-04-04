@@ -549,7 +549,8 @@ services:
       - pipelineiq-network
 
   minio:
-    image: minio/minio:RELEASE.2024-12-06T15-50-33Z
+    image: minio/minio:${MINIO_IMAGE_TAG:-latest}
+    profiles: ["storage"]
     container_name: pipelineiq-minio
     command: server /data --console-address ":9001"
     environment:
