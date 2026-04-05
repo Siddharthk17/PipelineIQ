@@ -7,12 +7,13 @@ import re
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User
+from backend.utils.uuid_utils import as_uuid
 from backend.auth import (
     get_password_hash,
     verify_password,
@@ -22,10 +23,13 @@ from backend.auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
 from backend.services.audit_service import log_action
+from backend.utils.rate_limiter import limiter
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Authentication"])
+
 
 # Request / Response schemas
 class RegisterRequest(BaseModel):
@@ -63,9 +67,11 @@ class RegisterRequest(BaseModel):
             raise ValueError("Password must contain at least one special character")
         return v
 
+
 class LoginRequest(BaseModel):
     email: str
     password: str
+
 
 class UserResponse(BaseModel):
     id: str
@@ -78,11 +84,13 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
 class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
     user: UserResponse
+
 
 class RoleUpdateRequest(BaseModel):
     role: str
@@ -94,7 +102,9 @@ class RoleUpdateRequest(BaseModel):
             raise ValueError("Role must be 'admin' or 'viewer'")
         return v
 
+
 # Helpers
+
 
 def _user_to_response(user: User) -> UserResponse:
     return UserResponse(
@@ -106,14 +116,23 @@ def _user_to_response(user: User) -> UserResponse:
         created_at=user.created_at.isoformat() if user.created_at else "",
     )
 
+
 # Endpoints
 @router.post("/register", status_code=201)
-def register(body: RegisterRequest, request: Request, db: Session = get_write_db_dependency()):
+@limiter.limit("5/minute")
+def register(
+    request: Request,
+    response: Response,
+    body: RegisterRequest,
+    db: Session = get_write_db_dependency(),
+):
     """Register a new user. First user becomes admin automatically."""
     # Check uniqueness
-    existing = db.query(User).filter(
-        (User.email == body.email) | (User.username == body.username)
-    ).first()
+    existing = (
+        db.query(User)
+        .filter((User.email == body.email) | (User.username == body.username))
+        .first()
+    )
     if existing:
         field = "email" if existing.email == body.email else "username"
         raise HTTPException(
@@ -136,13 +155,27 @@ def register(body: RegisterRequest, request: Request, db: Session = get_write_db
     db.refresh(user)
     logger.info("User registered: %s (role=%s)", user.username, user.role)
 
-    log_action(db, "user_registered", user_id=user.id, resource_type="user",
-               resource_id=user.id, details={"email": user.email, "role": user.role}, request=request)
+    log_action(
+        db,
+        "user_registered",
+        user_id=user.id,
+        resource_type="user",
+        resource_id=user.id,
+        details={"email": user.email, "role": user.role},
+        request=request,
+    )
 
     return _user_to_response(user)
 
+
 @router.post("/login")
-def login(body: LoginRequest, request: Request, db: Session = get_write_db_dependency()):
+@limiter.limit("5/minute")
+def login(
+    request: Request,
+    response: Response,
+    body: LoginRequest,
+    db: Session = get_write_db_dependency(),
+):
     """Authenticate and return a JWT access token."""
     user = db.query(User).filter(User.email == body.email).first()
     if not user or not verify_password(body.password, user.hashed_password):
@@ -159,8 +192,15 @@ def login(body: LoginRequest, request: Request, db: Session = get_write_db_depen
     token = create_access_token(data={"sub": str(user.id), "role": user.role})
     logger.info("User logged in: %s", user.username)
 
-    log_action(db, "user_login", user_id=user.id, resource_type="user",
-               resource_id=user.id, details={"email": user.email}, request=request)
+    log_action(
+        db,
+        "user_login",
+        user_id=user.id,
+        resource_type="user",
+        resource_id=user.id,
+        details={"email": user.email},
+        request=request,
+    )
 
     return LoginResponse(
         access_token=token,
@@ -168,16 +208,19 @@ def login(body: LoginRequest, request: Request, db: Session = get_write_db_depen
         user=_user_to_response(user),
     )
 
+
 @router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get the current authenticated user's profile."""
     return _user_to_response(current_user)
+
 
 @router.post("/logout")
 async def logout(current_user: User = Depends(get_current_user)):
     """Logout endpoint (client-side token removal)."""
     logger.info("User logged out: %s", current_user.username)
     return {"message": "Logged out successfully"}
+
 
 @router.get("/users")
 async def list_users(
@@ -188,6 +231,7 @@ async def list_users(
     users = db.query(User).order_by(User.created_at).all()
     return [_user_to_response(u) for u in users]
 
+
 @router.patch("/users/{user_id}/role")
 async def update_user_role(
     user_id: str,
@@ -196,11 +240,16 @@ async def update_user_role(
     db: Session = get_write_db_dependency(),
 ):
     """Update a user's role (admin only)."""
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == as_uuid(user_id)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     user.role = body.role
     db.commit()
     db.refresh(user)
-    logger.info("User %s role updated to %s by %s", user.username, body.role, current_user.username)
+    logger.info(
+        "User %s role updated to %s by %s",
+        user.username,
+        body.role,
+        current_user.username,
+    )
     return _user_to_response(user)
