@@ -13,7 +13,7 @@ Node naming convention (consistent everywhere):
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 
@@ -136,34 +136,45 @@ class LineageRecorder:
         file_node = _file_node_id(file_id)
         step_node = _step_node_id(step_name)
 
-        self._add_node(file_node, {
-            "node_type": "source_file",
-            "label": file_name,
-            "step_name": step_name,
-            "file_name": file_name,
-        })
-        self._add_node(step_node, {
-            "node_type": "step",
-            "label": f"Load: {file_name}",
-            "step_name": step_name,
-            "step_type": "load",
-        })
+        self._add_node(
+            file_node,
+            {
+                "node_type": "source_file",
+                "label": file_name,
+                "step_name": step_name,
+                "file_name": file_name,
+            },
+        )
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Load: {file_name}",
+                "step_name": step_name,
+                "step_type": "load",
+            },
+        )
         self.graph.add_edge(file_node, step_node)
 
         for col in columns:
             col_node = _col_node_id(step_name, col)
-            self._add_node(col_node, {
-                "node_type": "source_column",
-                "label": col,
-                "step_name": step_name,
-                "column_name": col,
-                "data_type": dtypes.get(col, "unknown"),
-            })
+            self._add_node(
+                col_node,
+                {
+                    "node_type": "source_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                    "data_type": dtypes.get(col, "unknown"),
+                },
+            )
             self.graph.add_edge(step_node, col_node)
 
         logger.debug(
             "Recorded load: file=%s, step=%s, columns=%d",
-            file_name, step_name, len(columns),
+            file_name,
+            step_name,
+            len(columns),
         )
 
     def record_passthrough(
@@ -175,28 +186,36 @@ class LineageRecorder:
     ) -> None:
         """Record a step that passes all columns through unchanged (filter/sort)."""
         step_node = _step_node_id(step_name)
-        self._add_node(step_node, {
-            "node_type": "step",
-            "label": f"{step_type.title()}: {step_name}",
-            "step_name": step_name,
-            "step_type": step_type,
-        })
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"{step_type.title()}: {step_name}",
+                "step_name": step_name,
+                "step_type": step_type,
+            },
+        )
 
         for col in columns:
             input_col = _col_node_id(input_step, col)
             output_col = _col_node_id(step_name, col)
-            self._add_node(output_col, {
-                "node_type": "output_column",
-                "label": col,
-                "step_name": step_name,
-                "column_name": col,
-            })
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
             self.graph.add_edge(input_col, step_node)
             self.graph.add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded passthrough: step=%s, type=%s, columns=%d",
-            step_name, step_type, len(columns),
+            step_name,
+            step_type,
+            len(columns),
         )
 
     def record_projection(
@@ -212,22 +231,28 @@ class LineageRecorder:
         from the lineage graph.
         """
         step_node = _step_node_id(step_name)
-        self._add_node(step_node, {
-            "node_type": "step",
-            "label": f"Select: {step_name}",
-            "step_name": step_name,
-            "step_type": "select",
-        })
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Select: {step_name}",
+                "step_name": step_name,
+                "step_type": "select",
+            },
+        )
 
         for col in kept_columns:
             input_col = _col_node_id(input_step, col)
             output_col = _col_node_id(step_name, col)
-            self._add_node(output_col, {
-                "node_type": "output_column",
-                "label": col,
-                "step_name": step_name,
-                "column_name": col,
-            })
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
             self.graph.add_edge(input_col, step_node)
             self.graph.add_edge(step_node, output_col)
 
@@ -238,7 +263,9 @@ class LineageRecorder:
 
         logger.debug(
             "Recorded projection: step=%s, kept=%d, dropped=%d",
-            step_name, len(kept_columns), len(dropped_columns),
+            step_name,
+            len(kept_columns),
+            len(dropped_columns),
         )
 
     def record_rename(
@@ -254,29 +281,37 @@ class LineageRecorder:
         Unchanged columns pass through with the same name.
         """
         step_node = _step_node_id(step_name)
-        self._add_node(step_node, {
-            "node_type": "step",
-            "label": f"Rename: {step_name}",
-            "step_name": step_name,
-            "step_type": "rename",
-        })
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Rename: {step_name}",
+                "step_name": step_name,
+                "step_type": "rename",
+            },
+        )
 
         for col in all_columns:
             input_col = _col_node_id(input_step, col)
             new_name = rename_mapping.get(col, col)
             output_col = _col_node_id(step_name, new_name)
-            self._add_node(output_col, {
-                "node_type": "output_column",
-                "label": new_name,
-                "step_name": step_name,
-                "column_name": new_name,
-            })
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": new_name,
+                    "step_name": step_name,
+                    "column_name": new_name,
+                },
+            )
             self.graph.add_edge(input_col, step_node)
             self.graph.add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded rename: step=%s, renamed=%d, total=%d",
-            step_name, len(rename_mapping), len(all_columns),
+            step_name,
+            len(rename_mapping),
+            len(all_columns),
         )
 
     def record_join(
@@ -296,29 +331,38 @@ class LineageRecorder:
         edges are marked with an is_join_key attribute.
         """
         step_node = _step_node_id(step_name)
-        self._add_node(step_node, {
-            "node_type": "step",
-            "label": f"Join ({how}): {step_name}",
-            "step_name": step_name,
-            "step_type": "join",
-        })
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Join ({how}): {step_name}",
+                "step_name": step_name,
+                "step_type": "join",
+            },
+        )
 
         self._connect_join_side(left_step, left_cols, step_node, join_key)
         self._connect_join_side(right_step, right_cols, step_node, join_key)
 
         for col in output_cols:
             output_col = _col_node_id(step_name, col)
-            self._add_node(output_col, {
-                "node_type": "output_column",
-                "label": col,
-                "step_name": step_name,
-                "column_name": col,
-            })
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
             self.graph.add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded join: step=%s, how=%s, key=%s, output_cols=%d",
-            step_name, how, join_key, len(output_cols),
+            step_name,
+            how,
+            join_key,
+            len(output_cols),
         )
 
     def record_aggregate(
@@ -331,39 +375,73 @@ class LineageRecorder:
     ) -> None:
         """Record a group-by aggregation step.
 
-        Group-by columns pass through. Aggregated columns create new
-        output column nodes with computed names.
+        Group-by columns pass through with explicit input→output edges.
+        Aggregated columns create new output column nodes with explicit
+        edges from the source input column to preserve lineage.
         """
         step_node = _step_node_id(step_name)
-        self._add_node(step_node, {
-            "node_type": "step",
-            "label": f"Aggregate: {step_name}",
-            "step_name": step_name,
-            "step_type": "aggregate",
-        })
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Aggregate: {step_name}",
+                "step_name": step_name,
+                "step_type": "aggregate",
+            },
+        )
+
+        # Build a mapping of output column name → input column name
+        # for lineage tracing
+        output_to_input: Dict[str, str] = {}
 
         # Group-by columns pass through
         for col in group_by_cols:
             input_col = _col_node_id(input_step, col)
+            output_col = _col_node_id(step_name, col)
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
             self.graph.add_edge(input_col, step_node)
+            self.graph.add_edge(step_node, output_col)
+            output_to_input[col] = col
 
+        # Aggregated columns: create output nodes and track input mapping
         for agg in aggregations:
-            input_col = _col_node_id(input_step, agg["column"])
+            input_col_name = agg["column"]
+            func_name = agg["function"]
+            input_col = _col_node_id(input_step, input_col_name)
             self.graph.add_edge(input_col, step_node)
+            # Output column name is typically {column}_{function}
+            output_col_name = f"{input_col_name}_{func_name}"
+            output_to_input[output_col_name] = input_col_name
 
+        # Create output column nodes with edges from step
         for col in output_cols:
             output_col = _col_node_id(step_name, col)
-            self._add_node(output_col, {
-                "node_type": "output_column",
-                "label": col,
-                "step_name": step_name,
-                "column_name": col,
-            })
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                    "source_column": output_to_input.get(col, col),
+                },
+            )
             self.graph.add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded aggregate: step=%s, group_by=%d, aggs=%d, output=%d",
-            step_name, len(group_by_cols), len(aggregations), len(output_cols),
+            step_name,
+            len(group_by_cols),
+            len(aggregations),
+            len(output_cols),
         )
 
     def record_save(
@@ -381,18 +459,24 @@ class LineageRecorder:
         step_node = _step_node_id(step_name)
         output_file = _output_node_id(step_name, filename)
 
-        self._add_node(step_node, {
-            "node_type": "step",
-            "label": f"Save: {filename}",
-            "step_name": step_name,
-            "step_type": "save",
-        })
-        self._add_node(output_file, {
-            "node_type": "output_file",
-            "label": filename,
-            "step_name": step_name,
-            "file_name": filename,
-        })
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Save: {filename}",
+                "step_name": step_name,
+                "step_type": "save",
+            },
+        )
+        self._add_node(
+            output_file,
+            {
+                "node_type": "output_file",
+                "label": filename,
+                "step_name": step_name,
+                "file_name": filename,
+            },
+        )
 
         for col in columns:
             input_col = _col_node_id(input_step, col)
@@ -402,7 +486,9 @@ class LineageRecorder:
 
         logger.debug(
             "Recorded save: step=%s, filename=%s, columns=%d",
-            step_name, filename, len(columns),
+            step_name,
+            filename,
+            len(columns),
         )
 
     def get_column_ancestry(
@@ -410,48 +496,110 @@ class LineageRecorder:
     ) -> ColumnLineage:
         """Trace a column backward to its source file.
 
-        Traverses the graph from the output column node backward
-        through all ancestors, collecting transformation steps and
-        identifying the original source file and column.
+        Uses BFS backward from the target column node, following
+        predecessor edges through step nodes to find the original
+        source file and column.
         """
         target_node = _col_node_id(output_step_name, column_name)
-        ancestors = nx.ancestors(self.graph, target_node)
+        if target_node not in self.graph:
+            return ColumnLineage(
+                column_name=column_name,
+                source_file="unknown",
+                source_column=column_name,
+                transformation_chain=[],
+                total_steps=0,
+            )
 
         source_file = "unknown"
         source_column = column_name
         transformation_chain: List[TransformationStep] = []
+        visited: Set[str] = set()
+        visited.add(target_node)
 
-        step_ancestors = [
-            node for node in ancestors
-            if self.graph.nodes[node].get("node_type") == "step"
-        ]
+        # BFS: queue contains nodes to explore
+        queue: List[str] = [target_node]
+        step_nodes_seen: List[str] = []
+        source_col_nodes: List[str] = []
 
-        topo_order = list(nx.topological_sort(self.graph))
+        while queue:
+            node = queue.pop(0)
+            attrs = self.graph.nodes[node]
+            node_type = attrs.get("node_type", "")
+
+            if node_type == "source_file":
+                if source_file == "unknown":
+                    source_file = attrs.get("label", "unknown")
+                # Don't continue - there may be no predecessors anyway
+
+            if node_type == "source_column":
+                source_col_nodes.append(node)
+                # Don't continue - follow predecessors to find the step node
+
+            if node_type == "step":
+                if node not in step_nodes_seen:
+                    step_nodes_seen.append(node)
+
+            # Follow all predecessor edges
+            for pred in self.graph.predecessors(node):
+                if pred not in visited:
+                    visited.add(pred)
+                    queue.append(pred)
+
+        # Build transformation chain in topological order
+        try:
+            topo_order = list(nx.topological_sort(self.graph))
+        except nx.NetworkXUnfeasible:
+            logger.warning(
+                "Lineage graph contains cycles — ancestry trace may be incomplete"
+            )
+            topo_order = list(self.graph.nodes())
         topo_index = {node: idx for idx, node in enumerate(topo_order)}
-        step_ancestors.sort(key=lambda n: topo_index.get(n, 0))
+        step_nodes_seen.sort(key=lambda n: topo_index.get(n, 0))
 
-        for step_node in step_ancestors:
+        for step_node in step_nodes_seen:
             attrs = self.graph.nodes[step_node]
-            transformation_chain.append(TransformationStep(
-                step_name=attrs.get("step_name", ""),
-                step_type=attrs.get("step_type", ""),
-                detail=attrs.get("label", ""),
-            ))
+            transformation_chain.append(
+                TransformationStep(
+                    step_name=attrs.get("step_name", ""),
+                    step_type=attrs.get("step_type", ""),
+                    detail=attrs.get("label", ""),
+                )
+            )
 
-        file_ancestors = [
-            node for node in ancestors
-            if self.graph.nodes[node].get("node_type") == "source_file"
-        ]
-        if file_ancestors:
-            source_file = self.graph.nodes[file_ancestors[0]].get("label", "unknown")
-
-        col_ancestors = [
-            node for node in ancestors
-            if self.graph.nodes[node].get("node_type") == "source_column"
-        ]
-        if col_ancestors:
-            col_ancestors.sort(key=lambda n: topo_index.get(n, 0))
-            source_column = self.graph.nodes[col_ancestors[0]].get("column_name", column_name)
+        # Determine source column: prefer the one with matching column_name,
+        # or use the source_column attribute if set (for aggregate steps)
+        if source_col_nodes:
+            # First try to find a source column with matching name
+            matching = [
+                n
+                for n in source_col_nodes
+                if self.graph.nodes[n].get("column_name") == column_name
+            ]
+            if matching:
+                source_column = self.graph.nodes[matching[0]].get(
+                    "column_name", column_name
+                )
+            else:
+                # For aggregate steps, check if any output column has source_column attr
+                # that matches one of our source columns
+                target_attrs = self.graph.nodes.get(target_node, {})
+                src_col = target_attrs.get("source_column")
+                if src_col:
+                    matching_src = [
+                        n
+                        for n in source_col_nodes
+                        if self.graph.nodes[n].get("column_name") == src_col
+                    ]
+                    if matching_src:
+                        source_column = src_col
+                    else:
+                        source_column = self.graph.nodes[source_col_nodes[0]].get(
+                            "column_name", column_name
+                        )
+                else:
+                    source_column = self.graph.nodes[source_col_nodes[0]].get(
+                        "column_name", column_name
+                    )
 
         return ColumnLineage(
             column_name=column_name,
@@ -461,9 +609,102 @@ class LineageRecorder:
             total_steps=len(transformation_chain),
         )
 
-    def get_impact_analysis(
-        self, step_name: str, column_name: str
-    ) -> ImpactAnalysis:
+        source_file = "unknown"
+        source_column = column_name
+        transformation_chain: List[TransformationStep] = []
+        visited: Set[str] = set()
+        visited.add(target_node)
+
+        # BFS: track which column names are "active" at each step
+        # Start with the target column
+        active_columns: Dict[str, str] = {target_node: column_name}
+        step_nodes_seen: List[str] = []
+
+        try:
+            topo_order = list(nx.topological_sort(self.graph))
+        except nx.NetworkXUnfeasible:
+            logger.warning(
+                "Lineage graph contains cycles — ancestry trace may be incomplete"
+            )
+            topo_order = list(self.graph.nodes())
+        topo_index = {node: idx for idx, node in enumerate(topo_order)}
+
+        # Process nodes in reverse topological order (backwards from target)
+        for node in reversed(topo_order):
+            if node not in visited:
+                continue
+            attrs = self.graph.nodes[node]
+            node_type = attrs.get("node_type", "")
+
+            if node_type == "source_file":
+                if source_file == "unknown":
+                    source_file = attrs.get("label", "unknown")
+                continue
+
+            if node_type == "source_column":
+                if source_column == column_name:
+                    source_column = attrs.get("column_name", column_name)
+                continue
+
+            if node_type == "step":
+                if node not in step_nodes_seen:
+                    step_nodes_seen.append(node)
+                # Find predecessor column nodes and mark them as visited
+                for pred in self.graph.predecessors(node):
+                    if pred not in visited:
+                        pred_attrs = self.graph.nodes[pred]
+                        pred_type = pred_attrs.get("node_type", "")
+                        visited.add(pred)
+                        if pred_type == "source_file":
+                            continue
+                        # Column nodes get added to active set
+
+        # Build transformation chain in topological order
+        step_nodes_seen.sort(key=lambda n: topo_index.get(n, 0))
+
+        for step_node in step_nodes_seen:
+            attrs = self.graph.nodes[step_node]
+            transformation_chain.append(
+                TransformationStep(
+                    step_name=attrs.get("step_name", ""),
+                    step_type=attrs.get("step_type", ""),
+                    detail=attrs.get("label", ""),
+                )
+            )
+
+        # Find the source column by tracing back through the graph
+        # Use nx.ancestors to find all reachable source columns,
+        # then pick the one that matches our column's lineage
+        all_ancestors = nx.ancestors(self.graph, target_node)
+        source_col_nodes = [
+            n
+            for n in all_ancestors
+            if self.graph.nodes[n].get("node_type") == "source_column"
+        ]
+        if source_col_nodes:
+            source_col_nodes.sort(key=lambda n: topo_index.get(n, 0))
+            source_column = self.graph.nodes[source_col_nodes[0]].get(
+                "column_name", column_name
+            )
+
+        file_ancestors = [
+            n
+            for n in all_ancestors
+            if self.graph.nodes[n].get("node_type") == "source_file"
+        ]
+        if file_ancestors:
+            file_ancestors.sort(key=lambda n: topo_index.get(n, 0))
+            source_file = self.graph.nodes[file_ancestors[0]].get("label", "unknown")
+
+        return ColumnLineage(
+            column_name=column_name,
+            source_file=source_file,
+            source_column=source_column,
+            transformation_chain=transformation_chain,
+            total_steps=len(transformation_chain),
+        )
+
+    def get_impact_analysis(self, step_name: str, column_name: str) -> ImpactAnalysis:
         """Analyze the downstream impact of a column.
 
         Traverses the graph forward from a column node to find all
@@ -510,13 +751,15 @@ class LineageRecorder:
         if not self.graph.nodes:
             return []
 
-        topo_order = list(nx.topological_sort(self.graph))
+        try:
+            topo_order = list(nx.topological_sort(self.graph))
+        except nx.NetworkXUnfeasible:
+            logger.warning("Lineage graph contains cycles — layout may be suboptimal")
+            topo_order = list(self.graph.nodes())
         layers = self._assign_layers(topo_order)
         return self._position_nodes(layers)
 
-    def _assign_layers(
-        self, topo_order: List[str]
-    ) -> Dict[int, List[str]]:
+    def _assign_layers(self, topo_order: List[str]) -> Dict[int, List[str]]:
         """Assign nodes to layers based on longest path from source."""
         layer_map: Dict[str, int] = {}
         for node in topo_order:
@@ -524,9 +767,9 @@ class LineageRecorder:
             if not predecessors:
                 layer_map[node] = 0
             else:
-                layer_map[node] = max(
-                    layer_map.get(pred, 0) for pred in predecessors
-                ) + 1
+                layer_map[node] = (
+                    max(layer_map.get(pred, 0) for pred in predecessors) + 1
+                )
 
         layers: Dict[int, List[str]] = {}
         for node, layer in layer_map.items():
@@ -534,9 +777,7 @@ class LineageRecorder:
 
         return layers
 
-    def _position_nodes(
-        self, layers: Dict[int, List[str]]
-    ) -> List[ReactFlowNode]:
+    def _position_nodes(self, layers: Dict[int, List[str]]) -> List[ReactFlowNode]:
         """Position nodes in a layered layout."""
         nodes: List[ReactFlowNode] = []
 
@@ -549,19 +790,21 @@ class LineageRecorder:
                 attrs = self.graph.nodes[node_id]
                 node_type = attrs.get("node_type", "step")
 
-                nodes.append(ReactFlowNode(
-                    id=node_id,
-                    type=_NODE_TYPE_MAP.get(node_type, "stepNode"),
-                    data={
-                        "label": attrs.get("label", node_id),
-                        "nodeType": node_type,
-                        "stepName": attrs.get("step_name"),
-                        "columnName": attrs.get("column_name"),
-                        "dataType": attrs.get("data_type"),
-                        "fileName": attrs.get("file_name"),
-                    },
-                    position={"x": x_pos, "y": y_pos},
-                ))
+                nodes.append(
+                    ReactFlowNode(
+                        id=node_id,
+                        type=_NODE_TYPE_MAP.get(node_type, "stepNode"),
+                        data={
+                            "label": attrs.get("label", node_id),
+                            "nodeType": node_type,
+                            "stepName": attrs.get("step_name"),
+                            "columnName": attrs.get("column_name"),
+                            "dataType": attrs.get("data_type"),
+                            "fileName": attrs.get("file_name"),
+                        },
+                        position={"x": x_pos, "y": y_pos},
+                    )
+                )
 
         return nodes
 
@@ -629,6 +872,4 @@ class LineageRecorder:
         for col in columns:
             input_col = _col_node_id(input_step, col)
             is_key = col == join_key
-            self.graph.add_edge(
-                input_col, step_node, is_join_key=is_key
-            )
+            self.graph.add_edge(input_col, step_node, is_join_key=is_key)
