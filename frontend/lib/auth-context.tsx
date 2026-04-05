@@ -35,6 +35,15 @@ function toAuthUser(apiUser: ApiAuthUser, isDemo: boolean): AuthUser {
 const DEMO_EMAIL = "demo@pipelineiq.app";
 const DEMO_PASSWORD = "Demo1234!";
 
+/** SameSite=None requires Secure, which only works over HTTPS.
+ *  In local development (HTTP) the cookie would be silently rejected. */
+const SECURE_COOKIE = typeof window !== "undefined" && window.location.protocol === "https:";
+
+function setAuthCookie(value: string, maxAge: number) {
+  const secure = SECURE_COOKIE ? "; Secure" : "";
+  document.cookie = `piq_auth=${value}; path=/; max-age=${maxAge}; SameSite=Lax${secure}`;
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setTokenState] = useState<string | null>(() => getToken());
@@ -48,14 +57,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         const isDemo = me.email === DEMO_EMAIL;
         setUser(toAuthUser(me, isDemo));
-        document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=None; Secure";
+        setAuthCookie("1", 86400);
       })
       .catch((err) => {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 401) {
           clearToken();
           setTokenState(null);
-          document.cookie = "piq_auth=; path=/; max-age=0; SameSite=None; Secure";
+          setAuthCookie("", 0);
         }
       })
       .finally(() => {
@@ -70,7 +79,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await apiLogin(email, password);
     setToken(res.access_token);
     setTokenState(res.access_token);
-    document.cookie = "piq_auth=1; path=/; max-age=86400; SameSite=None; Secure";
+    setAuthCookie("1", 86400);
     const me = await getMe();
     const isDemo = me.email === DEMO_EMAIL;
     setUser(toAuthUser(me, isDemo));
@@ -84,7 +93,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearToken();
     setTokenState(null);
     setUser(null);
-    document.cookie = "piq_auth=; path=/; max-age=0; SameSite=None; Secure";
+    setAuthCookie("", 0);
   }, []);
 
   return (

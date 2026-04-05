@@ -93,11 +93,15 @@ function swapWidgetsInTree(node: LayoutNode | null, id1: string, id2: string): L
     if (node.id === id2) return { type: 'widget', id: id1 };
     return node;
   }
-  return {
-    ...node,
-    first: swapWidgetsInTree(node.first, id1, id2) as LayoutNode,
-    second: swapWidgetsInTree(node.second, id1, id2) as LayoutNode
-  };
+  const newFirst = swapWidgetsInTree(node.first, id1, id2);
+  const newSecond = swapWidgetsInTree(node.second, id1, id2);
+
+  // If both children became null, collapse the split entirely
+  if (!newFirst && !newSecond) return null;
+  if (!newFirst) return newSecond;
+  if (!newSecond) return newFirst;
+
+  return { ...node, first: newFirst, second: newSecond };
 }
 
 interface WidgetState {

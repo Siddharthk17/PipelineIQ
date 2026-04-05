@@ -28,6 +28,10 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (filtered.length === 0) {
+      if (e.key === "Escape") onClose();
+      return;
+    }
     if (e.key === "ArrowDown") {
       setSelectedIndex(prev => (prev + 1) % filtered.length);
       e.preventDefault();
