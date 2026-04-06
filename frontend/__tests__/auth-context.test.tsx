@@ -152,6 +152,6 @@ describe("AuthProvider", () => {
 
     await user.click(screen.getByTestId("logout"));
     await waitFor(() => expect(screen.getByTestId("user").textContent).toBe("none"));
-    expect(localStorage.getItem("piq_token")).toBeNull();
+    expect(localStorage.getItem("pipelineiq_token")).toBeNull();
   });
 });

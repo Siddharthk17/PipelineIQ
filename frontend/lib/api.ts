@@ -352,6 +352,17 @@ export async function getMe(): Promise<AuthUser> {
   return fetchAuth<AuthUser>("/auth/me");
 }
 
-export function logout(): void {
-  clearToken();
+export async function logout(): Promise<void> {
+  try {
+    await fetchAuth<{ message: string }>("/auth/logout", {
+      method: "POST",
+    });
+  } catch (error) {
+    // Best-effort server logout. Local auth state is still cleared below.
+    if (!(error instanceof ApiError && error.status === 401)) {
+      // Ignore transient network/server failures on logout.
+    }
+  } finally {
+    clearToken();
+  }
 }

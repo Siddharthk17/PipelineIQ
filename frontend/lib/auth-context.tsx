@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { ApiError, getToken, setToken, clearToken, login as apiLogin, getMe, AuthUser as ApiAuthUser } from "./api";
+import { ApiError, getToken, setToken, clearToken, login as apiLogin, logout as apiLogout, getMe, AuthUser as ApiAuthUser } from "./api";
 
 export interface AuthUser {
   id: string;
@@ -94,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setTokenState(null);
     setUser(null);
     setAuthCookie("", 0);
+    void apiLogout();
   }, []);
 
   return (

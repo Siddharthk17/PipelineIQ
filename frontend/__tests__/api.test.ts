@@ -392,9 +392,17 @@ describe("Auth API functions", () => {
     expect((vi.mocked(fetch).mock.calls[0][1]?.headers as Record<string, string>)["Authorization"]).toBe("Bearer my-token");
   });
 
-  it("logout clears the token", () => {
+  it("logout revokes server session and clears the token", async () => {
     setToken("token-to-clear");
-    logout();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ message: "Logged out successfully" }),
+    } as Response);
+
+    await logout();
+
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/auth/logout");
+    expect(vi.mocked(fetch).mock.calls[0][1]).toMatchObject({ method: "POST" });
     expect(getToken()).toBeNull();
   });
 });

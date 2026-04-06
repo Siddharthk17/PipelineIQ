@@ -10,7 +10,7 @@ from uuid import UUID
 import httpx
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
@@ -43,8 +43,7 @@ class WebhookResponse(BaseModel):
     created_at: datetime
     has_secret: bool = False
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DeliveryResponse(BaseModel):
     id: str
@@ -56,8 +55,7 @@ class DeliveryResponse(BaseModel):
     error_message: Optional[str]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TestWebhookResponse(BaseModel):
     delivered: bool
