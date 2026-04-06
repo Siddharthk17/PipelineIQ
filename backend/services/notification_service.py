@@ -39,7 +39,8 @@ def send_slack_notification(webhook_url: str, message: str) -> bool:
         else:
             logger.warning(
                 "Slack notification failed: status=%d body=%s",
-                response.status_code, response.text[:200],
+                response.status_code,
+                response.text[:200],
             )
             return False
     except httpx.HTTPError as exc:
@@ -114,16 +115,16 @@ def notify_pipeline_event(
     run_id: Optional[str] = None,
     status: Optional[str] = None,
     error_message: Optional[str] = None,
+    user_id: str = "",
 ) -> int:
     """Find matching notification configs and send notifications.
 
     Returns the number of notifications successfully sent.
     """
-    configs = (
-        db.query(NotificationConfig)
-        .filter(NotificationConfig.is_active == True)  # noqa: E712
-        .all()
-    )
+    query = db.query(NotificationConfig).filter(NotificationConfig.is_active == True)
+    if user_id:
+        query = query.filter(NotificationConfig.user_id == user_id)
+    configs = query.all()
 
     sent = 0
     for config in configs:
@@ -131,7 +132,9 @@ def notify_pipeline_event(
         if event_type not in events_list:
             continue
 
-        message = _build_message(event_type, pipeline_name, run_id, status, error_message)
+        message = _build_message(
+            event_type, pipeline_name, run_id, status, error_message
+        )
 
         if config.type == NotificationType.SLACK:
             webhook_url = (config.config or {}).get("slack_webhook_url")

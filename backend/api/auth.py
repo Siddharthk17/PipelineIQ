@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User
-from backend.utils.uuid_utils import as_uuid
+from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 from backend.auth import (
     get_password_hash,
     verify_password,
@@ -192,6 +192,17 @@ def login(
     token = create_access_token(data={"sub": str(user.id), "role": user.role})
     logger.info("User logged in: %s", user.username)
 
+    # Set HttpOnly Secure SameSite=Strict cookie for XSS protection
+    response.set_cookie(
+        key="pipelineiq_token",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
+
     log_action(
         db,
         "user_login",
@@ -216,9 +227,21 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/logout")
-async def logout(current_user: User = Depends(get_current_user)):
-    """Logout endpoint (client-side token removal)."""
+async def logout(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+):
+    """Logout endpoint - clears HttpOnly cookie."""
     logger.info("User logged out: %s", current_user.username)
+
+    # Clear the HttpOnly cookie
+    response.delete_cookie(
+        key="pipelineiq_token",
+        path="/",
+        secure=True,
+        samesite="strict",
+    )
+
     return {"message": "Logged out successfully"}
 
 
@@ -240,6 +263,8 @@ async def update_user_role(
     db: Session = get_write_db_dependency(),
 ):
     """Update a user's role (admin only)."""
+    # Validate UUID format and convert for DB query
+    validate_uuid_format(user_id)
     user = db.query(User).filter(User.id == as_uuid(user_id)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

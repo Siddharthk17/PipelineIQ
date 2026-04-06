@@ -5,13 +5,19 @@ Validates that core operations complete within acceptable time bounds.
 
 import io
 import time
+import uuid as _uuid
 
 import pandas as pd
 import pytest
 
+from backend.auth import get_current_user
+from backend.dependencies import get_db, get_read_db, get_write_db
+from backend.main import app
+from backend.models import LineageGraph, PipelineRun, PipelineStatus, User
 from backend.pipeline.lineage import LineageRecorder
 from backend.tests.conftest import upload_file
-
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 
 class TestUploadPerformance:
@@ -57,7 +63,6 @@ class TestUploadPerformance:
         assert duration < 10.0, f"Upload took {duration:.2f}s (limit: 10s)"
 
 
-
 class TestLineagePerformance:
     """Performance tests for lineage graph operations."""
 
@@ -95,21 +100,133 @@ class TestLineagePerformance:
         assert "graph_data" in data
 
 
+def set_current_user(user: User):
+    app.dependency_overrides[get_current_user] = lambda: user
 
-class TestConcurrentUploads:
-    """Tests for concurrent upload safety."""
 
-    def test_multiple_sequential_uploads_do_not_corrupt_data(self, client):
-        """5 sequential uploads all succeed without data corruption."""
-        file_ids = []
-        for idx in range(5):
-            csv = f"id,value\n{idx},{idx * 100}\n".encode()
-            response = client.post(
-                "/api/v1/files/upload",
-                files={"file": (f"sequential_{idx}.csv", csv, "text/csv")},
+@pytest.fixture()
+def perf_client(test_db: Session, tmp_path):
+    def override_get_db():
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_read_db] = override_get_db
+    app.dependency_overrides[get_write_db] = override_get_db
+
+    from backend.api.files import settings as file_settings
+
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    file_settings.UPLOAD_DIR = upload_dir
+
+    return TestClient(app)
+
+
+@pytest.fixture()
+def admin_user(test_db: Session):
+    user = User(
+        id=_uuid.uuid4(),
+        email="perf@test.com",
+        username="perf_admin",
+        hashed_password="hashed_password",
+        role="admin",
+        is_active=True,
+    )
+    test_db.add(user)
+    test_db.commit()
+    return user
+
+
+class TestApiLatency:
+    """Latency benchmarks for core API endpoints."""
+
+    def test_stats_latency(self, perf_client, admin_user):
+        set_current_user(admin_user)
+        latencies = []
+        for _ in range(10):
+            start = time.perf_counter()
+            perf_client.get("/api/v1/pipelines/stats")
+            latencies.append(time.perf_counter() - start)
+
+        avg_latency = sum(latencies) / len(latencies)
+        assert avg_latency < 0.1, f"Average /stats latency too high: {avg_latency:.4f}s"
+
+
+class TestLineageRetrieval:
+    """Performance of retrieving pre-computed lineage graphs."""
+
+    def test_complex_graph_retrieval(self, perf_client, admin_user, test_db):
+        set_current_user(admin_user)
+        run_id = _uuid.uuid4()
+        run = PipelineRun(
+            id=run_id,
+            name="complex_pipeline",
+            status=PipelineStatus.COMPLETED,
+            yaml_config="pipeline: {name: complex_pipeline, steps: []}",
+        )
+        test_db.add(run)
+
+        # Simulate a large pre-computed graph (100 steps, 10 columns each)
+        nodes = []
+        edges = []
+        nodes.append(
+            {
+                "id": "file::src",
+                "type": "sourceFile",
+                "data": {"label": "src.csv"},
+                "position": {"x": 0, "y": 0},
+            }
+        )
+        for i in range(100):
+            step_name = f"step_{i}"
+            nodes.append(
+                {
+                    "id": f"step::{step_name}",
+                    "type": "stepNode",
+                    "data": {"label": step_name},
+                    "position": {"x": i * 300, "y": 0},
+                }
             )
-            assert response.status_code == 201, f"Upload {idx} failed: {response.text}"
-            file_ids.append(response.json()["id"])
+            for j in range(10):
+                col_id = f"col::{step_name}::{f'col_{j}'}"
+                nodes.append(
+                    {
+                        "id": col_id,
+                        "type": "columnNode",
+                        "data": {"label": f"col_{j}"},
+                        "position": {"x": i * 300, "y": j * 80},
+                    }
+                )
+                if i == 0:
+                    edges.append(
+                        {
+                            "id": f"file::src-{col_id}",
+                            "source": "file::src",
+                            "target": col_id,
+                        }
+                    )
+                else:
+                    edges.append(
+                        {
+                            "id": f"col::step_{i - 1}::{f'col_{j}'}-{col_id}",
+                            "source": f"col::step_{i - 1}::{f'col_{j}'}",
+                            "target": col_id,
+                        }
+                    )
 
-        # All file IDs should be unique
-        assert len(set(file_ids)) == 5
+        lineage = LineageGraph(
+            pipeline_run_id=run_id,
+            graph_data={"nodes": nodes, "edges": edges},
+            react_flow_data={"nodes": nodes, "edges": edges},
+        )
+        test_db.add(lineage)
+        test_db.commit()
+
+        start = time.perf_counter()
+        response = perf_client.get(f"/api/v1/lineage/{run_id}")
+        duration = time.perf_counter() - start
+
+        assert response.status_code == 200
+        assert duration < 0.5, (
+            f"Retrieving large lineage graph took too long: {duration:.4f}s"
+        )

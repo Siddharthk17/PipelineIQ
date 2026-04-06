@@ -15,13 +15,14 @@ Every new pipeline step type is incomplete until all three of these simultaneous
 
 1. **Execution method** in `backend/pipeline/steps.py` → `StepExecutor._dispatch`
 2. **Lineage recording method** in `backend/pipeline/lineage.py` → `LineageRecorder`
-3. **Test** in `backend/tests/test_steps.py`
+3. **Test** in `backend/tests/test_steps.py` or `backend/tests/test_new_steps.py`
 
 This is the product guarantee. PipelineIQ's entire value is column-level traceability.
 A step with no lineage recording silently produces a broken lineage graph — no error,
 no exception, just wrong output. A step with no test cannot be trusted.
-The existing 9 step types (`load`, `filter`, `select`, `rename`, `join`, `aggregate`,
-`sort`, `validate`, `save`) all satisfy this contract. New steps must too.
+The existing 14 step types (`load`, `filter`, `select`, `rename`, `join`, `aggregate`,
+`sort`, `validate`, `save`, `pivot`, `unpivot`, `deduplicate`, `fill_nulls`, `sample`)
+all satisfy this contract. New steps must too.
 
 ---
 
@@ -37,12 +38,18 @@ pipelineiq/
 │   ├── tasks/          ← pipeline_tasks.py, webhook_tasks.py, schedule_tasks.py
 │   ├── utils/          ← cache.py, rate_limiter.py, uuid_utils.py, string_utils.py
 │   ├── alembic/        ← 8 migration revisions
-│   ├── tests/          ← 259 tests across 20 executable files
+│   ├── tests/          ← 300+ tests across 25+ executable files
+│   │   ├── unit/
+│   │   │   └── profiling/
+│   │   │       └── test_data_profiler.py ← 19 DataProfiler unit tests
+│   │   ├── test_steps.py         ← 25+ StepExecutor unit tests
+│   │   └── test_new_steps.py     ← 14 new step type tests (pivot, unpivot, deduplicate, fill_nulls, sample)
+│   ├── profiling/      ← Data profiler module (analyzer.py, __init__.py)
 │   ├── scripts/        ← seed_demo.py
 │   ├── sample_data/    ← 4 CSVs + 3 YAML examples
 │   ├── main.py         ← App factory, middleware, health, Sentry init
 │   ├── config.py       ← Pydantic BaseSettings (55+ variables)
-│   ├── models.py       ← ALL 14 SQLAlchemy models (single file, never split)
+│   ├── models.py       ← ALL 15 SQLAlchemy models (single file, never split)
 │   ├── schemas.py      ← ALL Pydantic schemas (single file, never split)
 │   ├── metrics.py      ← ALL Prometheus metric definitions (single file)
 │   ├── auth.py         ← JWT utilities, get_current_user, get_current_admin
@@ -874,6 +881,7 @@ backend/tests/
 ├── integration/
 │   └── test_infrastructure.py ← 6 infra integration checks (gated by RUN_INTEGRATION_TESTS=1)
 ├── test_steps.py         ← 25 StepExecutor unit tests
+├── test_new_steps.py     ← 14 new step type tests (pivot, unpivot, deduplicate, fill_nulls, sample)
 ├── test_validators.py    ← 22 validation check tests
 ├── test_parser.py        ← 18 YAML parsing tests
 ├── test_lineage.py       ← 18 lineage graph tests
@@ -888,11 +896,14 @@ backend/tests/
 ├── test_api.py           ← 37 endpoint integration tests
 ├── test_rate_limiting.py ← 6 rate limit tests
 ├── test_performance.py   ← 5 performance tests
-└── unit/infrastructure/
-    ├── test_celery_queues.py      ← 12 queue/routing invariants
-    ├── test_redis_connections.py  ← 11 Redis role/pool invariants
-    ├── test_sse_lifecycle.py      ← 8 SSE protocol lifecycle invariants
-    └── test_file_upload.py        ← 4 upload-path/ORJSON safety checks
+└── unit/
+    ├── profiling/
+    │   └── test_data_profiler.py ← 19 DataProfiler unit tests
+    └── infrastructure/
+        ├── test_celery_queues.py      ← 12 queue/routing invariants
+        ├── test_redis_connections.py  ← 11 Redis role/pool invariants
+        ├── test_sse_lifecycle.py      ← 8 SSE protocol lifecycle invariants
+        └── test_file_upload.py        ← 4 upload-path/ORJSON safety checks
 ```
 
 Test database is always SQLite via `conftest.py`'s `test_db` fixture.
@@ -1257,7 +1268,7 @@ it("calls setError when API returns 401", () => {
 ```bash
 # Backend
 cd backend
-pytest tests/ -v                              # Latest baseline: 253 passed, 6 skipped
+pytest tests/ -v                              # Latest baseline: 300+ passed, 6 skipped
 python -m py_compile main.py                  # No syntax errors in main
 
 # Frontend

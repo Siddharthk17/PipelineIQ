@@ -153,6 +153,43 @@ def generate_execution_plan(
             estimated_cols = step_columns.get(input_step, [])
             filename = step.get("filename", "output.csv")
             files_written.append(filename)
+        elif step_type == "pivot":
+            rows_in = step_rows.get(input_step, 0) if input_step else 0
+            unique_pivot_values = max(1, int(rows_in * 0.1))
+            rows_out = max(1, int(rows_in / unique_pivot_values))
+            index_cols = step.get("index", [])
+            pivot_col = step.get("columns", "")
+            estimated_cols = index_cols + [
+                f"{pivot_col}_{v}" for v in range(unique_pivot_values)
+            ]
+        elif step_type == "unpivot":
+            rows_in = step_rows.get(input_step, 0) if input_step else 0
+            value_vars = step.get("value_vars", [])
+            rows_out = rows_in * max(1, len(value_vars))
+            id_vars = step.get("id_vars", [])
+            estimated_cols = id_vars + [
+                step.get("var_name", "variable"),
+                step.get("value_name", "value"),
+            ]
+        elif step_type == "deduplicate":
+            rows_in = step_rows.get(input_step, 0) if input_step else 0
+            rows_out = max(1, int(rows_in * 0.85))
+            estimated_cols = step_columns.get(input_step, [])
+        elif step_type == "fill_nulls":
+            rows_in = step_rows.get(input_step, 0) if input_step else 0
+            rows_out = rows_in
+            estimated_cols = step_columns.get(input_step, [])
+        elif step_type == "sample":
+            rows_in = step_rows.get(input_step, 0) if input_step else 0
+            n = step.get("n")
+            fraction = step.get("fraction")
+            if n is not None:
+                rows_out = min(n, rows_in)
+            elif fraction is not None:
+                rows_out = int(rows_in * fraction)
+            else:
+                rows_out = rows_in
+            estimated_cols = step_columns.get(input_step, [])
         else:
             rows_in = step_rows.get(input_step, 0) if input_step else 0
             rows_out = rows_in
@@ -164,20 +201,22 @@ def generate_execution_plan(
         # Duration estimation
         duration = _estimate_duration(step_type, rows_in)
 
-        step_plans.append(StepPlan(
-            step_index=idx,
-            step_name=step_name,
-            step_type=step_type,
-            input_step=input_step,
-            input_file_id=input_file_id,
-            estimated_rows_in=rows_in,
-            estimated_rows_out=rows_out,
-            estimated_columns=estimated_cols,
-            estimated_duration_ms=duration,
-            warnings=step_warnings,
-            will_fail=will_fail,
-            fail_reason=fail_reason,
-        ))
+        step_plans.append(
+            StepPlan(
+                step_index=idx,
+                step_name=step_name,
+                step_type=step_type,
+                input_step=input_step,
+                input_file_id=input_file_id,
+                estimated_rows_in=rows_in,
+                estimated_rows_out=rows_out,
+                estimated_columns=estimated_cols,
+                estimated_duration_ms=duration,
+                warnings=step_warnings,
+                will_fail=will_fail,
+                fail_reason=fail_reason,
+            )
+        )
 
     total_duration = sum(s.estimated_duration_ms for s in step_plans)
     total_rows = sum(s.estimated_rows_in or 0 for s in step_plans)

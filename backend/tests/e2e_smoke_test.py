@@ -100,7 +100,7 @@ pipeline:
         assert "text/csv" in export_resp.headers.get("Content-Type", "")
 
         # 7. Verify Lineage
-        lineage_resp = requests.get(f"{BASE_URL}/lineage/{run_id}")
+        lineage_resp = requests.get(f"{BASE_URL}/lineage/{run_id}", headers=headers)
         assert lineage_resp.status_code == 200
         data = lineage_resp.json()
         assert "nodes" in data

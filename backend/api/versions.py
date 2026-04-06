@@ -5,23 +5,55 @@ Provides access to pipeline version history, diffs, and restore.
 
 import logging
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import PipelineVersion
+from backend.models import PipelineVersion, User, PipelinePermission
 from backend.pipeline.versioning import diff_pipelines, save_version
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/versions", tags=["versions"])
 
+
+def _check_pipeline_permission(
+    db: Session,
+    user: User,
+    pipeline_name: str,
+    required_levels: list[str],
+) -> None:
+    """Verify user has required permission level for the pipeline."""
+    if user.role == "admin":
+        return
+
+    permission = (
+        db.query(PipelinePermission)
+        .filter(
+            PipelinePermission.pipeline_name == pipeline_name,
+            PipelinePermission.user_id == user.id,
+        )
+        .first()
+    )
+
+    if not permission or permission.permission_level not in required_levels:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User lacks required permissions ({', '.join(required_levels)}) to access pipeline '{pipeline_name}'",
+        )
+
+
 @router.get("/{pipeline_name}")
 def list_versions(
     pipeline_name: str,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ):
     """List all versions of a pipeline."""
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner", "viewer"]
+    )
     versions = (
         db.query(PipelineVersion)
         .filter(PipelineVersion.pipeline_name == pipeline_name)
@@ -44,13 +76,18 @@ def list_versions(
         ],
     }
 
+
 @router.get("/{pipeline_name}/{version_number}")
 def get_version(
     pipeline_name: str,
     version_number: int,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ):
     """Get a specific pipeline version."""
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner", "viewer"]
+    )
     version = (
         db.query(PipelineVersion)
         .filter(
@@ -72,14 +109,19 @@ def get_version(
         "created_at": version.created_at.isoformat() if version.created_at else None,
     }
 
+
 @router.get("/{pipeline_name}/diff/{version_a}/{version_b}")
 def diff_versions(
     pipeline_name: str,
     version_a: int,
     version_b: int,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ):
     """Diff two versions of a pipeline."""
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner", "viewer"]
+    )
     va = (
         db.query(PipelineVersion)
         .filter(
@@ -121,13 +163,16 @@ def diff_versions(
         "change_summary": diff.change_summary,
     }
 
+
 @router.post("/{pipeline_name}/restore/{version_number}")
 def restore_version(
     pipeline_name: str,
     version_number: int,
     db: Session = get_write_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ):
     """Restore a pipeline to a previous version by creating a new version."""
+    _check_pipeline_permission(db, current_user, pipeline_name, ["owner", "runner"])
     old_version = (
         db.query(PipelineVersion)
         .filter(
@@ -154,6 +199,8 @@ def restore_version(
             "version_number": new_version.version_number,
             "pipeline_name": new_version.pipeline_name,
             "change_summary": new_version.change_summary,
-            "created_at": new_version.created_at.isoformat() if new_version.created_at else None,
+            "created_at": new_version.created_at.isoformat()
+            if new_version.created_at
+            else None,
         },
     }

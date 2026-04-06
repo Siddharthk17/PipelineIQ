@@ -46,8 +46,8 @@ def _status_cache_key(run_id: str) -> str:
 
 def _cache_progress_payload(run_id: str, payload: dict) -> None:
     """Cache latest progress payload for reconnecting SSE clients."""
-    cache_client = get_cache_redis()
     try:
+        cache_client = get_cache_redis()
         cache_client.setex(_status_cache_key(run_id), 3600, orjson.dumps(payload))
     except RedisError:
         logger.warning("Failed to cache SSE progress payload for run_id=%s", run_id)
@@ -59,7 +59,6 @@ def make_redis_progress_callback(run_id: str) -> ProgressCallback:
     Channel name: f"pipeline_progress:{run_id}"
     Message format: JSON-serialized StepProgressEvent fields.
     """
-    redis_client = get_pubsub_redis()
     channel = f"pipeline_progress:{run_id}"
 
     def callback(event: StepProgressEvent) -> None:
@@ -75,8 +74,12 @@ def make_redis_progress_callback(run_id: str) -> ProgressCallback:
             "duration_ms": event.duration_ms,
             "error_message": event.error_message,
         }
-        message = orjson.dumps(payload)
-        redis_client.publish(channel, message)
+        try:
+            redis_client = get_pubsub_redis()
+            message = orjson.dumps(payload)
+            redis_client.publish(channel, message)
+        except RedisError:
+            logger.warning("Failed to publish progress event for run_id=%s", run_id)
         _cache_progress_payload(run_id, payload)
 
     return callback
@@ -88,17 +91,20 @@ def _publish_terminal_event(
     error_message: str = "",
 ) -> None:
     """Publish a terminal pipeline event (completed/failed) to Redis."""
-    redis_client = get_pubsub_redis()
-    channel = f"pipeline_progress:{run_id}"
-    payload = {
-        "run_id": run_id,
-        "event_type": event_type,
-        "error_message": error_message,
-        "status": _event_type_to_status(event_type),
-    }
-    message = orjson.dumps(payload)
-    redis_client.publish(channel, message)
-    _cache_progress_payload(run_id, payload)
+    try:
+        redis_client = get_pubsub_redis()
+        channel = f"pipeline_progress:{run_id}"
+        payload = {
+            "run_id": run_id,
+            "event_type": event_type,
+            "error_message": error_message,
+            "status": _event_type_to_status(event_type),
+        }
+        message = orjson.dumps(payload)
+        redis_client.publish(channel, message)
+        _cache_progress_payload(run_id, payload)
+    except RedisError:
+        logger.warning("Failed to publish terminal event for run_id=%s", run_id)
 
 
 def _event_type_to_status(event_type: str) -> str:
@@ -132,6 +138,9 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
         if not _should_execute(pipeline_run):
             return {"run_id": run_id, "status": pipeline_run.status.value}
 
+        pipeline_run.celery_task_id = self.request.id
+        db.commit()
+
         _mark_running(db, pipeline_run)
         summary = _run_pipeline(db, pipeline_run)
         _persist_results(db, pipeline_run, summary)
@@ -141,7 +150,9 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
     except Exception as exc:
         logger.error(
             "Unexpected error executing pipeline %s: %s",
-            run_id, exc, exc_info=True,
+            run_id,
+            exc,
+            exc_info=True,
         )
         _mark_failed(db, run_id, str(exc))
         _publish_terminal_event(run_id, "pipeline_failed", str(exc))
@@ -155,7 +166,8 @@ def _should_execute(pipeline_run: PipelineRun) -> bool:
     if pipeline_run.status != PipelineStatus.PENDING:
         logger.warning(
             "Pipeline run %s has status %s, skipping execution",
-            pipeline_run.id, pipeline_run.status.value,
+            pipeline_run.id,
+            pipeline_run.status.value,
         )
         return False
     return True
@@ -204,29 +216,32 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
     parser = PipelineParser()
     config = parser.parse(pipeline_run.yaml_config)
 
-    # Only load files referenced in the pipeline config (not all files)
     referenced_file_ids = set()
     for step in config.steps:
-        file_id = getattr(step, "file_id", None) or (step.params.get("file_id") if hasattr(step, "params") else None)
+        file_id = getattr(step, "file_id", None)
         if file_id:
             referenced_file_ids.add(file_id)
 
     if referenced_file_ids:
         from backend.utils.uuid_utils import as_uuid
+
         uuid_ids = []
         for fid in referenced_file_ids:
             try:
                 uuid_ids.append(as_uuid(fid))
             except (ValueError, AttributeError):
                 pass
-        uploaded_files = db.query(UploadedFile).filter(UploadedFile.id.in_(uuid_ids)).all() if uuid_ids else []
+        uploaded_files = (
+            db.query(UploadedFile).filter(UploadedFile.id.in_(uuid_ids)).all()
+            if uuid_ids
+            else []
+        )
     else:
-        uploaded_files = db.query(UploadedFile).all()
+        uploaded_files = []
 
     file_paths = {str(f.id): f.stored_path for f in uploaded_files}
     file_metadata = {
-        str(f.id): {"original_filename": f.original_filename}
-        for f in uploaded_files
+        str(f.id): {"original_filename": f.original_filename} for f in uploaded_files
     }
 
     runner = PipelineRunner()
@@ -256,11 +271,13 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         PIPELINE_RUNS_TOTAL.labels(status="failed").inc()
         event_type = "pipeline_failed"
         _publish_terminal_event(
-            str(pipeline_run.id), event_type,
+            str(pipeline_run.id),
+            event_type,
             str(summary.error) if summary.error else "",
         )
 
     pipeline_run.completed_at = utcnow()
+    duration = 0.0
     if pipeline_run.started_at and pipeline_run.completed_at:
         duration = (pipeline_run.completed_at - pipeline_run.started_at).total_seconds()
         PIPELINE_DURATION_SECONDS.observe(duration)
@@ -269,24 +286,31 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         summary.step_results[-1].rows_out if summary.step_results else 0
     )
 
-    # Fire notifications asynchronously via separate Celery task
     try:
         from backend.tasks.notification_tasks import deliver_notifications_task
+
         deliver_notifications_task.delay(
             run_id=str(pipeline_run.id),
             event_type=event_type,
             pipeline_name=pipeline_run.name or "",
             status=pipeline_run.status.value,
             error_message=pipeline_run.error_message or "",
+            user_id=str(pipeline_run.user_id) if pipeline_run.user_id else "",
         )
     except Exception as exc:
-        logger.error("Failed to queue notification task for run %s: %s", pipeline_run.id, exc)
+        logger.error(
+            "Failed to queue notification task for run %s: %s", pipeline_run.id, exc
+        )
 
-    # Fire webhooks asynchronously via separate Celery task
     try:
         from backend.tasks.webhook_tasks import deliver_webhooks_task
-        status_str = "completed" if summary.status == RunnerPipelineStatus.COMPLETED else "failed"
-        duration_ms = int(duration * 1000) if pipeline_run.started_at and pipeline_run.completed_at else 0
+
+        status_str = (
+            "completed"
+            if summary.status == RunnerPipelineStatus.COMPLETED
+            else "failed"
+        )
+        duration_ms = int(duration * 1000)
         deliver_webhooks_task.delay(
             run_id=str(pipeline_run.id),
             status=status_str,
@@ -294,9 +318,12 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             duration_ms=duration_ms,
             steps_count=len(summary.step_results),
             rows_processed=summary.total_rows_processed or 0,
+            user_id=str(pipeline_run.user_id) if pipeline_run.user_id else "",
         )
     except Exception as exc:
-        logger.error("Failed to queue webhook task for run %s: %s", pipeline_run.id, exc)
+        logger.error(
+            "Failed to queue webhook task for run %s: %s", pipeline_run.id, exc
+        )
 
     for idx, result in enumerate(summary.step_results):
         step_record = StepResult(
@@ -324,8 +351,6 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
 
     db.commit()
 
-    # Save pipeline version for versioning/diff tracking
-    # Use the pipeline name from the YAML config (not the run's display name)
     try:
         parser = PipelineParser()
         config = parser.parse(pipeline_run.yaml_config)
@@ -340,5 +365,7 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
 
     logger.info(
         "Pipeline run %s results persisted: status=%s, duration=%dms",
-        pipeline_run.id, pipeline_run.status.value, summary.total_duration_ms,
+        pipeline_run.id,
+        pipeline_run.status.value,
+        summary.total_duration_ms,
     )

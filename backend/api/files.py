@@ -10,11 +10,21 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, BinaryIO
 
 import orjson
 import pandas as pd
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
@@ -24,7 +34,10 @@ from backend.db.redis_pools import get_cache_redis
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import SchemaSnapshot, UploadedFile, User
 from backend.pipeline.schema_drift import detect_schema_drift
-from backend.utils.uuid_utils import validate_uuid_format as _validate_uuid_format, as_uuid as _as_uuid
+from backend.utils.uuid_utils import (
+    validate_uuid_format as _validate_uuid_format,
+    as_uuid as _as_uuid,
+)
 
 from backend.schemas import (
     ColumnDriftResponse,
@@ -36,6 +49,7 @@ from backend.schemas import (
 )
 from backend.utils.rate_limiter import limiter
 from backend.services.audit_service import log_action
+from backend.services.storage_service import storage_service
 
 logger = logging.getLogger(__name__)
 
@@ -155,9 +169,7 @@ async def request_upload_url(
         method="api",
         file_id=file_id,
         upload_endpoint=(
-            f"{absolute_api_prefix}/upload"
-            if is_legacy_api
-            else f"{api_prefix}/upload"
+            f"{absolute_api_prefix}/upload" if is_legacy_api else f"{api_prefix}/upload"
         ),
     )
 
@@ -185,9 +197,17 @@ async def direct_upload_file(
 
     stored_path = Path(pending["stored_path"])
     expected_size = int(pending["expected_size"])
-    written = await _stream_request_to_path(request, stored_path, MAX_DIRECT_UPLOAD_SIZE)
+    try:
+        written = await storage_service.upload_stream(
+            request.stream(), str(stored_path), MAX_DIRECT_UPLOAD_SIZE
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
     if written != expected_size:
-        stored_path.unlink(missing_ok=True)
+        storage_service.delete(str(stored_path))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Uploaded size mismatch: expected {expected_size} bytes, got {written} bytes",
@@ -219,8 +239,8 @@ async def confirm_direct_upload(
             detail="File not found or not pending confirmation",
         )
 
-    stored_path = Path(pending["stored_path"])
-    if not stored_path.exists():
+    stored_path = pending["stored_path"]
+    if not storage_service.exists(stored_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found in storage. Upload may have failed.",
@@ -230,13 +250,14 @@ async def confirm_direct_upload(
         db=db,
         file_id=_as_uuid(file_id),
         original_filename=pending["filename"],
-        stored_path=stored_path,
-        file_size_bytes=stored_path.stat().st_size,
+        stored_path=str(stored_path),
+        file_size_bytes=storage_service.get_size(str(stored_path)),
         request=request,
         current_user=current_user,
     )
     _clear_pending_upload(file_id)
     return finalized
+
 
 @router.post(
     "/upload",
@@ -254,13 +275,42 @@ async def upload_file(
     current_user: User = Depends(get_current_user),
 ) -> FileUploadResponse:
     """Upload a data file and store its metadata."""
+    # Handle empty or missing filename - this causes 422 errors
+    if not file.filename or file.filename.strip() == "":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No file provided or filename is empty. Please select a valid CSV or JSON file.",
+        )
+
     original_filename = os.path.basename(file.filename or "upload.csv")
     _validate_file_extension(original_filename)
 
     file_id = uuid.uuid4()
     extension = Path(original_filename).suffix.lower()
-    stored_path = settings.UPLOAD_DIR / f"{file_id}{extension}"
-    written = await _stream_upload_to_path(file, stored_path, LARGE_FILE_THRESHOLD)
+    stored_path = f"{file_id}{extension}"
+
+    try:
+        storage_service.upload(file.file, stored_path)
+        written = storage_service.get_size(stored_path)
+        if written == 0:
+            storage_service.delete(stored_path)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uploaded file is empty",
+            )
+        if written > settings.MAX_UPLOAD_SIZE:
+            storage_service.delete(stored_path)
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload file: {exc}",
+        )
 
     return _finalize_uploaded_file(
         db=db,
@@ -272,15 +322,19 @@ async def upload_file(
         current_user=current_user,
     )
 
+
 @router.get(
     "/",
     response_model=FileListResponse,
     summary="List uploaded files",
-    description="Returns metadata for all uploaded files.",
+    description="Returns metadata for all uploaded files belonging to the current user.",
 )
-def list_files(db: Session = get_read_db_dependency()) -> FileListResponse:
+def list_files(
+    db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> FileListResponse:
     """List all uploaded files with their metadata."""
-    files = db.query(UploadedFile).all()
+    files = db.query(UploadedFile).filter(UploadedFile.user_id == current_user.id).all()
     file_responses = [
         FileUploadResponse(
             id=str(f.id),
@@ -295,6 +349,7 @@ def list_files(db: Session = get_read_db_dependency()) -> FileListResponse:
     ]
     return FileListResponse(files=file_responses, total=len(file_responses))
 
+
 @router.get(
     "/{file_id}",
     response_model=FileUploadResponse,
@@ -304,10 +359,18 @@ def list_files(db: Session = get_read_db_dependency()) -> FileListResponse:
 def get_file(
     file_id: str,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> FileUploadResponse:
     """Get metadata for a specific uploaded file."""
     _validate_uuid_format(file_id)
-    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
+    uploaded_file = (
+        db.query(UploadedFile)
+        .filter(
+            UploadedFile.id == _as_uuid(file_id),
+            UploadedFile.user_id == current_user.id,
+        )
+        .first()
+    )
     if uploaded_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -323,6 +386,7 @@ def get_file(
         file_size_bytes=uploaded_file.file_size_bytes,
     )
 
+
 @router.delete(
     "/{file_id}",
     summary="Delete an uploaded file",
@@ -336,25 +400,38 @@ def delete_file(
 ) -> dict:
     """Delete an uploaded file from disk and database."""
     _validate_uuid_format(file_id)
-    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
+    uploaded_file = (
+        db.query(UploadedFile)
+        .filter(
+            UploadedFile.id == _as_uuid(file_id),
+            UploadedFile.user_id == current_user.id,
+        )
+        .first()
+    )
     if uploaded_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File '{file_id}' not found",
         )
 
-    stored_path = Path(uploaded_file.stored_path)
-    if stored_path.exists():
-        stored_path.unlink()
+    stored_path = uploaded_file.stored_path
+    storage_service.delete(stored_path)
 
     db.delete(uploaded_file)
     db.commit()
 
-    log_action(db, "file_deleted", user_id=current_user.id, resource_type="file",
-               resource_id=_as_uuid(file_id), request=request)
+    log_action(
+        db,
+        "file_deleted",
+        user_id=current_user.id,
+        resource_type="file",
+        resource_id=_as_uuid(file_id),
+        request=request,
+    )
 
     logger.info("File deleted: id=%s", file_id)
     return {"detail": f"File '{file_id}' deleted"}
+
 
 @router.get(
     "/{file_id}/preview",
@@ -365,22 +442,35 @@ def preview_file(
     file_id: str,
     rows: int = 20,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Return the first N rows of an uploaded file."""
     _validate_uuid_format(file_id)
-    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
+    uploaded_file = (
+        db.query(UploadedFile)
+        .filter(
+            UploadedFile.id == _as_uuid(file_id),
+            UploadedFile.user_id == current_user.id,
+        )
+        .first()
+    )
     if uploaded_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File '{file_id}' not found",
         )
-    stored_path = Path(uploaded_file.stored_path)
-    if not stored_path.exists():
+
+    stored_path = uploaded_file.stored_path
+    if not storage_service.exists(stored_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"File data not found on disk for '{file_id}'",
+            detail=f"File data not found in storage for '{file_id}'",
         )
-    df = _parse_file_preview(uploaded_file.original_filename, stored_path, min(rows, 100))
+
+    with storage_service.download(stored_path) as handle:
+        df = _parse_file_preview(
+            uploaded_file.original_filename, handle, min(rows, 100)
+        )
     return {
         "file_id": file_id,
         "filename": uploaded_file.original_filename,
@@ -389,6 +479,7 @@ def preview_file(
         "columns": list(df.columns),
         "data": df.to_dict(orient="records"),
     }
+
 
 def _validate_file_extension(filename: str) -> None:
     """Raise 400 if the file extension is not in ALLOWED_EXTENSIONS."""
@@ -419,62 +510,11 @@ def _resolve_upload_request_payload(
     return UploadUrlRequest(filename=filename, file_size=file_size)
 
 
-async def _stream_upload_to_path(file: UploadFile, stored_path: Path, max_size: int) -> int:
-    """Stream UploadFile content to disk with a strict size cap."""
-    chunk_size = 1024 * 1024
-    total_read = 0
-    with stored_path.open("wb") as output:
-        while True:
-            chunk = await file.read(chunk_size)
-            if not chunk:
-                break
-            total_read += len(chunk)
-            if total_read > max_size:
-                output.close()
-                stored_path.unlink(missing_ok=True)
-                max_mb = max_size / (1024 * 1024)
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=f"File size exceeds maximum ({max_mb:.0f} MB)",
-                )
-            output.write(chunk)
-    if total_read == 0:
-        stored_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty",
-        )
-    return total_read
-
-
-async def _stream_request_to_path(request: Request, stored_path: Path, max_size: int) -> int:
-    """Stream raw request body to disk with size enforcement."""
-    total_read = 0
-    with stored_path.open("wb") as output:
-        async for chunk in request.stream():
-            if not chunk:
-                continue
-            total_read += len(chunk)
-            if total_read > max_size:
-                output.close()
-                stored_path.unlink(missing_ok=True)
-                max_mb = max_size / (1024 * 1024)
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=f"File size exceeds maximum ({max_mb:.0f} MB)",
-                )
-            output.write(chunk)
-    if total_read == 0:
-        stored_path.unlink(missing_ok=True)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty",
-        )
-    return total_read
-
-def _extract_file_metadata(filename: str, stored_path: Path) -> tuple[int, list[str], dict[str, str]]:
+def _extract_file_metadata(
+    filename: str, stored_path: str
+) -> tuple[int, list[str], dict[str, str]]:
     """Extract row/column metadata with streaming for CSV uploads."""
-    extension = stored_path.suffix.lower()
+    extension = Path(filename).suffix.lower()
     if extension == ".csv":
         return _extract_csv_metadata(stored_path)
     if extension == ".json":
@@ -485,11 +525,15 @@ def _extract_file_metadata(filename: str, stored_path: Path) -> tuple[int, list[
     )
 
 
-def _extract_csv_metadata(stored_path: Path) -> tuple[int, list[str], dict[str, str]]:
+def _extract_csv_metadata(stored_path: str) -> tuple[int, list[str], dict[str, str]]:
     """Read CSV metadata with bounded memory usage."""
     try:
-        with stored_path.open("r", encoding="utf-8", newline="") as handle:
-            reader = csv.reader(handle)
+        with storage_service.download(stored_path) as handle:
+            # Convert binary stream to text wrapper for csv reader
+            import io
+
+            text_handle = io.TextIOWrapper(handle, encoding="utf-8", newline="")
+            reader = csv.reader(text_handle)
             header = next(reader, None)
             if header is None:
                 return 0, [], {}
@@ -497,8 +541,11 @@ def _extract_csv_metadata(stored_path: Path) -> tuple[int, list[str], dict[str, 
             columns = [str(column) for column in header]
     except UnicodeDecodeError:
         try:
-            with stored_path.open("r", encoding="utf-8-sig", newline="") as handle:
-                reader = csv.reader(handle)
+            with storage_service.download(stored_path) as handle:
+                import io
+
+                text_handle = io.TextIOWrapper(handle, encoding="utf-8-sig", newline="")
+                reader = csv.reader(text_handle)
                 header = next(reader, None)
                 if header is None:
                     return 0, [], {}
@@ -507,39 +554,71 @@ def _extract_csv_metadata(stored_path: Path) -> tuple[int, list[str], dict[str, 
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Failed to parse file '{stored_path.name}': {exc}",
+                detail=f"Failed to parse file '{stored_path}': {exc}",
             ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to parse file '{stored_path.name}': {exc}",
+            detail=f"Failed to parse file '{stored_path}': {exc}",
         ) from exc
 
     if not columns:
         return row_count, columns, {}
 
     sample_rows = max(1, min(1000, row_count))
-    sample_df = pd.read_csv(stored_path, nrows=sample_rows)
+    with storage_service.download(stored_path) as handle:
+        sample_df = pd.read_csv(handle, nrows=sample_rows)
     dtypes = {column: str(dtype) for column, dtype in sample_df.dtypes.items()}
     return row_count, columns, dtypes
 
 
-def _extract_json_metadata(filename: str, stored_path: Path) -> tuple[int, list[str], dict[str, str]]:
+def _extract_json_metadata(
+    filename: str, stored_path: str
+) -> tuple[int, list[str], dict[str, str]]:
     """Extract metadata for JSON uploads."""
     try:
-        try:
-            df = pd.read_json(stored_path)
-        except ValueError:
-            df = pd.read_json(stored_path, lines=True)
+        # Try JSONL (newline-delimited JSON) first for efficiency
+        with storage_service.download(stored_path) as handle:
+            import io
+
+            text_handle = io.TextIOWrapper(handle, encoding="utf-8")
+            first_line = text_handle.readline()
+            if not first_line:
+                return 0, [], {}
+
+            if first_line.strip().startswith("{"):
+                # Process as JSONL
+                row_count = 1
+                with storage_service.download(stored_path) as handle:
+                    # Re-open to read all lines
+                    import io
+
+                    text_handle = io.TextIOWrapper(handle, encoding="utf-8")
+                    for _ in text_handle:
+                        row_count += 1
+
+                import orjson
+
+                # We already have first_line from the first attempt
+                first_obj = orjson.loads(first_line)
+                columns = list(first_obj.keys())
+
+                # Sample first line for dtypes
+                sample_df = pd.DataFrame([first_obj])
+                dtypes = {col: str(dtype) for col, dtype in sample_df.dtypes.items()}
+                return row_count - 1, columns, dtypes
+
+        # Fallback to standard JSON list
+        with storage_service.download(stored_path) as handle:
+            df = pd.read_json(handle)
+            columns = list(df.columns)
+            dtypes = {column: str(dtype) for column, dtype in df.dtypes.items()}
+            return len(df), columns, dtypes
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
-
-    columns = list(df.columns)
-    dtypes = {column: str(dtype) for column, dtype in df.dtypes.items()}
-    return len(df), columns, dtypes
 
 
 def _build_schema_drift_response(
@@ -616,7 +695,7 @@ def _finalize_uploaded_file(
     db: Session,
     file_id,
     original_filename: str,
-    stored_path: Path,
+    stored_path: str,
     file_size_bytes: int,
     request: Request,
     current_user: User,
@@ -624,7 +703,7 @@ def _finalize_uploaded_file(
     """Persist uploaded file metadata, snapshot, and optional drift report."""
     row_count, columns, dtypes = _extract_file_metadata(original_filename, stored_path)
     if row_count > settings.MAX_ROWS_PER_FILE:
-        stored_path.unlink(missing_ok=True)
+        storage_service.delete(stored_path)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
@@ -639,6 +718,7 @@ def _finalize_uploaded_file(
         column_count=len(columns),
         columns=columns,
         dtypes=dtypes,
+        user_id=current_user.id,
     )
     db.add(uploaded_file)
     db.commit()
@@ -681,6 +761,10 @@ def _finalize_uploaded_file(
         request=request,
     )
 
+    from backend.tasks.profiling import profile_file
+
+    profile_file.apply_async([str(file_id)], queue="bulk")
+
     return FileUploadResponse(
         id=str(file_id),
         original_filename=original_filename,
@@ -693,14 +777,14 @@ def _finalize_uploaded_file(
     )
 
 
-def _parse_file_preview(filename: str, stored_path: Path, nrows: int) -> pd.DataFrame:
+def _parse_file_preview(filename: str, handle: BinaryIO, nrows: int) -> pd.DataFrame:
     """Parse only the first N rows of a file for preview (avoids reading full file)."""
-    extension = stored_path.suffix.lower()
+    extension = Path(filename).suffix.lower()
     try:
         if extension == ".csv":
-            return pd.read_csv(stored_path, nrows=nrows)
+            return pd.read_csv(handle, nrows=nrows)
         elif extension == ".json":
-            df = pd.read_json(stored_path)
+            df = pd.read_json(handle)
             return df.head(nrows)
         else:
             raise HTTPException(
@@ -715,6 +799,7 @@ def _parse_file_preview(filename: str, stored_path: Path, nrows: int) -> pd.Data
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
 
+
 @router.get(
     "/{file_id}/schema/history",
     summary="Get schema snapshot history",
@@ -723,10 +808,18 @@ def _parse_file_preview(filename: str, stored_path: Path, nrows: int) -> pd.Data
 def get_schema_history(
     file_id: str,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Get schema snapshot history for a file."""
     _validate_uuid_format(file_id)
-    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
+    uploaded_file = (
+        db.query(UploadedFile)
+        .filter(
+            UploadedFile.id == _as_uuid(file_id),
+            UploadedFile.user_id == current_user.id,
+        )
+        .first()
+    )
     if uploaded_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -755,6 +848,7 @@ def get_schema_history(
         ],
     }
 
+
 @router.get(
     "/{file_id}/schema/diff",
     summary="Get schema drift between latest snapshots",
@@ -763,10 +857,18 @@ def get_schema_history(
 def get_schema_diff(
     file_id: str,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Get schema drift between the two most recent snapshots."""
     _validate_uuid_format(file_id)
-    uploaded_file = db.query(UploadedFile).filter(UploadedFile.id == _as_uuid(file_id)).first()
+    uploaded_file = (
+        db.query(UploadedFile)
+        .filter(
+            UploadedFile.id == _as_uuid(file_id),
+            UploadedFile.user_id == current_user.id,
+        )
+        .first()
+    )
     if uploaded_file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -812,6 +914,98 @@ def get_schema_diff(
         ],
         "summary": report.summary,
     }
+
+
+@router.get("/{file_id}/profile")
+def get_file_profile(
+    file_id: str,
+    db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Get the data profile for an uploaded file."""
+    from backend.models import FileProfile
+    from sqlalchemy import select
+
+    _validate_uuid_format(file_id)
+    file_record = (
+        db.query(UploadedFile)
+        .filter(
+            UploadedFile.id == _as_uuid(file_id),
+            UploadedFile.user_id == current_user.id,
+        )
+        .first()
+    )
+    if file_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File '{file_id}' not found",
+        )
+
+    result = db.execute(
+        select(FileProfile).where(FileProfile.file_id == _as_uuid(file_id))
+    )
+    profile_record = result.scalar_one_or_none()
+
+    if not profile_record:
+        return {
+            "file_id": file_id,
+            "status": "pending",
+            "profile": None,
+        }
+
+    return {
+        "file_id": file_id,
+        "status": profile_record.status,
+        "computed_at": profile_record.computed_at.isoformat()
+        if profile_record.computed_at
+        else None,
+        "row_count": profile_record.row_count,
+        "col_count": profile_record.col_count,
+        "completeness_pct": float(profile_record.completeness_pct)
+        if profile_record.completeness_pct
+        else None,
+        "profile": profile_record.profile,
+        "error": profile_record.error,
+    }
+
+
+@router.post("/{file_id}/profile/refresh")
+def refresh_file_profile(
+    file_id: str,
+    db: Session = get_write_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Manually trigger re-profiling of a file."""
+    from backend.models import FileProfile
+    from sqlalchemy import update
+
+    _validate_uuid_format(file_id)
+    file_record = (
+        db.query(UploadedFile)
+        .filter(
+            UploadedFile.id == _as_uuid(file_id),
+            UploadedFile.user_id == current_user.id,
+        )
+        .first()
+    )
+    if file_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File '{file_id}' not found",
+        )
+
+    db.execute(
+        update(FileProfile)
+        .where(FileProfile.file_id == _as_uuid(file_id))
+        .values(status="pending", error=None)
+    )
+    db.commit()
+
+    from backend.tasks.profiling import profile_file
+
+    profile_file.apply_async([file_id], queue="bulk")
+
+    return {"file_id": file_id, "status": "queued"}
 
 
 # Legacy compatibility endpoints used by Week-1 verification prompt.

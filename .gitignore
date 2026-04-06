@@ -9,6 +9,7 @@ __pycache__/
 uploads/
 backend/uploads/
 .pytest_cache/
+.ruff_cache
 *.egg-info/
 dist/
 build/

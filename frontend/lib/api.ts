@@ -26,18 +26,29 @@ export class ApiError extends Error {
   }
 }
 
-// Token management
+// Token management - read from HttpOnly cookie for security
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
+  // Read from cookie instead of localStorage for XSS protection
+  const cookies = document.cookie.split("; ");
+  const tokenCookie = cookies.find((c) => c.startsWith("pipelineiq_token="));
+  if (tokenCookie) {
+    return tokenCookie.split("=")[1];
+  }
+  // Fallback to localStorage for backwards compatibility during migration
   return localStorage.getItem("pipelineiq_token");
 }
 
 export function setToken(token: string): void {
+  // Token is now set via HttpOnly cookie on login response
+  // Keep localStorage for backwards compatibility during migration
   localStorage.setItem("pipelineiq_token", token);
 }
 
 export function clearToken(): void {
+  // Token is cleared via HttpOnly cookie on logout response
+  // Keep localStorage for backwards compatibility during migration
   localStorage.removeItem("pipelineiq_token");
 }
 

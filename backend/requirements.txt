@@ -28,3 +28,4 @@ flower==2.0.1
 prometheus-fastapi-instrumentator==6.1.0
 sentry-sdk[fastapi]==1.39.1
 orjson==3.10.15
+boto3==1.34.0

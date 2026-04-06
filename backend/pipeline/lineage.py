@@ -730,6 +730,220 @@ class LineageRecorder:
 
         return edges
 
+    def record_pivot(
+        self,
+        step_name: str,
+        input_step: str,
+        index_col: str,
+        columns_col: str,
+        values_col: str,
+        output_columns: List[str],
+    ) -> None:
+        """Record a pivot step that reshapes data from long to wide format."""
+        step_node = _step_node_id(step_name)
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Pivot: {step_name}",
+                "step_name": step_name,
+                "step_type": "pivot",
+            },
+        )
+
+        for col in [index_col, columns_col, values_col]:
+            input_col = _col_node_id(input_step, col)
+            self.graph.add_edge(input_col, step_node)
+
+        for col in output_columns:
+            output_col = _col_node_id(step_name, col)
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
+            self.graph.add_edge(step_node, output_col)
+
+        logger.debug(
+            "Recorded pivot: step=%s, index=%s, columns_to=%s, values=%s, output_cols=%d",
+            step_name,
+            index_col,
+            columns_col,
+            values_col,
+            len(output_columns),
+        )
+
+    def record_unpivot(
+        self,
+        step_name: str,
+        input_step: str,
+        id_columns: List[str],
+        value_columns: List[str],
+        output_columns: List[str],
+    ) -> None:
+        """Record an unpivot (melt) step that reshapes data from wide to long format."""
+        step_node = _step_node_id(step_name)
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Unpivot: {step_name}",
+                "step_name": step_name,
+                "step_type": "unpivot",
+            },
+        )
+
+        for col in id_columns + value_columns:
+            input_col = _col_node_id(input_step, col)
+            self.graph.add_edge(input_col, step_node)
+
+        for col in output_columns:
+            output_col = _col_node_id(step_name, col)
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
+            self.graph.add_edge(step_node, output_col)
+
+        logger.debug(
+            "Recorded unpivot: step=%s, id_cols=%d, value_cols=%d, output_cols=%d",
+            step_name,
+            len(id_columns),
+            len(value_columns),
+            len(output_columns),
+        )
+
+    def record_deduplicate(
+        self,
+        step_name: str,
+        input_step: str,
+        columns: List[str],
+        subset: Optional[List[str]],
+    ) -> None:
+        """Record a deduplicate step that removes duplicate rows."""
+        step_node = _step_node_id(step_name)
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Deduplicate: {step_name}",
+                "step_name": step_name,
+                "step_type": "deduplicate",
+            },
+        )
+
+        for col in columns:
+            input_col = _col_node_id(input_step, col)
+            output_col = _col_node_id(step_name, col)
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
+            self.graph.add_edge(input_col, step_node)
+            self.graph.add_edge(step_node, output_col)
+
+        logger.debug(
+            "Recorded deduplicate: step=%s, columns=%d, subset=%s",
+            step_name,
+            len(columns),
+            subset,
+        )
+
+    def record_fill_nulls(
+        self,
+        step_name: str,
+        input_step: str,
+        columns: List[str],
+        method: str,
+    ) -> None:
+        """Record a fill_nulls step that fills missing values."""
+        step_node = _step_node_id(step_name)
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Fill Nulls: {step_name}",
+                "step_name": step_name,
+                "step_type": "fill_nulls",
+                "method": method,
+            },
+        )
+
+        for col in columns:
+            input_col = _col_node_id(input_step, col)
+            output_col = _col_node_id(step_name, col)
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
+            self.graph.add_edge(input_col, step_node)
+            self.graph.add_edge(step_node, output_col)
+
+        logger.debug(
+            "Recorded fill_nulls: step=%s, columns=%d, method=%s",
+            step_name,
+            len(columns),
+            method,
+        )
+
+    def record_sample(
+        self,
+        step_name: str,
+        input_step: str,
+        columns: List[str],
+    ) -> None:
+        """Record a sample step that randomly samples rows."""
+        step_node = _step_node_id(step_name)
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Sample: {step_name}",
+                "step_name": step_name,
+                "step_type": "sample",
+            },
+        )
+
+        for col in columns:
+            input_col = _col_node_id(input_step, col)
+            output_col = _col_node_id(step_name, col)
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
+            self.graph.add_edge(input_col, step_node)
+            self.graph.add_edge(step_node, output_col)
+
+        logger.debug(
+            "Recorded sample: step=%s, columns=%d",
+            step_name,
+            len(columns),
+        )
+
     def serialize(self) -> Dict[str, Any]:
         """Serialize the lineage graph for database storage.
 

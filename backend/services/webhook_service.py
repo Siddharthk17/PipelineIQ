@@ -118,7 +118,9 @@ def deliver_with_retry(
                     delivery.delivered_at = datetime.now(timezone.utc)
                     db.add(delivery)
                     db.commit()
-                    logger.info("Webhook %s delivered on attempt %d", webhook_id, attempt)
+                    logger.info(
+                        "Webhook %s delivered on attempt %d", webhook_id, attempt
+                    )
                     return
                 else:
                     delivery.failed_at = datetime.now(timezone.utc)
@@ -131,18 +133,29 @@ def deliver_with_retry(
             db.commit()
             logger.warning(
                 "Webhook %s attempt %d/%d failed: %s",
-                webhook_id, attempt, MAX_ATTEMPTS, delivery.error_message,
+                webhook_id,
+                attempt,
+                MAX_ATTEMPTS,
+                delivery.error_message,
             )
 
-        logger.error("Webhook %s permanently failed after %d attempts", webhook_id, MAX_ATTEMPTS)
+        logger.error(
+            "Webhook %s permanently failed after %d attempts", webhook_id, MAX_ATTEMPTS
+        )
     finally:
         db.close()
 
 
-def trigger_webhooks_for_run(run_id: str, status: str, pipeline_name: str = "",
-                              duration_ms: int = 0, steps_count: int = 0,
-                              rows_processed: int = 0) -> None:
-    """Fire webhooks for all users that registered for this event type."""
+def trigger_webhooks_for_run(
+    run_id: str,
+    status: str,
+    pipeline_name: str = "",
+    duration_ms: int = 0,
+    steps_count: int = 0,
+    rows_processed: int = 0,
+    user_id: str = "",
+) -> None:
+    """Fire webhooks for the pipeline owner that registered for this event type."""
     event_type = f"pipeline_{status.lower()}"
     payload = {
         "event": event_type,
@@ -159,7 +172,10 @@ def trigger_webhooks_for_run(run_id: str, status: str, pipeline_name: str = "",
 
     db = SessionLocal()
     try:
-        webhooks = db.query(Webhook).filter(Webhook.is_active == True).all()
+        query = db.query(Webhook).filter(Webhook.is_active == True)
+        if user_id:
+            query = query.filter(Webhook.user_id == user_id)
+        webhooks = query.all()
         for wh in webhooks:
             if event_type in (wh.events or []):
                 try:

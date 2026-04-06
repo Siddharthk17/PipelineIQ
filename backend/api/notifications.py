@@ -13,18 +13,24 @@ from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import NotificationConfig, NotificationType, User
 from backend.services.audit_service import log_action
-from backend.services.notification_service import send_slack_notification, send_email_notification
+from backend.services.notification_service import (
+    send_slack_notification,
+    send_email_notification,
+)
 from backend.utils.uuid_utils import validate_uuid_format, as_uuid
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
+
 class CreateNotificationConfigRequest(BaseModel):
     """Request body to create a notification config."""
 
     type: str = Field(..., description="Notification type: 'slack' or 'email'")
-    config: dict = Field(..., description="Channel-specific config (e.g. {'slack_webhook_url': '...'})")
+    config: dict = Field(
+        ..., description="Channel-specific config (e.g. {'slack_webhook_url': '...'})"
+    )
     events: list[str] = Field(
         default=["pipeline_completed", "pipeline_failed"],
         description="Events to subscribe to",
@@ -36,6 +42,7 @@ class CreateNotificationConfigRequest(BaseModel):
         """Accept case-insensitive notification types from clients."""
         return value.strip().lower()
 
+
 class NotificationConfigResponse(BaseModel):
     """Response for a notification config."""
 
@@ -46,6 +53,7 @@ class NotificationConfigResponse(BaseModel):
     is_active: bool
     created_at: str | None = None
 
+
 def _config_to_response(config: NotificationConfig) -> NotificationConfigResponse:
     return NotificationConfigResponse(
         id=str(config.id),
@@ -55,6 +63,7 @@ def _config_to_response(config: NotificationConfig) -> NotificationConfigRespons
         is_active=config.is_active,
         created_at=config.created_at.isoformat() if config.created_at else None,
     )
+
 
 @router.post(
     "/",
@@ -102,11 +111,18 @@ def create_notification_config(
     db.commit()
     db.refresh(config)
 
-    log_action(db, "notification_config_created", user_id=current_user.id,
-               resource_type="notification_config", resource_id=config.id,
-               details={"type": body.type}, request=request)
+    log_action(
+        db,
+        "notification_config_created",
+        user_id=current_user.id,
+        resource_type="notification_config",
+        resource_id=config.id,
+        details={"type": body.type},
+        request=request,
+    )
 
     return _config_to_response(config)
+
 
 @router.get(
     "/",
@@ -129,6 +145,7 @@ def list_notification_configs(
         "total": len(configs),
     }
 
+
 @router.delete(
     "/{config_id}",
     summary="Delete a notification config",
@@ -150,16 +167,25 @@ def delete_notification_config(
         .first()
     )
     if not config:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification config not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification config not found",
+        )
 
     db.delete(config)
     db.commit()
 
-    log_action(db, "notification_config_deleted", user_id=current_user.id,
-               resource_type="notification_config", resource_id=as_uuid(config_id),
-               request=request)
+    log_action(
+        db,
+        "notification_config_deleted",
+        user_id=current_user.id,
+        resource_type="notification_config",
+        resource_id=as_uuid(config_id),
+        request=request,
+    )
 
     return {"detail": f"Notification config '{config_id}' deleted"}
+
 
 @router.post(
     "/{config_id}/test",
@@ -182,7 +208,10 @@ def test_notification(
         .first()
     )
     if not config:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification config not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification config not found",
+        )
 
     if config.type == NotificationType.SLACK:
         webhook_url = (config.config or {}).get("slack_webhook_url")
@@ -191,17 +220,26 @@ def test_notification(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No slack_webhook_url configured",
             )
+
+        # Validate webhook URL format
+        if not webhook_url.startswith(("http://", "https://")):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid Slack webhook URL. Must start with http:// or https://",
+            )
+
         success = send_slack_notification(
             webhook_url,
             "🔔 *PipelineIQ Test Notification*\nThis is a test message to verify your Slack integration.",
         )
         if success:
             return {"detail": "Test notification sent successfully"}
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to send test notification to Slack",
-            )
+
+        # Slack failed - could be invalid URL or network issue
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to send test notification to Slack. Please verify your webhook URL is correct and accessible.",
+        )
 
     if config.type == NotificationType.EMAIL:
         recipients = (config.config or {}).get("email_to")
@@ -219,6 +257,16 @@ def test_notification(
         )
         if success:
             return {"detail": "Test email sent successfully"}
+
+        # Check if SMTP is not configured and return proper error
+        from backend.config import settings
+
+        if not settings.SMTP_HOST or not settings.SMTP_FROM:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="SMTP is not configured. Please set SMTP_HOST, SMTP_FROM, and other SMTP settings in your environment.",
+            )
+
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to send test email",

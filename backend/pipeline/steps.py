@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import pandas as pd
-
+from backend.services.storage_service import storage_service
 from backend.pipeline.exceptions import (
     AggregationError,
     ColumnNotFoundError,
@@ -25,17 +25,22 @@ from backend.pipeline.exceptions import (
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import (
     AggregateStepConfig,
+    DeduplicateStepConfig,
+    FillNullsStepConfig,
     FilterOperator,
     FilterStepConfig,
     JoinStepConfig,
     LoadStepConfig,
+    PivotStepConfig,
     RenameStepConfig,
+    SampleStepConfig,
     SaveStepConfig,
     SelectStepConfig,
     SortOrder,
     SortStepConfig,
     StepConfig,
     StepType,
+    UnpivotStepConfig,
     ValidateStepConfig,
 )
 from backend.utils.time_utils import measure_ms
@@ -60,18 +65,22 @@ class StepExecutionResult:
 
 # Maps FilterOperator → a callable that takes (pd.Series, value) → pd.Series[bool]
 FILTER_OPERATIONS: Dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] = {
-    FilterOperator.EQUALS:                lambda s, v: s == v,
-    FilterOperator.NOT_EQUALS:            lambda s, v: s != v,
-    FilterOperator.GREATER_THAN:          lambda s, v: s > v,
-    FilterOperator.LESS_THAN:             lambda s, v: s < v,
+    FilterOperator.EQUALS: lambda s, v: s == v,
+    FilterOperator.NOT_EQUALS: lambda s, v: s != v,
+    FilterOperator.GREATER_THAN: lambda s, v: s > v,
+    FilterOperator.LESS_THAN: lambda s, v: s < v,
     FilterOperator.GREATER_THAN_OR_EQUAL: lambda s, v: s >= v,
-    FilterOperator.LESS_THAN_OR_EQUAL:    lambda s, v: s <= v,
-    FilterOperator.CONTAINS:              lambda s, v: s.astype(str).str.contains(str(v), na=False),
-    FilterOperator.NOT_CONTAINS:          lambda s, v: ~s.astype(str).str.contains(str(v), na=False),
-    FilterOperator.STARTS_WITH:           lambda s, v: s.astype(str).str.startswith(str(v), na=False),
-    FilterOperator.ENDS_WITH:             lambda s, v: s.astype(str).str.endswith(str(v), na=False),
-    FilterOperator.IS_NULL:               lambda s, _: s.isna(),
-    FilterOperator.IS_NOT_NULL:           lambda s, _: s.notna(),
+    FilterOperator.LESS_THAN_OR_EQUAL: lambda s, v: s <= v,
+    FilterOperator.CONTAINS: lambda s, v: s.astype(str).str.contains(str(v), na=False),
+    FilterOperator.NOT_CONTAINS: lambda s, v: (
+        ~s.astype(str).str.contains(str(v), na=False)
+    ),
+    FilterOperator.STARTS_WITH: lambda s, v: s.astype(str).str.startswith(
+        str(v), na=False
+    ),
+    FilterOperator.ENDS_WITH: lambda s, v: s.astype(str).str.endswith(str(v), na=False),
+    FilterOperator.IS_NULL: lambda s, _: s.isna(),
+    FilterOperator.IS_NOT_NULL: lambda s, _: s.notna(),
 }
 
 SUPPORTED_FILE_EXTENSIONS: Dict[str, Callable[..., pd.DataFrame]] = {
@@ -100,6 +109,11 @@ class StepExecutor:
             StepType.SORT: self.execute_sort,
             StepType.SAVE: self.execute_save,
             StepType.VALIDATE: self.execute_validate,
+            StepType.PIVOT: self.execute_pivot,
+            StepType.UNPIVOT: self.execute_unpivot,
+            StepType.DEDUPLICATE: self.execute_deduplicate,
+            StepType.FILL_NULLS: self.execute_fill_nulls,
+            StepType.SAMPLE: self.execute_sample,
         }
 
     def execute(
@@ -123,7 +137,9 @@ class StepExecutor:
             )
 
         if config.step_type == StepType.LOAD:
-            return executor(df_registry, config, recorder, file_paths or {}, file_metadata or {})
+            return executor(
+                df_registry, config, recorder, file_paths or {}, file_metadata or {}
+            )
         return executor(df_registry, config, recorder)
 
     def execute_load(
@@ -158,7 +174,9 @@ class StepExecutor:
 
         return StepExecutionResult(
             step_name=config.name,
-            step_type=config.step_type.value if isinstance(config.step_type, StepType) else str(config.step_type),
+            step_type=config.step_type.value
+            if isinstance(config.step_type, StepType)
+            else str(config.step_type),
             output_df=df,
             rows_in=len(df),
             rows_out=len(df),
@@ -169,9 +187,7 @@ class StepExecutor:
 
     def _read_file(self, step_name: str, file_path: str) -> pd.DataFrame:
         """Read a data file into a DataFrame."""
-        path = Path(file_path)
-        extension = path.suffix.lower()
-
+        extension = Path(file_path).suffix.lower()
         reader = SUPPORTED_FILE_EXTENSIONS.get(extension)
         if reader is None:
             raise UnsupportedFileFormatError(
@@ -180,9 +196,9 @@ class StepExecutor:
                 extension=extension,
                 supported_extensions=list(SUPPORTED_FILE_EXTENSIONS.keys()),
             )
-
         try:
-            return reader(file_path)
+            with storage_service.download(file_path) as handle:
+                return reader(handle)
         except Exception as exc:
             raise FileReadError(
                 step_name=step_name,
@@ -218,7 +234,10 @@ class StepExecutor:
             )
             logger.warning(
                 "Filter produced 0 rows: step=%s, column=%s, operator=%s, value=%s",
-                config.name, config.column, config.operator.value, config.value,
+                config.name,
+                config.column,
+                config.operator.value,
+                config.value,
             )
 
         recorder.record_passthrough(
@@ -351,7 +370,8 @@ class StepExecutor:
         self._validate_join_key(config.name, config.on, right_df, "right")
 
         joined_df = pd.merge(
-            left_df, right_df,
+            left_df,
+            right_df,
             on=config.on,
             how=config.how.value,
             suffixes=("_left", "_right"),
@@ -457,6 +477,20 @@ class StepExecutor:
         agg_dict: Dict[str, List[str]],
     ) -> pd.DataFrame:
         """Execute the group-by aggregation and flatten column names."""
+        # Ensure numeric columns for numeric aggregations
+        numeric_funcs = {"sum", "mean", "median", "std", "var"}
+        for col, funcs in agg_dict.items():
+            for func in funcs:
+                if func in numeric_funcs and not pd.api.types.is_numeric_dtype(
+                    input_df[col]
+                ):
+                    raise AggregationError(
+                        step_name=config.name,
+                        column=col,
+                        function=func,
+                        reason=f"Aggregation function '{func}' requires numeric column, but '{col}' is {input_df[col].dtype}",
+                    )
+
         try:
             grouped = input_df.groupby(config.group_by).agg(agg_dict)
         except Exception as exc:
@@ -469,8 +503,7 @@ class StepExecutor:
 
         # Flatten multi-level column names: (column, func) → column_func
         grouped.columns = [
-            f"{col}_{func}" if func != col else col
-            for col, func in grouped.columns
+            f"{col}_{func}" if func != col else col for col, func in grouped.columns
         ]
         return grouped.reset_index()
 
@@ -492,9 +525,9 @@ class StepExecutor:
         self._validate_column_exists(config.name, config.by, columns_in)
 
         ascending = config.order == SortOrder.ASC
-        sorted_df = input_df.sort_values(
-            by=config.by, ascending=ascending
-        ).reset_index(drop=True)
+        sorted_df = input_df.sort_values(by=config.by, ascending=ascending).reset_index(
+            drop=True
+        )
 
         recorder.record_passthrough(
             step_name=config.name,
@@ -520,10 +553,42 @@ class StepExecutor:
         config: SaveStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
-        """Save the input DataFrame to a file."""
+        """Save the input DataFrame to a file on disk (CSV or JSON)."""
+        import uuid as _uuid
+        import io
+
+        from backend.config import settings
+
         start = time.perf_counter()
         input_df = df_registry[config.input]
         columns = list(input_df.columns)
+
+        # Determine extension from filename or default to .csv
+        filename = config.filename
+        ext = Path(filename).suffix.lower() or ".csv"
+        if ext not in [".csv", ".json"]:
+            ext = ".csv"
+
+        stored_path = f"{filename}_{_uuid.uuid4().hex}{ext}"
+
+        try:
+            if ext == ".json":
+                buffer = io.BytesIO()
+                input_df.to_json(buffer, orient="records", indent=2)
+                buffer.seek(0)
+            else:
+                buffer = io.BytesIO()
+                input_df.to_csv(buffer, index=False)
+                buffer.seek(0)
+
+            storage_service.upload(buffer, stored_path)
+        except Exception as exc:
+            logger.error("Failed to save file %s: %s", stored_path, exc)
+            raise FileReadError(  # Reusing FileReadError as a generic storage error
+                step_name=config.name,
+                file_path=stored_path,
+                reason=str(exc),
+            ) from exc
 
         recorder.record_save(
             step_name=config.name,
@@ -534,7 +599,10 @@ class StepExecutor:
 
         logger.info(
             "Save step '%s': %d rows, %d columns → %s",
-            config.name, len(input_df), len(columns), config.filename,
+            config.name,
+            len(input_df),
+            len(columns),
+            stored_path,
         )
 
         return StepExecutionResult(
@@ -604,3 +672,255 @@ class StepExecutor:
                 column=column,
                 available_columns=available_columns,
             )
+
+    def execute_pivot(
+        self,
+        df_registry: Dict[str, pd.DataFrame],
+        config: PivotStepConfig,
+        recorder: LineageRecorder,
+    ) -> StepExecutionResult:
+        """Reshape data from long to wide format."""
+        start = time.perf_counter()
+        input_df = df_registry[config.input]
+        columns_in = list(input_df.columns)
+
+        all_cols = config.index + [config.columns, config.values]
+        for col in all_cols:
+            self._validate_column_exists(config.name, col, columns_in)
+
+        result = input_df.pivot_table(
+            index=config.index,
+            columns=config.columns,
+            values=config.values,
+            aggfunc=config.aggfunc,
+            fill_value=config.fill_value,
+        )
+
+        if isinstance(result.columns, pd.MultiIndex):
+            result.columns = [
+                f"{col[1]}_{col[0]}" if isinstance(col, tuple) else str(col)
+                for col in result.columns
+            ]
+        else:
+            result.columns = [str(col) for col in result.columns]
+        result = result.reset_index()
+
+        output_columns = list(result.columns)
+        recorder.record_pivot(
+            step_name=config.name,
+            input_step=config.input,
+            index_col=config.index[0] if config.index else "",
+            columns_col=config.columns,
+            values_col=config.values,
+            output_columns=output_columns,
+        )
+
+        return StepExecutionResult(
+            step_name=config.name,
+            step_type="pivot",
+            output_df=result,
+            rows_in=len(input_df),
+            rows_out=len(result),
+            columns_in=columns_in,
+            columns_out=list(result.columns),
+            duration_ms=measure_ms(start),
+        )
+
+    def execute_unpivot(
+        self,
+        df_registry: Dict[str, pd.DataFrame],
+        config: UnpivotStepConfig,
+        recorder: LineageRecorder,
+    ) -> StepExecutionResult:
+        """Reshape data from wide to long format."""
+        start = time.perf_counter()
+        input_df = df_registry[config.input]
+        columns_in = list(input_df.columns)
+
+        all_cols = config.id_vars + config.value_vars
+        for col in all_cols:
+            self._validate_column_exists(config.name, col, columns_in)
+
+        overlap = set(config.id_vars) & set(config.value_vars)
+        if overlap:
+            raise ValueError(f"id_vars and value_vars must not overlap: {overlap}")
+
+        result = input_df.melt(
+            id_vars=config.id_vars,
+            value_vars=config.value_vars,
+            var_name=config.var_name,
+            value_name=config.value_name,
+        )
+
+        output_columns = list(result.columns)
+        recorder.record_unpivot(
+            step_name=config.name,
+            input_step=config.input,
+            id_columns=config.id_vars,
+            value_columns=config.value_vars,
+            output_columns=output_columns,
+        )
+
+        return StepExecutionResult(
+            step_name=config.name,
+            step_type="unpivot",
+            output_df=result,
+            rows_in=len(input_df),
+            rows_out=len(result),
+            columns_in=columns_in,
+            columns_out=list(result.columns),
+            duration_ms=measure_ms(start),
+        )
+
+    def execute_deduplicate(
+        self,
+        df_registry: Dict[str, pd.DataFrame],
+        config: DeduplicateStepConfig,
+        recorder: LineageRecorder,
+    ) -> StepExecutionResult:
+        """Remove duplicate rows."""
+        start = time.perf_counter()
+        input_df = df_registry[config.input]
+        columns_in = list(input_df.columns)
+
+        if config.subset:
+            for col in config.subset:
+                self._validate_column_exists(config.name, col, columns_in)
+
+        keep = False if config.keep == "none" else config.keep
+        result = input_df.drop_duplicates(subset=config.subset, keep=keep)
+        result = result.reset_index(drop=True)
+
+        recorder.record_deduplicate(
+            step_name=config.name,
+            input_step=config.input,
+            columns=list(result.columns),
+            subset=config.subset,
+        )
+
+        return StepExecutionResult(
+            step_name=config.name,
+            step_type="deduplicate",
+            output_df=result,
+            rows_in=len(input_df),
+            rows_out=len(result),
+            columns_in=columns_in,
+            columns_out=list(result.columns),
+            duration_ms=measure_ms(start),
+        )
+
+    def execute_fill_nulls(
+        self,
+        df_registry: Dict[str, pd.DataFrame],
+        config: FillNullsStepConfig,
+        recorder: LineageRecorder,
+    ) -> StepExecutionResult:
+        """Fill missing values."""
+        start = time.perf_counter()
+        input_df = df_registry[config.input]
+        columns_in = list(input_df.columns)
+
+        for col in config.columns:
+            self._validate_column_exists(config.name, col, columns_in)
+
+        result = input_df.copy()
+
+        for col in config.columns:
+            if config.strategy == "constant":
+                if config.constant_value is None:
+                    raise ValueError(
+                        "constant_value required when strategy is 'constant'"
+                    )
+                result[col] = result[col].fillna(config.constant_value)
+            elif config.strategy == "forward_fill":
+                result[col] = result[col].ffill()
+            elif config.strategy == "backward_fill":
+                result[col] = result[col].bfill()
+            elif config.strategy == "mean":
+                if not pd.api.types.is_numeric_dtype(result[col]):
+                    raise ValueError(f"Strategy 'mean' requires numeric column")
+                result[col] = result[col].fillna(result[col].mean())
+            elif config.strategy == "median":
+                if not pd.api.types.is_numeric_dtype(result[col]):
+                    raise ValueError(f"Strategy 'median' requires numeric column")
+                result[col] = result[col].fillna(result[col].median())
+            elif config.strategy == "mode":
+                mode_val = result[col].mode()
+                if len(mode_val) > 0:
+                    result[col] = result[col].fillna(mode_val[0])
+
+        recorder.record_fill_nulls(
+            step_name=config.name,
+            input_step=config.input,
+            columns=list(result.columns),
+            method=config.strategy,
+        )
+
+        return StepExecutionResult(
+            step_name=config.name,
+            step_type="fill_nulls",
+            output_df=result,
+            rows_in=len(input_df),
+            rows_out=len(result),
+            columns_in=columns_in,
+            columns_out=list(result.columns),
+            duration_ms=measure_ms(start),
+        )
+
+    def execute_sample(
+        self,
+        df_registry: Dict[str, pd.DataFrame],
+        config: SampleStepConfig,
+        recorder: LineageRecorder,
+    ) -> StepExecutionResult:
+        """Take a random sample of rows."""
+        start = time.perf_counter()
+        input_df = df_registry[config.input]
+        columns_in = list(input_df.columns)
+
+        if config.n is None and config.fraction is None:
+            raise ValueError("Either n or fraction must be specified")
+        if config.n is not None and config.fraction is not None:
+            raise ValueError("Specify either n or fraction, not both")
+
+        if config.stratify_by:
+            self._validate_column_exists(config.name, config.stratify_by, columns_in)
+
+        if config.n is not None and config.n > len(input_df):
+            result = input_df.reset_index(drop=True)
+        elif config.stratify_by:
+            groups = []
+            target_n = config.n or int(len(input_df) * config.fraction)
+            for group_val, group_df in input_df.groupby(config.stratify_by):
+                group_n = max(1, int(len(group_df) / len(input_df) * target_n))
+                groups.append(
+                    group_df.sample(
+                        n=min(group_n, len(group_df)), random_state=config.random_state
+                    )
+                )
+            result = pd.concat(groups).sample(frac=1, random_state=config.random_state)
+        elif config.n is not None:
+            result = input_df.sample(n=config.n, random_state=config.random_state)
+        else:
+            result = input_df.sample(
+                frac=config.fraction, random_state=config.random_state
+            )
+
+        result = result.reset_index(drop=True)
+
+        recorder.record_sample(
+            step_name=config.name,
+            input_step=config.input,
+            columns=list(result.columns),
+        )
+
+        return StepExecutionResult(
+            step_name=config.name,
+            step_type="sample",
+            output_df=result,
+            rows_in=len(input_df),
+            rows_out=len(result),
+            columns_in=columns_in,
+            columns_out=list(result.columns),
+            duration_ms=measure_ms(start),
+        )

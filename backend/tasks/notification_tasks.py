@@ -24,6 +24,7 @@ def deliver_notifications_task(
     pipeline_name: str = "",
     status: str = "",
     error_message: str = "",
+    user_id: str = "",
 ) -> Dict[str, str]:
     """Deliver Slack/email notifications for a pipeline event."""
     db = SessionLocal()
@@ -35,6 +36,7 @@ def deliver_notifications_task(
             run_id=run_id,
             status=status,
             error_message=error_message,
+            user_id=user_id,
         )
         return {"run_id": run_id, "status": "delivered"}
     except Exception as exc:

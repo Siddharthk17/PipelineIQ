@@ -27,10 +27,12 @@ def deliver_webhooks_task(
     duration_ms: int = 0,
     steps_count: int = 0,
     rows_processed: int = 0,
+    user_id: str = "",
 ) -> Dict[str, str]:
     """Deliver webhooks for a pipeline run asynchronously."""
     try:
         from backend.services.webhook_service import trigger_webhooks_for_run
+
         trigger_webhooks_for_run(
             run_id=run_id,
             status=status,
@@ -38,6 +40,7 @@ def deliver_webhooks_task(
             duration_ms=duration_ms,
             steps_count=steps_count,
             rows_processed=rows_processed,
+            user_id=user_id,
         )
         return {"run_id": run_id, "status": "delivered"}
     except Exception as exc:

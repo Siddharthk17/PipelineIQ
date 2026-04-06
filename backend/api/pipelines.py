@@ -6,6 +6,7 @@ result retrieval, cancellation, and export.
 
 import logging
 import orjson
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
@@ -32,7 +33,10 @@ from backend.tasks.pipeline_tasks import execute_pipeline_task
 from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.utils.rate_limiter import limiter
 from backend.services.audit_service import log_action
-from backend.utils.uuid_utils import validate_uuid_format as _validate_uuid_format, as_uuid as _as_uuid
+from backend.utils.uuid_utils import (
+    validate_uuid_format as _validate_uuid_format,
+    as_uuid as _as_uuid,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +67,9 @@ def _create_and_queue_pipeline_run(
     db.commit()
     db.refresh(pipeline_run)
 
-    execute_pipeline_task.delay(str(pipeline_run.id))
+    result = execute_pipeline_task.delay(str(pipeline_run.id))
+    pipeline_run.celery_task_id = result.id
+    db.commit()
 
     log_action(
         db,
@@ -76,7 +82,10 @@ def _create_and_queue_pipeline_run(
     )
 
     logger.info("Pipeline run queued: id=%s, name=%s", pipeline_run.id, pipeline_name)
-    return RunPipelineResponse(run_id=str(pipeline_run.id), status=pipeline_run.status.value)
+    return RunPipelineResponse(
+        run_id=str(pipeline_run.id), status=pipeline_run.status.value
+    )
+
 
 @router.post(
     "/validate",
@@ -118,6 +127,7 @@ def validate_pipeline(
             for w in result.warnings
         ],
     )
+
 
 @router.post(
     "/plan",
@@ -163,6 +173,64 @@ def plan_pipeline(
         ],
     }
 
+
+def _check_pipeline_permission(
+    db: Session,
+    user: User,
+    pipeline_name: str,
+    required_levels: list[str],
+    grant_owner: bool = False,
+) -> None:
+    """Verify user has required permission level for the pipeline."""
+    if user.role == "admin":
+        return
+
+    from backend.models import PipelinePermission
+
+    permission = (
+        db.query(PipelinePermission)
+        .filter(
+            PipelinePermission.pipeline_name == pipeline_name,
+            PipelinePermission.user_id == user.id,
+        )
+        .first()
+    )
+
+    if not permission:
+        logger.info(
+            "No permission found for user %s on pipeline %s. grant_owner=%s",
+            user.id,
+            pipeline_name,
+            grant_owner,
+        )
+        if grant_owner and user.role != "viewer":
+            # First time this pipeline is run/created - grant ownership
+            new_perm = PipelinePermission(
+                pipeline_name=pipeline_name,
+                user_id=user.id,
+                permission_level="owner",
+            )
+            db.add(new_perm)
+            db.commit()
+            logger.info(
+                "Granted owner permission to user %s for pipeline %s",
+                user.id,
+                pipeline_name,
+            )
+            return
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User lacks required permissions ({', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
+        )
+
+    if permission.permission_level not in required_levels:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"User lacks required permissions ({', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
+        )
+
+
 @router.post(
     "/run",
     response_model=RunPipelineResponse,
@@ -179,6 +247,48 @@ def run_pipeline(
     current_user: User = Depends(get_current_user),
 ) -> RunPipelineResponse:
     """Create a pipeline run record and queue it for execution."""
+    # Parse YAML to get the pipeline name for permission check
+    parser = PipelineParser()
+    config = parser.parse(body.yaml_config)
+    pipeline_name = body.name or config.name
+
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
+    )
+
+    # Verify all referenced file IDs exist in the database and general config is valid
+    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    validation_result = parser.validate(config, registered_ids)
+
+    if not validation_result.is_valid:
+        # Specifically check for file registration errors to return 404
+        for error in validation_result.errors:
+            if (
+                "not found" in error.message.lower()
+                or "registered" in error.message.lower()
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Referenced file not found: {error.message}",
+                )
+
+        # Otherwise, return all validation errors as 400
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "Pipeline configuration is invalid",
+                "errors": [
+                    {
+                        "step_name": e.step_name,
+                        "field": e.field,
+                        "message": e.message,
+                        "suggestion": e.suggestion,
+                    }
+                    for e in validation_result.errors
+                ],
+            },
+        )
+
     return _create_and_queue_pipeline_run(
         yaml_config=body.yaml_config,
         name=body.name,
@@ -235,6 +345,7 @@ async def run_pipeline_legacy(
         current_user=current_user,
     )
 
+
 @router.get(
     "/",
     response_model=PipelineRunListResponse,
@@ -246,14 +357,15 @@ def list_pipeline_runs(
     response: Response,
     page: int = 1,
     limit: int = 20,
-    status_filter: str = None,
+    status_filter: Optional[str] = None,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> PipelineRunListResponse:
     """List pipeline runs with pagination, ordered by creation time."""
     page = max(1, page)
     limit = max(1, min(limit, 100))
 
-    query = db.query(PipelineRun)
+    query = db.query(PipelineRun).filter(PipelineRun.user_id == current_user.id)
     if status_filter:
         try:
             ps = PipelineStatus(status_filter.upper())
@@ -263,8 +375,7 @@ def list_pipeline_runs(
 
     total = query.count()
     runs = (
-        query
-        .order_by(PipelineRun.created_at.desc())
+        query.order_by(PipelineRun.created_at.desc())
         .offset((page - 1) * limit)
         .limit(limit)
         .all()
@@ -273,6 +384,7 @@ def list_pipeline_runs(
         runs=[_run_to_response(r) for r in runs],
         total=total,
     )
+
 
 @router.get(
     "/stats",
@@ -283,20 +395,50 @@ def get_pipeline_stats(
     request: Request,
     response: Response,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ):
     """Get aggregate pipeline statistics."""
     from sqlalchemy import func
-    total_runs = db.query(func.count(PipelineRun.id)).scalar() or 0
-    completed = db.query(func.count(PipelineRun.id)).filter(
-        PipelineRun.status == PipelineStatus.COMPLETED
-    ).scalar() or 0
-    failed = db.query(func.count(PipelineRun.id)).filter(
-        PipelineRun.status == PipelineStatus.FAILED
-    ).scalar() or 0
-    pending = db.query(func.count(PipelineRun.id)).filter(
-        PipelineRun.status == PipelineStatus.PENDING
-    ).scalar() or 0
-    total_files = db.query(func.count(UploadedFile.id)).scalar() or 0
+
+    total_runs = (
+        db.query(func.count(PipelineRun.id))
+        .filter(PipelineRun.user_id == current_user.id)
+        .scalar()
+        or 0
+    )
+    completed = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.COMPLETED,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    failed = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.FAILED,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    pending = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.PENDING,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    total_files = (
+        db.query(func.count(UploadedFile.id))
+        .filter(UploadedFile.user_id == current_user.id)
+        .scalar()
+        or 0
+    )
     return {
         "total_runs": total_runs,
         "completed": completed,
@@ -305,6 +447,7 @@ def get_pipeline_stats(
         "success_rate": round(completed / total_runs * 100, 1) if total_runs > 0 else 0,
         "total_files": total_files,
     }
+
 
 @router.get(
     "/{run_id}",
@@ -317,22 +460,33 @@ def get_pipeline_run(
     request: Request,
     response: Response,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> PipelineRunResponse:
     """Get full details of a specific pipeline run."""
+    logger.info("DEBUG: User %s accessing run %s", current_user.id, run_id)
     _validate_uuid_format(run_id)
-    pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    pipeline_run = (
+        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    )
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline run '{run_id}' not found",
         )
+
+    _check_pipeline_permission(
+        db, current_user, pipeline_run.name, ["owner", "runner", "viewer"]
+    )
+
     return _run_to_response(pipeline_run)
+
 
 def _ensure_utc(dt):
     """Attach UTC tzinfo to naive datetimes from SQLite."""
     if dt is not None and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
+
 
 def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
     """Convert a PipelineRun ORM model to an API response."""
@@ -365,8 +519,10 @@ def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
         ],
     )
 
+
 def _status_cache_key(run_id: str) -> str:
     return f"pipeline_progress:last:{run_id}"
+
 
 @router.post(
     "/{run_id}/cancel",
@@ -381,12 +537,16 @@ def cancel_pipeline_run(
 ) -> dict:
     """Cancel a pipeline run by setting status to CANCELLED and revoking the task."""
     _validate_uuid_format(run_id)
-    pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    pipeline_run = (
+        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    )
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline run '{run_id}' not found",
         )
+
+    _check_pipeline_permission(db, current_user, pipeline_run.name, ["owner", "runner"])
 
     if pipeline_run.status not in (PipelineStatus.PENDING, PipelineStatus.RUNNING):
         raise HTTPException(
@@ -396,9 +556,12 @@ def cancel_pipeline_run(
 
     # Revoke the Celery task
     from backend.celery_app import celery_app as _celery_app
-    _celery_app.control.revoke(run_id, terminate=True, signal="SIGTERM")
+
+    task_id = pipeline_run.celery_task_id or run_id
+    _celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
 
     from backend.utils.time_utils import utcnow
+
     pipeline_run.status = PipelineStatus.CANCELLED
     pipeline_run.completed_at = utcnow()
     pipeline_run.error_message = "Cancelled by user"
@@ -415,16 +578,24 @@ def cancel_pipeline_run(
             f"pipeline_progress:{run_id}",
             orjson.dumps(cancel_payload),
         )
-        get_cache_redis().setex(_status_cache_key(run_id), 3600, orjson.dumps(cancel_payload))
+        get_cache_redis().setex(
+            _status_cache_key(run_id), 3600, orjson.dumps(cancel_payload)
+        )
     except RedisError:
         logger.warning("Failed to publish cancellation SSE event for run_id=%s", run_id)
 
-    log_action(db, "pipeline_cancelled", user_id=current_user.id,
-               resource_type="pipeline", resource_id=pipeline_run.id,
-               request=request)
+    log_action(
+        db,
+        "pipeline_cancelled",
+        user_id=current_user.id,
+        resource_type="pipeline",
+        resource_id=pipeline_run.id,
+        request=request,
+    )
 
     logger.info("Pipeline run cancelled: id=%s", run_id)
     return {"run_id": run_id, "status": "CANCELLED"}
+
 
 @router.post(
     "/preview",
@@ -471,6 +642,7 @@ def preview_pipeline_step(
         "note": "Full sample data preview requires pipeline execution. Use /plan for detailed estimates.",
     }
 
+
 @router.get(
     "/{run_id}/export",
     summary="Export pipeline run output",
@@ -487,12 +659,16 @@ def export_pipeline_output(
     from fastapi.responses import FileResponse
 
     _validate_uuid_format(run_id)
-    pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    pipeline_run = (
+        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    )
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline run '{run_id}' not found",
         )
+
+    _check_pipeline_permission(db, current_user, pipeline_run.name, ["owner", "runner"])
 
     if pipeline_run.status != PipelineStatus.COMPLETED:
         raise HTTPException(
@@ -500,42 +676,51 @@ def export_pipeline_output(
             detail=f"Pipeline run is not completed (status: {pipeline_run.status.value})",
         )
 
-    # Look for output files in the uploads directory matching this run
+    # Look for output files in the uploads directory matching known save conventions.
     output_dir = settings.UPLOAD_DIR
-    possible_patterns = [
-        output_dir / f"{run_id}*.csv",
-        output_dir / f"{run_id}*.json",
-    ]
-
     import glob as glob_module
-    output_files = []
-    for pattern in possible_patterns:
-        output_files.extend(glob_module.glob(str(pattern)))
+    import yaml
 
-    # Also check for files saved by the pipeline (look in step results for save steps)
+    output_files: list[str] = []
+    seen: set[str] = set()
+
+    def _add_matches(pattern: Path) -> None:
+        for match in glob_module.glob(str(pattern)):
+            if match not in seen:
+                seen.add(match)
+                output_files.append(match)
+
+    # Older conventions may include run_id in output filenames.
+    for pattern in [output_dir / f"{run_id}*.csv", output_dir / f"{run_id}*.json"]:
+        _add_matches(pattern)
+
+    # Current save step writes: "{filename}_{uuid}.csv"
     for sr in pipeline_run.step_results:
-        if sr.step_type == "save":
-            # Try common output paths
-            for ext in [".csv", ".json"]:
-                candidate = output_dir / f"{sr.step_name}{ext}"
-                if candidate.exists():
-                    output_files.append(str(candidate))
+        if sr.step_type != "save":
+            continue
+        for ext in [".csv", ".json"]:
+            _add_matches(output_dir / f"{sr.step_name}_*{ext}")
+            _add_matches(output_dir / f"{sr.step_name}{ext}")
 
-    if not output_files:
-        # Fall back: check if any output filename is embedded in the YAML
-        import yaml
-        try:
-            parsed = yaml.safe_load(pipeline_run.yaml_config)
-            steps = parsed.get("pipeline", {}).get("steps", [])
-            for step in steps:
-                if step.get("type") == "save":
-                    filename = step.get("filename", "")
-                    if filename:
-                        candidate = output_dir / filename
-                        if candidate.exists():
-                            output_files.append(str(candidate))
-        except Exception:
-            pass
+    # Parse YAML and look for save.filename values.
+    try:
+        parsed = yaml.safe_load(pipeline_run.yaml_config) or {}
+        steps = parsed.get("pipeline", {}).get("steps", [])
+        for step in steps:
+            if step.get("type") != "save":
+                continue
+            filename = str(step.get("filename", "")).strip()
+            if not filename:
+                continue
+            for ext in [".csv", ".json"]:
+                _add_matches(output_dir / filename)
+                _add_matches(output_dir / f"{filename}_*{ext}")
+                if not filename.endswith(ext):
+                    _add_matches(output_dir / f"{filename}{ext}")
+    except (TypeError, ValueError, yaml.YAMLError):
+        logger.warning(
+            "Could not parse YAML while locating export file for run_id=%s", run_id
+        )
 
     if not output_files:
         raise HTTPException(

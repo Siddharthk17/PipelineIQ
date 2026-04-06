@@ -11,6 +11,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.requests import Request
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -33,7 +34,9 @@ def get_password_hash(password: str) -> str:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
 
@@ -48,15 +51,25 @@ def verify_token(token: str) -> Optional[dict]:
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    request: Request = None,
     db: Session = Depends(get_db),
 ) -> User:
-    if credentials is None:
+    # First try Authorization header (Bearer token)
+    token = None
+    if credentials is not None:
+        token = credentials.credentials
+
+    # Fallback to cookie if no Bearer token
+    if token is None and request is not None:
+        token = request.cookies.get("pipelineiq_token")
+
+    if token is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = credentials.credentials
+
     payload = verify_token(token)
     if not payload:
         raise HTTPException(
@@ -69,6 +82,7 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid token payload")
     try:
         import uuid as _uuid
+
         uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
     except (ValueError, AttributeError):
         raise HTTPException(status_code=401, detail="Invalid token payload")
@@ -93,12 +107,17 @@ async def get_current_user_sse(
         description="JWT token for SSE EventSource clients that cannot set headers",
     ),
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    request: Request = None,
     db: Session = Depends(get_db),
 ) -> User:
-    """Authenticate SSE clients via query token or standard Bearer header."""
+    """Authenticate SSE clients via query token, standard Bearer header, or cookies."""
     raw_token = token
     if raw_token is None and credentials is not None:
         raw_token = credentials.credentials
+
+    # Fallback to cookie if no token provided in query or header
+    if raw_token is None and request is not None:
+        raw_token = request.cookies.get("pipelineiq_token")
 
     if raw_token is None:
         raise HTTPException(
@@ -147,6 +166,7 @@ def get_optional_user(
         return None
     try:
         import uuid as _uuid
+
         uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
     except (ValueError, AttributeError):
         return None

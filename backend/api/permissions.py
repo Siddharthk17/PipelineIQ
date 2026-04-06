@@ -19,17 +19,21 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pipelines", tags=["permissions"])
 
+
 class GrantPermissionRequest(BaseModel):
     """Request body to grant a permission on a pipeline."""
 
     user_id: str = Field(..., description="UUID of the user to grant permission to")
-    permission_level: str = Field(..., description="Permission level: 'owner', 'runner', or 'viewer'")
+    permission_level: str = Field(
+        ..., description="Permission level: 'owner', 'runner', or 'viewer'"
+    )
 
     @field_validator("permission_level")
     @classmethod
     def normalize_permission_level(cls, value: str) -> str:
         """Accept case-insensitive permission levels from clients."""
         return value.strip().lower()
+
 
 class PermissionResponse(BaseModel):
     """Response for a pipeline permission entry."""
@@ -40,14 +44,18 @@ class PermissionResponse(BaseModel):
     permission_level: str
     created_at: str | None = None
 
+
 def _permission_to_response(perm: PipelinePermission) -> PermissionResponse:
     return PermissionResponse(
         id=str(perm.id),
         pipeline_name=perm.pipeline_name,
         user_id=str(perm.user_id),
-        permission_level=perm.permission_level.value if hasattr(perm.permission_level, "value") else str(perm.permission_level),
+        permission_level=perm.permission_level.value
+        if hasattr(perm.permission_level, "value")
+        else str(perm.permission_level),
         created_at=perm.created_at.isoformat() if perm.created_at else None,
     )
+
 
 def _require_owner(db: Session, pipeline_name: str, user: User) -> None:
     """Raise 403 if the user is not an owner of the pipeline."""
@@ -66,6 +74,7 @@ def _require_owner(db: Session, pipeline_name: str, user: User) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only pipeline owners or admins can manage permissions",
         )
+
 
 @router.post(
     "/{pipeline_name}/permissions",
@@ -94,7 +103,9 @@ def grant_permission(
     validate_uuid_format(body.user_id)
     target_user = db.query(User).filter(User.id == as_uuid(body.user_id)).first()
     if not target_user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target user not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Target user not found"
+        )
 
     # Check if permission already exists
     existing = (
@@ -121,15 +132,26 @@ def grant_permission(
     db.commit()
     db.refresh(perm)
 
-    log_action(db, "permission_granted", user_id=current_user.id,
-               resource_type="pipeline_permission", resource_id=perm.id,
-               details={"pipeline_name": pipeline_name, "target_user": body.user_id, "level": body.permission_level},
-               request=request)
+    log_action(
+        db,
+        "permission_granted",
+        user_id=current_user.id,
+        resource_type="pipeline_permission",
+        resource_id=perm.id,
+        details={
+            "pipeline_name": pipeline_name,
+            "target_user": body.user_id,
+            "level": body.permission_level,
+        },
+        request=request,
+    )
 
     return _permission_to_response(perm)
 
+
 @router.get(
     "/{pipeline_name}/permissions",
+    response_model=None,
     summary="List permissions on a pipeline",
 )
 def list_permissions(
@@ -138,7 +160,8 @@ def list_permissions(
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """List all permission entries for a specific pipeline."""
+    """List all permission entries for a specific pipeline (owner/admin only)."""
+    _require_owner(db, pipeline_name, current_user)
     permissions = (
         db.query(PipelinePermission)
         .filter(PipelinePermission.pipeline_name == pipeline_name)
@@ -150,6 +173,7 @@ def list_permissions(
         "permissions": [_permission_to_response(p) for p in permissions],
         "total": len(permissions),
     }
+
 
 @router.delete(
     "/{pipeline_name}/permissions/{user_id}",
@@ -175,14 +199,23 @@ def revoke_permission(
         .first()
     )
     if not perm:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found"
+        )
 
     db.delete(perm)
     db.commit()
 
-    log_action(db, "permission_revoked", user_id=current_user.id,
-               resource_type="pipeline_permission", resource_id=as_uuid(user_id),
-               details={"pipeline_name": pipeline_name, "target_user": user_id},
-               request=request)
+    log_action(
+        db,
+        "permission_revoked",
+        user_id=current_user.id,
+        resource_type="pipeline_permission",
+        resource_id=as_uuid(user_id),
+        details={"pipeline_name": pipeline_name, "target_user": user_id},
+        request=request,
+    )
 
-    return {"detail": f"Permission revoked for user '{user_id}' on pipeline '{pipeline_name}'"}
+    return {
+        "detail": f"Permission revoked for user '{user_id}' on pipeline '{pipeline_name}'"
+    }

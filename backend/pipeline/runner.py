@@ -30,21 +30,23 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineStatus(str, Enum):
-    """Lifecycle states for a pipeline run."""
+    """Lifecycle states for a pipeline run (internal to runner)."""
 
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class StepStatus(str, Enum):
-    """Lifecycle states for an individual pipeline step."""
+    """Lifecycle states for an individual pipeline step (internal to runner)."""
 
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
 
 
 @dataclass
@@ -120,7 +122,9 @@ class PipelineRunner:
 
         logger.info(
             "Pipeline '%s' (run_id=%s) starting with %d steps",
-            config.name, run_id, len(config.steps),
+            config.name,
+            run_id,
+            len(config.steps),
         )
 
         try:
@@ -154,7 +158,9 @@ class PipelineRunner:
         total_duration = measure_ms(pipeline_start)
         logger.info(
             "Pipeline '%s' (run_id=%s) completed in %s",
-            config.name, run_id, format_duration(total_duration),
+            config.name,
+            run_id,
+            format_duration(total_duration),
         )
 
         return PipelineExecutionSummary(
@@ -180,17 +186,22 @@ class PipelineRunner:
         callback: ProgressCallback,
     ) -> StepExecutionResult:
         """Execute a single step with progress event emission."""
-        callback(StepProgressEvent(
-            run_id=run_id,
-            step_name=step.name,
-            step_index=index,
-            total_steps=total_steps,
-            status=StepStatus.RUNNING,
-        ))
+        callback(
+            StepProgressEvent(
+                run_id=run_id,
+                step_name=step.name,
+                step_index=index,
+                total_steps=total_steps,
+                status=StepStatus.RUNNING,
+            )
+        )
 
         logger.info(
             "Executing step %d/%d: '%s' (type=%s)",
-            index + 1, total_steps, step.name, step.step_type,
+            index + 1,
+            total_steps,
+            step.name,
+            step.step_type,
         )
 
         try:
@@ -202,30 +213,37 @@ class PipelineRunner:
                 file_metadata=file_metadata,
             )
         except StepExecutionError as exc:
-            callback(StepProgressEvent(
+            callback(
+                StepProgressEvent(
+                    run_id=run_id,
+                    step_name=step.name,
+                    step_index=index,
+                    total_steps=total_steps,
+                    status=StepStatus.FAILED,
+                    error_message=str(exc),
+                )
+            )
+            raise
+
+        callback(
+            StepProgressEvent(
                 run_id=run_id,
                 step_name=step.name,
                 step_index=index,
                 total_steps=total_steps,
-                status=StepStatus.FAILED,
-                error_message=str(exc),
-            ))
-            raise
-
-        callback(StepProgressEvent(
-            run_id=run_id,
-            step_name=step.name,
-            step_index=index,
-            total_steps=total_steps,
-            status=StepStatus.COMPLETED,
-            rows_in=result.rows_in,
-            rows_out=result.rows_out,
-            duration_ms=result.duration_ms,
-        ))
+                status=StepStatus.COMPLETED,
+                rows_in=result.rows_in,
+                rows_out=result.rows_out,
+                duration_ms=result.duration_ms,
+            )
+        )
 
         logger.info(
             "Step '%s' completed: %d → %d rows in %dms",
-            step.name, result.rows_in, result.rows_out, result.duration_ms,
+            step.name,
+            result.rows_in,
+            result.rows_out,
+            result.duration_ms,
         )
 
         return result
@@ -243,7 +261,9 @@ class PipelineRunner:
         """Build a summary for a failed pipeline execution."""
         logger.error(
             "Pipeline '%s' (run_id=%s) failed: %s",
-            config.name, run_id, error,
+            config.name,
+            run_id,
+            error,
         )
         return PipelineExecutionSummary(
             run_id=run_id,

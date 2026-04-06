@@ -31,5 +31,5 @@ USER appuser
 EXPOSE 8000
 EXPOSE 8001
 
-# Run migrations, seed data, background worker, then API
-CMD ["sh", "-c", "alembic upgrade head && python scripts/seed_demo.py && celery -A celery_app worker --loglevel=info -D && gunicorn backend.main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 120 --bind 0.0.0.0:${PORT:-8000}"]
+# No default CMD — each compose service defines its own entrypoint.
+# This image is used by api, sse-service, worker-*, celery-beat, and flower.

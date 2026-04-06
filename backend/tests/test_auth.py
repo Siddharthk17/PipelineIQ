@@ -11,19 +11,28 @@ from backend.auth import ALGORITHM, get_password_hash, create_access_token
 
 # Helpers
 
-def register_user(auth_client, email="test@example.com", username="testuser", password="Str0ngP@ss!"):
-    return auth_client.post("/auth/register", json={
-        "email": email,
-        "username": username,
-        "password": password,
-    })
+
+def register_user(
+    auth_client, email="test@example.com", username="testuser", password="Str0ngP@ss!"
+):
+    return auth_client.post(
+        "/auth/register",
+        json={
+            "email": email,
+            "username": username,
+            "password": password,
+        },
+    )
 
 
 def login_user(auth_client, email="test@example.com", password="Str0ngP@ss!"):
-    return auth_client.post("/auth/login", json={
-        "email": email,
-        "password": password,
-    })
+    return auth_client.post(
+        "/auth/login",
+        json={
+            "email": email,
+            "password": password,
+        },
+    )
 
 
 def auth_header(token):
@@ -31,6 +40,7 @@ def auth_header(token):
 
 
 # Registration
+
 
 def test_register_first_user_becomes_admin(auth_client):
     r = register_user(auth_client, "admin1@test.com", "admin1")
@@ -69,6 +79,7 @@ def test_register_short_password_returns_422(auth_client):
 
 # Login
 
+
 def test_login_valid_credentials_returns_token(auth_client):
     register_user(auth_client, "login@test.com", "loginuser")
     r = login_user(auth_client, "login@test.com")
@@ -93,6 +104,7 @@ def test_login_nonexistent_user_returns_401(auth_client):
 
 # Token / Profile
 
+
 def test_get_me_with_valid_token(auth_client):
     register_user(auth_client, "me@test.com", "meuser")
     token = login_user(auth_client, "me@test.com").json()["access_token"]
@@ -109,15 +121,20 @@ def test_get_me_with_invalid_token_returns_401(auth_client):
 def test_get_me_with_expired_token_returns_401(auth_client):
     register_user(auth_client, "exp@test.com", "expuser")
     # Create a token that expired 1 second ago
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from backend.config import settings
-    payload = {"sub": "fake-id", "exp": datetime.utcnow() - timedelta(seconds=1)}
+
+    payload = {
+        "sub": "fake-id",
+        "exp": datetime.now(timezone.utc) - timedelta(seconds=1),
+    }
     token = jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
     r = auth_client.get("/auth/me", headers=auth_header(token))
     assert r.status_code == 401
 
 
 # Route protection
+
 
 def test_protected_route_without_token_returns_401(auth_client):
     r = auth_client.post("/api/v1/pipelines/validate", json={"yaml_config": "test"})
@@ -138,6 +155,7 @@ def test_protected_route_with_valid_token_succeeds(auth_client):
 
 # RBAC
 
+
 def test_admin_route_with_viewer_token_returns_403(auth_client):
     register_user(auth_client, "adm@test.com", "admuser")  # admin (first)
     register_user(auth_client, "view@test.com", "viewuser")  # viewer
@@ -154,6 +172,7 @@ def test_admin_route_with_admin_token_succeeds(auth_client):
 
 
 # Logout
+
 
 def test_logout_returns_200(auth_client):
     register_user(auth_client, "bye@test.com", "byeuser")

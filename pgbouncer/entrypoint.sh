@@ -39,6 +39,8 @@ server_idle_timeout = ${SERVER_IDLE_TIMEOUT}
 client_idle_timeout = ${CLIENT_IDLE_TIMEOUT}
 ignore_startup_parameters = extra_float_digits
 log_pooler_errors = ${LOG_POOLER_ERRORS}
+log_connections = 0
+log_disconnections = 0
 admin_users = ${DB_USER}
 EOF
 

@@ -7,7 +7,7 @@ setting is missing or invalid, preventing runtime configuration errors.
 
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
 
-    DATABASE_URL: str = "postgresql://postgres:pipelineiq_dev_password@localhost:5432/pipelineiq"
+    DATABASE_URL: str = (
+        "postgresql://postgres:pipelineiq_dev_password@localhost:5432/pipelineiq"
+    )
     DATABASE_WRITE_URL: str = ""
     DATABASE_READ_URL: str = ""
     READ_REPLICA_HOST: str = "localhost"
@@ -62,7 +64,9 @@ class Settings(BaseSettings):
 
     API_PREFIX: str = "/api/v1"
     CORS_ORIGINS: List[str] = [
-        "http://localhost", "http://localhost:80", "http://localhost:3000",
+        "http://localhost",
+        "http://localhost:80",
+        "http://localhost:3000",
         "https://pipeline-iq0.vercel.app",
         "https://pipelineiq-api.onrender.com",
     ]
@@ -79,6 +83,10 @@ class Settings(BaseSettings):
     # Schema Drift
     DRIFT_DETECTION_ENABLED: bool = True
 
+    # Data Profiling
+    PROFILE_MAX_ROWS: int = 1_000_000
+    PROFILE_SAMPLE_ROWS: int = 100_000
+
     # Versioning
     MAX_VERSIONS_PER_PIPELINE: int = 50
 
@@ -89,6 +97,13 @@ class Settings(BaseSettings):
     # Grafana
     GRAFANA_USER: str = "admin"
     GRAFANA_PASSWORD: str = "change-me-in-production"
+
+    # S3 / MinIO Storage
+    STORAGE_TYPE: str = "local"  # "local" or "s3"
+    S3_ACCESS_KEY: str = ""
+    S3_SECRET_KEY: str = ""
+    S3_BUCKET: str = "pipelineiq"
+    S3_ENDPOINT_URL: Optional[str] = None  # Required for MinIO
 
     # Sentry
     SENTRY_DSN: str = ""
@@ -163,7 +178,10 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_secret_key_in_production(self) -> "Settings":
         """Prevent startup with default SECRET_KEY in production."""
-        if self.ENVIRONMENT == "production" and self.SECRET_KEY == "change-me-in-production":
+        if (
+            self.ENVIRONMENT == "production"
+            and self.SECRET_KEY == "change-me-in-production"
+        ):
             raise ValueError(
                 "SECRET_KEY must be changed from the default value in production. "
                 "Set the SECRET_KEY environment variable to a strong random string."

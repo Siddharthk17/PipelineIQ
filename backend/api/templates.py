@@ -16,7 +16,7 @@ PIPELINE_TEMPLATES = [
     {
         "id": "etl-basic",
         "name": "Basic ETL Pipeline",
-        "description": "Extract data from a CSV file, apply transformations (rename, filter, compute), and save the result.",
+        "description": "Extract data from a CSV file, apply transformations (rename, filter), and save the result.",
         "category": "ETL",
         "yaml_config": (
             "pipeline:\n"
@@ -33,7 +33,9 @@ PIPELINE_TEMPLATES = [
             "    - name: filter_rows\n"
             "      type: filter\n"
             "      input: rename_columns\n"
-            "      condition: \"new_name != ''\"\n"
+            "      column: new_name\n"
+            "      operator: not_equals\n"
+            "      value: ''\n"
             "    - name: save_output\n"
             "      type: save\n"
             "      input: filter_rows\n"
@@ -43,7 +45,7 @@ PIPELINE_TEMPLATES = [
     {
         "id": "data-cleaning",
         "name": "Data Cleaning Pipeline",
-        "description": "Load a dataset, drop duplicates, fill missing values, and standardize column types.",
+        "description": "Load a dataset, drop duplicates, fill missing values, and save the cleaned data.",
         "category": "Data Cleaning",
         "yaml_config": (
             "pipeline:\n"
@@ -56,9 +58,11 @@ PIPELINE_TEMPLATES = [
             "      type: deduplicate\n"
             "      input: load_data\n"
             "    - name: fill_missing\n"
-            "      type: fill_missing\n"
+            "      type: fill_nulls\n"
             "      input: deduplicate\n"
             "      strategy: mean\n"
+            "      columns:\n"
+            "        - amount\n"
             "    - name: save_clean\n"
             "      type: save\n"
             "      input: fill_missing\n"
@@ -68,7 +72,7 @@ PIPELINE_TEMPLATES = [
     {
         "id": "data-validation",
         "name": "Data Validation Pipeline",
-        "description": "Load data and run validation checks (null checks, range checks, type checks) before saving.",
+        "description": "Load data and run validation checks before saving.",
         "category": "Data Validation",
         "yaml_config": (
             "pipeline:\n"
@@ -77,13 +81,19 @@ PIPELINE_TEMPLATES = [
             "    - name: load_data\n"
             "      type: load\n"
             "      file_id: <YOUR_FILE_ID>\n"
-            "    - name: validate\n"
-            "      type: filter\n"
+            "    - name: validate_data\n"
+            "      type: validate\n"
             "      input: load_data\n"
-            "      condition: \"amount > 0\"\n"
+            "      rules:\n"
+            "        - check: not_null\n"
+            "          column: amount\n"
+            "          severity: error\n"
+            "        - check: positive\n"
+            "          column: amount\n"
+            "          severity: error\n"
             "    - name: save_valid\n"
             "      type: save\n"
-            "      input: validate\n"
+            "      input: validate_data\n"
             "      filename: validated_data.csv\n"
         ),
     },
@@ -105,8 +115,10 @@ PIPELINE_TEMPLATES = [
             "      group_by:\n"
             "        - category\n"
             "      aggregations:\n"
-            "        amount: sum\n"
-            "        id: count\n"
+            "        - column: amount\n"
+            "          function: sum\n"
+            "        - column: id\n"
+            "          function: count\n"
             "    - name: save_summary\n"
             "      type: save\n"
             "      input: group_and_aggregate\n"
@@ -130,10 +142,10 @@ PIPELINE_TEMPLATES = [
             "      file_id: <RIGHT_FILE_ID>\n"
             "    - name: join_data\n"
             "      type: join\n"
-            "      left_input: load_left\n"
-            "      right_input: load_right\n"
-            "      join_key: id\n"
-            "      join_type: inner\n"
+            "      left: load_left\n"
+            "      right: load_right\n"
+            "      on: id\n"
+            "      how: inner\n"
             "    - name: save_merged\n"
             "      type: save\n"
             "      input: join_data\n"
@@ -143,6 +155,7 @@ PIPELINE_TEMPLATES = [
 ]
 
 _TEMPLATES_BY_ID = {t["id"]: t for t in PIPELINE_TEMPLATES}
+
 
 @router.get(
     "/",
@@ -163,6 +176,7 @@ def list_templates() -> dict:
         ],
         "total": len(PIPELINE_TEMPLATES),
     }
+
 
 @router.get(
     "/{template_id}",
