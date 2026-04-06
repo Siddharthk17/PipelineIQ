@@ -18,6 +18,7 @@ task_routes = {
     "webhooks.deliver": {"queue": "critical"},
     "notifications.deliver": {"queue": "critical"},
     "schedules.check": {"queue": "bulk"},
+    "tasks.profile_file": {"queue": "bulk"},
 }
 
 task_serializer = "json"
@@ -30,11 +31,12 @@ task_acks_late = True
 worker_prefetch_multiplier = 1
 broker_connection_retry_on_startup = True
 
-# Default execution safety and retries.
+# Default execution safety.
 task_soft_time_limit = 300
 task_time_limit = 360
 task_default_retry_delay = 30
-task_annotations = {"*": {"max_retries": 3}}
+# Task-level retry policies are defined per-task via decorators.
+task_annotations = {}
 
 # Keep result backend short-lived to avoid Redis growth.
 result_expires = 3600

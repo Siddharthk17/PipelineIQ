@@ -62,7 +62,9 @@ def _create_user(test_db, email: str, username: str, role: str = "viewer") -> Us
     return user
 
 
-def _create_run(test_db, owner_id, status: PipelineStatus = PipelineStatus.RUNNING) -> PipelineRun:
+def _create_run(
+    test_db, owner_id, status: PipelineStatus = PipelineStatus.RUNNING
+) -> PipelineRun:
     run = PipelineRun(
         name="sse-run",
         status=status,
@@ -195,16 +197,20 @@ class _FakeCacheClient:
 
 @pytest.mark.asyncio
 async def test_live_generator_emits_cached_terminal_and_stream_end(monkeypatch):
-    payload = orjson.dumps({
-        "run_id": "r-1",
-        "event_type": "pipeline_completed",
-        "status": "COMPLETED",
-    })
+    payload = orjson.dumps(
+        {
+            "run_id": "r-1",
+            "event_type": "pipeline_completed",
+            "status": "COMPLETED",
+        }
+    )
     fake_pubsub = _FakePubSub(messages=[])
     fake_pubsub_client = _FakeRedisClient(fake_pubsub)
     fake_cache = _FakeCacheClient(payload)
 
-    monkeypatch.setattr(sse_module, "get_pubsub_redis_async", lambda: fake_pubsub_client)
+    monkeypatch.setattr(
+        sse_module, "get_pubsub_redis_async", lambda: fake_pubsub_client
+    )
     monkeypatch.setattr(sse_module, "get_cache_redis_async", lambda: fake_cache)
 
     request = _FakeRequest([False])
@@ -235,15 +241,17 @@ async def test_live_generator_emits_heartbeat_when_idle(monkeypatch):
             return 16.0
 
     monkeypatch.setattr(sse_module.time, "monotonic", _fake_monotonic)
-    monkeypatch.setattr(sse_module, "get_pubsub_redis_async", lambda: fake_pubsub_client)
+    monkeypatch.setattr(
+        sse_module, "get_pubsub_redis_async", lambda: fake_pubsub_client
+    )
     monkeypatch.setattr(sse_module, "get_cache_redis_async", lambda: fake_cache)
 
     request = _FakeRequest([False, True])
     generator = sse_module._live_event_generator("r-2", request, "RUNNING")
     first = await anext(generator)
     assert first.startswith("event: pipeline_status\ndata: ")
-    assert "\"run_id\":\"r-2\"" in first
-    assert "\"status\":\"RUNNING\"" in first
+    assert '"run_id":"r-2"' in first
+    assert '"status":"RUNNING"' in first
     second = await anext(generator)
     assert second == ": heartbeat\n\n"
     with pytest.raises(StopAsyncIteration):
@@ -262,13 +270,15 @@ def test_progress_callback_publishes_and_caches_status(monkeypatch):
     monkeypatch.setattr(pipeline_tasks, "get_cache_redis", lambda: fake_cache)
 
     callback = pipeline_tasks.make_redis_progress_callback("run-cache")
-    callback(StepProgressEvent(
-        run_id="run-cache",
-        step_name="load_sales",
-        step_index=0,
-        total_steps=3,
-        status=StepStatus.RUNNING,
-    ))
+    callback(
+        StepProgressEvent(
+            run_id="run-cache",
+            step_name="load_sales",
+            step_index=0,
+            total_steps=3,
+            status=StepStatus.RUNNING,
+        )
+    )
 
     fake_pubsub.publish.assert_called_once()
     fake_cache.setex.assert_called_once()

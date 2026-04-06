@@ -9,7 +9,10 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.models import LineageGraph, PipelineRun, PipelineStatus
+from backend.pipeline.lineage import LineageRecorder
 from backend.tests.conftest import build_simple_pipeline_yaml, upload_file
+from backend.utils.uuid_utils import as_uuid
 
 
 class TestHealthEndpoint:
@@ -315,10 +318,82 @@ class TestPipelineExecution:
         assert data["total"] == 0
         assert data["runs"] == []
 
+    def test_export_pipeline_output_finds_uuid_suffixed_save_file(
+        self, client, test_db, sales_csv_bytes, tmp_path, monkeypatch
+    ):
+        """Export endpoint resolves files saved as {filename}_{uuid}.csv."""
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+        yaml_config = build_simple_pipeline_yaml(file_id)
+        run_id = client.post(
+            "/api/v1/pipelines/run",
+            json={"yaml_config": yaml_config},
+        ).json()["run_id"]
+
+        run = test_db.query(PipelineRun).filter(PipelineRun.id == as_uuid(run_id)).first()
+        assert run is not None
+        run.status = PipelineStatus.COMPLETED
+        test_db.commit()
+
+        export_dir = tmp_path / "export-files"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr("backend.api.pipelines.settings.UPLOAD_DIR", export_dir)
+
+        output_file = export_dir / "output.csv_deadbeef.csv"
+        output_file.write_text("order_id,status\\n1,delivered\\n", encoding="utf-8")
+
+        response = client.get(f"/api/v1/pipelines/{run_id}/export")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/csv")
+        assert output_file.name in response.headers.get("content-disposition", "")
+
 
 
 class TestLineageEndpoints:
     """Tests for lineage query endpoints."""
+
+    @staticmethod
+    def _create_lineage_run(test_db) -> str:
+        run = PipelineRun(
+            name="lineage-run",
+            status=PipelineStatus.COMPLETED,
+            yaml_config="pipeline:\n  name: lineage\n  steps: []",
+        )
+        test_db.add(run)
+        test_db.commit()
+        test_db.refresh(run)
+
+        recorder = LineageRecorder()
+        recorder.record_load(
+            file_id="file-1",
+            file_name="sales.csv",
+            step_name="load_sales",
+            columns=["amount", "region"],
+            dtypes={"amount": "float64", "region": "object"},
+        )
+        recorder.record_passthrough(
+            step_name="filtered",
+            step_type="filter",
+            input_step="load_sales",
+            columns=["amount", "region"],
+        )
+        recorder.record_aggregate(
+            step_name="agg",
+            input_step="filtered",
+            group_by_cols=["region"],
+            aggregations=[{"column": "amount", "function": "sum"}],
+            output_cols=["region", "amount_sum"],
+        )
+
+        serialized = recorder.serialize()
+        test_db.add(
+            LineageGraph(
+                pipeline_run_id=run.id,
+                graph_data=serialized["graph_data"],
+                react_flow_data=serialized["react_flow_data"],
+            )
+        )
+        test_db.commit()
+        return str(run.id)
 
     def test_get_lineage_for_nonexistent_run_returns_404(self, client):
         """GET /lineage/{id} with nonexistent run returns 404."""
@@ -329,6 +404,31 @@ class TestLineageEndpoints:
         """GET /lineage/{id} with invalid UUID returns 422."""
         response = client.get("/api/v1/lineage/not-a-uuid")
         assert response.status_code == 422
+
+    def test_get_column_lineage_returns_source_details(self, client, test_db):
+        """GET /lineage/{id}/column returns the traced source for an output column."""
+        run_id = self._create_lineage_run(test_db)
+        response = client.get(
+            f"/api/v1/lineage/{run_id}/column",
+            params={"step": "agg", "column": "amount_sum"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["source_file"] == "sales.csv"
+        assert payload["source_column"] == "amount"
+        assert payload["total_steps"] >= 1
+
+    def test_get_impact_analysis_returns_downstream_dependencies(self, client, test_db):
+        """GET /lineage/{id}/impact returns impacted steps for a source column."""
+        run_id = self._create_lineage_run(test_db)
+        response = client.get(
+            f"/api/v1/lineage/{run_id}/impact",
+            params={"step": "load_sales", "column": "amount"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "filtered" in payload["affected_steps"]
+        assert "agg" in payload["affected_steps"]
 
 
 class TestPlanEndpoint:

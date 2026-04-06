@@ -15,7 +15,8 @@ import sentry_sdk
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, ORJSONResponse
+from fastapi.openapi.docs import get_redoc_html
+from fastapi.responses import HTMLResponse, JSONResponse, ORJSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
@@ -54,10 +55,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler for startup and shutdown."""
     logger.info(
         "Starting %s v%s (debug=%s, log_level=%s)",
-        settings.APP_NAME, settings.APP_VERSION,
-        settings.DEBUG, settings.LOG_LEVEL,
+        settings.APP_NAME,
+        settings.APP_VERSION,
+        settings.DEBUG,
+        settings.LOG_LEVEL,
     )
-    create_all_tables()
+    if settings.ENVIRONMENT == "development":
+        create_all_tables()
     _validate_upload_dir()
     logger.info("Application startup complete")
 
@@ -83,9 +87,7 @@ def _validate_upload_dir() -> None:
         test_file.unlink()
         logger.info("Upload directory validated: %s", upload_dir)
     except OSError as exc:
-        logger.error(
-            "Upload directory '%s' is not writable: %s", upload_dir, exc
-        )
+        logger.error("Upload directory '%s' is not writable: %s", upload_dir, exc)
         raise
 
 
@@ -111,8 +113,19 @@ app = FastAPI(
         "url": "https://github.com/pipelineiq",
     },
     docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
-    redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
+    redoc_url=None,
 )
+
+if settings.ENVIRONMENT != "production":
+
+    @app.get("/redoc", include_in_schema=False)
+    async def redoc_html() -> HTMLResponse:
+        return get_redoc_html(
+            openapi_url=app.openapi_url,
+            title=f"{app.title} - ReDoc",
+            redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js",
+        )
+
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -139,9 +152,7 @@ async def pipelineiq_error_handler(
 ) -> JSONResponse:
     """Handle PipelineIQ domain errors with structured error bodies."""
     request_id = getattr(request.state, "request_id", "unknown")
-    logger.warning(
-        "Domain error (request_id=%s): %s", request_id, exc.message
-    )
+    logger.warning("Domain error (request_id=%s): %s", request_id, exc.message)
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
@@ -178,9 +189,7 @@ async def validation_error_handler(
 
 
 @app.exception_handler(Exception)
-async def generic_error_handler(
-    request: Request, exc: Exception
-) -> JSONResponse:
+async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Handle unexpected errors with a safe error response.
 
     Never exposes internal details to the client. The request_id
@@ -189,7 +198,9 @@ async def generic_error_handler(
     request_id = getattr(request.state, "request_id", "unknown")
     logger.error(
         "Unhandled error (request_id=%s): %s",
-        request_id, exc, exc_info=True,
+        request_id,
+        exc,
+        exc_info=True,
     )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -247,6 +258,7 @@ app.include_router(audit_router)
 
 if settings.ENVIRONMENT != "production":
     from backend.api.debug import router as debug_router
+
     app.include_router(debug_router)
 
 

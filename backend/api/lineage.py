@@ -9,12 +9,13 @@ import logging
 import uuid
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status, Depends
 from sqlalchemy.orm import Session
 
+from backend.auth import get_current_user
 from backend.config import settings
 from backend.dependencies import get_read_db_dependency
-from backend.models import LineageGraph, PipelineRun
+from backend.models import LineageGraph, PipelineRun, User
 from backend.pipeline.lineage import LineageRecorder
 from backend.schemas import (
     ColumnLineageResponse,
@@ -25,11 +26,15 @@ from backend.schemas import (
     TransformationStepResponse,
 )
 from backend.utils.cache import cache_delete, cache_delete_pattern, cache_get, cache_set
-from backend.utils.uuid_utils import validate_uuid_format as _validate_uuid_format, as_uuid as _as_uuid
+from backend.utils.uuid_utils import (
+    validate_uuid_format as _validate_uuid_format,
+    as_uuid as _as_uuid,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/lineage", tags=["lineage"])
+
 
 @router.get(
     "/{run_id}",
@@ -40,16 +45,20 @@ router = APIRouter(prefix="/lineage", tags=["lineage"])
 def get_lineage_graph(
     run_id: str,
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> LineageGraphResponse:
     """Retrieve the pre-computed React Flow lineage graph. Cached permanently."""
     _validate_uuid_format(run_id)
+
+    # Ownership check
+    _validate_run_exists(run_id, db, current_user)
 
     cache_key = f"lineage:graph:{run_id}"
     cached = cache_get(cache_key)
     if cached is not None:
         return LineageGraphResponse(**cached)
 
-    lineage_graph = _get_lineage_record(run_id, db)
+    lineage_graph = _get_lineage_record(run_id, db, current_user)
     react_flow_data = lineage_graph.react_flow_data
 
     response = LineageGraphResponse(
@@ -77,6 +86,7 @@ def get_lineage_graph(
     cache_set(cache_key, response.model_dump(), ttl=3600)
     return response
 
+
 @router.get(
     "/{run_id}/column",
     response_model=ColumnLineageResponse,
@@ -88,16 +98,20 @@ def get_column_lineage(
     step: str = Query(..., description="Step name containing the column"),
     column: str = Query(..., description="Column name to trace"),
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> ColumnLineageResponse:
     """Trace a column's ancestry back to its source file. Cached permanently."""
     _validate_uuid_format(run_id)
+
+    # Ownership check
+    _validate_run_exists(run_id, db, current_user)
 
     cache_key = f"lineage:column:{run_id}:{step}:{column}"
     cached = cache_get(cache_key)
     if cached is not None:
         return ColumnLineageResponse(**cached)
 
-    recorder = _reconstruct_recorder(run_id, db)
+    recorder = _reconstruct_recorder(run_id, db, current_user)
 
     try:
         lineage = recorder.get_column_ancestry(step, column)
@@ -128,6 +142,7 @@ def get_column_lineage(
     cache_set(cache_key, response.model_dump(), ttl=3600)
     return response
 
+
 @router.get(
     "/{run_id}/impact",
     response_model=ImpactAnalysisResponse,
@@ -139,16 +154,20 @@ def get_impact_analysis(
     step: str = Query(..., description="Step name containing the source column"),
     column: str = Query(..., description="Column name to analyze"),
     db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
 ) -> ImpactAnalysisResponse:
     """Analyze the downstream impact of a column. Cached permanently."""
     _validate_uuid_format(run_id)
+
+    # Ownership check
+    _validate_run_exists(run_id, db, current_user)
 
     cache_key = f"lineage:impact:{run_id}:{step}:{column}"
     cached = cache_get(cache_key)
     if cached is not None:
         return ImpactAnalysisResponse(**cached)
 
-    recorder = _reconstruct_recorder(run_id, db)
+    recorder = _reconstruct_recorder(run_id, db, current_user)
 
     try:
         impact = recorder.get_impact_analysis(step, column)
@@ -171,9 +190,10 @@ def get_impact_analysis(
     cache_set(cache_key, response.model_dump(), ttl=3600)
     return response
 
-def _get_lineage_record(run_id: str, db: Session) -> LineageGraph:
+
+def _get_lineage_record(run_id: str, db: Session, current_user: User) -> LineageGraph:
     """Fetch the lineage graph record, raising 404 if not found."""
-    _validate_run_exists(run_id, db)
+    _validate_run_exists(run_id, db, current_user)
 
     lineage_graph = (
         db.query(LineageGraph)
@@ -190,8 +210,9 @@ def _get_lineage_record(run_id: str, db: Session) -> LineageGraph:
         )
     return lineage_graph
 
-def _validate_run_exists(run_id: str, db: Session) -> None:
-    """Raise 404 if the pipeline run does not exist."""
+
+def _validate_run_exists(run_id: str, db: Session, current_user: User) -> None:
+    """Raise 404 if the pipeline run does not exist or user lacks access."""
     exists = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
     if exists is None:
         raise HTTPException(
@@ -199,7 +220,17 @@ def _validate_run_exists(run_id: str, db: Session) -> None:
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-def _reconstruct_recorder(run_id: str, db: Session) -> LineageRecorder:
+    # Check ownership or admin role
+    if current_user.role != "admin" and exists.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline run '{run_id}' not found",
+        )
+
+
+def _reconstruct_recorder(
+    run_id: str, db: Session, current_user: User
+) -> LineageRecorder:
     """Reconstruct a LineageRecorder from stored graph data.
 
     Loads the serialized graph from the database and reconstructs
@@ -207,7 +238,10 @@ def _reconstruct_recorder(run_id: str, db: Session) -> LineageRecorder:
     """
     import networkx as nx
 
-    lineage_record = _get_lineage_record(run_id, db)
+    # This already checks existence and ownership
+    _validate_run_exists(run_id, db, current_user)
+
+    lineage_record = _get_lineage_record(run_id, db, current_user)
     recorder = LineageRecorder()
     recorder.graph = nx.node_link_graph(lineage_record.graph_data)
     return recorder
