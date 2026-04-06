@@ -1,13 +1,17 @@
-import requests
-import uuid
-import time
-import pytest
 import os
-from pathlib import Path
+import time
 
-BASE_URL = "http://localhost/api/v1"
-AUTH_URL = "http://localhost/auth"
-FILE_PATH = "sample_data/sales.csv"
+import pytest
+import requests
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_E2E_TESTS") != "1",
+    reason="Set RUN_E2E_TESTS=1 to run live HTTP e2e tests",
+)
+
+BASE_URL = os.getenv("E2E_BASE_URL", "http://localhost/api/v1")
+AUTH_URL = os.getenv("E2E_AUTH_URL", "http://localhost/auth")
+FILE_PATH = os.getenv("E2E_FILE_PATH", "sample_data/sales.csv")
 
 
 class TestE2ESmoke:

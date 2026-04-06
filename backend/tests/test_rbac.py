@@ -1,9 +1,16 @@
-import requests
+import os
 import uuid
-import pytest
 
-BASE_URL = "http://localhost:8000/api/v1"
-AUTH_URL = "http://localhost:8000/auth"
+import pytest
+import requests
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_E2E_TESTS") != "1",
+    reason="Set RUN_E2E_TESTS=1 to run live HTTP API tests",
+)
+
+BASE_URL = os.getenv("E2E_BASE_URL", "http://localhost:8000/api/v1")
+AUTH_URL = os.getenv("E2E_AUTH_URL", "http://localhost:8000/auth")
 
 
 @pytest.fixture(scope="module")
