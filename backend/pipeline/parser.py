@@ -690,21 +690,13 @@ class PipelineParser:
         """Validate all reference fields on a single step config."""
         refs_to_check: List[tuple] = []
 
-        if isinstance(
-            step,
-            (
-                FilterStepConfig,
-                SelectStepConfig,
-                RenameStepConfig,
-                AggregateStepConfig,
-                SortStepConfig,
-                SaveStepConfig,
-            ),
-        ):
-            refs_to_check.append(("input", step.input))
-        elif isinstance(step, JoinStepConfig):
+        if isinstance(step, JoinStepConfig):
             refs_to_check.append(("left", step.left))
             refs_to_check.append(("right", step.right))
+        else:
+            input_ref = getattr(step, "input", None)
+            if isinstance(input_ref, str):
+                refs_to_check.append(("input", input_ref))
 
         for field_name, ref_value in refs_to_check:
             if ref_value and ref_value not in available_steps:

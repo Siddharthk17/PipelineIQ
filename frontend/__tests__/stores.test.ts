@@ -3,13 +3,14 @@ import { usePipelineStore } from "@/store/pipelineStore";
 import { useWidgetStore, getAllWidgets, ALL_WIDGETS } from "@/store/widgetStore";
 import { useThemeStore } from "@/store/themeStore";
 import { useKeybindingStore, DEFAULT_KEYBINDINGS } from "@/store/keybindingStore";
+import { DEFAULT_PIPELINE_YAML } from "@/lib/pipeline-yaml";
 
 describe("pipelineStore", () => {
   beforeEach(() => {
     usePipelineStore.setState({
       activeRunId: null,
       activeRun: null,
-      lastYamlConfig: "pipeline:\n  name: my_pipeline\n  steps:\n    - name: load_step\n      type: load\n      file_id: \"\"\n",
+      lastYamlConfig: DEFAULT_PIPELINE_YAML,
     });
   });
 
@@ -18,6 +19,7 @@ describe("pipelineStore", () => {
     expect(state.activeRunId).toBeNull();
     expect(state.activeRun).toBeNull();
     expect(state.lastYamlConfig).toContain("my_pipeline");
+    expect(state.lastYamlConfig).toContain("load_file");
   });
 
   it("setActiveRunId updates the active run ID", () => {

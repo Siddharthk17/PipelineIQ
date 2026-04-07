@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { History, Eye, EyeOff, RotateCcw, GitCompare, Search } from "lucide-react";
 import { getPipelineVersions, getPipelineDiff, restorePipelineVersion } from "@/lib/api";
 import { usePipelineStore } from "@/store/pipelineStore";
 import type { PipelineVersion, PipelineDiff } from "@/lib/types";
+import { extractPipelineName } from "@/lib/pipeline-yaml";
 
 function relativeTime(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -64,26 +65,46 @@ export function VersionHistoryWidget() {
   const [diff, setDiff] = useState<PipelineDiff | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [restoringVersion, setRestoringVersion] = useState<number | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [autoLoadedPipelineName, setAutoLoadedPipelineName] = useState<string | null>(null);
 
-  const { setLastYamlConfig } = usePipelineStore();
+  const { lastYamlConfig, setLastYamlConfig } = usePipelineStore();
 
-  const handleLoad = async () => {
-    const name = pipelineName.trim();
-    if (!name) return;
+  const loadVersions = useCallback(async (name: string) => {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return;
+    }
     setLoading(true);
+    setHasSearched(true);
     setError(null);
     setVersions([]);
     setDiff(null);
     setSelectedVersions(new Set());
     try {
-      const data = await getPipelineVersions(name);
+      const data = await getPipelineVersions(trimmedName);
       setVersions(data);
     } catch (e: any) {
       setError(e.message || "Failed to load versions");
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const handleLoad = async () => {
+    await loadVersions(pipelineName);
   };
+
+  useEffect(() => {
+    const detectedPipelineName = extractPipelineName(lastYamlConfig);
+    if (!detectedPipelineName || detectedPipelineName === autoLoadedPipelineName) {
+      return;
+    }
+
+    setPipelineName((currentName) => currentName || detectedPipelineName);
+    setAutoLoadedPipelineName(detectedPipelineName);
+    void loadVersions(detectedPipelineName);
+  }, [lastYamlConfig, autoLoadedPipelineName, loadVersions]);
 
   const toggleSelect = (v: number) => {
     setSelectedVersions((prev) => {
@@ -154,6 +175,9 @@ export function VersionHistoryWidget() {
           {loading ? "..." : "Load"}
         </button>
       </div>
+      <div className="px-3 py-1 text-[10px] text-[var(--text-secondary)] border-b" style={{ borderColor: "var(--widget-border)" }}>
+        Searching by <span className="font-mono">pipeline.name</span> from your YAML.
+      </div>
 
       {error && (
         <div className="px-3 py-1.5 text-xs text-[var(--accent-error)] bg-[var(--accent-error)]/10">
@@ -183,7 +207,11 @@ export function VersionHistoryWidget() {
         {sorted.length === 0 && !loading && !error && (
           <div className="flex flex-col items-center justify-center h-full text-[var(--text-secondary)] text-sm gap-1">
             <Search className="w-5 h-5" />
-            <span>Enter a pipeline name to view versions</span>
+            <span>
+              {hasSearched
+                ? `No versions found for "${pipelineName.trim()}".`
+                : "Enter a pipeline name to view versions"}
+            </span>
           </div>
         )}
         <AnimatePresence>
@@ -242,7 +270,7 @@ export function VersionHistoryWidget() {
                     className="mt-2"
                   >
                     <pre className="text-xs font-mono p-2 rounded overflow-auto max-h-48 bg-[var(--bg-surface)] border" style={{ borderColor: "var(--widget-border)" }}>
-                      <code>{v.yaml_config}</code>
+                      <code>{v.yaml_config || "YAML content unavailable for this version."}</code>
                     </pre>
                   </motion.div>
                 )}

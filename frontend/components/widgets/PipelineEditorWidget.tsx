@@ -10,12 +10,19 @@ import { useThemeStore } from "@/store/themeStore";
 import { CheckCircle, XCircle, Play, RefreshCw, FileText, Plus, X, Eye } from "lucide-react";
 import { ValidationResult, ExecutionPlan, PipelinePreview } from "@/lib/types";
 import { StepDAG } from "./StepDAG";
+import {
+  DEFAULT_PIPELINE_YAML,
+  extractPipelineName,
+  hasNonEmptyFileId,
+  removeFileIdLines,
+  upsertFileIdInFirstLoadStep,
+} from "@/lib/pipeline-yaml";
 
 export function PipelineEditorWidget() {
   const queryClient = useQueryClient();
   const { lastYamlConfig, setLastYamlConfig, setActiveRunId, setActiveRun } = usePipelineStore();
   const { activeTheme } = useThemeStore();
-  const [code, setCode] = useState(lastYamlConfig);
+  const [code, setCode] = useState(lastYamlConfig || DEFAULT_PIPELINE_YAML);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [plan, setPlan] = useState<ExecutionPlan | null>(null);
@@ -34,12 +41,17 @@ export function PipelineEditorWidget() {
   });
 
   const runMutation = useMutation({
-    mutationFn: (yamlConfig: string) => runPipeline(yamlConfig, "My Pipeline"),
-    onSuccess: (data) => {
+    mutationFn: (args: { yamlConfig: string; pipelineName?: string }) =>
+      runPipeline(args.yamlConfig, args.pipelineName),
+    onSuccess: (data, variables) => {
+      const runName =
+        variables.pipelineName ||
+        extractPipelineName(variables.yamlConfig) ||
+        "Pipeline Run";
       // Set initial activeRun so RunMonitor renders immediately
       setActiveRun({
         id: data.run_id,
-        name: "My Pipeline",
+        name: runName,
         status: "PENDING",
         created_at: new Date().toISOString(),
         started_at: null,
@@ -56,6 +68,27 @@ export function PipelineEditorWidget() {
     },
   });
 
+  const latestFileId = files?.[0]?.id ?? null;
+
+  useEffect(() => {
+    if (!files || files.length > 0) {
+      return;
+    }
+    setCode((previousCode) => removeFileIdLines(previousCode));
+  }, [files]);
+
+  useEffect(() => {
+    if (!latestFileId) {
+      return;
+    }
+    setCode((previousCode) => {
+      if (hasNonEmptyFileId(previousCode)) {
+        return previousCode;
+      }
+      return upsertFileIdInFirstLoadStep(previousCode, latestFileId);
+    });
+  }, [latestFileId]);
+
   useEffect(() => {
     setIsValidating(true);
     const timer = setTimeout(() => {
@@ -70,7 +103,8 @@ export function PipelineEditorWidget() {
   useEffect(() => {
     const handleRun = () => {
       if (validation?.is_valid) {
-        runMutation.mutate(code);
+        const pipelineName = extractPipelineName(code) || undefined;
+        runMutation.mutate({ yamlConfig: code, pipelineName });
       }
     };
     window.addEventListener("pipeline:run", handleRun);
@@ -79,14 +113,7 @@ export function PipelineEditorWidget() {
   }, [code, validation]);
 
   const insertFileId = useCallback((id: string) => {
-    setCode((prev) => {
-      const placeholder = 'file_id: ""';
-      const idx = prev.lastIndexOf(placeholder);
-      if (idx !== -1) {
-        return prev.substring(0, idx) + `file_id: "${id}"` + prev.substring(idx + placeholder.length);
-      }
-      return prev.replace(/file_id:\s*"[^"]*"/, `file_id: "${id}"`);
-    });
+    setCode((prev) => upsertFileIdInFirstLoadStep(prev, id));
   }, []);
 
   const handlePlan = useCallback(async () => {
@@ -148,7 +175,13 @@ export function PipelineEditorWidget() {
               Validate
             </button>
             <button 
-              onClick={() => setCode("pipeline:\n  name: example\n  steps:\n    - name: load_data\n      type: load\n      file_id: \"\"\n")}
+              onClick={() =>
+                setCode(
+                  latestFileId
+                    ? upsertFileIdInFirstLoadStep(DEFAULT_PIPELINE_YAML, latestFileId)
+                    : DEFAULT_PIPELINE_YAML
+                )
+              }
               className="px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-secondary)] transition-colors"
               style={{ borderColor: "var(--widget-border)" }}
             >
@@ -174,7 +207,10 @@ export function PipelineEditorWidget() {
             </button>
           </div>
           <button 
-            onClick={() => runMutation.mutate(code)}
+            onClick={() => {
+              const pipelineName = extractPipelineName(code) || undefined;
+              runMutation.mutate({ yamlConfig: code, pipelineName });
+            }}
             disabled={!validation?.is_valid || runMutation.isPending}
             className="flex items-center gap-2 px-4 py-1.5 rounded text-xs font-medium bg-[var(--accent-primary)] text-[var(--bg-base)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           >

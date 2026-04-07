@@ -204,6 +204,80 @@ pipeline:
         assert result.is_valid is False
         assert any("save_output" in e.message for e in result.errors)
 
+    @pytest.mark.parametrize(
+        "step_block",
+        [
+            """
+    - name: validate_data
+      type: validate
+      input: missing_step
+      rules:
+        - check: not_null
+          column: status
+          severity: warning
+""",
+            """
+    - name: pivot_data
+      type: pivot
+      input: missing_step
+      index: customer_id
+      columns: status
+      values: amount
+""",
+            """
+    - name: unpivot_data
+      type: unpivot
+      input: missing_step
+      id_vars: [order_id]
+      value_vars: [amount]
+""",
+            """
+    - name: dedup_data
+      type: deduplicate
+      input: missing_step
+      subset: [order_id]
+      keep: first
+""",
+            """
+    - name: fill_data
+      type: fill_nulls
+      input: missing_step
+      method: constant
+      value: 0
+      columns: [amount]
+""",
+            """
+    - name: sample_data
+      type: sample
+      input: missing_step
+      n: 5
+""",
+        ],
+    )
+    def test_validate_missing_input_reference_for_week2_steps_returns_error(
+        self, parser, step_block
+    ):
+        """Week-2 and validate steps must fail validation when input references are invalid."""
+        yaml_str = f"""
+pipeline:
+  name: test
+  steps:
+    - name: load_data
+      type: load
+      file_id: f1
+{step_block}
+    - name: save_output
+      type: save
+      input: load_data
+      filename: out.csv
+"""
+        config = parser.parse(yaml_str)
+        result = parser.validate(config, {"f1"})
+        assert result.is_valid is False
+        assert any(
+            e.field == "input" and "missing_step" in e.message for e in result.errors
+        )
+
     def test_validate_nonexistent_file_id_returns_error(self, parser):
         """Load step referencing file_id not in registered set returns error."""
         config = parser.parse(VALID_SIMPLE_YAML)

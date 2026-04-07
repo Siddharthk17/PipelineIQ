@@ -39,7 +39,14 @@ class StorageProvider(ABC):
 
     @abstractmethod
     def get_size(self, path: str) -> int:
-        """Get the size of a file in bytes."""
+        """Return file size in bytes."""
+        pass
+
+    @abstractmethod
+    def get_presigned_upload_url(
+        self, destination_path: str, expiration: int = 3600
+    ) -> Optional[str]:
+        """Return a presigned URL for direct upload to storage. Return None if not supported."""
         pass
 
 
@@ -95,6 +102,11 @@ class LocalStorageProvider(StorageProvider):
 
     def get_size(self, path: str) -> int:
         return self._get_full_path(path).stat().st_size
+
+    def get_presigned_upload_url(
+        self, destination_path: str, expiration: int = 3600
+    ) -> Optional[str]:
+        return None
 
 
 class S3StorageProvider(StorageProvider):
@@ -161,6 +173,19 @@ class S3StorageProvider(StorageProvider):
         response = self.s3.head_object(Bucket=self.bucket, Key=key)
         return response["ContentLength"]
 
+    def get_presigned_upload_url(
+        self, destination_path: str, expiration: int = 3600
+    ) -> Optional[str]:
+        key = os.path.basename(destination_path)
+        try:
+            return self.s3.generate_presigned_url(
+                ClientMethod="put_object",
+                Params={"Bucket": self.bucket, "Key": key},
+                ExpiresIn=expiration,
+            )
+        except ClientError:
+            return None
+
 
 class StorageService:
     """Service to manage file storage, abstracting the underlying provider."""
@@ -188,6 +213,11 @@ class StorageService:
 
     def get_size(self, path: str) -> int:
         return self.provider.get_size(path)
+
+    def get_presigned_upload_url(
+        self, destination_path: str, expiration: int = 3600
+    ) -> Optional[str]:
+        return self.provider.get_presigned_upload_url(destination_path, expiration)
 
 
 # Singleton instance

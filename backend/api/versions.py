@@ -68,6 +68,7 @@ def list_versions(
                 "id": str(v.id),
                 "version_number": v.version_number,
                 "pipeline_name": v.pipeline_name,
+                "yaml_config": v.yaml_config,
                 "run_id": str(v.run_id) if v.run_id else None,
                 "change_summary": v.change_summary,
                 "created_at": v.created_at.isoformat() if v.created_at else None,

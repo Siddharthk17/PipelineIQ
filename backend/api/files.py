@@ -150,6 +150,20 @@ async def request_upload_url(
                 "user_id": str(current_user.id),
             },
         )
+
+        presigned_url = storage_service.get_presigned_upload_url(str(stored_path))
+        if presigned_url:
+            return UploadUrlResponse(
+                method="direct",
+                file_id=file_id,
+                upload_url=presigned_url,
+                confirm_endpoint=(
+                    f"{absolute_api_prefix}/{file_id}/confirm"
+                    if is_legacy_api
+                    else f"{api_prefix}/{file_id}/confirm"
+                ),
+            )
+
         return UploadUrlResponse(
             method="direct",
             file_id=file_id,
@@ -334,7 +348,12 @@ def list_files(
     current_user: User = Depends(get_current_user),
 ) -> FileListResponse:
     """List all uploaded files with their metadata."""
-    files = db.query(UploadedFile).filter(UploadedFile.user_id == current_user.id).all()
+    files = (
+        db.query(UploadedFile)
+        .filter(UploadedFile.user_id == current_user.id)
+        .order_by(UploadedFile.created_at.desc())
+        .all()
+    )
     file_responses = [
         FileUploadResponse(
             id=str(f.id),

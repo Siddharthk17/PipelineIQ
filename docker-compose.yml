@@ -142,7 +142,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
-      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -208,7 +208,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
-      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -266,7 +266,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
-      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -312,7 +312,7 @@ services:
     container_name: pipelineiq-worker-default
     command: >
       celery -A backend.celery_app:celery_app worker
-      --queues=critical,default
+      --queues=default
       --concurrency=${CELERY_WORKERS_DEFAULT:-3}
       --prefetch-multiplier=1
       --hostname=default@%h
@@ -323,7 +323,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
-      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -379,7 +379,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
-      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -432,7 +432,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
-      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0

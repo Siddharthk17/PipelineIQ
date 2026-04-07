@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { PipelineRun } from "@/lib/types";
+import { DEFAULT_PIPELINE_YAML } from "@/lib/pipeline-yaml";
 
 interface PipelineState {
   activeRunId: string | null;
@@ -16,7 +17,7 @@ export const usePipelineStore = create<PipelineState>()(
     (set) => ({
       activeRunId: null,
       activeRun: null,
-      lastYamlConfig: "pipeline:\n  name: my_pipeline\n  steps:\n    - name: load_step\n      type: load\n      file_id: \"\"\n",
+      lastYamlConfig: DEFAULT_PIPELINE_YAML,
       setActiveRunId: (id) => set({ activeRunId: id }),
       setActiveRun: (run) => set({ activeRun: run }),
       setLastYamlConfig: (yaml) => set({ lastYamlConfig: yaml }),

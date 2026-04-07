@@ -4,8 +4,8 @@ Fires on every successful file upload.
 Runs on the 'bulk' queue — never blocks the API.
 """
 
-import io
 import logging
+from contextlib import closing
 from pathlib import Path
 
 import pandas as pd
@@ -18,12 +18,14 @@ from backend.profiling.analyzer import (
     compute_completeness,
     profile_dataframe,
 )
+from backend.services.storage_service import storage_service
+from backend.utils.uuid_utils import as_uuid
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_FORMATS = {
-    ".csv": lambda path: pd.read_csv(path),
-    ".json": lambda path: pd.read_json(path),
+    ".csv": lambda handle: pd.read_csv(handle),
+    ".json": lambda handle: pd.read_json(handle),
 }
 
 
@@ -94,25 +96,27 @@ def profile_file(self, file_id: str) -> dict:
 
 
 def _load_file_from_disk(file_id: str) -> pd.DataFrame:
-    """Load a file from disk and return as a DataFrame."""
+    """Load a file from storage and return as a DataFrame."""
     db = SessionLocal()
     try:
+        file_uuid = as_uuid(file_id)
         uploaded_file = (
-            db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+            db.query(UploadedFile).filter(UploadedFile.id == file_uuid).first()
         )
         if uploaded_file is None:
             raise ValueError(f"File record not found for file_id={file_id}")
 
-        stored_path = Path(uploaded_file.stored_path)
-        if not stored_path.exists():
+        stored_path = uploaded_file.stored_path
+        if not storage_service.exists(stored_path):
             raise ValueError(f"File not found at path: {stored_path}")
 
-        extension = stored_path.suffix.lower()
+        extension = Path(stored_path).suffix.lower()
         loader = SUPPORTED_FORMATS.get(extension)
         if loader is None:
             raise ValueError(f"Unsupported file format: {extension}")
 
-        df = loader(str(stored_path))
+        with closing(storage_service.download(stored_path)) as handle:
+            df = loader(handle)
 
         df = df.convert_dtypes(
             convert_string=False,
@@ -133,17 +137,18 @@ def _update_profile_status(
     """Update the profile status in the database."""
     from sqlalchemy import update
 
-    existing = db.query(FileProfile).filter(FileProfile.file_id == file_id).first()
+    file_uuid = as_uuid(file_id)
+    existing = db.query(FileProfile).filter(FileProfile.file_id == file_uuid).first()
     if existing:
         stmt = (
             update(FileProfile)
-            .where(FileProfile.file_id == file_id)
+            .where(FileProfile.file_id == file_uuid)
             .values(status=status, error=error)
         )
         db.execute(stmt)
     else:
         profile = FileProfile(
-            file_id=file_id,
+            file_id=file_uuid,
             status=status,
             error=error,
         )
@@ -160,9 +165,8 @@ def _save_profile(
     completeness_pct: float,
 ) -> None:
     """Upsert the profile into the database."""
-    from sqlalchemy import text
-
-    existing = db.query(FileProfile).filter(FileProfile.file_id == file_id).first()
+    file_uuid = as_uuid(file_id)
+    existing = db.query(FileProfile).filter(FileProfile.file_id == file_uuid).first()
     if existing:
         existing.profile = profile
         existing.row_count = row_count
@@ -173,7 +177,7 @@ def _save_profile(
     else:
         db.add(
             FileProfile(
-                file_id=file_id,
+                file_id=file_uuid,
                 profile=profile,
                 row_count=row_count,
                 col_count=col_count,
