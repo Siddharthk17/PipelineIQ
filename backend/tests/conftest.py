@@ -106,14 +106,17 @@ def client(test_db: Session, tmp_path) -> TestClient:
     with (
         patch("backend.api.files.settings") as mock_settings,
         patch("backend.api.pipelines.execute_pipeline_task") as mock_task,
+        patch("backend.tasks.profiling.profile_file.apply_async") as mock_profile_task,
     ):
         mock_settings.UPLOAD_DIR = upload_dir
         mock_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
         mock_settings.MAX_UPLOAD_SIZE = 50 * 1024 * 1024
         mock_settings.MAX_ROWS_PER_FILE = 1000000
         mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
+        mock_profile_task.return_value = MagicMock(id="mock-profile-task-id")
         test_client = TestClient(app)
         test_client._mock_task = mock_task
+        test_client._mock_profile_task = mock_profile_task
         yield test_client
 
     app.dependency_overrides.clear()
@@ -135,12 +138,14 @@ def auth_client(test_db: Session, tmp_path) -> TestClient:
     with (
         patch("backend.api.files.settings") as mock_settings,
         patch("backend.api.pipelines.execute_pipeline_task") as mock_task,
+        patch("backend.tasks.profiling.profile_file.apply_async") as mock_profile_task,
     ):
         mock_settings.UPLOAD_DIR = upload_dir
         mock_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
         mock_settings.MAX_UPLOAD_SIZE = 50 * 1024 * 1024
         mock_settings.MAX_ROWS_PER_FILE = 1000000
         mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
+        mock_profile_task.return_value = MagicMock(id="mock-profile-task-id")
         test_client = TestClient(app)
         yield test_client
 
