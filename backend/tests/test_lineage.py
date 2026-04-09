@@ -162,6 +162,25 @@ class TestRecordJoin:
         assert graph.has_edge("col::load_customers::customer_id", step_node)
 
 
+class TestRecordSql:
+    """Tests for LineageRecorder.record_sql()."""
+
+    def test_record_sql_connects_all_inputs_to_outputs(self, loaded_recorder):
+        """SQL step should connect input columns through the SQL step node."""
+        loaded_recorder.record_sql(
+            step_name="sql_transform",
+            input_step="load_sales",
+            input_columns=["order_id", "customer_id", "amount", "status"],
+            output_columns=["customer_id", "amount_x2"],
+        )
+
+        graph = loaded_recorder.graph
+        step_node = "step::sql_transform"
+        assert graph.has_node(step_node)
+        assert graph.has_edge("col::load_sales::amount", step_node)
+        assert graph.has_edge(step_node, "col::sql_transform::amount_x2")
+
+
 class TestColumnAncestry:
     """Tests for LineageRecorder.get_column_ancestry()."""
 

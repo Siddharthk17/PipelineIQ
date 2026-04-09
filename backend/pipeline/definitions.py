@@ -103,4 +103,11 @@ STEP_DEFINITIONS: dict[str, dict] = {
         "label": "Sample",
         "description": "Take a random sample of rows",
     },
+    "sql": {
+        "icon": "🧮",
+        "color": "#0EA5E9",
+        "category": "transform",
+        "label": "SQL",
+        "description": "Run SELECT SQL against the input DataFrame",
+    },
 }

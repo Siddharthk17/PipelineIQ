@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import pandas as pd
+from backend.execution.smart_executor import SmartExecutor
 from backend.services.storage_service import storage_service
 from backend.pipeline.exceptions import (
     AggregationError,
@@ -36,6 +37,7 @@ from backend.pipeline.parser import (
     SampleStepConfig,
     SaveStepConfig,
     SelectStepConfig,
+    SqlStepConfig,
     SortOrder,
     SortStepConfig,
     StepConfig,
@@ -99,6 +101,7 @@ class StepExecutor:
     """
 
     def __init__(self) -> None:
+        self._smart_executor = SmartExecutor()
         self._dispatch: Dict[StepType, Callable] = {
             StepType.LOAD: self.execute_load,
             StepType.FILTER: self.execute_filter,
@@ -114,6 +117,7 @@ class StepExecutor:
             StepType.DEDUPLICATE: self.execute_deduplicate,
             StepType.FILL_NULLS: self.execute_fill_nulls,
             StepType.SAMPLE: self.execute_sample,
+            StepType.SQL: self.execute_sql,
         }
 
     def execute(
@@ -224,8 +228,12 @@ class StepExecutor:
         warnings: List[str] = []
 
         self._validate_column_exists(config.name, config.column, columns_in)
-        mask = self._apply_filter_operator(config)
-        filtered_df = input_df[mask(input_df[config.column], config.value)].copy()
+
+        def _pandas_filter() -> pd.DataFrame:
+            mask = self._apply_filter_operator(config)
+            return input_df[mask(input_df[config.column], config.value)].copy()
+
+        filtered_df = self._smart_executor.execute_unary(config, input_df, _pandas_filter)
 
         if len(filtered_df) == 0:
             warnings.append(
@@ -290,7 +298,10 @@ class StepExecutor:
         for col in config.columns:
             self._validate_column_exists(config.name, col, columns_in)
 
-        selected_df = input_df[config.columns].copy()
+        def _pandas_select() -> pd.DataFrame:
+            return input_df[config.columns].copy()
+
+        selected_df = self._smart_executor.execute_unary(config, input_df, _pandas_select)
         dropped = [c for c in columns_in if c not in config.columns]
 
         recorder.record_projection(
@@ -369,12 +380,20 @@ class StepExecutor:
         self._validate_join_key(config.name, config.on, left_df, "left")
         self._validate_join_key(config.name, config.on, right_df, "right")
 
-        joined_df = pd.merge(
+        def _pandas_join() -> pd.DataFrame:
+            return pd.merge(
+                left_df,
+                right_df,
+                on=config.on,
+                how=config.how.value,
+                suffixes=("_left", "_right"),
+            )
+
+        joined_df = self._smart_executor.execute_join(
+            config,
             left_df,
             right_df,
-            on=config.on,
-            how=config.how.value,
-            suffixes=("_left", "_right"),
+            _pandas_join,
         )
 
         recorder.record_join(
@@ -435,7 +454,15 @@ class StepExecutor:
             self._validate_column_exists(config.name, col, columns_in)
 
         agg_dict = self._build_aggregation_dict(config, columns_in)
-        aggregated_df = self._perform_aggregation(config, input_df, agg_dict)
+
+        def _pandas_aggregate() -> pd.DataFrame:
+            return self._perform_aggregation(config, input_df, agg_dict)
+
+        aggregated_df = self._smart_executor.execute_unary(
+            config,
+            input_df,
+            _pandas_aggregate,
+        )
 
         recorder.record_aggregate(
             step_name=config.name,
@@ -524,10 +551,13 @@ class StepExecutor:
 
         self._validate_column_exists(config.name, config.by, columns_in)
 
-        ascending = config.order == SortOrder.ASC
-        sorted_df = input_df.sort_values(by=config.by, ascending=ascending).reset_index(
-            drop=True
-        )
+        def _pandas_sort() -> pd.DataFrame:
+            ascending = config.order == SortOrder.ASC
+            return input_df.sort_values(by=config.by, ascending=ascending).reset_index(
+                drop=True
+            )
+
+        sorted_df = self._smart_executor.execute_unary(config, input_df, _pandas_sort)
 
         recorder.record_passthrough(
             step_name=config.name,
@@ -688,22 +718,24 @@ class StepExecutor:
         for col in all_cols:
             self._validate_column_exists(config.name, col, columns_in)
 
-        result = input_df.pivot_table(
-            index=config.index,
-            columns=config.columns,
-            values=config.values,
-            aggfunc=config.aggfunc,
-            fill_value=config.fill_value,
-        )
+        def _pandas_pivot() -> pd.DataFrame:
+            result_df = input_df.pivot_table(
+                index=config.index,
+                columns=config.columns,
+                values=config.values,
+                aggfunc=config.aggfunc,
+                fill_value=config.fill_value,
+            )
+            if isinstance(result_df.columns, pd.MultiIndex):
+                result_df.columns = [
+                    f"{col[1]}_{col[0]}" if isinstance(col, tuple) else str(col)
+                    for col in result_df.columns
+                ]
+            else:
+                result_df.columns = [str(col) for col in result_df.columns]
+            return result_df.reset_index()
 
-        if isinstance(result.columns, pd.MultiIndex):
-            result.columns = [
-                f"{col[1]}_{col[0]}" if isinstance(col, tuple) else str(col)
-                for col in result.columns
-            ]
-        else:
-            result.columns = [str(col) for col in result.columns]
-        result = result.reset_index()
+        result = self._smart_executor.execute_unary(config, input_df, _pandas_pivot)
 
         output_columns = list(result.columns)
         recorder.record_pivot(
@@ -745,12 +777,15 @@ class StepExecutor:
         if overlap:
             raise ValueError(f"id_vars and value_vars must not overlap: {overlap}")
 
-        result = input_df.melt(
-            id_vars=config.id_vars,
-            value_vars=config.value_vars,
-            var_name=config.var_name,
-            value_name=config.value_name,
-        )
+        def _pandas_unpivot() -> pd.DataFrame:
+            return input_df.melt(
+                id_vars=config.id_vars,
+                value_vars=config.value_vars,
+                var_name=config.var_name,
+                value_name=config.value_name,
+            )
+
+        result = self._smart_executor.execute_unary(config, input_df, _pandas_unpivot)
 
         output_columns = list(result.columns)
         recorder.record_unpivot(
@@ -787,9 +822,16 @@ class StepExecutor:
             for col in config.subset:
                 self._validate_column_exists(config.name, col, columns_in)
 
-        keep = False if config.keep == "none" else config.keep
-        result = input_df.drop_duplicates(subset=config.subset, keep=keep)
-        result = result.reset_index(drop=True)
+        def _pandas_deduplicate() -> pd.DataFrame:
+            keep = False if config.keep == "none" else config.keep
+            deduped = input_df.drop_duplicates(subset=config.subset, keep=keep)
+            return deduped.reset_index(drop=True)
+
+        result = self._smart_executor.execute_unary(
+            config,
+            input_df,
+            _pandas_deduplicate,
+        )
 
         recorder.record_deduplicate(
             step_name=config.name,
@@ -823,31 +865,34 @@ class StepExecutor:
         for col in config.columns:
             self._validate_column_exists(config.name, col, columns_in)
 
-        result = input_df.copy()
+        def _pandas_fill_nulls() -> pd.DataFrame:
+            result_df = input_df.copy()
+            for col in config.columns:
+                if config.strategy == "constant":
+                    if config.constant_value is None:
+                        raise ValueError(
+                            "constant_value required when strategy is 'constant'"
+                        )
+                    result_df[col] = result_df[col].fillna(config.constant_value)
+                elif config.strategy == "forward_fill":
+                    result_df[col] = result_df[col].ffill()
+                elif config.strategy == "backward_fill":
+                    result_df[col] = result_df[col].bfill()
+                elif config.strategy == "mean":
+                    if not pd.api.types.is_numeric_dtype(result_df[col]):
+                        raise ValueError("Strategy 'mean' requires numeric column")
+                    result_df[col] = result_df[col].fillna(result_df[col].mean())
+                elif config.strategy == "median":
+                    if not pd.api.types.is_numeric_dtype(result_df[col]):
+                        raise ValueError("Strategy 'median' requires numeric column")
+                    result_df[col] = result_df[col].fillna(result_df[col].median())
+                elif config.strategy == "mode":
+                    mode_val = result_df[col].mode()
+                    if len(mode_val) > 0:
+                        result_df[col] = result_df[col].fillna(mode_val[0])
+            return result_df
 
-        for col in config.columns:
-            if config.strategy == "constant":
-                if config.constant_value is None:
-                    raise ValueError(
-                        "constant_value required when strategy is 'constant'"
-                    )
-                result[col] = result[col].fillna(config.constant_value)
-            elif config.strategy == "forward_fill":
-                result[col] = result[col].ffill()
-            elif config.strategy == "backward_fill":
-                result[col] = result[col].bfill()
-            elif config.strategy == "mean":
-                if not pd.api.types.is_numeric_dtype(result[col]):
-                    raise ValueError(f"Strategy 'mean' requires numeric column")
-                result[col] = result[col].fillna(result[col].mean())
-            elif config.strategy == "median":
-                if not pd.api.types.is_numeric_dtype(result[col]):
-                    raise ValueError(f"Strategy 'median' requires numeric column")
-                result[col] = result[col].fillna(result[col].median())
-            elif config.strategy == "mode":
-                mode_val = result[col].mode()
-                if len(mode_val) > 0:
-                    result[col] = result[col].fillna(mode_val[0])
+        result = self._smart_executor.execute_unary(config, input_df, _pandas_fill_nulls)
 
         recorder.record_fill_nulls(
             step_name=config.name,
@@ -886,27 +931,34 @@ class StepExecutor:
         if config.stratify_by:
             self._validate_column_exists(config.name, config.stratify_by, columns_in)
 
-        if config.n is not None and config.n > len(input_df):
-            result = input_df.reset_index(drop=True)
-        elif config.stratify_by:
-            groups = []
-            target_n = config.n or int(len(input_df) * config.fraction)
-            for group_val, group_df in input_df.groupby(config.stratify_by):
-                group_n = max(1, int(len(group_df) / len(input_df) * target_n))
-                groups.append(
-                    group_df.sample(
-                        n=min(group_n, len(group_df)), random_state=config.random_state
+        def _pandas_sample() -> pd.DataFrame:
+            if config.n is not None and config.n > len(input_df):
+                sampled_df = input_df.reset_index(drop=True)
+            elif config.stratify_by:
+                groups = []
+                target_n = config.n or int(len(input_df) * config.fraction)
+                for _, group_df in input_df.groupby(config.stratify_by):
+                    group_n = max(1, int(len(group_df) / len(input_df) * target_n))
+                    groups.append(
+                        group_df.sample(
+                            n=min(group_n, len(group_df)),
+                            random_state=config.random_state,
+                        )
                     )
+                sampled_df = pd.concat(groups).sample(
+                    frac=1,
+                    random_state=config.random_state,
                 )
-            result = pd.concat(groups).sample(frac=1, random_state=config.random_state)
-        elif config.n is not None:
-            result = input_df.sample(n=config.n, random_state=config.random_state)
-        else:
-            result = input_df.sample(
-                frac=config.fraction, random_state=config.random_state
-            )
+            elif config.n is not None:
+                sampled_df = input_df.sample(n=config.n, random_state=config.random_state)
+            else:
+                sampled_df = input_df.sample(
+                    frac=config.fraction,
+                    random_state=config.random_state,
+                )
+            return sampled_df.reset_index(drop=True)
 
-        result = result.reset_index(drop=True)
+        result = self._smart_executor.execute_unary(config, input_df, _pandas_sample)
 
         recorder.record_sample(
             step_name=config.name,
@@ -917,6 +969,36 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="sample",
+            output_df=result,
+            rows_in=len(input_df),
+            rows_out=len(result),
+            columns_in=columns_in,
+            columns_out=list(result.columns),
+            duration_ms=measure_ms(start),
+        )
+
+    def execute_sql(
+        self,
+        df_registry: Dict[str, pd.DataFrame],
+        config: SqlStepConfig,
+        recorder: LineageRecorder,
+    ) -> StepExecutionResult:
+        """Execute a SQL step using DuckDB against the input DataFrame."""
+        start = time.perf_counter()
+        input_df = df_registry[config.input]
+        columns_in = list(input_df.columns)
+        result = self._smart_executor.execute_sql(config, input_df)
+
+        recorder.record_sql(
+            step_name=config.name,
+            input_step=config.input,
+            input_columns=columns_in,
+            output_columns=list(result.columns),
+        )
+
+        return StepExecutionResult(
+            step_name=config.name,
+            step_type="sql",
             output_df=result,
             rows_in=len(input_df),
             rows_out=len(result),

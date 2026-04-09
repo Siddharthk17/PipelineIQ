@@ -5,6 +5,7 @@ Uses file metadata for row count estimates and heuristics for
 step-level row/duration estimation.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -190,6 +191,14 @@ def generate_execution_plan(
             else:
                 rows_out = rows_in
             estimated_cols = step_columns.get(input_step, [])
+        elif step_type == "sql":
+            rows_in = step_rows.get(input_step, 0) if input_step else 0
+            rows_out = max(1, int(rows_in * 0.8))
+            query = str(step.get("query", ""))
+            limit_match = re.search(r"\blimit\s+(\d+)", query, re.IGNORECASE)
+            if limit_match:
+                rows_out = min(rows_out, int(limit_match.group(1)))
+            estimated_cols = step_columns.get(input_step, [])
         else:
             rows_in = step_rows.get(input_step, 0) if input_step else 0
             rows_out = rows_in
@@ -247,5 +256,7 @@ def _estimate_duration(step_type: str, row_count: int) -> int:
         return max(10, row_count // 3000)
     elif step_type == "sort":
         return max(5, row_count // 8000)
+    elif step_type == "sql":
+        return max(8, row_count // 2500)
     else:
         return max(2, row_count // 10000)

@@ -158,6 +158,12 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
         _publish_terminal_event(run_id, "pipeline_failed", str(exc))
         return {"run_id": run_id, "status": "FAILED"}
     finally:
+        try:
+            from backend.execution.arrow_bus import get_arrow_bus
+
+            get_arrow_bus().cleanup_run(run_id)
+        except Exception:
+            logger.debug("Arrow bus cleanup skipped for run_id=%s", run_id)
         db.close()
 
 

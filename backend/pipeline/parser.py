@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Literal, Optional, Set, Union
 import yaml
 
 from backend.config import settings
+from backend.execution.sql_builder import validate_sql_step_query
 from backend.pipeline.exceptions import InvalidYAMLError, MissingRequiredFieldError
 from backend.utils.string_utils import (
     find_closest_column,
@@ -42,6 +43,7 @@ class StepType(str, Enum):
     DEDUPLICATE = "deduplicate"
     FILL_NULLS = "fill_nulls"
     SAMPLE = "sample"
+    SQL = "sql"
 
 
 class FilterOperator(str, Enum):
@@ -233,6 +235,14 @@ class SampleStepConfig(StepConfig):
 
 
 @dataclass
+class SqlStepConfig(StepConfig):
+    """Configuration for SQL transformation step."""
+
+    input: str = ""
+    query: str = ""
+
+
+@dataclass
 class PipelineConfig:
     """Fully typed pipeline configuration parsed from YAML."""
 
@@ -283,6 +293,7 @@ _STEP_CONFIG_MAP: Dict[StepType, type] = {
     StepType.DEDUPLICATE: DeduplicateStepConfig,
     StepType.FILL_NULLS: FillNullsStepConfig,
     StepType.SAMPLE: SampleStepConfig,
+    StepType.SQL: SqlStepConfig,
 }
 
 
@@ -331,6 +342,7 @@ class PipelineParser:
         self._check_has_save_step(config, errors, warnings)
         self._check_save_filenames(config, errors)
         self._check_validate_rules(config, errors)
+        self._check_sql_steps(config, errors)
 
         return ValidationResult(
             is_valid=len(errors) == 0,
@@ -516,6 +528,13 @@ class PipelineParser:
                 fraction=raw.get("fraction"),
                 random_state=raw.get("random_state", 42),
                 stratify_by=raw.get("stratify_by"),
+            )
+        if step_type == StepType.SQL:
+            return SqlStepConfig(
+                name=name,
+                step_type=step_type,
+                input=raw.get("input", ""),
+                query=raw.get("query", ""),
             )
         # Unreachable, but satisfies type checkers
         return StepConfig(name=name, step_type=step_type)
@@ -888,3 +907,23 @@ class PipelineParser:
                             ),
                         )
                     )
+
+    def _check_sql_steps(
+        self,
+        config: PipelineConfig,
+        errors: List[ValidationError],
+    ) -> None:
+        """Validate SQL step safety and placeholder usage."""
+        for step in config.steps:
+            if not isinstance(step, SqlStepConfig):
+                continue
+            try:
+                validate_sql_step_query(step.query, require_input_placeholder=True)
+            except ValueError as exc:
+                errors.append(
+                    ValidationError(
+                        step_name=step.name,
+                        field="query",
+                        message=str(exc),
+                    )
+                )

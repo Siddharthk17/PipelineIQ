@@ -11,6 +11,7 @@ from backend.pipeline.parser import (
     LoadStepConfig,
     PipelineParser,
     SaveStepConfig,
+    SqlStepConfig,
     StepType,
 )
 
@@ -429,3 +430,68 @@ pipeline:
         assert result.is_valid is True
         assert len(result.warnings) > 0
         assert any("save" in w.message.lower() for w in result.warnings)
+
+    def test_parse_sql_step_returns_typed_sql_config(self, parser):
+        """SQL steps parse into SqlStepConfig with query preserved."""
+        yaml_str = """
+pipeline:
+  name: sql_test
+  steps:
+    - name: load_data
+      type: load
+      file_id: f1
+    - name: custom_sql
+      type: sql
+      input: load_data
+      query: |
+        SELECT customer_id, amount
+        FROM {{input}}
+        WHERE amount > 100
+    - name: save_output
+      type: save
+      input: custom_sql
+      filename: out.csv
+"""
+        config = parser.parse(yaml_str)
+        sql_step = config.steps[1]
+        assert isinstance(sql_step, SqlStepConfig)
+        assert sql_step.input == "load_data"
+        assert "{{input}}" in sql_step.query
+
+    def test_validate_sql_step_requires_input_placeholder(self, parser):
+        """SQL steps without {{input}} fail validation."""
+        yaml_str = """
+pipeline:
+  name: sql_test
+  steps:
+    - name: load_data
+      type: load
+      file_id: f1
+    - name: bad_sql
+      type: sql
+      input: load_data
+      query: "SELECT * FROM some_table"
+"""
+        config = parser.parse(yaml_str)
+        result = parser.validate(config, {"f1"})
+        assert result.is_valid is False
+        assert any(e.field == "query" for e in result.errors)
+
+    def test_validate_sql_step_blocks_non_select_queries(self, parser):
+        """SQL step query must be SELECT/CTE only."""
+        yaml_str = """
+pipeline:
+  name: sql_test
+  steps:
+    - name: load_data
+      type: load
+      file_id: f1
+    - name: bad_sql
+      type: sql
+      input: load_data
+      query: "DELETE FROM {{input}}"
+"""
+        config = parser.parse(yaml_str)
+        result = parser.validate(config, {"f1"})
+        assert result.is_valid is False
+        assert any("select" in e.message.lower() for e in result.errors)

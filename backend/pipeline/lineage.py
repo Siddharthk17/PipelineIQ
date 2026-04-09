@@ -944,6 +944,54 @@ class LineageRecorder:
             len(columns),
         )
 
+    def record_sql(
+        self,
+        step_name: str,
+        input_step: str,
+        input_columns: List[str],
+        output_columns: List[str],
+    ) -> None:
+        """Record a SQL step.
+
+        SQL transformations can arbitrarily reshape columns; we preserve
+        lineage conservatively by connecting all input columns to the SQL
+        step node and then connecting that step node to every output column.
+        """
+        step_node = _step_node_id(step_name)
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"SQL: {step_name}",
+                "step_name": step_name,
+                "step_type": "sql",
+            },
+        )
+
+        for col in input_columns:
+            input_col = _col_node_id(input_step, col)
+            self.graph.add_edge(input_col, step_node)
+
+        for col in output_columns:
+            output_col = _col_node_id(step_name, col)
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                },
+            )
+            self.graph.add_edge(step_node, output_col)
+
+        logger.debug(
+            "Recorded SQL: step=%s, input_cols=%d, output_cols=%d",
+            step_name,
+            len(input_columns),
+            len(output_columns),
+        )
+
     def serialize(self) -> Dict[str, Any]:
         """Serialize the lineage graph for database storage.
 

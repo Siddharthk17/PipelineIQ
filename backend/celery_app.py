@@ -9,9 +9,11 @@ import ssl
 
 import sentry_sdk
 from celery import Celery
+from celery.signals import worker_process_init, worker_process_shutdown
 from sentry_sdk.integrations.celery import CeleryIntegration
 
 from backend.config import settings
+from backend.execution.duckdb_executor import close_worker_duckdb, initialize_worker_duckdb
 
 if settings.SENTRY_DSN:
     sentry_sdk.init(
@@ -41,3 +43,15 @@ celery_app.autodiscover_tasks(["backend.tasks"], related_name="webhook_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="schedule_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="notification_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="profiling")
+
+
+@worker_process_init.connect
+def _init_worker_duckdb(**kwargs) -> None:
+    """Initialize one DuckDB connection in each worker process."""
+    initialize_worker_duckdb()
+
+
+@worker_process_shutdown.connect
+def _close_worker_duckdb(**kwargs) -> None:
+    """Close worker DuckDB connection on process shutdown."""
+    close_worker_duckdb()

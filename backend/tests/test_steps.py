@@ -21,6 +21,7 @@ from backend.pipeline.parser import (
     SampleStepConfig,
     SaveStepConfig,
     SelectStepConfig,
+    SqlStepConfig,
     SortOrder,
     SortStepConfig,
     StepType,
@@ -600,3 +601,36 @@ class TestStepEdgeCases:
         )
         with pytest.raises(ValueError, match="Strategy 'mean' requires numeric column"):
             executor.execute_fill_nulls(df_registry, config, recorder)
+
+
+class TestSqlStep:
+    """Tests for SQL step execution."""
+
+    def test_sql_step_executes_select_query(self, executor, recorder, sample_sales_df):
+        """SQL step executes against {{input}} and returns projected output."""
+        df_registry = {"load_sales": sample_sales_df}
+        config = SqlStepConfig(
+            name="sql_projection",
+            step_type=StepType.SQL,
+            input="load_sales",
+            query=(
+                "SELECT customer_id, amount * 2 AS amount_x2 "
+                "FROM {{input}} WHERE amount > 100"
+            ),
+        )
+        result = executor.execute_sql(df_registry, config, recorder)
+        assert list(result.output_df.columns) == ["customer_id", "amount_x2"]
+        assert result.rows_out > 0
+        assert (result.output_df["amount_x2"] > 200).all()
+
+    def test_sql_step_rejects_non_select_query(self, executor, recorder, sample_sales_df):
+        """SQL step blocks write/admin SQL keywords."""
+        df_registry = {"load_sales": sample_sales_df}
+        config = SqlStepConfig(
+            name="sql_bad",
+            step_type=StepType.SQL,
+            input="load_sales",
+            query="DELETE FROM {{input}}",
+        )
+        with pytest.raises(ValueError):
+            executor.execute_sql(df_registry, config, recorder)

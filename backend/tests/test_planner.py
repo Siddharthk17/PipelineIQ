@@ -206,3 +206,28 @@ class TestPlannerEndpoint:
         )
         # Invalid YAML should get a 422 or error
         assert response.status_code in [400, 422]
+
+
+class TestPlannerSqlStep:
+    """Tests for SQL step dry-run planning."""
+
+    def test_plan_sql_step_estimates_rows_and_preserves_columns(
+        self, client, test_db, sales_csv_bytes
+    ):
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+        yaml_config = f"""pipeline:
+  name: sql_plan
+  steps:
+    - name: load_sales
+      type: load
+      file_id: "{file_id}"
+    - name: sql_transform
+      type: sql
+      input: load_sales
+      query: "SELECT * FROM {{input}} LIMIT 5"
+"""
+        plan = generate_execution_plan(yaml_config, test_db)
+        sql_step = plan.steps[1]
+        assert sql_step.step_type == "sql"
+        assert sql_step.estimated_rows_in == 20
+        assert sql_step.estimated_rows_out == 5
