@@ -5,6 +5,7 @@
 
 import pytest
 from backend.pipeline.versioning import diff_pipelines, save_version
+from sqlalchemy.exc import IntegrityError
 
 
 YAML_V1 = """pipeline:
@@ -68,6 +69,38 @@ class TestVersionCreation:
         v1b = save_version("pipeline_b", YAML_V1, "b0000000-0000-0000-0000-000000000002", test_db)
         assert v1a.version_number == 1
         assert v1b.version_number == 1
+
+    def test_save_version_retries_after_integrity_error(self, test_db, monkeypatch):
+        save_version(
+            "retry_pipeline",
+            YAML_V1,
+            "a0000000-0000-0000-0000-000000000001",
+            test_db,
+        )
+
+        original_commit = test_db.commit
+        state = {"calls": 0}
+
+        def flaky_commit():
+            state["calls"] += 1
+            if state["calls"] == 1:
+                raise IntegrityError(
+                    "INSERT INTO pipeline_versions ...",
+                    params={},
+                    orig=Exception("duplicate key value violates unique constraint"),
+                )
+            return original_commit()
+
+        monkeypatch.setattr(test_db, "commit", flaky_commit)
+
+        v2 = save_version(
+            "retry_pipeline",
+            YAML_V2,
+            "b0000000-0000-0000-0000-000000000002",
+            test_db,
+        )
+        assert v2.version_number == 2
+        assert state["calls"] == 2
 
 
 class TestPipelineDiff:

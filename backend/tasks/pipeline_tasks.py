@@ -367,6 +367,8 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             db=db,
         )
     except Exception as exc:
+        # Keep session usable even if version write fails after persistence commit.
+        db.rollback()
         logger.warning("Failed to save pipeline version: %s", exc)
 
     logger.info(

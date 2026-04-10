@@ -49,7 +49,7 @@ def quote_identifier(identifier: str) -> str:
     """Quote SQL identifiers safely for DuckDB."""
     if not isinstance(identifier, str) or identifier == "":
         raise ValueError("Identifier must be a non-empty string")
-    return f"\"{identifier.replace('\"', '\"\"')}\""
+    return '"' + identifier.replace('"', '""') + '"'
 
 
 def sql_literal(value: Any) -> str:

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import yaml
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.models import PipelineVersion
@@ -114,35 +115,59 @@ def save_version(
     yaml_config: str,
     run_id: Optional[str],
     db: Session,
+    *,
+    max_retries: int = 5,
 ) -> PipelineVersion:
-    """Save a new pipeline version, auto-incrementing version number."""
-    latest = (
-        db.query(PipelineVersion)
-        .filter(PipelineVersion.pipeline_name == pipeline_name)
-        .order_by(PipelineVersion.version_number.desc())
-        .first()
-    )
+    """Save a new pipeline version, retrying on version-number races.
 
-    next_version = (latest.version_number + 1) if latest else 1
+    Concurrent runs for the same pipeline name can race on
+    (pipeline_name, version_number). On uniqueness conflicts, rollback and
+    retry with a freshly computed version number.
+    """
+    if max_retries < 1:
+        raise ValueError("max_retries must be >= 1")
 
-    change_summary = None
-    if latest:
-        diff = diff_pipelines(
-            latest.yaml_config,
-            yaml_config,
-            latest.version_number,
-            next_version,
+    normalized_run_id = _uuid.UUID(run_id) if isinstance(run_id, str) else run_id
+    last_error: Optional[Exception] = None
+
+    for attempt in range(max_retries):
+        latest = (
+            db.query(PipelineVersion)
+            .filter(PipelineVersion.pipeline_name == pipeline_name)
+            .order_by(PipelineVersion.version_number.desc())
+            .first()
         )
-        change_summary = diff.change_summary
 
-    version = PipelineVersion(
-        pipeline_name=pipeline_name,
-        version_number=next_version,
-        yaml_config=yaml_config,
-        run_id=_uuid.UUID(run_id) if isinstance(run_id, str) else run_id,
-        change_summary=change_summary or "Initial version",
-    )
-    db.add(version)
-    db.commit()
-    db.refresh(version)
-    return version
+        next_version = (latest.version_number + 1) if latest else 1
+        change_summary = "Initial version"
+        if latest:
+            diff = diff_pipelines(
+                latest.yaml_config,
+                yaml_config,
+                latest.version_number,
+                next_version,
+            )
+            change_summary = diff.change_summary
+
+        version = PipelineVersion(
+            pipeline_name=pipeline_name,
+            version_number=next_version,
+            yaml_config=yaml_config,
+            run_id=normalized_run_id,
+            change_summary=change_summary,
+        )
+        db.add(version)
+
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            last_error = exc
+            if attempt == max_retries - 1:
+                raise
+            continue
+
+        db.refresh(version)
+        return version
+
+    raise RuntimeError("Unable to save pipeline version after retries") from last_error
