@@ -22,6 +22,71 @@ _LEADING_COMMENT = re.compile(
 )
 
 
+def _strip_literals_and_comments(sql: str) -> str:
+    """Mask SQL string/comment bodies so keyword scans only inspect executable SQL."""
+    result: list[str] = []
+    i = 0
+    state = "code"
+    length = len(sql)
+
+    while i < length:
+        ch = sql[i]
+        nxt = sql[i + 1] if i + 1 < length else ""
+
+        if state == "code":
+            if ch == "'" and state == "code":
+                state = "single_quote"
+                result.append(" ")
+            elif ch == '"' and state == "code":
+                state = "double_quote"
+                result.append(" ")
+            elif ch == "-" and nxt == "-":
+                state = "line_comment"
+                result.extend((" ", " "))
+                i += 1
+            elif ch == "/" and nxt == "*":
+                state = "block_comment"
+                result.extend((" ", " "))
+                i += 1
+            else:
+                result.append(ch)
+        elif state == "single_quote":
+            if ch == "'" and nxt == "'":
+                result.extend((" ", " "))
+                i += 1
+            elif ch == "'":
+                state = "code"
+                result.append(" ")
+            else:
+                result.append(" ")
+        elif state == "double_quote":
+            if ch == '"' and nxt == '"':
+                result.extend((" ", " "))
+                i += 1
+            elif ch == '"':
+                state = "code"
+                result.append(" ")
+            else:
+                result.append(" ")
+        elif state == "line_comment":
+            if ch == "\n":
+                state = "code"
+                result.append("\n")
+            else:
+                result.append(" ")
+        elif state == "block_comment":
+            if ch == "*" and nxt == "/":
+                state = "code"
+                result.extend((" ", " "))
+                i += 1
+            else:
+                result.append(" ")
+
+        i += 1
+
+    return "".join(result)
+
+
 def _step_value(step: Any, key: str, default: Any = None) -> Any:
     if isinstance(step, dict):
         return step.get(key, default)
@@ -103,7 +168,8 @@ def validate_sql_step_query(
     if leading_keyword not in {"select", "with"}:
         raise ValueError("Only SELECT/CTE queries are allowed")
 
-    if _FORBIDDEN_SQL_KEYWORDS.search(sql_for_scan):
+    keyword_scan_sql = _strip_literals_and_comments(sql_for_scan)
+    if _FORBIDDEN_SQL_KEYWORDS.search(keyword_scan_sql):
         raise ValueError("SQL query contains disallowed write/admin keywords")
 
     return normalized.replace("{{input}}", "__input__")

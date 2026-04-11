@@ -8,12 +8,12 @@ row counts, and column metadata.
 
 import logging
 import time
+import pandas as pd
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
-import pandas as pd
-from backend.execution.smart_executor import SmartExecutor
+import pyarrow as pa
 from backend.services.storage_service import storage_service
 from backend.pipeline.exceptions import (
     AggregationError,
@@ -56,13 +56,18 @@ class StepExecutionResult:
 
     step_name: str
     step_type: str
-    output_df: pd.DataFrame
+    output_table: pa.Table
     rows_in: int
     rows_out: int
     columns_in: List[str]
     columns_out: List[str]
     duration_ms: int
     warnings: List[str] = field(default_factory=list)
+
+    @property
+    def output_df(self) -> pd.DataFrame:
+        """Backward compatibility for tests and components expecting a Pandas DataFrame."""
+        return self.output_table.to_pandas()
 
 
 # Maps FilterOperator → a callable that takes (pd.Series, value) → pd.Series[bool]
@@ -90,6 +95,8 @@ SUPPORTED_FILE_EXTENSIONS: Dict[str, Callable[..., pd.DataFrame]] = {
     ".json": pd.read_json,
 }
 
+TableLike = Union[pa.Table, pd.DataFrame]
+
 
 class StepExecutor:
     """Executes individual pipeline steps and records lineage.
@@ -101,7 +108,6 @@ class StepExecutor:
     """
 
     def __init__(self) -> None:
-        self._smart_executor = SmartExecutor()
         self._dispatch: Dict[StepType, Callable] = {
             StepType.LOAD: self.execute_load,
             StepType.FILTER: self.execute_filter,
@@ -122,7 +128,7 @@ class StepExecutor:
 
     def execute(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: StepConfig,
         recorder: LineageRecorder,
         file_paths: Optional[Dict[str, str]] = None,
@@ -142,13 +148,13 @@ class StepExecutor:
 
         if config.step_type == StepType.LOAD:
             return executor(
-                df_registry, config, recorder, file_paths or {}, file_metadata or {}
+                table_registry, config, recorder, file_paths or {}, file_metadata or {}
             )
-        return executor(df_registry, config, recorder)
+        return executor(table_registry, config, recorder)
 
     def execute_load(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: LoadStepConfig,
         recorder: LineageRecorder,
         file_paths: Dict[str, str],
@@ -181,7 +187,7 @@ class StepExecutor:
             step_type=config.step_type.value
             if isinstance(config.step_type, StepType)
             else str(config.step_type),
-            output_df=df,
+            output_table=pa.Table.from_pandas(df, preserve_index=False),
             rows_in=len(df),
             rows_out=len(df),
             columns_in=columns,
@@ -212,7 +218,7 @@ class StepExecutor:
 
     def execute_filter(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: FilterStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -223,17 +229,20 @@ class StepExecutor:
             InvalidOperatorError: If the operator is not supported.
         """
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = input_table.to_pandas()
         columns_in = list(input_df.columns)
         warnings: List[str] = []
 
         self._validate_column_exists(config.name, config.column, columns_in)
 
-        def _pandas_filter() -> pd.DataFrame:
+        def _pandas_filter() -> pa.Table:
             mask = self._apply_filter_operator(config)
-            return input_df[mask(input_df[config.column], config.value)].copy()
+            filtered_df = input_df[mask(input_df[config.column], config.value)].copy()
+            return pa.Table.from_pandas(filtered_df, preserve_index=False)
 
-        filtered_df = self._smart_executor.execute_unary(config, input_df, _pandas_filter)
+        filtered_table = _pandas_filter()
+        filtered_df = filtered_table.to_pandas()
 
         if len(filtered_df) == 0:
             warnings.append(
@@ -258,9 +267,9 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="filter",
-            output_df=filtered_df,
-            rows_in=len(input_df),
-            rows_out=len(filtered_df),
+            output_table=filtered_table,
+            rows_in=input_table.num_rows,
+            rows_out=filtered_table.num_rows,
             columns_in=columns_in,
             columns_out=list(filtered_df.columns),
             duration_ms=measure_ms(start),
@@ -282,7 +291,7 @@ class StepExecutor:
 
     def execute_select(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: SelectStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -292,16 +301,19 @@ class StepExecutor:
             ColumnNotFoundError: If any selected column doesn't exist.
         """
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = input_table.to_pandas()
         columns_in = list(input_df.columns)
 
         for col in config.columns:
             self._validate_column_exists(config.name, col, columns_in)
 
-        def _pandas_select() -> pd.DataFrame:
-            return input_df[config.columns].copy()
+        def _pandas_select() -> pa.Table:
+            selected_df = input_df[config.columns].copy()
+            return pa.Table.from_pandas(selected_df, preserve_index=False)
 
-        selected_df = self._smart_executor.execute_unary(config, input_df, _pandas_select)
+        selected_table = _pandas_select()
+        selected_df = selected_table.to_pandas()
         dropped = [c for c in columns_in if c not in config.columns]
 
         recorder.record_projection(
@@ -314,9 +326,9 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="select",
-            output_df=selected_df,
-            rows_in=len(input_df),
-            rows_out=len(selected_df),
+            output_table=selected_table,
+            rows_in=input_table.num_rows,
+            rows_out=selected_table.num_rows,
             columns_in=columns_in,
             columns_out=list(selected_df.columns),
             duration_ms=measure_ms(start),
@@ -326,7 +338,7 @@ class StepExecutor:
 
     def execute_rename(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: RenameStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -336,13 +348,15 @@ class StepExecutor:
             ColumnNotFoundError: If any source column doesn't exist.
         """
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = input_table.to_pandas()
         columns_in = list(input_df.columns)
 
         for old_name in config.mapping:
             self._validate_column_exists(config.name, old_name, columns_in)
 
         renamed_df = input_df.rename(columns=config.mapping).copy()
+        renamed_table = pa.Table.from_pandas(renamed_df, preserve_index=False)
 
         recorder.record_rename(
             step_name=config.name,
@@ -354,9 +368,9 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="rename",
-            output_df=renamed_df,
-            rows_in=len(input_df),
-            rows_out=len(renamed_df),
+            output_table=renamed_table,
+            rows_in=input_table.num_rows,
+            rows_out=renamed_table.num_rows,
             columns_in=columns_in,
             columns_out=list(renamed_df.columns),
             duration_ms=measure_ms(start),
@@ -364,7 +378,7 @@ class StepExecutor:
 
     def execute_join(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: JoinStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -374,27 +388,27 @@ class StepExecutor:
             JoinKeyMissingError: If the join key is missing from either side.
         """
         start = time.perf_counter()
-        left_df = df_registry[config.left]
-        right_df = df_registry[config.right]
+        left_table = table_registry[config.left]
+        right_table = table_registry[config.right]
+
+        left_df = left_table.to_pandas()
+        right_df = right_table.to_pandas()
 
         self._validate_join_key(config.name, config.on, left_df, "left")
         self._validate_join_key(config.name, config.on, right_df, "right")
 
-        def _pandas_join() -> pd.DataFrame:
-            return pd.merge(
+        def _pandas_join() -> pa.Table:
+            joined_df = pd.merge(
                 left_df,
                 right_df,
                 on=config.on,
                 how=config.how.value,
                 suffixes=("_left", "_right"),
             )
+            return pa.Table.from_pandas(joined_df, preserve_index=False)
 
-        joined_df = self._smart_executor.execute_join(
-            config,
-            left_df,
-            right_df,
-            _pandas_join,
-        )
+        joined_table = _pandas_join()
+        joined_df = joined_table.to_pandas()
 
         recorder.record_join(
             step_name=config.name,
@@ -410,9 +424,9 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="join",
-            output_df=joined_df,
-            rows_in=len(left_df) + len(right_df),
-            rows_out=len(joined_df),
+            output_table=joined_table,
+            rows_in=left_table.num_rows + right_table.num_rows,
+            rows_out=joined_table.num_rows,
             columns_in=list(left_df.columns) + list(right_df.columns),
             columns_out=list(joined_df.columns),
             duration_ms=measure_ms(start),
@@ -436,7 +450,7 @@ class StepExecutor:
 
     def execute_aggregate(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: AggregateStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -447,7 +461,8 @@ class StepExecutor:
             AggregationError: If the aggregation operation fails.
         """
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = input_table.to_pandas()
         columns_in = list(input_df.columns)
 
         for col in config.group_by:
@@ -455,14 +470,12 @@ class StepExecutor:
 
         agg_dict = self._build_aggregation_dict(config, columns_in)
 
-        def _pandas_aggregate() -> pd.DataFrame:
-            return self._perform_aggregation(config, input_df, agg_dict)
+        def _pandas_aggregate() -> pa.Table:
+            aggregated_df = self._perform_aggregation(config, input_df, agg_dict)
+            return pa.Table.from_pandas(aggregated_df, preserve_index=False)
 
-        aggregated_df = self._smart_executor.execute_unary(
-            config,
-            input_df,
-            _pandas_aggregate,
-        )
+        aggregated_table = _pandas_aggregate()
+        aggregated_df = aggregated_table.to_pandas()
 
         recorder.record_aggregate(
             step_name=config.name,
@@ -475,9 +488,9 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="aggregate",
-            output_df=aggregated_df,
-            rows_in=len(input_df),
-            rows_out=len(aggregated_df),
+            output_table=aggregated_table,
+            rows_in=input_table.num_rows,
+            rows_out=aggregated_table.num_rows,
             columns_in=columns_in,
             columns_out=list(aggregated_df.columns),
             duration_ms=measure_ms(start),
@@ -536,7 +549,7 @@ class StepExecutor:
 
     def execute_sort(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: SortStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -546,18 +559,21 @@ class StepExecutor:
             ColumnNotFoundError: If the sort column doesn't exist.
         """
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = input_table.to_pandas()
         columns_in = list(input_df.columns)
 
         self._validate_column_exists(config.name, config.by, columns_in)
 
-        def _pandas_sort() -> pd.DataFrame:
+        def _pandas_sort() -> pa.Table:
             ascending = config.order == SortOrder.ASC
-            return input_df.sort_values(by=config.by, ascending=ascending).reset_index(
-                drop=True
-            )
+            sorted_df = input_df.sort_values(
+                by=config.by, ascending=ascending
+            ).reset_index(drop=True)
+            return pa.Table.from_pandas(sorted_df, preserve_index=False)
 
-        sorted_df = self._smart_executor.execute_unary(config, input_df, _pandas_sort)
+        sorted_table = _pandas_sort()
+        sorted_df = sorted_table.to_pandas()
 
         recorder.record_passthrough(
             step_name=config.name,
@@ -569,9 +585,9 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="sort",
-            output_df=sorted_df,
-            rows_in=len(input_df),
-            rows_out=len(sorted_df),
+            output_table=sorted_table,
+            rows_in=input_table.num_rows,
+            rows_out=sorted_table.num_rows,
             columns_in=columns_in,
             columns_out=list(sorted_df.columns),
             duration_ms=measure_ms(start),
@@ -579,7 +595,7 @@ class StepExecutor:
 
     def execute_save(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: SaveStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -590,7 +606,8 @@ class StepExecutor:
         from backend.config import settings
 
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = input_table.to_pandas()
         columns = list(input_df.columns)
 
         # Determine extension from filename or default to .csv
@@ -638,9 +655,9 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="save",
-            output_df=input_df,
-            rows_in=len(input_df),
-            rows_out=len(input_df),
+            output_table=input_table,
+            rows_in=input_table.num_rows,
+            rows_out=input_table.num_rows,
             columns_in=columns,
             columns_out=columns,
             duration_ms=measure_ms(start),
@@ -648,7 +665,7 @@ class StepExecutor:
 
     def execute_validate(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: ValidateStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -656,7 +673,8 @@ class StepExecutor:
         from backend.pipeline.validators import execute_validate as run_validate
 
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = input_table.to_pandas()
         columns = list(input_df.columns)
         warnings: List[str] = []
 
@@ -680,9 +698,9 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="validate",
-            output_df=result.output_df,
-            rows_in=len(input_df),
-            rows_out=len(result.output_df),
+            output_table=input_table,
+            rows_in=input_table.num_rows,
+            rows_out=input_table.num_rows,
             columns_in=columns,
             columns_out=columns,
             duration_ms=measure_ms(start),
@@ -703,22 +721,39 @@ class StepExecutor:
                 available_columns=available_columns,
             )
 
+    def _to_pandas_df(self, table: TableLike) -> pd.DataFrame:
+        """Normalize table-like inputs to a pandas DataFrame."""
+        if isinstance(table, pa.Table):
+            return table.to_pandas()
+        if isinstance(table, pd.DataFrame):
+            return table
+        raise TypeError(f"Unsupported table type: {type(table)!r}")
+
+    def _row_count(self, table: TableLike) -> int:
+        """Get row count from Arrow or pandas inputs."""
+        if isinstance(table, pa.Table):
+            return table.num_rows
+        if isinstance(table, pd.DataFrame):
+            return len(table)
+        raise TypeError(f"Unsupported table type: {type(table)!r}")
+
     def execute_pivot(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: PivotStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Reshape data from long to wide format."""
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = self._to_pandas_df(input_table)
         columns_in = list(input_df.columns)
 
         all_cols = config.index + [config.columns, config.values]
         for col in all_cols:
             self._validate_column_exists(config.name, col, columns_in)
 
-        def _pandas_pivot() -> pd.DataFrame:
+        def _pandas_pivot() -> pa.Table:
             result_df = input_df.pivot_table(
                 index=config.index,
                 columns=config.columns,
@@ -733,11 +768,12 @@ class StepExecutor:
                 ]
             else:
                 result_df.columns = [str(col) for col in result_df.columns]
-            return result_df.reset_index()
+            return pa.Table.from_pandas(result_df.reset_index(), preserve_index=False)
 
-        result = self._smart_executor.execute_unary(config, input_df, _pandas_pivot)
+        result_table = _pandas_pivot()
+        result_df = result_table.to_pandas()
 
-        output_columns = list(result.columns)
+        output_columns = list(result_df.columns)
         recorder.record_pivot(
             step_name=config.name,
             input_step=config.input,
@@ -750,23 +786,24 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="pivot",
-            output_df=result,
-            rows_in=len(input_df),
-            rows_out=len(result),
+            output_table=result_table,
+            rows_in=self._row_count(input_table),
+            rows_out=result_table.num_rows,
             columns_in=columns_in,
-            columns_out=list(result.columns),
+            columns_out=output_columns,
             duration_ms=measure_ms(start),
         )
 
     def execute_unpivot(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: UnpivotStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Reshape data from wide to long format."""
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = self._to_pandas_df(input_table)
         columns_in = list(input_df.columns)
 
         all_cols = config.id_vars + config.value_vars
@@ -777,17 +814,19 @@ class StepExecutor:
         if overlap:
             raise ValueError(f"id_vars and value_vars must not overlap: {overlap}")
 
-        def _pandas_unpivot() -> pd.DataFrame:
-            return input_df.melt(
+        def _pandas_unpivot() -> pa.Table:
+            result_df = input_df.melt(
                 id_vars=config.id_vars,
                 value_vars=config.value_vars,
                 var_name=config.var_name,
                 value_name=config.value_name,
             )
+            return pa.Table.from_pandas(result_df, preserve_index=False)
 
-        result = self._smart_executor.execute_unary(config, input_df, _pandas_unpivot)
+        result_table = _pandas_unpivot()
+        result_df = result_table.to_pandas()
 
-        output_columns = list(result.columns)
+        output_columns = list(result_df.columns)
         recorder.record_unpivot(
             step_name=config.name,
             input_step=config.input,
@@ -799,73 +838,74 @@ class StepExecutor:
         return StepExecutionResult(
             step_name=config.name,
             step_type="unpivot",
-            output_df=result,
-            rows_in=len(input_df),
-            rows_out=len(result),
+            output_table=result_table,
+            rows_in=self._row_count(input_table),
+            rows_out=result_table.num_rows,
             columns_in=columns_in,
-            columns_out=list(result.columns),
+            columns_out=output_columns,
             duration_ms=measure_ms(start),
         )
 
     def execute_deduplicate(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: DeduplicateStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Remove duplicate rows."""
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = self._to_pandas_df(input_table)
         columns_in = list(input_df.columns)
 
         if config.subset:
             for col in config.subset:
                 self._validate_column_exists(config.name, col, columns_in)
 
-        def _pandas_deduplicate() -> pd.DataFrame:
+        def _pandas_deduplicate() -> pa.Table:
             keep = False if config.keep == "none" else config.keep
             deduped = input_df.drop_duplicates(subset=config.subset, keep=keep)
-            return deduped.reset_index(drop=True)
+            return pa.Table.from_pandas(
+                deduped.reset_index(drop=True), preserve_index=False
+            )
 
-        result = self._smart_executor.execute_unary(
-            config,
-            input_df,
-            _pandas_deduplicate,
-        )
+        result_table = _pandas_deduplicate()
+        result_df = result_table.to_pandas()
 
         recorder.record_deduplicate(
             step_name=config.name,
             input_step=config.input,
-            columns=list(result.columns),
+            columns=list(result_df.columns),
             subset=config.subset,
         )
 
         return StepExecutionResult(
             step_name=config.name,
             step_type="deduplicate",
-            output_df=result,
-            rows_in=len(input_df),
-            rows_out=len(result),
+            output_table=result_table,
+            rows_in=self._row_count(input_table),
+            rows_out=result_table.num_rows,
             columns_in=columns_in,
-            columns_out=list(result.columns),
+            columns_out=list(result_df.columns),
             duration_ms=measure_ms(start),
         )
 
     def execute_fill_nulls(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: FillNullsStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Fill missing values."""
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = self._to_pandas_df(input_table)
         columns_in = list(input_df.columns)
 
         for col in config.columns:
             self._validate_column_exists(config.name, col, columns_in)
 
-        def _pandas_fill_nulls() -> pd.DataFrame:
+        def _pandas_fill_nulls() -> pa.Table:
             result_df = input_df.copy()
             for col in config.columns:
                 if config.strategy == "constant":
@@ -890,37 +930,39 @@ class StepExecutor:
                     mode_val = result_df[col].mode()
                     if len(mode_val) > 0:
                         result_df[col] = result_df[col].fillna(mode_val[0])
-            return result_df
+            return pa.Table.from_pandas(result_df, preserve_index=False)
 
-        result = self._smart_executor.execute_unary(config, input_df, _pandas_fill_nulls)
+        result_table = _pandas_fill_nulls()
+        result_df = result_table.to_pandas()
 
         recorder.record_fill_nulls(
             step_name=config.name,
             input_step=config.input,
-            columns=list(result.columns),
+            columns=list(result_df.columns),
             method=config.strategy,
         )
 
         return StepExecutionResult(
             step_name=config.name,
             step_type="fill_nulls",
-            output_df=result,
-            rows_in=len(input_df),
-            rows_out=len(result),
+            output_table=result_table,
+            rows_in=self._row_count(input_table),
+            rows_out=result_table.num_rows,
             columns_in=columns_in,
-            columns_out=list(result.columns),
+            columns_out=list(result_df.columns),
             duration_ms=measure_ms(start),
         )
 
     def execute_sample(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: SampleStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Take a random sample of rows."""
         start = time.perf_counter()
-        input_df = df_registry[config.input]
+        input_table = table_registry[config.input]
+        input_df = self._to_pandas_df(input_table)
         columns_in = list(input_df.columns)
 
         if config.n is None and config.fraction is None:
@@ -931,7 +973,7 @@ class StepExecutor:
         if config.stratify_by:
             self._validate_column_exists(config.name, config.stratify_by, columns_in)
 
-        def _pandas_sample() -> pd.DataFrame:
+        def _pandas_sample() -> pa.Table:
             if config.n is not None and config.n > len(input_df):
                 sampled_df = input_df.reset_index(drop=True)
             elif config.stratify_by:
@@ -950,59 +992,46 @@ class StepExecutor:
                     random_state=config.random_state,
                 )
             elif config.n is not None:
-                sampled_df = input_df.sample(n=config.n, random_state=config.random_state)
+                sampled_df = input_df.sample(
+                    n=config.n, random_state=config.random_state
+                )
             else:
                 sampled_df = input_df.sample(
                     frac=config.fraction,
                     random_state=config.random_state,
                 )
-            return sampled_df.reset_index(drop=True)
+            return pa.Table.from_pandas(
+                sampled_df.reset_index(drop=True), preserve_index=False
+            )
 
-        result = self._smart_executor.execute_unary(config, input_df, _pandas_sample)
+        result_table = _pandas_sample()
+        result_df = result_table.to_pandas()
 
         recorder.record_sample(
             step_name=config.name,
             input_step=config.input,
-            columns=list(result.columns),
+            columns=list(result_df.columns),
         )
 
         return StepExecutionResult(
             step_name=config.name,
             step_type="sample",
-            output_df=result,
-            rows_in=len(input_df),
-            rows_out=len(result),
+            output_table=result_table,
+            rows_in=self._row_count(input_table),
+            rows_out=result_table.num_rows,
             columns_in=columns_in,
-            columns_out=list(result.columns),
+            columns_out=list(result_df.columns),
             duration_ms=measure_ms(start),
         )
 
     def execute_sql(
         self,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         config: SqlStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
         """Execute a SQL step using DuckDB against the input DataFrame."""
-        start = time.perf_counter()
-        input_df = df_registry[config.input]
-        columns_in = list(input_df.columns)
-        result = self._smart_executor.execute_sql(config, input_df)
-
-        recorder.record_sql(
-            step_name=config.name,
-            input_step=config.input,
-            input_columns=columns_in,
-            output_columns=list(result.columns),
-        )
-
-        return StepExecutionResult(
-            step_name=config.name,
-            step_type="sql",
-            output_df=result,
-            rows_in=len(input_df),
-            rows_out=len(result),
-            columns_in=columns_in,
-            columns_out=list(result.columns),
-            duration_ms=measure_ms(start),
+        raise NotImplementedError(
+            "SQL steps are only supported via DuckDBExecutor. "
+            "The SmartExecutor should route these requests to DuckDB."
         )

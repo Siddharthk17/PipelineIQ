@@ -10,6 +10,7 @@ from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -343,6 +344,18 @@ def sample_customers_df() -> pd.DataFrame:
             ],
         }
     )
+
+
+@pytest.fixture()
+def sample_sales_table(sample_sales_df: pd.DataFrame) -> pa.Table:
+    """Arrow Table version of sample_sales_df."""
+    return pa.Table.from_pandas(sample_sales_df, preserve_index=False)
+
+
+@pytest.fixture()
+def sample_customers_table(sample_customers_df: pd.DataFrame) -> pa.Table:
+    """Arrow Table version of sample_customers_df."""
+    return pa.Table.from_pandas(sample_customers_df, preserve_index=False)
 
 
 @pytest.fixture()

@@ -9,6 +9,7 @@ from typing import Callable, Optional
 import duckdb
 import pyarrow as pa
 
+from backend.config import settings
 from backend.execution.sql_builder import build_sql_for_step
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ def _configure_connection(
     threads: int = 4,
 ) -> None:
     conn.execute(f"PRAGMA threads={max(1, int(threads))}")
+    conn.execute(f"SET memory_limit='{settings.WORKER_MEMORY_LIMIT_GB}GB'")
     conn.execute("PRAGMA temp_directory='/tmp'")
     conn.execute("PRAGMA enable_object_cache=true")
 
@@ -98,7 +100,11 @@ class DuckDBExecutor:
         *,
         extra_tables: Optional[dict[str, pa.Table]] = None,
     ) -> pa.Table:
-        """Execute a single step against Arrow input and return Arrow output."""
+        """Execute a single step using DuckDB SQL.
+
+        This is the primary entry point for smart routing. It leverages
+        the sql_builder to convert a StepConfig into a DuckDB SQL query.
+        """
         sql = build_sql_for_step(step)
         return self.execute_sql(sql, input_table, extra_tables=extra_tables)
 
@@ -137,4 +143,3 @@ class DuckDBExecutor:
             if self._local_connection is not None:
                 self._local_connection.close()
                 self._local_connection = None
-

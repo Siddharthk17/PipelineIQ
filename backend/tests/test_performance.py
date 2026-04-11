@@ -6,6 +6,7 @@ Validates that core operations complete within acceptable time bounds.
 import io
 import time
 import uuid as _uuid
+import numpy as np
 
 import pandas as pd
 import pytest
@@ -15,9 +16,17 @@ from backend.dependencies import get_db, get_read_db, get_write_db
 from backend.main import app
 from backend.models import LineageGraph, PipelineRun, PipelineStatus, User
 from backend.pipeline.lineage import LineageRecorder
+from backend.pipeline.parser import StepType, FilterOperator, FilterStepConfig
 from backend.tests.conftest import upload_file
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
+# New imports for execution performance
+import pyarrow as pa
+from backend.execution.smart_executor import SmartExecutor
+from backend.execution.duckdb_executor import DuckDBExecutor
+from backend.pipeline.steps import StepExecutor
+from backend.execution.arrow_bus import get_arrow_bus
 
 
 class TestUploadPerformance:
@@ -230,3 +239,41 @@ class TestLineageRetrieval:
         assert duration < 0.5, (
             f"Retrieving large lineage graph took too long: {duration:.4f}s"
         )
+
+
+class TestExecutionPerformance:
+    """Execution performance benchmarks for the SmartExecutor."""
+
+    def test_small_pipeline_execution_latency(self):
+        """A simple pipeline on 10k rows should execute in under 200ms."""
+        bus = get_arrow_bus()
+        bus.clear_all()
+        executor = SmartExecutor(StepExecutor(), DuckDBExecutor())
+        recorder = LineageRecorder()
+
+        # Generate 10k rows
+        df = pd.DataFrame(
+            {
+                "col_0": np.random.randint(0, 100, 10_000),
+                "category": np.random.choice(["A", "B"], 10_000),
+            }
+        )
+        table = pa.Table.from_pandas(df)
+        bus.put("load", table, run_id="perf_test")
+
+        filter_cfg = FilterStepConfig(
+            name="filter",
+            step_type=StepType.FILTER,
+            input="load",
+            column="col_0",
+            operator=FilterOperator.GREATER_THAN,
+            value=50,
+        )
+
+        start = time.perf_counter()
+        # We use la_registry from bus for simulation
+        registry = {"load": bus.get("load")}
+        executor.execute_step(filter_cfg, registry, recorder)
+        duration = time.perf_counter() - start
+
+        assert duration < 0.2, f"Execution took too long: {duration:.4f}s"

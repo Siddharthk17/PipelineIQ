@@ -1,0 +1,26 @@
+pipeline:
+  name: tiered_storage_test
+  steps:
+    - name: load_base
+      type: load
+      file_id: "3d084171-3e1b-4966-8dd0-3e41685e3151"
+    - name: filter_small
+      type: filter
+      input: load_base
+      column: id
+      operator: less_than
+      value: 10000
+    - name: filter_medium
+      type: filter
+      input: load_base
+      column: id
+      operator: less_than
+      value: 500000
+    - name: expand_data
+      type: sql
+      input: filter_medium
+      query: "SELECT a.*, b.id as b_id FROM {{input}} a CROSS JOIN (SELECT id FROM {{input}} LIMIT 100) b"
+    - name: save_result
+      type: save
+      input: expand_data
+      filename: tiered_test_output

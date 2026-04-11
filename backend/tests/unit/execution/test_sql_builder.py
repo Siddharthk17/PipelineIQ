@@ -44,7 +44,14 @@ def test_validate_sql_step_query_requires_input_placeholder() -> None:
 
 def test_validate_sql_step_query_rejects_write_keywords() -> None:
     with pytest.raises(ValueError, match="disallowed"):
-        validate_sql_step_query("SELECT * FROM {{input}} WHERE action = 'drop'")
+        validate_sql_step_query("SELECT * FROM {{input}} WHERE status = 'ok' DROP TABLE x")
+
+
+def test_validate_sql_step_query_allows_keywords_in_literals_and_comments() -> None:
+    normalized = validate_sql_step_query(
+        "SELECT * FROM {{input}} WHERE action = 'drop' -- delete is text"
+    )
+    assert normalized == "SELECT * FROM __input__ WHERE action = 'drop' -- delete is text"
 
 
 def test_validate_sql_step_query_rejects_multiple_statements() -> None:

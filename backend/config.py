@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     MAX_PIPELINE_STEPS: int = 50
     MAX_ROWS_PER_FILE: int = 1_000_000
     STEP_TIMEOUT_SECONDS: int = 300
+    WORKER_MEMORY_LIMIT_GB: int = 2
 
     API_PREFIX: str = "/api/v1"
     CORS_ORIGINS: List[str] = [

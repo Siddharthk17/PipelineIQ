@@ -1,13 +1,13 @@
 {
-  "generated_at_utc": "2026-04-09T14:57:13.487249+00:00",
+  "generated_at_utc": "2026-04-11T17:24:16.428250+00:00",
   "benchmark": "duckdb_vs_pandas",
   "parameters": {
     "sizes": [
-      10000,
-      50000,
-      100000
+      100000,
+      500000,
+      1000000
     ],
-    "repeats": 3,
+    "repeats": 5,
     "operations": [
       "filter",
       "aggregate",
@@ -25,153 +25,153 @@
     "pyarrow_version": "23.0.1"
   },
   "results": {
-    "10000": {
-      "filter": {
-        "pandas_ms_mean": 2.618,
-        "pandas_ms_median": 2.629,
-        "pandas_ms_p95": 2.629,
-        "duckdb_ms_mean": 7.994,
-        "duckdb_ms_median": 7.197,
-        "duckdb_ms_p95": 7.197,
-        "speedup": 0.327
-      },
-      "aggregate": {
-        "pandas_ms_mean": 6.264,
-        "pandas_ms_median": 5.277,
-        "pandas_ms_p95": 5.277,
-        "duckdb_ms_mean": 4.961,
-        "duckdb_ms_median": 5.4,
-        "duckdb_ms_p95": 5.4,
-        "speedup": 1.263
-      },
-      "join": {
-        "pandas_ms_mean": 11.915,
-        "pandas_ms_median": 11.886,
-        "pandas_ms_p95": 11.886,
-        "duckdb_ms_mean": 14.464,
-        "duckdb_ms_median": 12.612,
-        "duckdb_ms_p95": 12.612,
-        "speedup": 0.824
-      },
-      "sort": {
-        "pandas_ms_mean": 6.196,
-        "pandas_ms_median": 6.737,
-        "pandas_ms_p95": 6.737,
-        "duckdb_ms_mean": 10.213,
-        "duckdb_ms_median": 10.657,
-        "duckdb_ms_p95": 10.657,
-        "speedup": 0.607
-      },
-      "sql_projection": {
-        "pandas_ms_mean": 3.029,
-        "pandas_ms_median": 3.558,
-        "pandas_ms_p95": 3.558,
-        "duckdb_ms_mean": 6.03,
-        "duckdb_ms_median": 6.289,
-        "duckdb_ms_p95": 6.289,
-        "speedup": 0.502
-      }
-    },
-    "50000": {
-      "filter": {
-        "pandas_ms_mean": 6.156,
-        "pandas_ms_median": 5.051,
-        "pandas_ms_p95": 5.051,
-        "duckdb_ms_mean": 7.28,
-        "duckdb_ms_median": 5.172,
-        "duckdb_ms_p95": 5.172,
-        "speedup": 0.846
-      },
-      "aggregate": {
-        "pandas_ms_mean": 9.104,
-        "pandas_ms_median": 8.242,
-        "pandas_ms_p95": 8.242,
-        "duckdb_ms_mean": 7.852,
-        "duckdb_ms_median": 8.413,
-        "duckdb_ms_p95": 8.413,
-        "speedup": 1.159
-      },
-      "join": {
-        "pandas_ms_mean": 31.555,
-        "pandas_ms_median": 29.955,
-        "pandas_ms_p95": 29.955,
-        "duckdb_ms_mean": 22.761,
-        "duckdb_ms_median": 21.473,
-        "duckdb_ms_p95": 21.473,
-        "speedup": 1.386
-      },
-      "sort": {
-        "pandas_ms_mean": 17.545,
-        "pandas_ms_median": 17.028,
-        "pandas_ms_p95": 17.028,
-        "duckdb_ms_mean": 28.916,
-        "duckdb_ms_median": 29.49,
-        "duckdb_ms_p95": 29.49,
-        "speedup": 0.607
-      },
-      "sql_projection": {
-        "pandas_ms_mean": 11.036,
-        "pandas_ms_median": 11.244,
-        "pandas_ms_p95": 11.244,
-        "duckdb_ms_mean": 10.585,
-        "duckdb_ms_median": 9.587,
-        "duckdb_ms_p95": 9.587,
-        "speedup": 1.043
-      }
-    },
     "100000": {
       "filter": {
-        "pandas_ms_mean": 13.011,
-        "pandas_ms_median": 13.464,
-        "pandas_ms_p95": 13.464,
-        "duckdb_ms_mean": 10.471,
-        "duckdb_ms_median": 9.809,
-        "duckdb_ms_p95": 9.809,
-        "speedup": 1.243
+        "pandas_ms_mean": 4.092,
+        "pandas_ms_median": 3.976,
+        "pandas_ms_p95": 4.45,
+        "duckdb_ms_mean": 4.455,
+        "duckdb_ms_median": 4.229,
+        "duckdb_ms_p95": 4.721,
+        "speedup": 0.919
       },
       "aggregate": {
-        "pandas_ms_mean": 10.826,
-        "pandas_ms_median": 10.728,
-        "pandas_ms_p95": 10.728,
-        "duckdb_ms_mean": 10.718,
-        "duckdb_ms_median": 10.151,
-        "duckdb_ms_p95": 10.151,
-        "speedup": 1.01
+        "pandas_ms_mean": 3.922,
+        "pandas_ms_median": 3.893,
+        "pandas_ms_p95": 4.042,
+        "duckdb_ms_mean": 6.089,
+        "duckdb_ms_median": 6.581,
+        "duckdb_ms_p95": 7.175,
+        "speedup": 0.644
       },
       "join": {
-        "pandas_ms_mean": 58.289,
-        "pandas_ms_median": 55.77,
-        "pandas_ms_p95": 55.77,
-        "duckdb_ms_mean": 29.243,
-        "duckdb_ms_median": 28.96,
-        "duckdb_ms_p95": 28.96,
-        "speedup": 1.993
+        "pandas_ms_mean": 19.006,
+        "pandas_ms_median": 19.451,
+        "pandas_ms_p95": 19.643,
+        "duckdb_ms_mean": 13.344,
+        "duckdb_ms_median": 13.583,
+        "duckdb_ms_p95": 13.735,
+        "speedup": 1.424
       },
       "sort": {
-        "pandas_ms_mean": 46.342,
-        "pandas_ms_median": 46.942,
-        "pandas_ms_p95": 46.942,
-        "duckdb_ms_mean": 70.881,
-        "duckdb_ms_median": 69.968,
-        "duckdb_ms_p95": 69.968,
-        "speedup": 0.654
+        "pandas_ms_mean": 15.071,
+        "pandas_ms_median": 14.924,
+        "pandas_ms_p95": 16.353,
+        "duckdb_ms_mean": 24.799,
+        "duckdb_ms_median": 25.976,
+        "duckdb_ms_p95": 26.764,
+        "speedup": 0.608
       },
       "sql_projection": {
-        "pandas_ms_mean": 23.412,
-        "pandas_ms_median": 23.53,
-        "pandas_ms_p95": 23.53,
-        "duckdb_ms_mean": 11.884,
-        "duckdb_ms_median": 11.544,
-        "duckdb_ms_p95": 11.544,
-        "speedup": 1.97
+        "pandas_ms_mean": 6.231,
+        "pandas_ms_median": 5.816,
+        "pandas_ms_p95": 6.718,
+        "duckdb_ms_mean": 4.278,
+        "duckdb_ms_median": 4.181,
+        "duckdb_ms_p95": 4.52,
+        "speedup": 1.457
+      }
+    },
+    "500000": {
+      "filter": {
+        "pandas_ms_mean": 25.511,
+        "pandas_ms_median": 25.042,
+        "pandas_ms_p95": 25.875,
+        "duckdb_ms_mean": 12.008,
+        "duckdb_ms_median": 12.084,
+        "duckdb_ms_p95": 12.351,
+        "speedup": 2.125
+      },
+      "aggregate": {
+        "pandas_ms_mean": 13.06,
+        "pandas_ms_median": 12.923,
+        "pandas_ms_p95": 13.032,
+        "duckdb_ms_mean": 17.402,
+        "duckdb_ms_median": 17.068,
+        "duckdb_ms_p95": 18.128,
+        "speedup": 0.75
+      },
+      "join": {
+        "pandas_ms_mean": 130.534,
+        "pandas_ms_median": 130.18,
+        "pandas_ms_p95": 136.34,
+        "duckdb_ms_mean": 43.936,
+        "duckdb_ms_median": 43.798,
+        "duckdb_ms_p95": 43.908,
+        "speedup": 2.971
+      },
+      "sort": {
+        "pandas_ms_mean": 98.203,
+        "pandas_ms_median": 96.467,
+        "pandas_ms_p95": 98.377,
+        "duckdb_ms_mean": 107.673,
+        "duckdb_ms_median": 107.096,
+        "duckdb_ms_p95": 109.352,
+        "speedup": 0.912
+      },
+      "sql_projection": {
+        "pandas_ms_mean": 48.274,
+        "pandas_ms_median": 48.156,
+        "pandas_ms_p95": 49.809,
+        "duckdb_ms_mean": 14.544,
+        "duckdb_ms_median": 14.588,
+        "duckdb_ms_p95": 14.643,
+        "speedup": 3.319
+      }
+    },
+    "1000000": {
+      "filter": {
+        "pandas_ms_mean": 52.041,
+        "pandas_ms_median": 51.866,
+        "pandas_ms_p95": 52.531,
+        "duckdb_ms_mean": 19.676,
+        "duckdb_ms_median": 19.485,
+        "duckdb_ms_p95": 20.323,
+        "speedup": 2.645
+      },
+      "aggregate": {
+        "pandas_ms_mean": 27.113,
+        "pandas_ms_median": 24.302,
+        "pandas_ms_p95": 28.317,
+        "duckdb_ms_mean": 31.81,
+        "duckdb_ms_median": 32.406,
+        "duckdb_ms_p95": 32.653,
+        "speedup": 0.852
+      },
+      "join": {
+        "pandas_ms_mean": 244.034,
+        "pandas_ms_median": 241.986,
+        "pandas_ms_p95": 244.868,
+        "duckdb_ms_mean": 82.907,
+        "duckdb_ms_median": 83.342,
+        "duckdb_ms_p95": 85.63,
+        "speedup": 2.943
+      },
+      "sort": {
+        "pandas_ms_mean": 210.324,
+        "pandas_ms_median": 205.952,
+        "pandas_ms_p95": 211.905,
+        "duckdb_ms_mean": 226.134,
+        "duckdb_ms_median": 226.377,
+        "duckdb_ms_p95": 234.829,
+        "speedup": 0.93
+      },
+      "sql_projection": {
+        "pandas_ms_mean": 111.797,
+        "pandas_ms_median": 105.849,
+        "pandas_ms_p95": 108.26,
+        "duckdb_ms_mean": 27.203,
+        "duckdb_ms_median": 27.508,
+        "duckdb_ms_p95": 27.945,
+        "speedup": 4.11
       }
     }
   },
   "summary": {
-    "largest_size": 100000,
-    "average_speedup_largest": 1.374,
-    "min_speedup_largest": 0.654,
-    "ops_faster_on_duckdb_largest": 4,
+    "largest_size": 1000000,
+    "average_speedup_largest": 2.296,
+    "min_speedup_largest": 0.852,
+    "ops_faster_on_duckdb_largest": 3,
     "total_ops": 5
   }
 }

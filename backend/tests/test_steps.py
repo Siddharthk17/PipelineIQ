@@ -1,6 +1,7 @@
 """Tests for the pipeline step executor."""
 
 import pandas as pd
+import pyarrow as pa
 import pytest
 
 from backend.pipeline.exceptions import (
@@ -28,6 +29,8 @@ from backend.pipeline.parser import (
     UnpivotStepConfig,
     ValidateStepConfig,
 )
+from backend.execution.smart_executor import SmartExecutor
+from backend.execution.duckdb_executor import DuckDBExecutor
 from backend.pipeline.steps import StepExecutor
 
 
@@ -35,6 +38,15 @@ from backend.pipeline.steps import StepExecutor
 def executor() -> StepExecutor:
     """Fresh StepExecutor instance."""
     return StepExecutor()
+
+
+@pytest.fixture()
+def smart_executor() -> SmartExecutor:
+    """Fresh SmartExecutor instance with its dependencies."""
+    return SmartExecutor(
+        pandas_executor=StepExecutor(),
+        duckdb_executor=DuckDBExecutor(),
+    )
 
 
 @pytest.fixture()
@@ -47,10 +59,10 @@ class TestFilterStep:
     """Tests for the filter step executor."""
 
     def test_filter_equals_returns_only_matching_rows(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """Filter with EQUALS returns only 8 delivered rows."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_delivered",
             step_type=StepType.FILTER,
@@ -64,10 +76,10 @@ class TestFilterStep:
         assert all(result.output_df["status"] == "delivered")
 
     def test_filter_greater_than_returns_rows_above_threshold(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_df, sample_sales_table
     ):
         """GREATER_THAN filter returns correct count."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_high",
             step_type=StepType.FILTER,
@@ -81,10 +93,10 @@ class TestFilterStep:
         assert result.rows_out == expected
 
     def test_filter_is_null_on_column_without_nulls_returns_zero_rows(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """IS_NULL on a complete column returns 0 rows."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_nulls",
             step_type=StepType.FILTER,
@@ -97,10 +109,10 @@ class TestFilterStep:
         assert result.rows_out == 0
 
     def test_filter_is_not_null_returns_all_rows_when_no_nulls(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_df, sample_sales_table
     ):
         """IS_NOT_NULL returns all rows when no nulls exist."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_not_null",
             step_type=StepType.FILTER,
@@ -113,10 +125,10 @@ class TestFilterStep:
         assert result.rows_out == len(sample_sales_df)
 
     def test_filter_contains_returns_partial_match_rows(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """status contains 'deli' should match 'delivered' (8 rows)."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_contains",
             step_type=StepType.FILTER,
@@ -129,10 +141,10 @@ class TestFilterStep:
         assert result.rows_out == 8
 
     def test_filter_nonexistent_column_raises_column_not_found_error(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """ColumnNotFoundError raised for nonexistent column."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_bad",
             step_type=StepType.FILTER,
@@ -147,10 +159,10 @@ class TestFilterStep:
         assert len(exc_info.value.available_columns) > 0
 
     def test_filter_column_not_found_provides_fuzzy_suggestion(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """Column 'amoutn' (typo) should suggest 'amount'."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_typo",
             step_type=StepType.FILTER,
@@ -164,10 +176,10 @@ class TestFilterStep:
         assert exc_info.value.suggestion == "amount"
 
     def test_filter_equals_returns_empty_df_when_no_match(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """Filter returns empty DataFrame when no rows match."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_none",
             step_type=StepType.FILTER,
@@ -183,7 +195,7 @@ class TestFilterStep:
     def test_filter_on_column_with_all_nulls_returns_empty_df(self, executor, recorder):
         """Filter on a column with 100% nulls returns 0 rows without crashing."""
         df = pd.DataFrame({"col": [None, None, None], "val": [1, 2, 3]})
-        df_registry = {"source": df}
+        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
         config = FilterStepConfig(
             name="filter_nulls",
             step_type=StepType.FILTER,
@@ -201,10 +213,10 @@ class TestSelectStep:
     """Tests for the select step executor."""
 
     def test_select_keeps_only_specified_columns(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_df, sample_sales_table
     ):
         """Select keeps only order_id and amount."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SelectStepConfig(
             name="select_cols",
             step_type=StepType.SELECT,
@@ -216,10 +228,10 @@ class TestSelectStep:
         assert result.rows_out == len(sample_sales_df)
 
     def test_select_nonexistent_column_raises_error(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """ColumnNotFoundError raised for nonexistent column."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SelectStepConfig(
             name="select_bad",
             step_type=StepType.SELECT,
@@ -234,10 +246,10 @@ class TestRenameStep:
     """Tests for the rename step executor."""
 
     def test_rename_changes_specified_columns(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """Rename changes amount→revenue and status→order_status."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = RenameStepConfig(
             name="rename_cols",
             step_type=StepType.RENAME,
@@ -251,10 +263,10 @@ class TestRenameStep:
         assert "status" not in result.output_df.columns
 
     def test_rename_nonexistent_column_raises_error(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """ColumnNotFoundError raised when renaming a nonexistent column."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = RenameStepConfig(
             name="rename_bad",
             step_type=StepType.RENAME,
@@ -265,10 +277,10 @@ class TestRenameStep:
             executor.execute_rename(df_registry, config, recorder)
 
     def test_rename_preserves_non_renamed_columns(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """Non-renamed columns are preserved intact."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = RenameStepConfig(
             name="rename_one",
             step_type=StepType.RENAME,
@@ -285,12 +297,12 @@ class TestJoinStep:
     """Tests for the join step executor."""
 
     def test_join_inner_excludes_rows_without_match(
-        self, executor, recorder, sample_sales_df, sample_customers_df
+        self, executor, recorder, sample_sales_table, sample_customers_table
     ):
         """Inner join returns only matching rows."""
         df_registry = {
-            "load_sales": sample_sales_df,
-            "load_customers": sample_customers_df,
+            "load_sales": sample_sales_table,
+            "load_customers": sample_customers_table,
         }
         config = JoinStepConfig(
             name="join_data",
@@ -307,7 +319,10 @@ class TestJoinStep:
         """Left join preserves all rows from the left DataFrame."""
         left_df = pd.DataFrame({"key": [1, 2, 3], "left_val": ["a", "b", "c"]})
         right_df = pd.DataFrame({"key": [1, 2], "right_val": ["x", "y"]})
-        df_registry = {"left": left_df, "right": right_df}
+        df_registry = {
+            "left": pa.Table.from_pandas(left_df, preserve_index=False),
+            "right": pa.Table.from_pandas(right_df, preserve_index=False),
+        }
         config = JoinStepConfig(
             name="join_left",
             step_type=StepType.JOIN,
@@ -323,7 +338,10 @@ class TestJoinStep:
         """JoinKeyMissingError raised when key not in left DataFrame."""
         left_df = pd.DataFrame({"id": [1, 2], "val": ["a", "b"]})
         right_df = pd.DataFrame({"key": [1, 2], "val": ["x", "y"]})
-        df_registry = {"left": left_df, "right": right_df}
+        df_registry = {
+            "left": pa.Table.from_pandas(left_df, preserve_index=False),
+            "right": pa.Table.from_pandas(right_df, preserve_index=False),
+        }
         config = JoinStepConfig(
             name="join_bad",
             step_type=StepType.JOIN,
@@ -340,7 +358,10 @@ class TestJoinStep:
         """JoinKeyMissingError raised when key not in right DataFrame."""
         left_df = pd.DataFrame({"key": [1, 2], "val": ["a", "b"]})
         right_df = pd.DataFrame({"id": [1, 2], "val": ["x", "y"]})
-        df_registry = {"left": left_df, "right": right_df}
+        df_registry = {
+            "left": pa.Table.from_pandas(left_df, preserve_index=False),
+            "right": pa.Table.from_pandas(right_df, preserve_index=False),
+        }
         config = JoinStepConfig(
             name="join_bad",
             step_type=StepType.JOIN,
@@ -365,7 +386,7 @@ class TestAggregateStep:
                 "value": [10.0, 20.0, 30.0, 40.0],
             }
         )
-        df_registry = {"source": df}
+        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
         config = AggregateStepConfig(
             name="agg_totals",
             step_type=StepType.AGGREGATE,
@@ -381,10 +402,10 @@ class TestAggregateStep:
         assert a_total == 30.0
 
     def test_aggregate_count_includes_all_groups(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_df, sample_sales_table
     ):
         """Count aggregation includes all unique groups."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = AggregateStepConfig(
             name="agg_count",
             step_type=StepType.AGGREGATE,
@@ -398,7 +419,7 @@ class TestAggregateStep:
     def test_aggregate_on_string_column_with_sum_raises_error(self, executor, recorder):
         """AggregationError raised when summing a string column."""
         df = pd.DataFrame({"group": ["a", "b"], "val": ["x", "y"]})
-        df_registry = {"source": df}
+        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
         config = AggregateStepConfig(
             name="agg_bad",
             step_type=StepType.AGGREGATE,
@@ -415,9 +436,11 @@ class TestAggregateStep:
 class TestSortStep:
     """Tests for the sort step executor."""
 
-    def test_sort_ascending_orders_correctly(self, executor, recorder, sample_sales_df):
+    def test_sort_ascending_orders_correctly(
+        self, executor, recorder, sample_sales_table
+    ):
         """Sort ascending produces correctly ordered output."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SortStepConfig(
             name="sort_asc",
             step_type=StepType.SORT,
@@ -430,10 +453,10 @@ class TestSortStep:
         assert amounts == sorted(amounts)
 
     def test_sort_descending_orders_correctly(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """Sort descending produces correctly ordered output."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SortStepConfig(
             name="sort_desc",
             step_type=StepType.SORT,
@@ -446,10 +469,10 @@ class TestSortStep:
         assert amounts == sorted(amounts, reverse=True)
 
     def test_sort_nonexistent_column_raises_error(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """ColumnNotFoundError raised for nonexistent sort column."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SortStepConfig(
             name="sort_bad",
             step_type=StepType.SORT,
@@ -465,10 +488,10 @@ class TestExecutionResult:
     """Tests for StepExecutionResult metadata correctness."""
 
     def test_execution_result_records_correct_timing(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """duration_ms must be > 0 and < 5000 for a simple filter."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_timing",
             step_type=StepType.FILTER,
@@ -482,10 +505,10 @@ class TestExecutionResult:
         assert result.duration_ms < 5000
 
     def test_execution_result_records_correct_row_counts(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_df, sample_sales_table
     ):
         """rows_in and rows_out are correctly populated."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = FilterStepConfig(
             name="filter_counts",
             step_type=StepType.FILTER,
@@ -499,10 +522,10 @@ class TestExecutionResult:
         assert result.rows_out == 8
 
     def test_execution_result_records_correct_columns(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_df, sample_sales_table
     ):
         """columns_in and columns_out are correctly populated."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SelectStepConfig(
             name="select_meta",
             step_type=StepType.SELECT,
@@ -518,10 +541,10 @@ class TestStepEdgeCases:
     """Additional edge-case tests for pipeline steps."""
 
     def test_sample_frac_zero_returns_empty_df(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_table
     ):
         """Sample with frac=0.0 returns an empty DataFrame."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SampleStepConfig(
             name="sample_zero",
             step_type=StepType.SAMPLE,
@@ -533,10 +556,10 @@ class TestStepEdgeCases:
         assert len(result.output_df) == 0
 
     def test_sample_frac_one_returns_all_rows(
-        self, executor, recorder, sample_sales_df
+        self, executor, recorder, sample_sales_df, sample_sales_table
     ):
         """Sample with frac=1.0 returns all rows."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SampleStepConfig(
             name="sample_all",
             step_type=StepType.SAMPLE,
@@ -549,7 +572,7 @@ class TestStepEdgeCases:
     def test_pivot_empty_df_returns_empty_df(self, executor, recorder):
         """Pivot on empty DataFrame should not crash and return empty result."""
         df = pd.DataFrame(columns=["idx", "cols", "vals"])
-        df_registry = {"source": df}
+        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
         config = PivotStepConfig(
             name="pivot_empty",
             step_type=StepType.PIVOT,
@@ -564,7 +587,7 @@ class TestStepEdgeCases:
     def test_unpivot_overlapping_vars_raises_error(self, executor, recorder):
         """Unpivot with overlapping id_vars and value_vars must raise ValueError."""
         df = pd.DataFrame({"a": [1], "b": [2], "c": [3]})
-        df_registry = {"source": df}
+        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
         config = UnpivotStepConfig(
             name="unpivot_overlap",
             step_type=StepType.UNPIVOT,
@@ -578,7 +601,7 @@ class TestStepEdgeCases:
     def test_deduplicate_no_subset_uses_all_columns(self, executor, recorder):
         """Deduplicate without subset should consider all columns."""
         df = pd.DataFrame({"a": [1, 1, 2], "b": [1, 1, 3]})
-        df_registry = {"source": df}
+        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
         config = DeduplicateStepConfig(
             name="dedup_all",
             step_type=StepType.DEDUPLICATE,
@@ -591,7 +614,7 @@ class TestStepEdgeCases:
     def test_fill_nulls_mean_on_non_numeric_raises_error(self, executor, recorder):
         """Fill nulls with mean on string column should raise ValueError."""
         df = pd.DataFrame({"a": ["x", None, "z"]})
-        df_registry = {"source": df}
+        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
         config = FillNullsStepConfig(
             name="fill_bad",
             step_type=StepType.FILL_NULLS,
@@ -606,9 +629,11 @@ class TestStepEdgeCases:
 class TestSqlStep:
     """Tests for SQL step execution."""
 
-    def test_sql_step_executes_select_query(self, executor, recorder, sample_sales_df):
+    def test_sql_step_executes_select_query(
+        self, smart_executor, recorder, sample_sales_df, sample_sales_table
+    ):
         """SQL step executes against {{input}} and returns projected output."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SqlStepConfig(
             name="sql_projection",
             step_type=StepType.SQL,
@@ -618,14 +643,20 @@ class TestSqlStep:
                 "FROM {{input}} WHERE amount > 100"
             ),
         )
-        result = executor.execute_sql(df_registry, config, recorder)
+        result = smart_executor.execute_step(
+            step=config,
+            table_registry=df_registry,
+            recorder=recorder,
+        )
         assert list(result.output_df.columns) == ["customer_id", "amount_x2"]
         assert result.rows_out > 0
         assert (result.output_df["amount_x2"] > 200).all()
 
-    def test_sql_step_rejects_non_select_query(self, executor, recorder, sample_sales_df):
+    def test_sql_step_rejects_non_select_query(
+        self, smart_executor, recorder, sample_sales_table
+    ):
         """SQL step blocks write/admin SQL keywords."""
-        df_registry = {"load_sales": sample_sales_df}
+        df_registry = {"load_sales": sample_sales_table}
         config = SqlStepConfig(
             name="sql_bad",
             step_type=StepType.SQL,
@@ -633,4 +664,8 @@ class TestSqlStep:
             query="DELETE FROM {{input}}",
         )
         with pytest.raises(ValueError):
-            executor.execute_sql(df_registry, config, recorder)
+            smart_executor.execute_step(
+                step=config,
+                table_registry=df_registry,
+                recorder=recorder,
+            )

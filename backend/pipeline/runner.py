@@ -15,7 +15,11 @@ from enum import Enum
 from typing import Callable, Dict, List, Optional
 
 import pandas as pd
+import pyarrow as pa
 
+from backend.execution.arrow_bus import get_arrow_bus, ArrowDataBus
+from backend.execution.duckdb_executor import DuckDBExecutor
+from backend.execution.smart_executor import SmartExecutor
 from backend.pipeline.exceptions import StepExecutionError
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import (
@@ -101,7 +105,12 @@ class PipelineRunner:
     """
 
     def __init__(self) -> None:
-        self._executor = StepExecutor()
+        self._pandas_executor = StepExecutor()
+        self._duckdb_executor = DuckDBExecutor()
+        self._executor = SmartExecutor(
+            pandas_executor=self._pandas_executor,
+            duckdb_executor=self._duckdb_executor,
+        )
 
     def execute(
         self,
@@ -115,7 +124,8 @@ class PipelineRunner:
         run_id = run_id or str(uuid.uuid4())
         callback = progress_callback or _noop_progress_callback
         recorder = LineageRecorder()
-        df_registry: Dict[str, pd.DataFrame] = {}
+        bus = get_arrow_bus()
+        table_registry: Dict[str, pa.Table] = {}
         step_results: List[StepExecutionResult] = []
         total_rows_processed: int = 0
         pipeline_start = time.perf_counter()
@@ -134,14 +144,15 @@ class PipelineRunner:
                     index=index,
                     total_steps=len(config.steps),
                     run_id=run_id,
-                    df_registry=df_registry,
+                    table_registry=table_registry,
                     recorder=recorder,
                     file_paths=file_paths,
                     file_metadata=file_metadata,
                     callback=callback,
+                    bus=bus,
                 )
                 step_results.append(result)
-                df_registry[step.name] = result.output_df
+                table_registry[step.name] = result.output_table
                 total_rows_processed += result.rows_in
 
         except StepExecutionError as exc:
@@ -179,11 +190,12 @@ class PipelineRunner:
         index: int,
         total_steps: int,
         run_id: str,
-        df_registry: Dict[str, pd.DataFrame],
+        table_registry: Dict[str, pa.Table],
         recorder: LineageRecorder,
         file_paths: Dict[str, str],
         file_metadata: Dict[str, Dict[str, str]],
         callback: ProgressCallback,
+        bus: ArrowDataBus,
     ) -> StepExecutionResult:
         """Execute a single step with progress event emission."""
         callback(
@@ -205,13 +217,15 @@ class PipelineRunner:
         )
 
         try:
-            result = self._executor.execute(
-                df_registry=df_registry,
-                config=step,
+            result = self._executor.execute_step(
+                step=step,
+                table_registry=table_registry,
                 recorder=recorder,
                 file_paths=file_paths,
                 file_metadata=file_metadata,
             )
+            # Persist result to Arrow data bus (tiered storage)
+            bus.put(key=step.name, table=result.output_table, run_id=run_id)
         except StepExecutionError as exc:
             callback(
                 StepProgressEvent(
