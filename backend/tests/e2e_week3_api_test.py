@@ -1,15 +1,23 @@
-import requests
-import pandas as pd
-import numpy as np
 import io
-import uuid
+import os
 import time
 import json
+import uuid
 
-API_URL = "http://localhost:8000/api/v1"
-AUTH_URL = "http://localhost:8000/auth"
-USER_EMAIL = "demo@pipelineiq.app"
-USER_PASS = "Demo1234!"
+import numpy as np
+import pandas as pd
+import pytest
+import requests
+
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_E2E_TESTS") != "1",
+    reason="Set RUN_E2E_TESTS=1 to run live HTTP e2e tests",
+)
+
+API_URL = os.getenv("E2E_BASE_URL", "http://localhost/api/v1")
+AUTH_URL = os.getenv("E2E_AUTH_URL", "http://localhost/auth")
+USER_EMAIL = os.getenv("TEST_ADMIN_EMAIL", "demo@pipelineiq.app")
+USER_PASS = os.getenv("TEST_ADMIN_PASSWORD", "Demo1234!")
 
 
 def get_token():
