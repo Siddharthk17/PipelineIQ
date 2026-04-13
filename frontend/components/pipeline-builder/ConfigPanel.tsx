@@ -8,6 +8,7 @@ interface ConfigPanelProps {
   availableFiles: UploadedFile[];
   availableColumns: string[];
   onSave: (nodeId: string, config: Record<string, unknown>) => void;
+  onDelete: (nodeId: string) => void;
   onClose: () => void;
 }
 
@@ -58,6 +59,7 @@ export function ConfigPanel({
   availableFiles,
   availableColumns,
   onSave,
+  onDelete,
   onClose,
 }: ConfigPanelProps) {
   const [draft, setDraft] = useState<Record<string, unknown>>(() => node?.data.config ?? {});
@@ -90,12 +92,11 @@ export function ConfigPanel({
   );
 
   if (!node || !stepDefinition) {
-    return (
-      <aside className="w-80 shrink-0 border-l bg-card/40 p-3">
-        <p className="text-xs text-muted-foreground">Select a step to configure it.</p>
-      </aside>
-    );
+    return null;
   }
+
+  const getFieldId = (field: string) => `config-${node.id}-${field}`;
+  const getFieldName = (field: string) => `${node.data.type}.${field}`;
 
   const update = (key: string, value: unknown) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -128,19 +129,33 @@ export function ConfigPanel({
   };
 
   return (
-    <aside className="w-80 shrink-0 border-l bg-card/40 p-3">
+    <aside className="w-80 shrink-0 border-l bg-card/40 p-3" data-testid="config-panel">
       <div className="mb-3 flex items-start justify-between gap-2">
         <div>
           <h4 className="text-sm font-semibold">{node.data.label}</h4>
           <p className="text-xs text-muted-foreground">{stepDefinition.label} configuration</p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded border px-2 py-1 text-xs hover:bg-muted"
-        >
-          Close
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => {
+              onDelete(node.id);
+              onClose();
+            }}
+            data-testid="config-panel-delete"
+            className="rounded border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+          >
+            Delete
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            data-testid="config-panel-close"
+            className="rounded border px-2 py-1 text-xs hover:bg-muted"
+          >
+            Close
+          </button>
+        </div>
       </div>
 
       <div className="space-y-3 text-xs">
@@ -148,6 +163,8 @@ export function ConfigPanel({
           <label className="block space-y-1">
             <span className="text-muted-foreground">File</span>
             <select
+              id={getFieldId("file_id")}
+              name={getFieldName("file_id")}
               value={asString(draft.file_id)}
               onChange={(event) => update("file_id", event.target.value)}
               className="w-full rounded border bg-background px-2 py-1.5"
@@ -167,6 +184,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Column</span>
               <select
+                id={getFieldId("column")}
+                name={getFieldName("column")}
                 value={asString(draft.column)}
                 onChange={(event) => update("column", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -182,6 +201,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Operator</span>
               <select
+                id={getFieldId("operator")}
+                name={getFieldName("operator")}
                 value={asString(draft.operator) || "equals"}
                 onChange={(event) => update("operator", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -209,6 +230,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Value</span>
               <input
+                id={getFieldId("value")}
+                name={getFieldName("value")}
                 value={String(draft.value ?? "")}
                 onChange={(event) => update("value", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -223,6 +246,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Join key</span>
               <select
+                id={getFieldId("on")}
+                name={getFieldName("on")}
                 value={asString(draft.on)}
                 onChange={(event) => update("on", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -238,6 +263,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Join type</span>
               <select
+                id={getFieldId("how")}
+                name={getFieldName("how")}
                 value={asString(draft.how) || "inner"}
                 onChange={(event) => update("how", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -257,6 +284,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Group by (comma-separated)</span>
               <input
+                id={getFieldId("group_by")}
+                name={getFieldName("group_by")}
                 value={asArray(draft.group_by).join(", ")}
                 onChange={(event) => update("group_by", parseCsv(event.target.value))}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -266,6 +295,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Aggregations (column:function per line)</span>
               <textarea
+                id={getFieldId("aggregations")}
+                name={getFieldName("aggregations")}
                 value={aggregationsText}
                 onChange={(event) => setAggregationsText(event.target.value)}
                 className="min-h-24 w-full rounded border bg-background px-2 py-1.5 font-mono text-[11px]"
@@ -280,6 +311,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Sort column</span>
               <select
+                id={getFieldId("by")}
+                name={getFieldName("by")}
                 value={asString(draft.by)}
                 onChange={(event) => update("by", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -295,6 +328,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Order</span>
               <select
+                id={getFieldId("order")}
+                name={getFieldName("order")}
                 value={asString(draft.order) || "asc"}
                 onChange={(event) => update("order", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -315,6 +350,8 @@ export function ConfigPanel({
                 return (
                   <label key={column} className="flex items-center gap-2">
                     <input
+                      id={`${getFieldId("columns")}-${column}`}
+                      name={getFieldName("columns")}
                       type="checkbox"
                       checked={checked}
                       onChange={(event) =>
@@ -333,6 +370,8 @@ export function ConfigPanel({
           <label className="block space-y-1">
             <span className="text-muted-foreground">Mappings (old:new per line)</span>
             <textarea
+              id={getFieldId("mapping")}
+              name={getFieldName("mapping")}
               value={mappingText}
               onChange={(event) => setMappingText(event.target.value)}
               className="min-h-24 w-full rounded border bg-background px-2 py-1.5 font-mono text-[11px]"
@@ -344,6 +383,8 @@ export function ConfigPanel({
           <label className="block space-y-1">
             <span className="text-muted-foreground">Filename</span>
             <input
+              id={getFieldId("filename")}
+              name={getFieldName("filename")}
               value={asString(draft.filename)}
               onChange={(event) => update("filename", event.target.value)}
               className="w-full rounded border bg-background px-2 py-1.5"
@@ -357,6 +398,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Index columns (comma-separated)</span>
               <input
+                id={getFieldId("index")}
+                name={getFieldName("index")}
                 value={asArray(draft.index).join(", ")}
                 onChange={(event) => update("index", parseCsv(event.target.value))}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -365,6 +408,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Columns field</span>
               <input
+                id={getFieldId("columns")}
+                name={getFieldName("columns")}
                 value={asString(draft.columns)}
                 onChange={(event) => update("columns", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -373,6 +418,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Values field</span>
               <input
+                id={getFieldId("values")}
+                name={getFieldName("values")}
                 value={asString(draft.values)}
                 onChange={(event) => update("values", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -381,6 +428,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Aggregate function</span>
               <select
+                id={getFieldId("aggfunc")}
+                name={getFieldName("aggfunc")}
                 value={asString(draft.aggfunc) || "sum"}
                 onChange={(event) => update("aggfunc", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -400,6 +449,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">ID variables (comma-separated)</span>
               <input
+                id={getFieldId("id_vars")}
+                name={getFieldName("id_vars")}
                 value={asArray(draft.id_vars).join(", ")}
                 onChange={(event) => update("id_vars", parseCsv(event.target.value))}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -408,6 +459,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Value variables (comma-separated)</span>
               <input
+                id={getFieldId("value_vars")}
+                name={getFieldName("value_vars")}
                 value={asArray(draft.value_vars).join(", ")}
                 onChange={(event) => update("value_vars", parseCsv(event.target.value))}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -416,6 +469,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Variable column name</span>
               <input
+                id={getFieldId("var_name")}
+                name={getFieldName("var_name")}
                 value={asString(draft.var_name) || "variable"}
                 onChange={(event) => update("var_name", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -424,6 +479,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Value column name</span>
               <input
+                id={getFieldId("value_name")}
+                name={getFieldName("value_name")}
                 value={asString(draft.value_name) || "value"}
                 onChange={(event) => update("value_name", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -437,6 +494,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Subset columns (comma-separated, optional)</span>
               <input
+                id={getFieldId("subset")}
+                name={getFieldName("subset")}
                 value={asArray(draft.subset).join(", ")}
                 onChange={(event) => update("subset", parseCsv(event.target.value))}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -445,11 +504,13 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Keep</span>
               <select
+                id={getFieldId("keep")}
+                name={getFieldName("keep")}
                 value={asString(draft.keep) || "first"}
                 onChange={(event) => update("keep", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
               >
-                {["first", "last", "false"].map((keep) => (
+                {["first", "last", "none"].map((keep) => (
                   <option key={keep} value={keep}>
                     {keep}
                   </option>
@@ -464,29 +525,44 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Strategy</span>
               <select
+                id={getFieldId("strategy")}
+                name={getFieldName("strategy")}
                 value={asString(draft.strategy) || "constant"}
                 onChange={(event) => update("strategy", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
               >
-                {["constant", "ffill", "bfill"].map((strategy) => (
+                {[
+                  "constant",
+                  "forward_fill",
+                  "backward_fill",
+                  "mean",
+                  "median",
+                  "mode",
+                ].map((strategy) => (
                   <option key={strategy} value={strategy}>
                     {strategy}
                   </option>
                 ))}
               </select>
             </label>
-            <label className="block space-y-1">
-              <span className="text-muted-foreground">Constant value</span>
-              <input
-                value={String(draft.constant_value ?? "")}
-                onChange={(event) => update("constant_value", event.target.value)}
-                className="w-full rounded border bg-background px-2 py-1.5"
-                placeholder="0"
-              />
-            </label>
+            {(asString(draft.strategy) || "constant") === "constant" && (
+              <label className="block space-y-1">
+                <span className="text-muted-foreground">Constant value</span>
+                <input
+                  id={getFieldId("constant_value")}
+                  name={getFieldName("constant_value")}
+                  value={String(draft.constant_value ?? "")}
+                  onChange={(event) => update("constant_value", event.target.value)}
+                  className="w-full rounded border bg-background px-2 py-1.5"
+                  placeholder="0"
+                />
+              </label>
+            )}
             <label className="block space-y-1">
               <span className="text-muted-foreground">Columns (comma-separated, optional)</span>
               <input
+                id={getFieldId("fill_columns")}
+                name={getFieldName("columns")}
                 value={asArray(draft.columns).join(", ")}
                 onChange={(event) => update("columns", parseCsv(event.target.value))}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -500,16 +576,22 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Sample size (n)</span>
               <input
+                id={getFieldId("n")}
+                name={getFieldName("n")}
                 type="number"
                 min={1}
-                value={asNumber(draft.n, 1000)}
-                onChange={(event) => update("n", Number(event.target.value))}
+                value={typeof draft.n === "number" ? draft.n : ""}
+                onChange={(event) =>
+                  update("n", event.target.value ? Number(event.target.value) : undefined)
+                }
                 className="w-full rounded border bg-background px-2 py-1.5"
               />
             </label>
             <label className="block space-y-1">
               <span className="text-muted-foreground">Fraction (optional)</span>
               <input
+                id={getFieldId("fraction")}
+                name={getFieldName("fraction")}
                 type="number"
                 min={0}
                 max={1}
@@ -524,6 +606,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Random state</span>
               <input
+                id={getFieldId("random_state")}
+                name={getFieldName("random_state")}
                 type="number"
                 value={asNumber(draft.random_state, 42)}
                 onChange={(event) => update("random_state", Number(event.target.value))}
@@ -537,6 +621,8 @@ export function ConfigPanel({
           <label className="block space-y-1">
             <span className="text-muted-foreground">Validation rules (JSON)</span>
             <textarea
+              id={getFieldId("rules")}
+              name={getFieldName("rules")}
               value={JSON.stringify(draft.rules ?? [], null, 2)}
               onChange={(event) => {
                 try {
@@ -555,6 +641,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Column</span>
               <input
+                id={getFieldId("transform_column")}
+                name={getFieldName("column")}
                 value={asString(draft.column)}
                 onChange={(event) => update("column", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
@@ -563,6 +651,8 @@ export function ConfigPanel({
             <label className="block space-y-1">
               <span className="text-muted-foreground">Expression</span>
               <textarea
+                id={getFieldId("expression")}
+                name={getFieldName("expression")}
                 value={asString(draft.expression)}
                 onChange={(event) => update("expression", event.target.value)}
                 className="min-h-20 w-full rounded border bg-background px-2 py-1.5 font-mono text-[11px]"
@@ -575,6 +665,9 @@ export function ConfigPanel({
           <label className="block space-y-1">
             <span className="text-muted-foreground">SQL query</span>
             <textarea
+              id={getFieldId("query")}
+              name={getFieldName("query")}
+              data-testid="sql-query-textarea"
               value={asString(draft.query)}
               onChange={(event) => update("query", event.target.value)}
               className="min-h-24 w-full rounded border bg-background px-2 py-1.5 font-mono text-[11px]"
@@ -587,6 +680,7 @@ export function ConfigPanel({
         <button
           type="button"
           onClick={onClose}
+          data-testid="config-panel-cancel"
           className="rounded border px-2.5 py-1.5 text-xs hover:bg-muted"
         >
           Cancel
@@ -594,6 +688,7 @@ export function ConfigPanel({
         <button
           type="button"
           onClick={saveConfig}
+          data-testid="config-panel-save"
           className="rounded border border-primary bg-primary px-2.5 py-1.5 text-xs text-primary-foreground hover:opacity-90"
         >
           Save

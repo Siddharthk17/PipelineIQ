@@ -70,7 +70,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[var(--grid-bg)] relative overflow-hidden">
+    <main className="min-h-screen flex items-center justify-center bg-[var(--grid-bg)] relative overflow-hidden">
       {/* dot grid */}
       <div
         className="absolute inset-0 pointer-events-none"
@@ -148,10 +148,16 @@ export default function RegisterPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-[11px] mb-1.5" style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
+              <label
+                htmlFor="register-email"
+                className="block text-[11px] mb-1.5"
+                style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}
+              >
                 <span style={{ color: "var(--accent-primary)" }}>›</span> email
               </label>
               <input
+                id="register-email"
+                name="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -166,10 +172,16 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-[11px] mb-1.5" style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
+              <label
+                htmlFor="register-username"
+                className="block text-[11px] mb-1.5"
+                style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}
+              >
                 <span style={{ color: "var(--accent-primary)" }}>›</span> username
               </label>
               <input
+                id="register-username"
+                name="username"
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -187,11 +199,17 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-[11px] mb-1.5" style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
+              <label
+                htmlFor="register-password"
+                className="block text-[11px] mb-1.5"
+                style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}
+              >
                 <span style={{ color: "var(--accent-primary)" }}>›</span> password
               </label>
               <div className="relative">
                 <input
+                  id="register-password"
+                  name="password"
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -207,11 +225,14 @@ export default function RegisterPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px]"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 min-h-11 min-w-11 rounded px-2 text-xs"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
                   style={{
                     fontFamily: "var(--font-mono)",
                     color: "var(--text-secondary)",
                     transition: "color 0.15s",
+                    background: "transparent",
+                    border: "none",
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.color = "var(--text-primary)")}
                   onMouseLeave={(e) => (e.currentTarget.style.color = "var(--text-secondary)")}
@@ -222,10 +243,16 @@ export default function RegisterPage() {
             </div>
 
             <div>
-              <label className="block text-[11px] mb-1.5" style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
+              <label
+                htmlFor="register-confirm-password"
+                className="block text-[11px] mb-1.5"
+                style={{ fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}
+              >
                 <span style={{ color: "var(--accent-primary)" }}>›</span> confirm password
               </label>
               <input
+                id="register-confirm-password"
+                name="confirmPassword"
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -275,6 +302,6 @@ export default function RegisterPage() {
           </div>
         </div>
       </div>
-    </div>
+    </main>
   );
 }

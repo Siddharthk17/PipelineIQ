@@ -120,9 +120,7 @@ export function validateConnectionCandidate(
     targetHandle,
   };
 
-  try {
-    topologicalSort(nodes, [...edges, candidate]);
-  } catch {
+  if (topologicalSort(nodes, [...edges, candidate]) === null) {
     return { valid: false, message: "This connection would create a cycle." };
   }
 
@@ -268,7 +266,7 @@ export function usePipelineEditor({
         sourceHandle: connection.sourceHandle ?? "output",
         target: connection.target,
         targetHandle: result.targetHandle,
-        animated: connection.targetHandle === "left" || connection.targetHandle === "right",
+        animated: result.targetHandle === "left" || result.targetHandle === "right",
       };
 
       setEdges((prevEdges) => addEdge(edge, prevEdges));
@@ -278,39 +276,76 @@ export function usePipelineEditor({
 
   const handleDragStart = useCallback((event: DragEvent, stepType: VisualStepType) => {
     event.dataTransfer.setData("application/pipeline-step", stepType);
+    event.dataTransfer.setData("text/plain", stepType);
     event.dataTransfer.effectAllowed = "move";
   }, []);
 
-  const handleDrop = useCallback(
-    (stepType: VisualStepType, position: XYPosition) => {
+  const addStepNode = useCallback(
+    (
+      stepType: VisualStepType,
+      resolvePosition: (existingNodes: BuilderNode[]) => XYPosition,
+    ) => {
       if (!isVisualStepType(stepType)) {
         return;
       }
 
       const definition = STEP_DEFINITIONS[stepType];
-      const siblingCount = nodes.filter((node) => node.data.type === stepType).length + 1;
-      const nodeId = `${stepType}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const label = `${definition.label}_${siblingCount}`;
+      let createdNodeId: string | null = null;
 
-      const newNode: BuilderNode = {
-        id: nodeId,
-        type: "stepNode",
-        position,
-        data: {
-          label,
-          type: stepType,
-          config: getDefaultStepConfig(stepType),
-          backendSupported: definition.backendSupported,
-        },
-      };
+      setNodes((existingNodes) => {
+        const siblingCount =
+          existingNodes.filter((node) => node.data.type === stepType).length + 1;
+        const nodeId = `${stepType}_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 8)}`;
+        createdNodeId = nodeId;
+        const label = `${definition.label}_${siblingCount}`;
 
-      setNodes((prevNodes) => [...prevNodes, newNode]);
-      setConfiguringNodeId(nodeId);
+        const newNode: BuilderNode = {
+          id: nodeId,
+          type: "stepNode",
+          position: resolvePosition(existingNodes),
+          data: {
+            label,
+            type: stepType,
+            config: getDefaultStepConfig(stepType),
+            backendSupported: definition.backendSupported,
+          },
+        };
+
+        return [...existingNodes, newNode];
+      });
+
+      if (createdNodeId) {
+        setConfiguringNodeId(createdNodeId);
+      }
       if (!definition.backendSupported) {
         showToast(`${definition.label} is visual-only and may fail backend validation.`);
       }
     },
-    [nodes, setNodes, showToast],
+    [setNodes, showToast],
+  );
+
+  const handleDrop = useCallback(
+    (stepType: VisualStepType, position: XYPosition) => {
+      addStepNode(stepType, () => position);
+    },
+    [addStepNode],
+  );
+
+  const handleAddStep = useCallback(
+    (stepType: VisualStepType) => {
+      addStepNode(stepType, (existingNodes) => {
+        if (existingNodes.length === 0) {
+          return { x: 120, y: 120 };
+        }
+        const lastNode = existingNodes[existingNodes.length - 1];
+        const lastX = Number.isFinite(lastNode.position.x) ? lastNode.position.x : 0;
+        const lastY = Number.isFinite(lastNode.position.y) ? lastNode.position.y : 0;
+        return { x: lastX + 240, y: lastY };
+      });
+    },
+    [addStepNode],
   );
 
   const handleConfigure = useCallback((nodeId: string) => {
@@ -521,6 +556,7 @@ export function usePipelineEditor({
     handleConnect,
     handleDragStart,
     handleDrop,
+    handleAddStep,
     handleConfigure,
     handleConfigClose,
     handleConfigSave,

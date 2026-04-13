@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
+import { EditorView } from "@codemirror/view";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { validatePipeline, runPipeline, getFiles, getPipelinePlan, previewPipelineStep } from "@/lib/api";
 import { usePipelineStore } from "@/store/pipelineStore";
@@ -20,7 +21,11 @@ import {
   upsertFileIdInFirstLoadStep,
 } from "@/lib/pipeline-yaml";
 
-export function PipelineEditorWidget() {
+interface PipelineEditorWidgetProps {
+  initialMode?: "yaml" | "visual";
+}
+
+export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWidgetProps) {
   const queryClient = useQueryClient();
   const { lastYamlConfig, setLastYamlConfig, setActiveRunId, setActiveRun } = usePipelineStore();
   const { activeTheme } = useThemeStore();
@@ -33,7 +38,7 @@ export function PipelineEditorWidget() {
   const [preview, setPreview] = useState<PipelinePreview | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const [editorMode, setEditorMode] = useState<"yaml" | "visual">("yaml");
+  const [editorMode, setEditorMode] = useState<"yaml" | "visual">(initialMode);
 
   const { data: files } = useQuery({ queryKey: ["files"], queryFn: getFiles });
 
@@ -52,6 +57,7 @@ export function PipelineEditorWidget() {
     handleConnect,
     handleDragStart,
     handleDrop,
+    handleAddStep,
     handleConfigure,
     handleConfigClose,
     handleConfigSave,
@@ -192,17 +198,43 @@ export function PipelineEditorWidget() {
   const previewRows = preview?.data ?? [];
 
   const isLightTheme = activeTheme.includes("light");
+  const editorExtensions = useMemo(() => {
+    const baseExtensions = [
+      yaml(),
+      EditorView.contentAttributes.of({ "aria-label": "Pipeline YAML editor" }),
+    ];
+
+    if (isLightTheme) {
+      return baseExtensions;
+    }
+
+    // Keep dark mode readable while avoiding low-contrast token styles in the embedded editor.
+    return [
+      ...baseExtensions,
+      EditorView.theme({
+        ".cm-content": { color: "var(--text-primary)" },
+        ".cm-content span": { color: "var(--text-primary)" },
+        ".cm-gutters": {
+          color: "var(--text-primary)",
+          backgroundColor: "var(--bg-surface)",
+          borderRightColor: "var(--widget-border)",
+        },
+        ".cm-gutterElement": { color: "var(--text-primary)" },
+        ".cm-activeLineGutter": { color: "var(--text-primary)" },
+      }),
+    ];
+  }, [isLightTheme]);
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full overflow-hidden" data-testid="pipeline-editor-widget">
       <div className="w-[60%] flex flex-col border-r" style={{ borderColor: "var(--widget-border)" }}>
         <div className="flex-1 overflow-hidden bg-[var(--bg-base)]">
           {editorMode === "yaml" ? (
-            <div className="h-full overflow-auto">
+            <div className="h-full overflow-auto" data-testid="yaml-editor">
               <CodeMirror
                 value={code}
                 height="100%"
-                extensions={[yaml()]}
+                extensions={editorExtensions}
                 theme={isLightTheme ? "light" : "dark"}
                 onChange={(value) => handleYamlChange(value)}
                 className="text-sm font-mono"
@@ -211,13 +243,19 @@ export function PipelineEditorWidget() {
             </div>
           ) : (
             <div className="relative flex h-full overflow-hidden">
-              <StepPalette onDragStart={handleDragStart} />
+              <StepPalette onDragStart={handleDragStart} onAddStep={handleAddStep} />
               <div className="flex min-w-0 flex-1 flex-col gap-2 p-2">
                 <div className="flex items-center gap-2 rounded-md border bg-[var(--bg-surface)] px-2 py-1.5">
-                  <label className="text-[11px] uppercase tracking-wide text-[var(--text-secondary)]">
+                  <label
+                    htmlFor="pipeline-name-input"
+                    className="text-[11px] uppercase tracking-wide text-[var(--text-secondary)]"
+                  >
                     Pipeline
                   </label>
                   <input
+                    id="pipeline-name-input"
+                    name="pipelineName"
+                    data-testid="pipeline-name-input"
                     value={pipelineName}
                     onChange={(event) => setPipelineName(event.target.value)}
                     className="min-w-0 flex-1 rounded border bg-[var(--bg-base)] px-2 py-1 text-xs"
@@ -242,14 +280,17 @@ export function PipelineEditorWidget() {
                   </div>
                 )}
               </div>
-              <ConfigPanel
-                key={configuringNode?.id ?? "no-config-node"}
-                node={configuringNode}
-                availableFiles={availableFiles}
-                availableColumns={configColumns}
-                onSave={handleConfigSave}
-                onClose={handleConfigClose}
-              />
+              {configuringNode && (
+                <ConfigPanel
+                  key={configuringNode.id}
+                  node={configuringNode}
+                  availableFiles={availableFiles}
+                  availableColumns={configColumns}
+                  onSave={handleConfigSave}
+                  onDelete={handleDeleteNode}
+                  onClose={handleConfigClose}
+                />
+              )}
               {builderToastMessage && (
                 <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded border bg-[var(--bg-elevated)] px-3 py-1.5 text-xs text-[var(--text-primary)]">
                   {builderToastMessage}
@@ -261,30 +302,33 @@ export function PipelineEditorWidget() {
         <div className="p-2 border-t flex items-center justify-between bg-[var(--bg-surface)]" style={{ borderColor: "var(--widget-border)" }}>
           <div className="flex items-center gap-2">
             <div className="mr-2 flex items-center gap-1 rounded border p-0.5" style={{ borderColor: "var(--widget-border)" }}>
-              <button
-                onClick={() => setEditorMode("yaml")}
-                className={`rounded px-2 py-1 text-[10px] font-medium uppercase tracking-wide transition-colors ${
-                  editorMode === "yaml"
-                    ? "bg-[var(--accent-primary)] text-[var(--bg-base)]"
-                    : "text-[var(--text-secondary)] hover:bg-[var(--interactive-hover)]"
-                }`}
-              >
+                <button
+                  onClick={() => setEditorMode("yaml")}
+                  data-testid="mode-yaml-btn"
+                  className={`min-h-11 min-w-11 rounded px-3 py-1.5 text-xs font-medium uppercase tracking-wide transition-colors ${
+                    editorMode === "yaml"
+                      ? "bg-[var(--accent-primary)] text-[var(--bg-base)]"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--interactive-hover)]"
+                  }`}
+                >
                 YAML
               </button>
-              <button
-                onClick={() => setEditorMode("visual")}
-                className={`rounded px-2 py-1 text-[10px] font-medium uppercase tracking-wide transition-colors ${
-                  editorMode === "visual"
-                    ? "bg-[var(--accent-primary)] text-[var(--bg-base)]"
-                    : "text-[var(--text-secondary)] hover:bg-[var(--interactive-hover)]"
-                }`}
-              >
+                <button
+                  onClick={() => setEditorMode("visual")}
+                  data-testid="mode-visual-btn"
+                  className={`min-h-11 min-w-11 rounded px-3 py-1.5 text-xs font-medium uppercase tracking-wide transition-colors ${
+                    editorMode === "visual"
+                      ? "bg-[var(--accent-primary)] text-[var(--bg-base)]"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--interactive-hover)]"
+                  }`}
+                >
                 Visual
               </button>
             </div>
             <button 
               onClick={() => validateMutation.mutate(code)}
-              className="px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-primary)] transition-colors"
+              data-testid="validate-pipeline-btn"
+              className="min-h-11 px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-primary)] transition-colors"
               style={{ borderColor: "var(--widget-border)" }}
             >
               Validate
@@ -297,7 +341,8 @@ export function PipelineEditorWidget() {
                     : DEFAULT_PIPELINE_YAML
                 )
               }
-              className="px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-secondary)] transition-colors"
+              data-testid="clear-editor-btn"
+              className="min-h-11 px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-secondary)] transition-colors"
               style={{ borderColor: "var(--widget-border)" }}
             >
               Clear
@@ -305,7 +350,8 @@ export function PipelineEditorWidget() {
             <button
               onClick={handlePlan}
               disabled={isPlanLoading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              data-testid="plan-pipeline-btn"
+              className="min-h-11 flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ borderColor: "var(--widget-border)" }}
             >
               {isPlanLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <span>▷</span>}
@@ -314,7 +360,8 @@ export function PipelineEditorWidget() {
             <button
               onClick={handlePreview}
               disabled={isPreviewLoading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              data-testid="preview-pipeline-btn"
+              className="min-h-11 flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border hover:bg-[var(--interactive-hover)] text-[var(--text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ borderColor: "var(--widget-border)" }}
             >
               {isPreviewLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Eye className="w-3 h-3" />}
@@ -330,7 +377,8 @@ export function PipelineEditorWidget() {
               runMutation.mutate({ yamlConfig: code, pipelineName: pipelineNameValue });
             }}
             disabled={!validation?.is_valid || runMutation.isPending}
-            className="flex items-center gap-2 px-4 py-1.5 rounded text-xs font-medium bg-[var(--accent-primary)] text-[var(--bg-base)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            data-testid="run-pipeline-btn"
+            className="min-h-11 flex items-center gap-2 px-4 py-1.5 rounded text-xs font-medium bg-[var(--accent-primary)] text-[var(--bg-base)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           >
             {runMutation.isPending ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
             Run Pipeline
@@ -450,7 +498,7 @@ export function PipelineEditorWidget() {
                 </button>
               </div>
               {previewColumns.length === 0 ? (
-                <div className="text-xs text-[var(--text-secondary)]">
+                <div className="text-xs text-[var(--text-primary)]/75">
                   No preview columns available for this step yet.
                 </div>
               ) : (
@@ -494,7 +542,7 @@ export function PipelineEditorWidget() {
 
       <div className="w-[40%] flex flex-col bg-[var(--bg-surface)] overflow-hidden">
         <div className="p-3 border-b" style={{ borderColor: "var(--widget-border)" }}>
-          <h3 className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider mb-2">Validation</h3>
+          <h3 className="text-xs font-medium text-[var(--text-primary)]/80 uppercase tracking-wider mb-2">Validation</h3>
           {isValidating ? (
             <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
               <RefreshCw className="w-4 h-4 animate-spin" /> Validating...
@@ -514,7 +562,7 @@ export function PipelineEditorWidget() {
                     <div className="text-xs font-medium text-[var(--accent-error)] mb-1">
                       {err.step_name ? `Step: ${err.step_name}` : "Global"} - {err.field}
                     </div>
-                    <div className="text-xs text-[var(--text-secondary)]">{err.message}</div>
+                    <div className="text-xs text-[var(--text-primary)]/75">{err.message}</div>
                     {err.suggestion && <div className="text-[10px] text-[var(--accent-warning)] mt-1">Tip: {err.suggestion}</div>}
                   </div>
                 ))}
@@ -524,9 +572,9 @@ export function PipelineEditorWidget() {
         </div>
 
         <div className="flex-1 p-3 overflow-y-auto">
-          <h3 className="text-xs font-medium text-[var(--text-secondary)] uppercase tracking-wider mb-2">Available Files</h3>
+          <h3 className="text-xs font-medium text-[var(--text-primary)]/80 uppercase tracking-wider mb-2">Available Files</h3>
           {files?.length === 0 ? (
-            <div className="text-xs text-[var(--text-secondary)] italic">No files uploaded yet.</div>
+            <div className="text-xs text-[var(--text-primary)]/75 italic">No files uploaded yet.</div>
           ) : (
             <div className="space-y-2">
               {files?.map((file) => (
@@ -544,17 +592,17 @@ export function PipelineEditorWidget() {
                       <Plus className="w-3 h-3" />
                     </button>
                   </div>
-                  <div className="text-[10px] font-mono text-[var(--text-secondary)] truncate">
+                  <div className="text-[10px] font-mono text-[var(--text-primary)]/80 truncate">
                     ID: {file.id}
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {file.columns?.slice(0, 3).map((col) => (
-                      <span key={col} className="px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border text-[9px] font-mono text-[var(--text-secondary)]" style={{ borderColor: "var(--widget-border)" }}>
+                      <span key={col} className="px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border text-[9px] font-mono text-[var(--text-primary)]/80" style={{ borderColor: "var(--widget-border)" }}>
                         {col}
                       </span>
                     ))}
                     {file.columns && file.columns.length > 3 && (
-                      <span className="px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border text-[9px] font-mono text-[var(--text-secondary)]" style={{ borderColor: "var(--widget-border)" }}>
+                      <span className="px-1.5 py-0.5 rounded bg-[var(--bg-surface)] border text-[9px] font-mono text-[var(--text-primary)]/80" style={{ borderColor: "var(--widget-border)" }}>
                         +{file.columns.length - 3} more
                       </span>
                     )}

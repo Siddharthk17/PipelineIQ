@@ -3,7 +3,12 @@ import type { Edge, Node } from "@xyflow/react";
 export function topologicalSort<TNode extends Node>(
   nodes: TNode[],
   edges: Edge[],
-): string[] {
+): TNode[] | null {
+  if (nodes.length === 0) {
+    return [];
+  }
+
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const nodeIds = nodes.map((node) => node.id);
   const adjacency = new Map<string, Set<string>>();
   const inDegree = new Map<string, number>();
@@ -46,8 +51,12 @@ export function topologicalSort<TNode extends Node>(
   }
 
   if (order.length !== nodeIds.length) {
-    throw new Error("Cycle detected in pipeline graph");
+    return null;
   }
 
-  return order;
+  return order.map((id) => nodeById.get(id)).filter((node): node is TNode => Boolean(node));
+}
+
+export function hasCycle<TNode extends Node>(nodes: TNode[], edges: Edge[]): boolean {
+  return topologicalSort(nodes, edges) === null;
 }

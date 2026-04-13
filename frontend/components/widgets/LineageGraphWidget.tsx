@@ -16,7 +16,12 @@ export function LineageGraphWidget() {
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center justify-between p-2 border-b bg-[var(--bg-surface)]" style={{ borderColor: "var(--widget-border)" }}>
         <div className="flex items-center gap-3">
+          <label htmlFor="lineage-run-select" className="sr-only">
+            Select pipeline run
+          </label>
           <select
+            id="lineage-run-select"
+            name="runId"
             value={activeRunId || ""}
             onChange={(e) => setActiveRunId(e.target.value)}
             className="px-3 py-1.5 rounded text-sm bg-[var(--bg-elevated)] border text-[var(--text-primary)] outline-none focus:border-[var(--accent-primary)]"

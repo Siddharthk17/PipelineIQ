@@ -1,15 +1,29 @@
-import type { DragEvent } from "react";
+import { useRef, type DragEvent } from "react";
 import { STEP_CATEGORY_LABELS, STEP_DEFINITIONS, STEP_TYPES, type StepCategory, type VisualStepType } from "@/lib/stepDefinitions";
 
 interface StepPaletteProps {
   onDragStart: (event: DragEvent, stepType: VisualStepType) => void;
+  onAddStep?: (stepType: VisualStepType) => void;
 }
 
 const CATEGORY_ORDER: StepCategory[] = ["io", "transform", "quality", "reshape", "advanced"];
 
-export function StepPalette({ onDragStart }: StepPaletteProps) {
+export function StepPalette({ onDragStart, onAddStep }: StepPaletteProps) {
+  const suppressClickRef = useRef(false);
+
+  const handleCardClick = (stepType: VisualStepType) => {
+    if (!onAddStep) {
+      return;
+    }
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+    onAddStep(stepType);
+  };
+
   return (
-    <aside className="w-72 shrink-0 border-r bg-card/40 p-3">
+    <aside className="w-72 shrink-0 border-r bg-card/40 p-3" data-testid="step-palette">
       <h3 className="mb-3 text-sm font-semibold">Step Palette</h3>
 
       <div className="space-y-4">
@@ -35,7 +49,12 @@ export function StepPalette({ onDragStart }: StepPaletteProps) {
                       key={stepType}
                       type="button"
                       draggable
-                      onDragStart={(event) => onDragStart(event, stepType)}
+                      onDragStart={(event) => {
+                        suppressClickRef.current = true;
+                        onDragStart(event, stepType);
+                      }}
+                      onClick={() => handleCardClick(stepType)}
+                      data-testid={`step-card-${stepType}`}
                       className="w-full rounded-md border bg-background px-2.5 py-2 text-left hover:bg-muted"
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -47,7 +66,7 @@ export function StepPalette({ onDragStart }: StepPaletteProps) {
                           <p className="text-[11px] text-muted-foreground">{definition.description}</p>
                         </div>
                         {!definition.backendSupported && (
-                          <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1 py-0.5 text-[10px] uppercase text-amber-700">
+                          <span className="rounded border border-[var(--widget-border)] bg-[var(--bg-surface)] px-1 py-0.5 text-[10px] uppercase text-[var(--text-primary)]">
                             Visual
                           </span>
                         )}

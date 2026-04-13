@@ -42,12 +42,21 @@ function toEdgeId(source: string, target: string, targetHandle?: string): string
   return `e-${source}-${target}-${targetHandle ?? "input"}`;
 }
 
-function makeNodeId(index: number, stepName: string): string {
-  const suffix = stepName
+function makeNodeId(stepName: string, index: number, usedIds: Set<string>): string {
+  const normalized = stepName
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, "_")
     .replace(/^_+|_+$/g, "");
-  return `step_${index}_${suffix || "node"}`;
+
+  const base = normalized || `step_${index + 1}`;
+  let candidate = base;
+  let suffix = 1;
+  while (usedIds.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  usedIds.add(candidate);
+  return candidate;
 }
 
 function sanitizeStepName(rawName: string, index: number, usedNames: Set<string>): string {
@@ -157,7 +166,7 @@ function computeNodePositions(nodes: BuilderNode[], edges: BuilderEdge[]): Map<s
     return positions;
   }
 
-  const order = topologicalSort(nodes, edges);
+  const orderedNodes = topologicalSort(nodes, edges) ?? [...nodes].sort((a, b) => a.id.localeCompare(b.id));
   const incomingByTarget = new Map<string, string[]>();
   for (const edge of edges) {
     const incoming = incomingByTarget.get(edge.target) ?? [];
@@ -166,7 +175,8 @@ function computeNodePositions(nodes: BuilderNode[], edges: BuilderEdge[]): Map<s
   }
 
   const levelById = new Map<string, number>();
-  for (const id of order) {
+  for (const node of orderedNodes) {
+    const id = node.id;
     const incoming = incomingByTarget.get(id) ?? [];
     if (incoming.length === 0) {
       levelById.set(id, 0);
@@ -177,7 +187,8 @@ function computeNodePositions(nodes: BuilderNode[], edges: BuilderEdge[]): Map<s
   }
 
   const rowsPerLevel = new Map<number, number>();
-  for (const id of order) {
+  for (const node of orderedNodes) {
+    const id = node.id;
     const level = levelById.get(id) ?? 0;
     const row = rowsPerLevel.get(level) ?? 0;
     rowsPerLevel.set(level, row + 1);
@@ -188,13 +199,19 @@ function computeNodePositions(nodes: BuilderNode[], edges: BuilderEdge[]): Map<s
 }
 
 export function yamlToGraph(yamlText: string): BuilderGraph {
+  const emptyGraph: BuilderGraph = { pipelineName: "my_pipeline", nodes: [], edges: [] };
   if (!yamlText.trim()) {
-    return { pipelineName: "my_pipeline", nodes: [], edges: [] };
+    return emptyGraph;
   }
 
-  const rawLoaded = yaml.load(yamlText);
+  let rawLoaded: unknown;
+  try {
+    rawLoaded = yaml.load(yamlText);
+  } catch {
+    return emptyGraph;
+  }
   if (!rawLoaded || typeof rawLoaded !== "object") {
-    throw new Error("YAML root must be a mapping object");
+    return emptyGraph;
   }
 
   const rawRoot = toRecord(rawLoaded);
@@ -205,6 +222,7 @@ export function yamlToGraph(yamlText: string): BuilderGraph {
   const nodes: BuilderNode[] = [];
   const edges: BuilderEdge[] = [];
   const stepNameToNodeId = new Map<string, string>();
+  const usedNodeIds = new Set<string>();
   const rawStepRecords: Record<string, unknown>[] = [];
 
   rawSteps.forEach((stepValue, index) => {
@@ -213,24 +231,22 @@ export function yamlToGraph(yamlText: string): BuilderGraph {
 
     const rawType = asString(step.type);
     const stepType: VisualStepType = isVisualStepType(rawType) ? rawType : "transform";
-    const label = asString(step.name).trim() || `${STEP_DEFINITIONS[stepType].label}_${index + 1}`;
-    const id = makeNodeId(index, label);
+    const stepName = asString(step.name).trim() || `${STEP_DEFINITIONS[stepType].label}_${index + 1}`;
+    const id = makeNodeId(stepName, index, usedNodeIds);
 
     nodes.push({
       id,
       type: "stepNode",
       position: { x: 0, y: 0 },
       data: {
-        label,
+        label: stepName,
         type: stepType,
         config: extractConfigForUi(stepType, step),
         backendSupported: STEP_DEFINITIONS[stepType].backendSupported,
       },
     });
 
-    if (asString(step.name).trim()) {
-      stepNameToNodeId.set(asString(step.name).trim(), id);
-    }
+    stepNameToNodeId.set(stepName, id);
   });
 
   rawStepRecords.forEach((step, index) => {
@@ -356,11 +372,14 @@ function normalizeFillNullsConfigForYaml(config: Record<string, unknown>): Recor
 function normalizeSampleConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
 
-  if (typeof config.n === "number" && Number.isFinite(config.n)) {
+  const hasFraction = typeof config.fraction === "number" && Number.isFinite(config.fraction);
+  const hasN = typeof config.n === "number" && Number.isFinite(config.n);
+
+  if (hasN && !hasFraction) {
     payload.n = config.n;
   }
 
-  if (typeof config.fraction === "number" && Number.isFinite(config.fraction)) {
+  if (hasFraction) {
     payload.fraction = config.fraction;
   }
 
@@ -460,7 +479,10 @@ function normalizeConfigForYaml(
 export function graphToYAML(graph: BuilderGraph): string {
   const nodes = graph.nodes ?? [];
   const edges = graph.edges ?? [];
-  const order = topologicalSort(nodes, edges);
+  const orderedNodes = topologicalSort(nodes, edges);
+  if (!orderedNodes) {
+    return "";
+  }
 
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const incomingByTarget = new Map<string, BuilderEdge[]>();
@@ -474,14 +496,15 @@ export function graphToYAML(graph: BuilderGraph): string {
   const stepNameByNodeId = new Map<string, string>();
   const steps: Record<string, unknown>[] = [];
 
-  order.forEach((nodeId, index) => {
-    const node = nodeById.get(nodeId);
-    if (!node) {
-      return;
-    }
-
-    const stepType = node.data.type;
-    const stepName = sanitizeStepName(node.data.label || `${stepType}_${index + 1}`, index, usedStepNames);
+  orderedNodes.forEach((node, index) => {
+    const nodeId = node.id;
+    const resolvedNode = nodeById.get(nodeId) ?? node;
+    const stepType = resolvedNode.data.type;
+    const stepName = sanitizeStepName(
+      resolvedNode.data.label || `${stepType}_${index + 1}`,
+      index,
+      usedStepNames,
+    );
     stepNameByNodeId.set(nodeId, stepName);
 
     const step: Record<string, unknown> = {
@@ -501,13 +524,13 @@ export function graphToYAML(graph: BuilderGraph): string {
 
       step.left = leftEdge ? stepNameByNodeId.get(leftEdge.source) ?? "" : "";
       step.right = rightEdge ? stepNameByNodeId.get(rightEdge.source) ?? "" : "";
-      Object.assign(step, normalizeJoinConfigForYaml(node.data.config));
+      Object.assign(step, normalizeJoinConfigForYaml(resolvedNode.data.config));
     } else {
       if (STEP_DEFINITIONS[stepType].maxInputs > 0) {
         const sourceEdge = incomingEdges[0];
         step.input = sourceEdge ? stepNameByNodeId.get(sourceEdge.source) ?? "" : "";
       }
-      Object.assign(step, normalizeConfigForYaml(stepType, node.data.config));
+      Object.assign(step, normalizeConfigForYaml(stepType, resolvedNode.data.config));
     }
 
     steps.push(step);

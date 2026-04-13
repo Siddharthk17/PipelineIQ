@@ -158,7 +158,12 @@ export function VersionHistoryWidget() {
 
       {/* Search */}
       <div className="flex items-center gap-2 px-3 py-2 border-b" style={{ borderColor: "var(--widget-border)" }}>
+        <label htmlFor="version-history-pipeline-name" className="sr-only">
+          Pipeline name
+        </label>
         <input
+          id="version-history-pipeline-name"
+          name="pipelineName"
           type="text"
           value={pipelineName}
           onChange={(e) => setPipelineName(e.target.value)}
@@ -227,6 +232,8 @@ export function VersionHistoryWidget() {
               <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
+                  name={`compare-version-${v.version_number}`}
+                  aria-label={`Select version ${v.version_number} for comparison`}
                   checked={selectedVersions.has(v.version_number)}
                   onChange={() => toggleSelect(v.version_number)}
                   className="accent-[var(--accent-primary)] w-3.5 h-3.5"

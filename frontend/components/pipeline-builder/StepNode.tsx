@@ -8,6 +8,7 @@ function StepNodeComponent({ id, data, selected }: NodeProps<BuilderNode>) {
 
   return (
     <div
+      data-testid={`step-node-${id}`}
       className={[
         "min-w-[190px] rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm",
         selected ? "ring-2 ring-primary" : "ring-0",
@@ -64,16 +65,20 @@ function StepNodeComponent({ id, data, selected }: NodeProps<BuilderNode>) {
         <button
           type="button"
           onClick={() => data.onConfigure?.(id)}
+          data-testid={`config-btn-${id}`}
+          aria-label={`Configure ${data.label}`}
           className="rounded border border-border px-2 py-1 text-[11px] hover:bg-muted"
         >
-          Configure
+          ⚙
         </button>
         <button
           type="button"
           onClick={() => data.onDelete?.(id)}
+          data-testid={`delete-btn-${id}`}
+          aria-label={`Delete ${data.label}`}
           className="rounded border border-destructive/30 px-2 py-1 text-[11px] text-destructive hover:bg-destructive/10"
         >
-          Delete
+          ×
         </button>
       </div>
     </div>

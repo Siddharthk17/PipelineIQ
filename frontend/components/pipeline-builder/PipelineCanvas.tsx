@@ -70,7 +70,9 @@ export function PipelineCanvas({
         return;
       }
 
-      const droppedStep = event.dataTransfer.getData("application/pipeline-step");
+      const droppedStep =
+        event.dataTransfer.getData("application/pipeline-step") ||
+        event.dataTransfer.getData("text/plain");
       if (!isVisualStepType(droppedStep)) {
         return;
       }
@@ -86,7 +88,7 @@ export function PipelineCanvas({
   );
 
   return (
-    <div className="relative h-full w-full rounded-md border bg-background/30">
+    <div className="relative h-full w-full rounded-md border bg-background/30" data-testid="pipeline-canvas">
       <ReactFlow<BuilderNode, BuilderEdge>
         nodes={decoratedNodes}
         edges={edges}
@@ -112,7 +114,10 @@ export function PipelineCanvas({
       </ReactFlow>
 
       {nodes.length === 0 && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div
+          className="pointer-events-none absolute inset-0 flex items-center justify-center"
+          data-testid="pipeline-canvas-empty"
+        >
           <p className="rounded border bg-card px-3 py-1.5 text-xs text-muted-foreground">
             Drag steps from the palette to start building.
           </p>

@@ -334,6 +334,7 @@ class PipelineParser:
         self._check_duplicate_step_names(config, errors)
         self._check_step_name_format(config, errors)
         self._check_step_types(config, errors)
+        self._check_required_step_fields(config, errors)
         self._check_step_references(config, errors)
         self._check_load_file_ids(config, registered_file_ids, errors)
         self._check_filter_operators(config, errors)
@@ -691,6 +692,217 @@ class PipelineParser:
                     )
                 )
 
+    def _check_required_step_fields(
+        self, config: PipelineConfig, errors: List[ValidationError]
+    ) -> None:
+        """Validate required step fields before semantic reference checks."""
+        for step in config.steps:
+            step_name = step.name or "<unnamed>"
+
+            if not step.name or not step.name.strip():
+                errors.append(
+                    ValidationError(
+                        step_name=step_name,
+                        field="name",
+                        message="Step name must be a non-empty string",
+                    )
+                )
+                continue
+
+            if not isinstance(step.step_type, StepType):
+                continue
+
+            if isinstance(step, LoadStepConfig):
+                if not step.file_id or not step.file_id.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="file_id",
+                            message="Load step must specify a non-empty file_id",
+                        )
+                    )
+                continue
+
+            if isinstance(step, JoinStepConfig):
+                if not step.left or not step.left.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="left",
+                            message="Join step must specify a non-empty left input",
+                        )
+                    )
+                if not step.right or not step.right.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="right",
+                            message="Join step must specify a non-empty right input",
+                        )
+                    )
+            else:
+                input_ref = getattr(step, "input", None)
+                if isinstance(input_ref, str) and not input_ref.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="input",
+                            message="Step must specify a non-empty input reference",
+                        )
+                    )
+
+            if isinstance(step, FilterStepConfig):
+                if not step.column or not step.column.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="column",
+                            message="Filter step must specify a non-empty column",
+                        )
+                    )
+                if (
+                    isinstance(step.operator, FilterOperator)
+                    and step.operator
+                    not in {FilterOperator.IS_NULL, FilterOperator.IS_NOT_NULL}
+                    and step.value is None
+                ):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="value",
+                            message="Filter step must specify a value for this operator",
+                        )
+                    )
+
+            if isinstance(step, SelectStepConfig) and not step.columns:
+                errors.append(
+                    ValidationError(
+                        step_name=step_name,
+                        field="columns",
+                        message="Select step must specify at least one column",
+                    )
+                )
+
+            if isinstance(step, RenameStepConfig) and not step.mapping:
+                errors.append(
+                    ValidationError(
+                        step_name=step_name,
+                        field="mapping",
+                        message="Rename step must define at least one mapping",
+                    )
+                )
+
+            if isinstance(step, AggregateStepConfig) and not step.group_by:
+                errors.append(
+                    ValidationError(
+                        step_name=step_name,
+                        field="group_by",
+                        message="Aggregate step must specify at least one group_by column",
+                    )
+                )
+
+            if isinstance(step, SortStepConfig) and not step.by.strip():
+                errors.append(
+                    ValidationError(
+                        step_name=step_name,
+                        field="by",
+                        message="Sort step must specify a non-empty 'by' column",
+                    )
+                )
+
+            if isinstance(step, ValidateStepConfig) and not step.rules:
+                errors.append(
+                    ValidationError(
+                        step_name=step_name,
+                        field="rules",
+                        message="Validate step must define at least one rule",
+                    )
+                )
+
+            if isinstance(step, PivotStepConfig):
+                if not step.index:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="index",
+                            message="Pivot step must specify at least one index column",
+                        )
+                    )
+                if not step.columns or not step.columns.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="columns",
+                            message="Pivot step must specify a non-empty columns field",
+                        )
+                    )
+                if not step.values or not step.values.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="values",
+                            message="Pivot step must specify a non-empty values field",
+                        )
+                    )
+
+            if isinstance(step, UnpivotStepConfig):
+                if not step.id_vars:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="id_vars",
+                            message="Unpivot step must define at least one id_vars column",
+                        )
+                    )
+                if not step.value_vars:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="value_vars",
+                            message="Unpivot step must define at least one value_vars column",
+                        )
+                    )
+
+            if (
+                isinstance(step, FillNullsStepConfig)
+                and step.strategy == "constant"
+                and step.constant_value is None
+            ):
+                errors.append(
+                    ValidationError(
+                        step_name=step_name,
+                        field="value",
+                        message="Fill nulls step with 'constant' strategy must provide a value",
+                    )
+                )
+
+            if isinstance(step, SampleStepConfig):
+                if step.n is None and step.fraction is None:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="sample",
+                            message="Sample step must specify either 'n' or 'fraction'",
+                        )
+                    )
+                if step.n is not None and step.fraction is not None:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="sample",
+                            message="Sample step must specify only one of 'n' or 'fraction'",
+                        )
+                    )
+
+            if isinstance(step, SqlStepConfig) and not step.query.strip():
+                errors.append(
+                    ValidationError(
+                        step_name=step_name,
+                        field="query",
+                        message="SQL step must provide a non-empty query",
+                    )
+                )
+
     def _check_step_references(
         self, config: PipelineConfig, errors: List[ValidationError]
     ) -> None:
@@ -741,15 +953,7 @@ class PipelineParser:
         """Check 6: Every load step's file_id exists in registered_file_ids."""
         for step in config.steps:
             if isinstance(step, LoadStepConfig):
-                if not step.file_id:
-                    errors.append(
-                        ValidationError(
-                            step_name=step.name,
-                            field="file_id",
-                            message="Load step must specify a file_id",
-                        )
-                    )
-                elif step.file_id not in registered_file_ids:
+                if step.file_id and step.file_id.strip() and step.file_id not in registered_file_ids:
                     errors.append(
                         ValidationError(
                             step_name=step.name,

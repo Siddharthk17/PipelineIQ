@@ -286,6 +286,81 @@ pipeline:
         assert result.is_valid is False
         assert any("file_id" in e.field for e in result.errors)
 
+    def test_validate_empty_input_reference_returns_error(self, parser):
+        """Steps with blank input must fail fast during validation."""
+        yaml_str = """
+pipeline:
+  name: test
+  steps:
+    - name: load_data
+      type: load
+      file_id: f1
+    - name: filter_data
+      type: filter
+      input: ""
+      column: status
+      operator: equals
+      value: ok
+    - name: save_output
+      type: save
+      input: filter_data
+      filename: out.csv
+"""
+        config = parser.parse(yaml_str)
+        result = parser.validate(config, {"f1"})
+        assert result.is_valid is False
+        assert any(e.step_name == "filter_data" and e.field == "input" for e in result.errors)
+
+    def test_validate_join_requires_non_empty_left_and_right_inputs(self, parser):
+        """Join step must include both left and right references."""
+        yaml_str = """
+pipeline:
+  name: test
+  steps:
+    - name: load_a
+      type: load
+      file_id: f1
+    - name: load_b
+      type: load
+      file_id: f2
+    - name: join_step
+      type: join
+      left: ""
+      right: load_b
+      on: customer_id
+      how: inner
+    - name: save_output
+      type: save
+      input: join_step
+      filename: out.csv
+"""
+        config = parser.parse(yaml_str)
+        result = parser.validate(config, {"f1", "f2"})
+        assert result.is_valid is False
+        assert any(e.step_name == "join_step" and e.field == "left" for e in result.errors)
+
+    def test_validate_sample_requires_n_or_fraction(self, parser):
+        """Sample step must define exactly one sizing mode."""
+        yaml_str = """
+pipeline:
+  name: test
+  steps:
+    - name: load_data
+      type: load
+      file_id: f1
+    - name: sample_data
+      type: sample
+      input: load_data
+    - name: save_output
+      type: save
+      input: sample_data
+      filename: out.csv
+"""
+        config = parser.parse(yaml_str)
+        result = parser.validate(config, {"f1"})
+        assert result.is_valid is False
+        assert any(e.step_name == "sample_data" and e.field == "sample" for e in result.errors)
+
     def test_validate_invalid_filter_operator_returns_error(self, parser):
         """Filter step with operator='invalid_op' returns error."""
         yaml_str = """
