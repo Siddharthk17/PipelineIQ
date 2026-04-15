@@ -23,10 +23,14 @@ export function StepPalette({ onDragStart, onAddStep }: StepPaletteProps) {
   };
 
   return (
-    <aside className="w-72 shrink-0 border-r bg-card/40 p-3" data-testid="step-palette">
-      <h3 className="mb-3 text-sm font-semibold">Step Palette</h3>
+    <aside
+      className="flex h-full w-64 shrink-0 flex-col border-r bg-[var(--bg-surface)] p-3 text-[var(--text-primary)]"
+      style={{ borderColor: "var(--widget-border)" }}
+      data-testid="step-palette"
+    >
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">Step Palette</h3>
 
-      <div className="space-y-4">
+      <div className="flex-1 space-y-4 overflow-y-auto pr-1">
         {CATEGORY_ORDER.map((category) => {
           const categorySteps = STEP_TYPES.filter(
             (stepType) => STEP_DEFINITIONS[stepType].category === category,
@@ -37,7 +41,7 @@ export function StepPalette({ onDragStart, onAddStep }: StepPaletteProps) {
 
           return (
             <section key={category} className="space-y-2">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
                 {STEP_CATEGORY_LABELS[category]}
               </p>
 
@@ -55,18 +59,26 @@ export function StepPalette({ onDragStart, onAddStep }: StepPaletteProps) {
                       }}
                       onClick={() => handleCardClick(stepType)}
                       data-testid={`step-card-${stepType}`}
-                      className="w-full rounded-md border bg-background px-2.5 py-2 text-left hover:bg-muted"
+                      className="w-full rounded-md border bg-[var(--bg-elevated)] px-2.5 py-2 text-left transition-colors hover:bg-[var(--interactive-hover)]"
+                      style={{ borderColor: "var(--widget-border)" }}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="space-y-0.5">
-                          <p className="text-sm font-medium leading-none">
+                          <p className="text-sm font-medium leading-none text-[var(--text-primary)]">
                             <span className="mr-1.5">{definition.icon}</span>
                             {definition.label}
                           </p>
-                          <p className="text-[11px] text-muted-foreground">{definition.description}</p>
+                          <p className="text-[11px] text-[var(--text-secondary)]">{definition.description}</p>
                         </div>
                         {!definition.backendSupported && (
-                          <span className="rounded border border-[var(--widget-border)] bg-[var(--bg-surface)] px-1 py-0.5 text-[10px] uppercase text-[var(--text-primary)]">
+                          <span
+                            className="rounded border px-1 py-0.5 text-[10px] font-semibold uppercase"
+                            style={{
+                              borderColor: "color-mix(in srgb, var(--accent-warning) 45%, transparent)",
+                              color: "var(--accent-warning)",
+                              backgroundColor: "color-mix(in srgb, var(--accent-warning) 14%, transparent)",
+                            }}
+                          >
                             Visual
                           </span>
                         )}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Connection } from "@xyflow/react";
-import { validateConnectionCandidate } from "@/hooks/usePipelineEditor";
+import { removeEdgeById, validateConnectionCandidate } from "@/hooks/usePipelineEditor";
 import type { BuilderEdge, BuilderNode } from "@/lib/yamlGraphSync";
 
 function makeConnection(source: string, target: string, targetHandle?: string): Connection {
@@ -70,5 +70,20 @@ describe("validateConnectionCandidate", () => {
     const result = validateConnectionCandidate(makeConnection("save", "sort"), nodes, []);
     expect(result.valid).toBe(false);
     expect(result.message).toContain("terminal");
+  });
+});
+
+describe("removeEdgeById", () => {
+  it("removes only the targeted edge id", () => {
+    const edges: BuilderEdge[] = [
+      { id: "e-1", source: "load", target: "filter" },
+      { id: "e-2", source: "filter", target: "save" },
+      { id: "e-3", source: "load", target: "save" },
+    ];
+
+    const nextEdges = removeEdgeById(edges, "e-2");
+
+    expect(nextEdges).toHaveLength(2);
+    expect(nextEdges.map((edge) => edge.id)).toEqual(["e-1", "e-3"]);
   });
 });

@@ -131,6 +131,10 @@ function uniqueColumns(columns: string[]): string[] {
   return [...new Set(columns.filter((column) => column.trim().length > 0))];
 }
 
+export function removeEdgeById(edges: BuilderEdge[], edgeId: string): BuilderEdge[] {
+  return edges.filter((edge) => edge.id !== edgeId);
+}
+
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -250,6 +254,13 @@ export function usePipelineEditor({
       onEdgesChangeBase(changes);
     },
     [onEdgesChangeBase],
+  );
+
+  const handleDeleteEdge = useCallback(
+    (edgeId: string) => {
+      setEdges((prevEdges) => removeEdgeById(prevEdges, edgeId));
+    },
+    [setEdges],
   );
 
   const handleConnect = useCallback(
@@ -561,6 +572,7 @@ export function usePipelineEditor({
     handleConfigClose,
     handleConfigSave,
     handleDeleteNode,
+    handleDeleteEdge,
     handleYamlChange,
     getAvailableColumns,
   };

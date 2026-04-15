@@ -129,11 +129,15 @@ export function ConfigPanel({
   };
 
   return (
-    <aside className="w-80 shrink-0 border-l bg-card/40 p-3" data-testid="config-panel">
+    <aside
+      className="flex h-full w-72 shrink-0 flex-col border-l bg-[var(--bg-surface)] p-3 text-[var(--text-primary)]"
+      style={{ borderColor: "var(--widget-border)" }}
+      data-testid="config-panel"
+    >
       <div className="mb-3 flex items-start justify-between gap-2">
         <div>
-          <h4 className="text-sm font-semibold">{node.data.label}</h4>
-          <p className="text-xs text-muted-foreground">{stepDefinition.label} configuration</p>
+          <h4 className="text-sm font-semibold text-[var(--text-primary)]">{node.data.label}</h4>
+          <p className="text-xs text-[var(--text-secondary)]">{stepDefinition.label} configuration</p>
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -143,7 +147,8 @@ export function ConfigPanel({
               onClose();
             }}
             data-testid="config-panel-delete"
-            className="rounded border border-destructive/30 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+            className="rounded border px-2 py-1 text-xs text-[var(--accent-error)] transition-colors hover:bg-[var(--interactive-hover)]"
+            style={{ borderColor: "color-mix(in srgb, var(--accent-error) 45%, transparent)" }}
           >
             Delete
           </button>
@@ -151,14 +156,17 @@ export function ConfigPanel({
             type="button"
             onClick={onClose}
             data-testid="config-panel-close"
-            className="rounded border px-2 py-1 text-xs hover:bg-muted"
+            className="rounded border px-2 py-1 text-xs transition-colors hover:bg-[var(--interactive-hover)]"
+            style={{ borderColor: "var(--widget-border)" }}
           >
             Close
           </button>
         </div>
       </div>
 
-      <div className="space-y-3 text-xs">
+      <div
+        className="flex-1 space-y-3 overflow-y-auto pr-1 text-xs [&_input]:border-[var(--widget-border)] [&_input]:bg-[var(--bg-base)] [&_input]:text-[var(--text-primary)] [&_input:focus]:border-[var(--widget-border)] [&_input:focus]:outline-none [&_input:focus]:shadow-none [&_input:focus-visible]:outline-none [&_input:focus-visible]:shadow-none [&_select]:border-[var(--widget-border)] [&_select]:bg-[var(--bg-base)] [&_select]:text-[var(--text-primary)] [&_select:focus]:border-[var(--widget-border)] [&_select:focus]:outline-none [&_select:focus]:shadow-none [&_select:focus-visible]:outline-none [&_select:focus-visible]:shadow-none [&_textarea]:border-[var(--widget-border)] [&_textarea]:bg-[var(--bg-base)] [&_textarea]:text-[var(--text-primary)] [&_textarea:focus]:border-[var(--widget-border)] [&_textarea:focus]:outline-none [&_textarea:focus]:shadow-none [&_textarea:focus-visible]:outline-none [&_textarea:focus-visible]:shadow-none [&_option]:bg-[var(--bg-surface)] [&_option]:text-[var(--text-primary)]"
+      >
         {node.data.type === "load" && (
           <label className="block space-y-1">
             <span className="text-muted-foreground">File</span>
@@ -676,12 +684,16 @@ export function ConfigPanel({
         )}
       </div>
 
-      <div className="mt-4 flex items-center justify-end gap-2">
+      <div
+        className="mt-3 flex items-center justify-end gap-2 border-t pt-3"
+        style={{ borderColor: "var(--widget-border)" }}
+      >
         <button
           type="button"
           onClick={onClose}
           data-testid="config-panel-cancel"
-          className="rounded border px-2.5 py-1.5 text-xs hover:bg-muted"
+          className="rounded border px-2.5 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)]"
+          style={{ borderColor: "var(--widget-border)" }}
         >
           Cancel
         </button>
@@ -689,7 +701,11 @@ export function ConfigPanel({
           type="button"
           onClick={saveConfig}
           data-testid="config-panel-save"
-          className="rounded border border-primary bg-primary px-2.5 py-1.5 text-xs text-primary-foreground hover:opacity-90"
+          className="rounded border px-2.5 py-1.5 text-xs font-medium text-[var(--bg-base)] transition-[filter] hover:brightness-110"
+          style={{
+            borderColor: "color-mix(in srgb, var(--accent-primary) 60%, transparent)",
+            backgroundColor: "var(--accent-primary)",
+          }}
         >
           Save
         </button>
