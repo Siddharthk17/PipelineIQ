@@ -14,6 +14,11 @@ import type {
   PipelineVersion,
   PipelineDiff,
   SchemaSnapshot,
+  AIGeneratePipelineResponse,
+  AIRepairPipelineResponse,
+  AIColumnAutocompleteResponse,
+  AIColumnBatchAutocompleteResponse,
+  AIYamlValidationResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -109,6 +114,10 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
 
 async function fetchAuth<T>(endpoint: string, options?: RequestInit): Promise<T> {
   return fetchWithAuth<T>(API_BASE_URL, endpoint, options);
+}
+
+async function fetchAi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  return fetchWithAuth<T>(API_BASE_URL, `/api/ai${endpoint}`, options);
 }
 
 export async function uploadFile(file: File): Promise<UploadedFile> {
@@ -253,6 +262,62 @@ export async function restorePipelineVersion(name: string, version: number): Pro
 export async function getSchemaHistory(fileId: string): Promise<SchemaSnapshot[]> {
   const data = await fetchApi<{ file_id: string; total_snapshots: number; snapshots: SchemaSnapshot[] }>(`/files/${fileId}/schema/history`);
   return data.snapshots;
+}
+
+// AI
+
+export async function generatePipelineWithAI(
+  description: string,
+  fileIds: string[],
+): Promise<AIGeneratePipelineResponse> {
+  return fetchAi<AIGeneratePipelineResponse>("/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ description, file_ids: fileIds }),
+  });
+}
+
+export async function repairPipelineRunWithAI(
+  runId: string,
+): Promise<AIRepairPipelineResponse> {
+  return fetchAi<AIRepairPipelineResponse>(`/runs/${runId}/repair`, {
+    method: "POST",
+  });
+}
+
+export async function autocompleteColumnWithAI(
+  typed: string,
+  availableColumns: string[],
+): Promise<AIColumnAutocompleteResponse> {
+  return fetchAi<AIColumnAutocompleteResponse>("/autocomplete/column", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ typed, available_columns: availableColumns }),
+  });
+}
+
+export async function autocompleteColumnsBatchWithAI(
+  typedColumns: string[],
+  availableColumns: string[],
+): Promise<AIColumnBatchAutocompleteResponse> {
+  return fetchAi<AIColumnBatchAutocompleteResponse>("/autocomplete/columns", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      typed_columns: typedColumns,
+      available_columns: availableColumns,
+    }),
+  });
+}
+
+export async function validateYamlWithAI(
+  yamlText: string,
+): Promise<AIYamlValidationResponse> {
+  return fetchAi<AIYamlValidationResponse>("/validate-yaml", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ yaml_text: yamlText }),
+  });
 }
 
 // Notifications

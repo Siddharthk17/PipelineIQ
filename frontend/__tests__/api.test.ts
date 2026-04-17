@@ -25,6 +25,11 @@ import {
   register,
   getMe,
   logout,
+  generatePipelineWithAI,
+  repairPipelineRunWithAI,
+  autocompleteColumnWithAI,
+  autocompleteColumnsBatchWithAI,
+  validateYamlWithAI,
 } from "@/lib/api";
 
 describe("Token management", () => {
@@ -342,6 +347,70 @@ describe("Week 2 API functions", () => {
 
     const snaps = await getSchemaHistory("f1");
     expect(snaps).toHaveLength(2);
+  });
+
+  it("generatePipelineWithAI posts to /api/ai/generate", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ yaml: "pipeline:\n  name: ai", valid: true, attempts: 1, error: null }),
+    } as Response);
+
+    const result = await generatePipelineWithAI("Build a basic ETL flow for sales data", ["file-1"]);
+    expect(result.valid).toBe(true);
+
+    const call = vi.mocked(fetch).mock.calls[0];
+    expect(call[0]).toBe("/api/ai/generate");
+    expect(call[1]?.method).toBe("POST");
+  });
+
+  it("repairPipelineRunWithAI posts to /api/ai/runs/{id}/repair", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          corrected_yaml: "pipeline:\n  name: repaired",
+          diff_lines: [{ type: "added", content: "  name: repaired" }],
+          valid: true,
+          error: null,
+        }),
+    } as Response);
+
+    const result = await repairPipelineRunWithAI("run-1");
+    expect(result.valid).toBe(true);
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/api/ai/runs/run-1/repair");
+  });
+
+  it("autocompleteColumnWithAI posts typed and available columns", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ suggestion: "revenue", confidence: 0.91 }),
+    } as Response);
+
+    const result = await autocompleteColumnWithAI("reveue", ["revenue", "region"]);
+    expect(result.suggestion).toBe("revenue");
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/api/ai/autocomplete/column");
+  });
+
+  it("autocompleteColumnsBatchWithAI posts to batch endpoint", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ suggestions: { reveue: "revenue", rgion: "region" } }),
+    } as Response);
+
+    const result = await autocompleteColumnsBatchWithAI(["reveue", "rgion"], ["revenue", "region"]);
+    expect(result.suggestions.reveue).toBe("revenue");
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/api/ai/autocomplete/columns");
+  });
+
+  it("validateYamlWithAI posts YAML to /api/ai/validate-yaml", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ valid: true, error: null, step_count: 3 }),
+    } as Response);
+
+    const result = await validateYamlWithAI("pipeline:\n  name: test\n  steps: []");
+    expect(result.step_count).toBe(3);
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/api/ai/validate-yaml");
   });
 });
 

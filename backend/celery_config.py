@@ -11,6 +11,7 @@ task_queues = (
     Queue("critical"),
     Queue("default"),
     Queue("bulk"),
+    Queue("gemini"),
 )
 
 task_routes = {
@@ -19,6 +20,9 @@ task_routes = {
     "notifications.deliver": {"queue": "critical"},
     "schedules.check": {"queue": "bulk"},
     "tasks.profile_file": {"queue": "bulk"},
+    "tasks.call_gemini": {"queue": "gemini"},
+    "tasks.generate_pipeline_ai": {"queue": "gemini"},
+    "tasks.repair_pipeline_ai": {"queue": "gemini"},
 }
 
 task_serializer = "json"

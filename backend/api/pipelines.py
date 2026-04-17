@@ -17,6 +17,7 @@ from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import PipelineRun, PipelineStatus, UploadedFile, User
 from datetime import timezone
 from backend.pipeline.parser import PipelineParser
+from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.planner import generate_execution_plan
 from backend.schemas import (
     PipelineRunListResponse,
@@ -42,19 +43,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 legacy_runs_router = APIRouter(prefix="/runs", tags=["runs"])
+_pipeline_parser = PipelineParser()
 
 
 def _create_and_queue_pipeline_run(
     *,
     yaml_config: str,
     name: str | None,
+    parsed_config=None,
     request: Request,
     db: Session,
     current_user: User,
 ) -> RunPipelineResponse:
     """Create a PipelineRun record and queue Celery execution."""
-    parser = PipelineParser()
-    config = parser.parse(yaml_config)
+    config = parsed_config or get_parsed_pipeline(yaml_config)
     pipeline_name = name or config.name
 
     pipeline_run = PipelineRun(
@@ -102,11 +104,10 @@ def validate_pipeline(
     current_user: User = Depends(get_current_user),
 ) -> ValidatePipelineResponse:
     """Validate a pipeline configuration against registered files."""
-    parser = PipelineParser()
-    config = parser.parse(body.yaml_config)
+    config = get_parsed_pipeline(body.yaml_config)
 
     registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
-    result = parser.validate(config, registered_ids)
+    result = _pipeline_parser.validate(config, registered_ids)
 
     return ValidatePipelineResponse(
         is_valid=result.is_valid,
@@ -248,8 +249,7 @@ def run_pipeline(
 ) -> RunPipelineResponse:
     """Create a pipeline run record and queue it for execution."""
     # Parse YAML to get the pipeline name for permission check
-    parser = PipelineParser()
-    config = parser.parse(body.yaml_config)
+    config = get_parsed_pipeline(body.yaml_config)
     pipeline_name = body.name or config.name
 
     _check_pipeline_permission(
@@ -258,7 +258,7 @@ def run_pipeline(
 
     # Verify all referenced file IDs exist in the database and general config is valid
     registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
-    validation_result = parser.validate(config, registered_ids)
+    validation_result = _pipeline_parser.validate(config, registered_ids)
 
     if not validation_result.is_valid:
         # Specifically check for file registration errors to return 404
@@ -292,6 +292,7 @@ def run_pipeline(
     return _create_and_queue_pipeline_run(
         yaml_config=body.yaml_config,
         name=body.name,
+        parsed_config=config,
         request=request,
         db=db,
         current_user=current_user,
@@ -612,8 +613,7 @@ def preview_pipeline_step(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Preview sample data at a specific step of a pipeline."""
-    parser = PipelineParser()
-    config = parser.parse(body.yaml_config)
+    config = get_parsed_pipeline(body.yaml_config)
 
     if step_index < 0 or step_index >= len(config.steps):
         raise HTTPException(
@@ -679,7 +679,6 @@ def export_pipeline_output(
     # Look for output files in the uploads directory matching known save conventions.
     output_dir = settings.UPLOAD_DIR
     import glob as glob_module
-    import yaml
 
     output_files: list[str] = []
     seen: set[str] = set()
@@ -704,12 +703,12 @@ def export_pipeline_output(
 
     # Parse YAML and look for save.filename values.
     try:
-        parsed = yaml.safe_load(pipeline_run.yaml_config) or {}
-        steps = parsed.get("pipeline", {}).get("steps", [])
+        parsed_pipeline = get_parsed_pipeline(pipeline_run.yaml_config)
+        steps = parsed_pipeline.steps
         for step in steps:
-            if step.get("type") != "save":
+            if getattr(step, "step_type", None) != "save":
                 continue
-            filename = str(step.get("filename", "")).strip()
+            filename = str(getattr(step, "filename", "")).strip()
             if not filename:
                 continue
             for ext in [".csv", ".json"]:
@@ -717,7 +716,7 @@ def export_pipeline_output(
                 _add_matches(output_dir / f"{filename}_*{ext}")
                 if not filename.endswith(ext):
                     _add_matches(output_dir / f"{filename}{ext}")
-    except (TypeError, ValueError, yaml.YAMLError):
+    except Exception:
         logger.warning(
             "Could not parse YAML while locating export file for run_id=%s", run_id
         )

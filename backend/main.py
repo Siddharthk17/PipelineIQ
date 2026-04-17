@@ -256,6 +256,9 @@ app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(webhooks_router)
 app.include_router(audit_router)
 
+from backend.routers.ai import router as ai_router
+app.include_router(ai_router)
+
 if settings.ENVIRONMENT != "production":
     from backend.api.debug import router as debug_router
 

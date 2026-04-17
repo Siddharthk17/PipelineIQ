@@ -203,3 +203,37 @@ export interface SchemaSnapshot {
   row_count: number;
   captured_at: string;
 }
+
+export interface AIGeneratePipelineResponse {
+  yaml: string;
+  valid: boolean;
+  attempts: number;
+  error: string | null;
+}
+
+export interface AIRepairDiffLine {
+  type: "added" | "removed" | "unchanged";
+  content: string;
+}
+
+export interface AIRepairPipelineResponse {
+  corrected_yaml: string;
+  diff_lines: AIRepairDiffLine[];
+  valid: boolean;
+  error: string | null;
+}
+
+export interface AIColumnAutocompleteResponse {
+  suggestion: string | null;
+  confidence: number | null;
+}
+
+export interface AIColumnBatchAutocompleteResponse {
+  suggestions: Record<string, string | null>;
+}
+
+export interface AIYamlValidationResponse {
+  valid: boolean;
+  error: string | null;
+  step_count: number;
+}

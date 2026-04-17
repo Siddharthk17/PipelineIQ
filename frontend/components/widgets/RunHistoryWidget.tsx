@@ -1,11 +1,13 @@
 "use client";
 
 import React from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { CheckCircle, XCircle, Clock, PlayCircle, RefreshCw } from "lucide-react";
-import { getPipelineRuns } from "@/lib/api";
+import { CheckCircle, XCircle, Clock, RefreshCw, Sparkles } from "lucide-react";
+import { getPipelineRuns, repairPipelineRunWithAI } from "@/lib/api";
 import { usePipelineStore } from "@/store/pipelineStore";
+import { AIRepairDiffModal } from "@/components/widgets/AIPipelineModals";
+import type { AIRepairPipelineResponse } from "@/lib/types";
 
 export function RunHistoryWidget() {
   const queryClient = useQueryClient();
@@ -16,7 +18,17 @@ export function RunHistoryWidget() {
     refetchIntervalInBackground: true,
     staleTime: 0,
   });
-  const { setActiveRunId } = usePipelineStore();
+  const { setActiveRunId, setLastYamlConfig } = usePipelineStore();
+  const [repairResult, setRepairResult] = React.useState<AIRepairPipelineResponse | null>(null);
+  const [repairOpen, setRepairOpen] = React.useState(false);
+
+  const repairMutation = useMutation({
+    mutationFn: repairPipelineRunWithAI,
+    onSuccess: (result) => {
+      setRepairResult(result);
+      setRepairOpen(true);
+    },
+  });
 
   // Force refetch when activeRun status changes to a terminal state
   const activeRunStatus = usePipelineStore(s => s.activeRun?.status);
@@ -61,6 +73,7 @@ export function RunHistoryWidget() {
                 onClick={() => setActiveRunId(run.id)}
                 className="group cursor-pointer border-b last:border-0 hover:bg-[var(--interactive-hover)] transition-colors" 
                 style={{ borderColor: "var(--widget-border)" }}
+                data-status={run.status.toLowerCase()}
               >
                 <td className="py-3 pl-3">
                   <div className="flex items-center gap-2">
@@ -78,13 +91,47 @@ export function RunHistoryWidget() {
                   {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : "-"}
                 </td>
                 <td className="py-3 text-xs text-[var(--text-secondary)]">
-                  {formatDistanceToNow(new Date(run.created_at))} ago
+                  <div className="flex items-center gap-2">
+                    <span>{formatDistanceToNow(new Date(run.created_at))} ago</span>
+                    {run.status === "FAILED" && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          repairMutation.mutate(run.id);
+                        }}
+                        disabled={repairMutation.isPending}
+                        className="rounded border px-2 py-0.5 text-[10px] text-[var(--accent-primary)] hover:bg-[var(--interactive-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                        style={{ borderColor: "var(--widget-border)" }}
+                        data-testid="repair-pipeline-btn"
+                        data-run-id={run.id}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          <Sparkles className="h-3 w-3" />
+                          Repair
+                        </span>
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <AIRepairDiffModal
+        isOpen={repairOpen}
+        correctedYaml={repairResult?.corrected_yaml ?? ""}
+        diffLines={repairResult?.diff_lines ?? []}
+        valid={repairResult?.valid ?? false}
+        error={repairResult?.error ?? null}
+        isApplying={false}
+        onClose={() => setRepairOpen(false)}
+        onApply={(yaml) => {
+          setLastYamlConfig(yaml);
+          setRepairOpen(false);
+        }}
+      />
     </div>
   );
 }

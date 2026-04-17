@@ -5,13 +5,31 @@ import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { EditorView } from "@codemirror/view";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { validatePipeline, runPipeline, getFiles, getPipelinePlan, previewPipelineStep } from "@/lib/api";
+import {
+  validatePipeline,
+  runPipeline,
+  getFiles,
+  getPipelinePlan,
+  previewPipelineStep,
+  generatePipelineWithAI,
+} from "@/lib/api";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { useThemeStore } from "@/store/themeStore";
-import { CheckCircle, XCircle, Play, RefreshCw, FileText, Plus, X, Eye } from "lucide-react";
+import {
+  CheckCircle,
+  XCircle,
+  Play,
+  RefreshCw,
+  FileText,
+  Plus,
+  X,
+  Eye,
+  Sparkles,
+} from "lucide-react";
 import { ValidationResult, ExecutionPlan, PipelinePreview } from "@/lib/types";
 import { StepDAG } from "./StepDAG";
 import { ConfigPanel, PipelineCanvas, StepPalette } from "@/components/pipeline-builder";
+import { AIGeneratePipelineModal } from "@/components/widgets/AIPipelineModals";
 import { usePipelineEditor } from "@/hooks/usePipelineEditor";
 import {
   DEFAULT_PIPELINE_YAML,
@@ -39,6 +57,9 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<"yaml" | "visual">(initialMode);
+  const [isAIGenerateOpen, setIsAIGenerateOpen] = useState(false);
+  const [isAIGenerating, setIsAIGenerating] = useState(false);
+  const [aiGenerateError, setAIGenerateError] = useState<string | null>(null);
 
   const { data: files } = useQuery({ queryKey: ["files"], queryFn: getFiles });
 
@@ -124,6 +145,12 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   }, [files]);
 
   useEffect(() => {
+    if (lastYamlConfig && lastYamlConfig !== code) {
+      setCode(lastYamlConfig);
+    }
+  }, [lastYamlConfig, code]);
+
+  useEffect(() => {
     if (!latestFileId) {
       return;
     }
@@ -194,6 +221,31 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
       setIsPreviewLoading(false);
     }
   }, [code]);
+
+  const handleAIGenerate = useCallback(
+    async (description: string, fileIds: string[]) => {
+      setAIGenerateError(null);
+      setIsAIGenerating(true);
+      try {
+        const result = await generatePipelineWithAI(description, fileIds);
+        if (!result.yaml) {
+          throw new Error(result.error || "AI did not return YAML");
+        }
+        setCode(result.yaml);
+        setLastYamlConfig(result.yaml);
+        setPlan(null);
+        setPreview(null);
+        setIsAIGenerateOpen(false);
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error ? err.message : "Failed to generate pipeline with AI";
+        setAIGenerateError(message);
+      } finally {
+        setIsAIGenerating(false);
+      }
+    },
+    [setLastYamlConfig]
+  );
 
   const previewColumns = preview?.columns ?? [];
   const previewRows = preview?.data ?? [];
@@ -333,6 +385,17 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                   Visual
                 </button>
               </div>
+              <button
+                onClick={() => setIsAIGenerateOpen(true)}
+                data-testid="open-ai-generate-btn"
+                className="min-h-10 shrink-0 rounded border px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--interactive-hover)]"
+                style={{ borderColor: "var(--widget-border)" }}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Sparkles className="h-3 w-3" />
+                  Generate with AI
+                </span>
+              </button>
               <button
                 onClick={() => validateMutation.mutate(code)}
                 data-testid="validate-pipeline-btn"
@@ -639,6 +702,18 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
           )}
         </div>
       </div>
+      <AIGeneratePipelineModal
+        isOpen={isAIGenerateOpen}
+        files={availableFiles}
+        isSubmitting={isAIGenerating}
+        error={aiGenerateError}
+        onClose={() => {
+          if (!isAIGenerating) {
+            setIsAIGenerateOpen(false);
+          }
+        }}
+        onGenerate={handleAIGenerate}
+      />
     </div>
   );
 }

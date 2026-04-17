@@ -28,7 +28,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      router.push("/");
+      router.push("/dashboard");
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError("invalid email or password");
@@ -48,7 +48,7 @@ export default function LoginPage() {
     setDemoLoading(true);
     try {
       await loginAsDemo();
-      router.push("/");
+      router.push("/dashboard");
     } catch {
       setError("demo unavailable — try registering instead");
     } finally {
@@ -162,6 +162,7 @@ export default function LoginPage() {
                 onFocus={(e) => (e.target.style.borderColor = "var(--accent-primary)")}
                 onBlur={(e) => (e.target.style.borderColor = "var(--widget-border)")}
                 placeholder="you@example.com"
+                data-testid="email-input"
               />
             </div>
 
@@ -194,6 +195,7 @@ export default function LoginPage() {
                   onFocus={(e) => (e.target.style.borderColor = "var(--accent-primary)")}
                   onBlur={(e) => (e.target.style.borderColor = "var(--widget-border)")}
                   placeholder="••••••••"
+                  data-testid="password-input"
                 />
                 <button
                   type="button"
@@ -228,9 +230,10 @@ export default function LoginPage() {
                 cursor: loading ? "wait" : "pointer",
                 transition: "opacity 0.15s",
               }}
+              data-testid="login-btn"
             >
-              {loading ? "authenticating…" : "sign in"}
-            </button>
+                {loading ? "authenticating…" : "sign in"}
+              </button>
           </form>
 
           {/* divider */}

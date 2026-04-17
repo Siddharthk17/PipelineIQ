@@ -16,9 +16,9 @@ from backend.celery_config import (
 
 
 class TestQueueConfiguration:
-    def test_three_queues_defined(self):
+    def test_four_queues_defined(self):
         queue_names = {q.name for q in task_queues}
-        assert queue_names == {"critical", "default", "bulk"}
+        assert queue_names == {"critical", "default", "bulk", "gemini"}
 
     def test_prefetch_multiplier_is_one(self):
         assert worker_prefetch_multiplier == 1
@@ -78,9 +78,13 @@ class TestQueuePriorityModel:
         critical_worker_queues = {"critical"}
         default_worker_queues = {"critical", "default"}
         bulk_worker_queues = {"bulk"}
+        gemini_worker_queues = {"gemini"}
 
         assert "default" not in critical_worker_queues
         assert "bulk" not in critical_worker_queues
         assert "critical" in default_worker_queues
         assert "critical" not in bulk_worker_queues
         assert "default" not in bulk_worker_queues
+        assert "gemini" not in critical_worker_queues
+        assert "gemini" not in default_worker_queues
+        assert "critical" not in gemini_worker_queues

@@ -29,13 +29,14 @@ vi.mock("motion/react", () => {
 vi.mock("@/lib/api", () => ({
   getFiles: vi.fn(),
   getPipelineRuns: vi.fn(),
+  repairPipelineRunWithAI: vi.fn(),
   uploadFile: vi.fn(),
   deleteFile: vi.fn(),
   getFilePreview: vi.fn(),
   getSchemaHistory: vi.fn(),
 }));
 
-import { getFiles, getPipelineRuns, uploadFile, deleteFile } from "@/lib/api";
+import { getFiles, getPipelineRuns, repairPipelineRunWithAI, uploadFile, deleteFile } from "@/lib/api";
 import { QuickStatsWidget } from "@/components/widgets/QuickStatsWidget";
 import { FileUploadWidget } from "@/components/widgets/FileUploadWidget";
 import { RunHistoryWidget } from "@/components/widgets/RunHistoryWidget";
@@ -132,6 +133,12 @@ describe("RunHistoryWidget", () => {
 
   beforeEach(() => {
     vi.mocked(getPipelineRuns).mockResolvedValue(mockRuns);
+    vi.mocked(repairPipelineRunWithAI).mockResolvedValue({
+      corrected_yaml: "pipeline:\n  name: fixed",
+      diff_lines: [{ type: "added", content: "  name: fixed" }],
+      valid: true,
+      error: null,
+    });
   });
 
   it("renders run history table", async () => {

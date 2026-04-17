@@ -26,7 +26,7 @@ from backend.models import (
     StepStatus,
     UploadedFile,
 )
-from backend.pipeline.parser import PipelineParser
+from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.runner import (
     PipelineRunner,
     ProgressCallback,
@@ -219,8 +219,7 @@ def _mark_failed(db, run_id: str, error_message: str) -> None:
 
 def _run_pipeline(db, pipeline_run: PipelineRun):
     """Parse config, load file paths, and execute the pipeline."""
-    parser = PipelineParser()
-    config = parser.parse(pipeline_run.yaml_config)
+    config = get_parsed_pipeline(pipeline_run.yaml_config)
 
     referenced_file_ids = set()
     for step in config.steps:
@@ -358,8 +357,7 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     db.commit()
 
     try:
-        parser = PipelineParser()
-        config = parser.parse(pipeline_run.yaml_config)
+        config = get_parsed_pipeline(pipeline_run.yaml_config)
         save_version(
             pipeline_name=config.name,
             yaml_config=pipeline_run.yaml_config,

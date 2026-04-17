@@ -40,7 +40,7 @@ export default function RegisterPage() {
     try {
       await register(email, username, password);
       await login(email, password);
-      router.push("/");
+      router.push("/dashboard");
     } catch (err) {
       if (err instanceof ApiError) {
         const detail = (err.detail as { detail?: string })?.detail;
