@@ -7,6 +7,7 @@ result retrieval, cancellation, and export.
 import logging
 import orjson
 from typing import Optional
+from kombu.exceptions import OperationalError as KombuOperationalError
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
@@ -559,7 +560,15 @@ def cancel_pipeline_run(
     from backend.celery_app import celery_app as _celery_app
 
     task_id = pipeline_run.celery_task_id or run_id
-    _celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+    try:
+        _celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+    except (KombuOperationalError, RedisError, OSError) as exc:
+        logger.warning(
+            "Failed to revoke task during cancellation for run_id=%s task_id=%s: %s",
+            run_id,
+            task_id,
+            exc,
+        )
 
     from backend.utils.time_utils import utcnow
 

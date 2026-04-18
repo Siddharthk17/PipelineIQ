@@ -9,7 +9,9 @@
     "lint": "eslint .",
     "clean": "next clean",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@codemirror/lang-yaml": "^6.1.2",
@@ -48,6 +50,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5.1.4",
+    "@playwright/test": "^1.56.1",
     "eslint": "9.39.1",
     "eslint-config-next": "16.0.8",
     "jsdom": "^28.1.0",

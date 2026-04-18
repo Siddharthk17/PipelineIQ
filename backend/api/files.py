@@ -14,6 +14,7 @@ from typing import List, Optional, BinaryIO
 
 import orjson
 import pandas as pd
+from kombu.exceptions import OperationalError as KombuOperationalError
 from fastapi import (
     APIRouter,
     Body,
@@ -710,6 +711,20 @@ def _build_schema_drift_response(
     )
 
 
+def _enqueue_profile_task(file_id: str) -> None:
+    """Queue async profiling without failing requests when broker is unavailable."""
+    from backend.tasks.profiling import profile_file
+
+    try:
+        profile_file.apply_async([str(file_id)], queue="bulk")
+    except (KombuOperationalError, RedisError, OSError) as exc:
+        logger.warning(
+            "Profile task enqueue failed for file_id=%s; continuing without async profiling: %s",
+            file_id,
+            exc,
+        )
+
+
 def _finalize_uploaded_file(
     db: Session,
     file_id,
@@ -780,9 +795,7 @@ def _finalize_uploaded_file(
         request=request,
     )
 
-    from backend.tasks.profiling import profile_file
-
-    profile_file.apply_async([str(file_id)], queue="bulk")
+    _enqueue_profile_task(str(file_id))
 
     return FileUploadResponse(
         id=str(file_id),
@@ -1020,9 +1033,7 @@ def refresh_file_profile(
     )
     db.commit()
 
-    from backend.tasks.profiling import profile_file
-
-    profile_file.apply_async([file_id], queue="bulk")
+    _enqueue_profile_task(file_id)
 
     return {"file_id": file_id, "status": "queued"}
 

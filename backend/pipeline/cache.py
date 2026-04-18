@@ -18,8 +18,12 @@ Cache backend: redis-cache (not redis-broker)
 """
 import hashlib
 import logging
+import os
 import pickle
+from urllib.parse import urlparse
+from collections import OrderedDict
 
+from backend.config import settings
 from backend.db.redis_pools import get_cache_redis
 from backend.pipeline.parser import PipelineParser
 
@@ -27,9 +31,57 @@ logger = logging.getLogger(__name__)
 
 YAML_CACHE_TTL = 3600  # 1 hour in seconds
 YAML_CACHE_PREFIX = "yaml:parsed:"
+LOCAL_CACHE_MAX_ENTRIES = 256
+_DOCKER_INTERNAL_REDIS_HOSTS = {"redis-cache", "redis-broker", "redis-pubsub", "redis-yjs"}
 
 # Module-level parser instance — stateless, safe to reuse
 _parser = PipelineParser()
+_local_parsed_cache: "OrderedDict[str, object]" = OrderedDict()
+_redis_cache_disabled = False
+
+
+def _local_cache_get(cache_key: str):
+    cached = _local_parsed_cache.get(cache_key)
+    if cached is None:
+        return None
+    _local_parsed_cache.move_to_end(cache_key)
+    return cached
+
+
+def _local_cache_set(cache_key: str, pipeline_obj: object) -> None:
+    _local_parsed_cache[cache_key] = pipeline_obj
+    _local_parsed_cache.move_to_end(cache_key)
+    while len(_local_parsed_cache) > LOCAL_CACHE_MAX_ENTRIES:
+        _local_parsed_cache.popitem(last=False)
+
+
+def _should_use_redis_cache() -> bool:
+    """Skip Redis cache when running outside Docker with Docker-only hostnames."""
+    # Unit tests monkeypatch get_cache_redis() to in-memory fakes; keep Redis path enabled.
+    if getattr(get_cache_redis, "__module__", "") != "backend.db.redis_pools":
+        return True
+
+    parsed = urlparse(settings.REDIS_CACHE_URL or "")
+    host = parsed.hostname or ""
+    if host in _DOCKER_INTERNAL_REDIS_HOSTS and not os.path.exists("/.dockerenv"):
+        return False
+    return True
+
+
+def _redis_call(redis_client, operation: str, *args, **kwargs):
+    global _redis_cache_disabled
+    if _redis_cache_disabled:
+        return None
+    try:
+        return getattr(redis_client, operation)(*args, **kwargs)
+    except Exception as exc:
+        _redis_cache_disabled = True
+        logger.warning(
+            "YAML cache %s failed; disabling Redis cache for this process: %s",
+            operation,
+            exc,
+        )
+        return None
 
 
 def get_parsed_pipeline(yaml_text: str):
@@ -54,36 +106,47 @@ def get_parsed_pipeline(yaml_text: str):
     yaml_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
     cache_key = f"{YAML_CACHE_PREFIX}{yaml_hash}"
 
-    redis = get_cache_redis()
+    local_cached = _local_cache_get(cache_key)
+    if local_cached is not None:
+        return local_cached
 
-    # Check cache first
-    try:
-        cached = redis.get(cache_key)
+    if _should_use_redis_cache():
+        redis = get_cache_redis()
+
+        # Check cache first
+        cached = _redis_call(redis, "get", cache_key)
         if cached:
-            # redis pool returns str (decode_responses=True); pickle needs bytes
-            if isinstance(cached, str):
-                cached = cached.encode("latin-1")
-            pipeline = pickle.loads(cached)
-            logger.debug(f"YAML cache HIT: {cache_key[:24]}...")
-            return pipeline
-    except Exception as e:
-        # Cache read failure is non-fatal — fall through to parse
-        logger.warning(f"YAML cache read failed: {e}. Parsing fresh.")
+            try:
+                # redis pool returns str (decode_responses=True); pickle needs bytes
+                if isinstance(cached, str):
+                    cached = cached.encode("latin-1")
+                pipeline = pickle.loads(cached)
+                _local_cache_set(cache_key, pipeline)
+                logger.debug(f"YAML cache HIT: {cache_key[:24]}...")
+                return pipeline
+            except Exception as e:
+                logger.warning(f"YAML cache decode failed: {e}. Parsing fresh.")
 
     # Cache miss — parse the YAML (~5ms)
     pipeline = _parser.parse(yaml_text)
+    _local_cache_set(cache_key, pipeline)
 
     # Store in cache for future calls
-    try:
-        pickled = pickle.dumps(pipeline)
-        # Store raw bytes — use the connection without decode_responses
-        # Since pool uses decode_responses=True, we encode to latin-1 which
-        # is a lossless round-trip for binary pickle data
-        redis.set(cache_key, pickled.decode("latin-1"), ex=YAML_CACHE_TTL)
-        logger.debug(f"YAML cache MISS → stored: {cache_key[:24]}...")
-    except Exception as e:
-        # Cache write failure is non-fatal — pipeline was parsed successfully
-        logger.warning(f"YAML cache write failed: {e}")
+    if _should_use_redis_cache():
+        redis = get_cache_redis()
+        try:
+            pickled = pickle.dumps(pipeline)
+            # Store raw bytes — use the connection without decode_responses
+            # Since pool uses decode_responses=True, we encode to latin-1 which
+            # is a lossless round-trip for binary pickle data
+            stored = _redis_call(
+                redis, "set", cache_key, pickled.decode("latin-1"), ex=YAML_CACHE_TTL
+            )
+            if stored:
+                logger.debug(f"YAML cache MISS → stored: {cache_key[:24]}...")
+        except Exception as e:
+            # Cache write failure is non-fatal — pipeline was parsed successfully
+            logger.warning(f"YAML cache write failed: {e}")
 
     return pipeline
 
@@ -95,9 +158,9 @@ def invalidate_pipeline_cache(yaml_text: str) -> None:
     """
     yaml_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
     cache_key = f"{YAML_CACHE_PREFIX}{yaml_hash}"
-    redis = get_cache_redis()
-    try:
-        redis.delete(cache_key)
-        logger.debug(f"YAML cache invalidated: {cache_key[:24]}...")
-    except Exception as e:
-        logger.warning(f"YAML cache invalidation failed: {e}")
+    _local_parsed_cache.pop(cache_key, None)
+    if _should_use_redis_cache():
+        redis = get_cache_redis()
+        deleted = _redis_call(redis, "delete", cache_key)
+        if deleted is not None:
+            logger.debug(f"YAML cache invalidated: {cache_key[:24]}...")

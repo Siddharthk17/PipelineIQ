@@ -12,6 +12,7 @@ import {
   getPipelinePlan,
   previewPipelineStep,
   generatePipelineWithAI,
+  autocompleteColumnsBatchWithAI,
 } from "@/lib/api";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { useThemeStore } from "@/store/themeStore";
@@ -38,6 +39,10 @@ import {
   removeFileIdLines,
   upsertFileIdInFirstLoadStep,
 } from "@/lib/pipeline-yaml";
+import {
+  collectMissingColumnCandidates,
+  extractColumnCandidate,
+} from "@/lib/validation-autocomplete";
 
 interface PipelineEditorWidgetProps {
   initialMode?: "yaml" | "visual";
@@ -60,10 +65,15 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   const [isAIGenerateOpen, setIsAIGenerateOpen] = useState(false);
   const [isAIGenerating, setIsAIGenerating] = useState(false);
   const [aiGenerateError, setAIGenerateError] = useState<string | null>(null);
+  const [aiColumnSuggestions, setAiColumnSuggestions] = useState<Record<string, string>>({});
 
   const { data: files } = useQuery({ queryKey: ["files"], queryFn: getFiles });
 
-  const availableFiles = files ?? [];
+  const availableFiles = useMemo(() => files ?? [], [files]);
+  const availableColumnsForAutocomplete = useMemo(
+    () => [...new Set(availableFiles.flatMap((file) => file.columns ?? []))],
+    [availableFiles]
+  );
 
   const {
     pipelineName,
@@ -171,6 +181,57 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSuggestions = async () => {
+      const errors = validation?.errors ?? [];
+      if (errors.length === 0 || availableColumnsForAutocomplete.length === 0) {
+        if (!cancelled) {
+          setAiColumnSuggestions({});
+        }
+        return;
+      }
+
+      const columns = collectMissingColumnCandidates(errors);
+      if (columns.length === 0) {
+        if (!cancelled) {
+          setAiColumnSuggestions({});
+        }
+        return;
+      }
+
+      try {
+        const result = await autocompleteColumnsBatchWithAI(
+          columns,
+          availableColumnsForAutocomplete
+        );
+        if (cancelled) {
+          return;
+        }
+
+        const normalizedSuggestions = Object.entries(result.suggestions).reduce<
+          Record<string, string>
+        >((acc, [typed, suggestion]) => {
+          if (suggestion) {
+            acc[typed.toLowerCase()] = suggestion;
+          }
+          return acc;
+        }, {});
+        setAiColumnSuggestions(normalizedSuggestions);
+      } catch {
+        if (!cancelled) {
+          setAiColumnSuggestions({});
+        }
+      }
+    };
+
+    void loadSuggestions();
+    return () => {
+      cancelled = true;
+    };
+  }, [validation?.errors, availableColumnsForAutocomplete]);
 
   // Handle Ctrl+Enter to trigger pipeline:run event
   useEffect(() => {
@@ -646,15 +707,27 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                 <XCircle className="w-4 h-4" /> {validation?.errors.length || 0} Errors
               </div>
               <div className="max-h-32 overflow-y-auto space-y-2 pr-1">
-                {validation?.errors.map((err, i) => (
-                  <div key={i} className="p-2 rounded bg-[var(--bg-elevated)] border border-[var(--accent-error)]/30">
-                    <div className="text-xs font-medium text-[var(--accent-error)] mb-1">
-                      {err.step_name ? `Step: ${err.step_name}` : "Global"} - {err.field}
+                {validation?.errors.map((err, i) => {
+                  const typedColumn = extractColumnCandidate(err);
+                  const aiSuggestion = typedColumn
+                    ? aiColumnSuggestions[typedColumn.toLowerCase()]
+                    : null;
+                  const suggestion = err.suggestion ?? aiSuggestion ?? null;
+
+                  return (
+                    <div key={i} className="p-2 rounded bg-[var(--bg-elevated)] border border-[var(--accent-error)]/30">
+                      <div className="text-xs font-medium text-[var(--accent-error)] mb-1">
+                        {err.step_name ? `Step: ${err.step_name}` : "Global"} - {err.field}
+                      </div>
+                      <div className="text-xs text-[var(--text-primary)]/75">{err.message}</div>
+                      {suggestion && (
+                        <div className="text-[10px] text-[var(--accent-warning)] mt-1">
+                          Tip{!err.suggestion && aiSuggestion ? " (AI)" : ""}: {suggestion}
+                        </div>
+                      )}
                     </div>
-                    <div className="text-xs text-[var(--text-primary)]/75">{err.message}</div>
-                    {err.suggestion && <div className="text-[10px] text-[var(--accent-warning)] mt-1">Tip: {err.suggestion}</div>}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

@@ -605,6 +605,15 @@ npm run test
 
 Frontend tests use Vitest + React Testing Library + jsdom.
 
+Optional AI Playwright e2e checks:
+
+```bash
+cd frontend
+E2E_BASE_URL=http://localhost:3000 npm run test:e2e
+```
+
+Set `E2E_EMAIL` and `E2E_PASSWORD` to override the default demo credentials.
+
 ---
 
 ## Database Migrations
