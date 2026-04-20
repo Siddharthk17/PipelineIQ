@@ -111,6 +111,11 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     MINIO_IMAGE_TAG: str = "latest"
 
+    # Gemini AI
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_FALLBACK_MODELS: str = "gemini-2.0-flash,gemini-1.5-flash"
+
     # Email (SMTP)
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587

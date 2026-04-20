@@ -425,8 +425,10 @@ services:
   worker-gemini:
     image: pipelineiq-backend
     build: ./backend
+    env_file:
+      - .env
     command: >
-      celery -A backend.celery_app worker
+      celery -A backend.celery_app:celery_app worker
       --queues=gemini
       --concurrency=1
       --prefetch-multiplier=1
@@ -437,6 +439,8 @@ services:
       - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GEMINI_FALLBACK_MODELS=${GEMINI_FALLBACK_MODELS:-gemini-2.0-flash,gemini-1.5-flash}
       - CELERY_CONCURRENCY=1
     depends_on:
       - redis-broker
@@ -444,6 +448,8 @@ services:
     restart: unless-stopped
     deploy:
       replicas: 1
+    networks:
+      - pipelineiq-network
 
   celery-beat:
     build:

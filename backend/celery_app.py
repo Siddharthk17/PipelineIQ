@@ -43,6 +43,7 @@ celery_app.autodiscover_tasks(["backend.tasks"], related_name="webhook_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="schedule_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="notification_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="profiling")
+celery_app.autodiscover_tasks(["backend.tasks"], related_name="gemini_tasks")
 
 
 @worker_process_init.connect

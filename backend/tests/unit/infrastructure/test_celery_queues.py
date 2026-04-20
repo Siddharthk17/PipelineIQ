@@ -38,6 +38,9 @@ class TestQueueConfiguration:
         assert route is not None
         assert route["queue"] == "critical"
 
+    def test_gemini_task_is_registered_on_celery_app(self):
+        assert "tasks.call_gemini" in celery_app.tasks
+
     def test_schedules_check_routes_to_bulk(self):
         route = task_routes.get("schedules.check")
         assert route is not None

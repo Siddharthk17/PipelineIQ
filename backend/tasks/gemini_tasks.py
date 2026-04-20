@@ -23,6 +23,28 @@ TOKEN_BUDGET_WINDOW_SECONDS = 60
 # Cache TTL for responses: 1 hour
 RESPONSE_CACHE_TTL = 3600
 
+
+def _is_free_tier_hard_quota(error_str: str) -> bool:
+    """True when Google reports free-tier request quota is effectively disabled."""
+    lowered = error_str.lower()
+    return (
+        "generate_content_free_tier_requests" in lowered
+        and "limit: 0" in lowered
+    )
+
+
+def _should_retry_rate_limit(error_str: str) -> bool:
+    """Retry only for transient throttling, not hard free-tier quota exhaustion."""
+    if _is_free_tier_hard_quota(error_str):
+        return False
+    lowered = error_str.lower()
+    return (
+        "429" in error_str
+        or "resource_exhausted" in lowered
+        or "quota" in lowered
+    )
+
+
 @celery_app.task(
     name="tasks.call_gemini",
     queue="gemini",
@@ -71,15 +93,13 @@ def call_gemini_task(
 
     # ── Step 3: Call Gemini ───────────────────────────────────────────────
     try:
-        import google.generativeai as genai
         model = get_gemini_model()
         response = model.generate_content(
             prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-                candidate_count=1,
-            ),
+            generation_config={
+                "temperature": temperature,
+                "max_output_tokens": max_output_tokens,
+            },
         )
 
         result_text = response.text.strip()
@@ -103,7 +123,15 @@ def call_gemini_task(
     except Exception as e:
         error_str = str(e)
 
-        if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
+        if _is_free_tier_hard_quota(error_str):
+            message = (
+                "Gemini free-tier quota is unavailable for this API key/region (limit: 0). "
+                "Use a supported region/key or wait for quota reset."
+            )
+            logger.error(message)
+            raise RuntimeError(message) from e
+
+        if _should_retry_rate_limit(error_str):
             backoff = 10 * (2 ** self.request.retries)
             logger.warning(
                 f"Gemini rate limited (attempt {self.request.retries + 1}/5). "

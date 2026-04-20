@@ -155,12 +155,6 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   }, [files]);
 
   useEffect(() => {
-    if (lastYamlConfig && lastYamlConfig !== code) {
-      setCode(lastYamlConfig);
-    }
-  }, [lastYamlConfig, code]);
-
-  useEffect(() => {
     if (!latestFileId) {
       return;
     }
