@@ -90,7 +90,7 @@ class Settings(BaseSettings):
 
     # Autonomous healing
     AUTONOMOUS_HEALING_ENABLED: bool = True
-    AUTONOMOUS_HEALING_MAX_ATTEMPTS: int = 2
+    AUTONOMOUS_HEALING_MAX_ATTEMPTS: int = 3
 
     # Versioning
     MAX_VERSIONS_PER_PIPELINE: int = 50

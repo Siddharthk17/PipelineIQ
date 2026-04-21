@@ -27,7 +27,15 @@ export interface UploadUrlResponse {
 export interface PipelineRun {
   id: string;
   name: string;
-  status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
+  status:
+    | "PENDING"
+    | "RUNNING"
+    | "HEALING"
+    | "HEALED"
+    | "COMPLETED"
+    | "FAILED"
+    | "CANCELLED"
+    | "TIMEOUT";
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -63,9 +71,20 @@ export interface HealingAttempt {
     | "VALIDATION_FAILED"
     | "APPLIED"
     | "FAILED";
-  failed_step_name: string | null;
+  pipeline_name: string | null;
+  failed_step: string | null;
   error_type: string | null;
   error_message: string | null;
+  old_schema: Record<string, unknown> | null;
+  new_schema: Record<string, unknown> | null;
+  removed_columns: string[] | null;
+  added_columns: string[] | null;
+  renamed_candidates: { [key: string]: unknown }[] | null;
+  gemini_patch: Record<string, unknown> | null;
+  sandbox_result: Record<string, unknown> | null;
+  applied: boolean;
+  confidence: number | null;
+  healed_at: string | null;
   classification_reason: string | null;
   ai_valid: boolean | null;
   ai_error: string | null;

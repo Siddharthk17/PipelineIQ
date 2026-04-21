@@ -33,7 +33,12 @@ export function RunHistoryWidget() {
   // Force refetch when activeRun status changes to a terminal state
   const activeRunStatus = usePipelineStore(s => s.activeRun?.status);
   React.useEffect(() => {
-    if (activeRunStatus === "COMPLETED" || activeRunStatus === "FAILED") {
+    if (
+      activeRunStatus === "COMPLETED"
+      || activeRunStatus === "HEALED"
+      || activeRunStatus === "FAILED"
+      || activeRunStatus === "TIMEOUT"
+    ) {
       queryClient.invalidateQueries({ queryKey: ["pipelineRuns"] });
     }
   }, [activeRunStatus, queryClient]);
@@ -77,9 +82,11 @@ export function RunHistoryWidget() {
               >
                 <td className="py-3 pl-3">
                   <div className="flex items-center gap-2">
+                    {run.status === "HEALED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
                     {run.status === "COMPLETED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
                     {run.status === "FAILED" && <XCircle className="w-4 h-4 text-[var(--accent-error)]" />}
                     {run.status === "RUNNING" && <div className="w-4 h-4 rounded-full bg-[var(--accent-warning)] animate-pulse" />}
+                    {run.status === "HEALING" && <div className="w-4 h-4 rounded-full bg-[var(--accent-primary)] animate-pulse" />}
                     {run.status === "PENDING" && <Clock className="w-4 h-4 text-[var(--text-secondary)]" />}
                   </div>
                 </td>

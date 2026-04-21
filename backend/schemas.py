@@ -235,11 +235,38 @@ class HealingAttemptResponse(BaseModel):
     id: str = Field(..., description="Healing attempt ID")
     attempt_number: int = Field(..., description="1-indexed healing attempt number")
     status: str = Field(..., description="Healing attempt status")
-    failed_step_name: Optional[str] = Field(
-        None, description="Step name where failure was observed"
-    )
+    pipeline_name: Optional[str] = Field(None, description="Pipeline name for this run")
+    failed_step: Optional[str] = Field(None, description="Step name where failure was observed")
     error_type: Optional[str] = Field(None, description="Failure exception type")
     error_message: Optional[str] = Field(None, description="Failure exception message")
+    old_schema: Optional[Dict[str, Any]] = Field(
+        None, description="Schema snapshot captured when the run started"
+    )
+    new_schema: Optional[Dict[str, Any]] = Field(
+        None, description="Current schema observed when healing ran"
+    )
+    removed_columns: Optional[List[str]] = Field(
+        None, description="Columns that disappeared between old and new schema"
+    )
+    added_columns: Optional[List[str]] = Field(
+        None, description="Columns that appeared in the new schema"
+    )
+    renamed_candidates: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Likely rename pairs detected from the schema diff"
+    )
+    gemini_patch: Optional[Dict[str, Any]] = Field(
+        None, description="Structured JSON patch returned by Gemini"
+    )
+    sandbox_result: Optional[Dict[str, Any]] = Field(
+        None, description="DuckDB sandbox validation result for the patch"
+    )
+    applied: bool = Field(False, description="Whether the candidate patch was applied")
+    confidence: Optional[float] = Field(
+        None, description="Gemini confidence score for the selected patch"
+    )
+    healed_at: Optional[datetime] = Field(
+        None, description="When the patch was accepted and applied"
+    )
     classification_reason: Optional[str] = Field(
         None, description="Healer classification reason"
     )

@@ -37,7 +37,7 @@ export function QuickStatsWidget() {
   const { data: runs } = useQuery({ queryKey: ["pipelineRuns", 1, 100], queryFn: () => getPipelineRuns(1, 100), refetchInterval: 30000 });
 
   const totalRuns = runs?.length || 0;
-  const successfulRuns = runs?.filter(r => r.status === "COMPLETED").length || 0;
+  const successfulRuns = runs?.filter(r => r.status === "COMPLETED" || r.status === "HEALED").length || 0;
   const filesUploaded = files?.length || 0;
   const runsWithDuration = runs?.filter(r => r.duration_ms != null && r.duration_ms > 0) || [];
   const avgDuration = runsWithDuration.length ? Math.round(runsWithDuration.reduce((acc, r) => acc + (r.duration_ms || 0), 0) / runsWithDuration.length) : 0;

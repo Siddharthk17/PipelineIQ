@@ -1,9 +1,9 @@
-"""Unit tests for autonomous healing orchestration in pipeline tasks."""
+"""Tests for autonomous healing orchestration in pipeline tasks."""
 
 from backend.config import settings
+from backend.execution.healing_agent import HealingResult
 from backend.models import HealingAttempt, HealingAttemptStatus, PipelineRun, PipelineStatus
 from backend.pipeline.exceptions import ColumnNotFoundError, FileReadError
-from backend.pipeline.healing import CandidateValidation, HealingCandidate
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.runner import PipelineExecutionSummary, PipelineStatus as RunnerPipelineStatus
 from backend.tasks.pipeline_tasks import _execute_with_autonomous_healing
@@ -49,10 +49,8 @@ def test_healing_marks_non_healable_and_stops(monkeypatch, test_db):
 
     monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_ENABLED", True, raising=False)
     monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_MAX_ATTEMPTS", 3, raising=False)
-    monkeypatch.setattr(
-        "backend.tasks.pipeline_tasks._run_pipeline",
-        lambda db, run: failed,
-    )
+    monkeypatch.setattr("backend.tasks.pipeline_tasks._run_pipeline", lambda db, run: failed)
+
     published_events = []
     monkeypatch.setattr(
         "backend.tasks.pipeline_tasks._publish_progress_payload",
@@ -64,16 +62,16 @@ def test_healing_marks_non_healable_and_stops(monkeypatch, test_db):
 
     attempts = (
         test_db.query(HealingAttempt)
-        .filter(HealingAttempt.pipeline_run_id == pipeline_run.id)
+        .filter(HealingAttempt.run_id == pipeline_run.id)
         .all()
     )
     assert len(attempts) == 1
     assert attempts[0].status == HealingAttemptStatus.NON_HEALABLE
-    assert attempts[0].failed_step_name == "load_sales"
-    assert any(e["event_type"] == "healing_non_healable" for e in published_events)
+    assert attempts[0].failed_step == "load_sales"
+    assert any(event["event_type"] == "healing_non_healable" for event in published_events)
 
 
-def test_healing_records_ai_invalid_candidate(monkeypatch, test_db):
+def test_healing_failure_publishes_healing_failed(monkeypatch, test_db):
     pipeline_run = PipelineRun(
         name="healing-run",
         status=PipelineStatus.RUNNING,
@@ -83,29 +81,16 @@ def test_healing_records_ai_invalid_candidate(monkeypatch, test_db):
     test_db.commit()
     test_db.refresh(pipeline_run)
 
-    failed = _failed_summary(
-        ColumnNotFoundError("filter_step", "ammount", ["amount", "status"])
-    )
+    failed = _failed_summary(ColumnNotFoundError("filter_step", "ammount", ["amount", "status"]))
 
     monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_ENABLED", True, raising=False)
-    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_MAX_ATTEMPTS", 1, raising=False)
+    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_MAX_ATTEMPTS", 3, raising=False)
+    monkeypatch.setattr("backend.tasks.pipeline_tasks._run_pipeline", lambda db, run: failed)
     monkeypatch.setattr(
-        "backend.tasks.pipeline_tasks._run_pipeline",
-        lambda db, run: failed,
+        "backend.tasks.pipeline_tasks.attempt_heal",
+        lambda **kwargs: HealingResult(success=False, attempts=3, error="sandbox failed"),
     )
-    monkeypatch.setattr(
-        "backend.tasks.pipeline_tasks.collect_registered_file_ids",
-        lambda db: set(),
-    )
-    monkeypatch.setattr(
-        "backend.tasks.pipeline_tasks.generate_healing_candidate",
-        lambda **kwargs: HealingCandidate(
-            corrected_yaml=kwargs["original_yaml"],
-            diff_lines=[],
-            ai_valid=False,
-            ai_error="invalid patch",
-        ),
-    )
+
     published_events = []
     monkeypatch.setattr(
         "backend.tasks.pipeline_tasks._publish_progress_payload",
@@ -114,19 +99,13 @@ def test_healing_records_ai_invalid_candidate(monkeypatch, test_db):
 
     summary = _execute_with_autonomous_healing(test_db, pipeline_run)
     assert summary is failed
-
-    attempts = (
-        test_db.query(HealingAttempt)
-        .filter(HealingAttempt.pipeline_run_id == pipeline_run.id)
-        .all()
-    )
-    assert len(attempts) == 1
-    assert attempts[0].status == HealingAttemptStatus.AI_INVALID
-    assert attempts[0].ai_error == "invalid patch"
-    assert any(e["event_type"] == "healing_attempt_invalid" for e in published_events)
+    event_types = [event["event_type"] for event in published_events]
+    assert "healing_started" in event_types
+    assert "healing_attempt_started" in event_types
+    assert "healing_failed" in event_types
 
 
-def test_healing_applies_patch_and_succeeds(monkeypatch, test_db):
+def test_healing_applies_patch_and_marks_run_healed(monkeypatch, test_db):
     pipeline_run = PipelineRun(
         name="healing-run",
         status=PipelineStatus.RUNNING,
@@ -136,41 +115,28 @@ def test_healing_applies_patch_and_succeeds(monkeypatch, test_db):
     test_db.commit()
     test_db.refresh(pipeline_run)
 
-    failed = _failed_summary(
-        ColumnNotFoundError("filter_step", "ammount", ["amount", "status"])
-    )
+    failed = _failed_summary(ColumnNotFoundError("filter_step", "ammount", ["amount", "status"]))
     completed = _completed_summary()
     run_results = iter([failed, completed])
 
     monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_ENABLED", True, raising=False)
-    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_MAX_ATTEMPTS", 2, raising=False)
+    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_MAX_ATTEMPTS", 3, raising=False)
+    monkeypatch.setattr("backend.tasks.pipeline_tasks._run_pipeline", lambda db, run: next(run_results))
     monkeypatch.setattr(
-        "backend.tasks.pipeline_tasks._run_pipeline",
-        lambda db, run: next(run_results),
-    )
-    monkeypatch.setattr(
-        "backend.tasks.pipeline_tasks.collect_registered_file_ids",
-        lambda db: set(),
-    )
-    monkeypatch.setattr(
-        "backend.tasks.pipeline_tasks.generate_healing_candidate",
-        lambda **kwargs: HealingCandidate(
-            corrected_yaml="pipeline:\n  name: healed\n  steps: []\n",
-            diff_lines=[{"line": 1, "old": "p1", "new": "healed"}],
-            ai_valid=True,
-            ai_error=None,
+        "backend.tasks.pipeline_tasks.attempt_heal",
+        lambda **kwargs: HealingResult(
+            success=True,
+            patched_yaml="pipeline:\n  name: healed\n  steps: []\n",
+            confidence=0.94,
+            description="Renamed ammount to amount",
+            attempts=1,
+            patch={"patches": [{"step_name": "filter_step"}]},
+            schema_diff={"summary": "ammount -> amount"},
         ),
     )
-    monkeypatch.setattr(
-        "backend.tasks.pipeline_tasks.validate_healing_candidate",
-        lambda **kwargs: CandidateValidation(
-            is_valid=True,
-            errors=[],
-            warnings=[],
-            sandbox_passed=True,
-            sandbox_error=None,
-        ),
-    )
+    monkeypatch.setattr("backend.tasks.pipeline_tasks._save_version_if_needed", lambda **kwargs: None)
+    monkeypatch.setattr("backend.tasks.pipeline_tasks._record_healing_audit", lambda **kwargs: None)
+
     published_events = []
     monkeypatch.setattr(
         "backend.tasks.pipeline_tasks._publish_progress_payload",
@@ -181,18 +147,11 @@ def test_healing_applies_patch_and_succeeds(monkeypatch, test_db):
     assert summary.status == RunnerPipelineStatus.COMPLETED
 
     test_db.refresh(pipeline_run)
+    assert pipeline_run.status == PipelineStatus.HEALED
     assert "healed" in pipeline_run.yaml_config
 
-    attempts = (
-        test_db.query(HealingAttempt)
-        .filter(HealingAttempt.pipeline_run_id == pipeline_run.id)
-        .all()
-    )
-    assert len(attempts) == 1
-    assert attempts[0].status == HealingAttemptStatus.APPLIED
-    assert attempts[0].parser_valid is True
-    assert attempts[0].sandbox_passed is True
     event_types = [event["event_type"] for event in published_events]
-    assert "healing_attempt_started" in event_types
+    assert "healing_started" in event_types
     assert "healing_attempt_applied" in event_types
+    assert "healing_complete" in event_types
     assert "healing_succeeded" in event_types

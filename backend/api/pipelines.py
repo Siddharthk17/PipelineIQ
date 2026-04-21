@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from backend.auth import get_current_user
 from backend.config import settings
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import HealingAttempt, PipelineRun, PipelineStatus, UploadedFile, User
+from backend.models import HealingAttempt, PipelineRun, PipelineStatus, SchemaSnapshot, UploadedFile, User
 from datetime import timezone
 from backend.pipeline.parser import PipelineParser
 from backend.pipeline.cache import get_parsed_pipeline
@@ -70,6 +70,7 @@ def _create_and_queue_pipeline_run(
     db.add(pipeline_run)
     db.commit()
     db.refresh(pipeline_run)
+    _create_run_schema_snapshots(db=db, run_id=pipeline_run.id, parsed_config=config)
 
     result = execute_pipeline_task.delay(str(pipeline_run.id))
     pipeline_run.celery_task_id = result.id
@@ -89,6 +90,37 @@ def _create_and_queue_pipeline_run(
     return RunPipelineResponse(
         run_id=str(pipeline_run.id), status=pipeline_run.status.value
     )
+
+
+def _create_run_schema_snapshots(*, db: Session, run_id, parsed_config) -> None:
+    """Capture the source file schema at run submission time for healing diffing."""
+    referenced_file_ids = []
+    seen_file_ids: set[str] = set()
+    for step in getattr(parsed_config, "steps", []):
+        file_id = getattr(step, "file_id", None)
+        if isinstance(file_id, str) and file_id and file_id not in seen_file_ids:
+            seen_file_ids.add(file_id)
+            referenced_file_ids.append(_as_uuid(file_id))
+
+    if not referenced_file_ids:
+        return
+
+    uploaded_files = (
+        db.query(UploadedFile)
+        .filter(UploadedFile.id.in_(referenced_file_ids))
+        .all()
+    )
+    for uploaded_file in uploaded_files:
+        db.add(
+            SchemaSnapshot(
+                file_id=uploaded_file.id,
+                run_id=run_id,
+                columns=uploaded_file.columns,
+                dtypes=uploaded_file.dtypes,
+                row_count=uploaded_file.row_count,
+            )
+        )
+    db.commit()
 
 
 @router.post(
@@ -412,7 +444,7 @@ def get_pipeline_stats(
     completed = (
         db.query(func.count(PipelineRun.id))
         .filter(
-            PipelineRun.status == PipelineStatus.COMPLETED,
+            PipelineRun.status.in_([PipelineStatus.COMPLETED, PipelineStatus.HEALED]),
             PipelineRun.user_id == current_user.id,
         )
         .scalar()
@@ -572,6 +604,29 @@ def get_healing_attempt(
     return _healing_attempt_to_response(attempt)
 
 
+@router.get(
+    "/{run_id}/healing-history",
+    summary="Get healing history for a run",
+)
+@limiter.limit(settings.RATE_LIMIT_READ)
+def get_healing_history(
+    run_id: str,
+    request: Request,
+    response: Response,
+    db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return healing attempts wrapped in a run-scoped payload."""
+    attempts = list_healing_attempts(
+        run_id=run_id,
+        request=request,
+        response=response,
+        db=db,
+        current_user=current_user,
+    )
+    return {"run_id": run_id, "healing_attempts": [attempt.model_dump() for attempt in attempts]}
+
+
 def _ensure_utc(dt):
     """Attach UTC tzinfo to naive datetimes from SQLite."""
     if dt is not None and dt.tzinfo is None:
@@ -624,9 +679,20 @@ def _healing_attempt_to_response(attempt: HealingAttempt) -> HealingAttemptRespo
         id=str(attempt.id),
         attempt_number=attempt.attempt_number,
         status=attempt.status.value,
-        failed_step_name=attempt.failed_step_name,
+        pipeline_name=attempt.pipeline_name,
+        failed_step=attempt.failed_step,
         error_type=attempt.error_type,
         error_message=attempt.error_message,
+        old_schema=attempt.old_schema,
+        new_schema=attempt.new_schema,
+        removed_columns=attempt.removed_columns,
+        added_columns=attempt.added_columns,
+        renamed_candidates=attempt.renamed_candidates,
+        gemini_patch=attempt.gemini_patch,
+        sandbox_result=attempt.sandbox_result,
+        applied=attempt.applied,
+        confidence=float(attempt.confidence) if attempt.confidence is not None else None,
+        healed_at=_ensure_utc(attempt.healed_at),
         classification_reason=attempt.classification_reason,
         ai_valid=attempt.ai_valid,
         ai_error=attempt.ai_error,
@@ -797,7 +863,7 @@ def export_pipeline_output(
 
     _check_pipeline_permission(db, current_user, pipeline_run.name, ["owner", "runner"])
 
-    if pipeline_run.status != PipelineStatus.COMPLETED:
+    if pipeline_run.status not in (PipelineStatus.COMPLETED, PipelineStatus.HEALED):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Pipeline run is not completed (status: {pipeline_run.status.value})",

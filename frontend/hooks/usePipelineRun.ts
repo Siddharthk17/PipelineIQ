@@ -39,7 +39,8 @@ function applyStepEvent(run: PipelineRun, evt: StepEvent): PipelineRun {
   } else {
     steps.push({ step_type: "", columns_in: [], columns_out: [], warnings: [], ...patch } as StepResult);
   }
-  const runStatus = evt.status === "RUNNING" ? "RUNNING" : run.status;
+  const runStatus =
+    evt.status === "RUNNING" && run.status !== "HEALING" ? "RUNNING" : run.status;
   return { ...run, step_results: steps, status: runStatus };
 }
 
@@ -115,6 +116,24 @@ export function usePipelineRun(runId: string | null) {
           });
       };
 
+      const handleHealingState = (status: PipelineRun["status"]) => (e: MessageEvent) => {
+        const data = JSON.parse(e.data);
+        usePipelineStore.setState((state) => {
+          if (!state.activeRun) return state;
+          return {
+            activeRun: {
+              ...state.activeRun,
+              status,
+              error_message: data.error_message || null,
+            },
+          };
+        });
+        refreshRun();
+      };
+
+      eventSource.addEventListener("healing_started", handleHealingState("HEALING"));
+      eventSource.addEventListener("healing_complete", handleHealingState("HEALED"));
+      eventSource.addEventListener("healing_failed", handleHealingState("FAILED"));
       eventSource.addEventListener("healing_attempt_started", refreshRun);
       eventSource.addEventListener("healing_attempt_applied", refreshRun);
       eventSource.addEventListener("healing_attempt_invalid", refreshRun);
@@ -123,14 +142,21 @@ export function usePipelineRun(runId: string | null) {
       eventSource.addEventListener("healing_retry_failed", refreshRun);
       eventSource.addEventListener("healing_succeeded", refreshRun);
 
-      const handleTerminal = (status: PipelineRun["status"]) => (e: MessageEvent) => {
+      const handleTerminal = (fallbackStatus: PipelineRun["status"]) => (e: MessageEvent) => {
         const data = JSON.parse(e.data);
+        const terminalStatus = (data.status as PipelineRun["status"]) || fallbackStatus;
         getPipelineRun(runId!).then((run) => {
           if (!cancelled) usePipelineStore.setState({ activeRun: run });
         }).catch(() => {
           usePipelineStore.setState((state) => {
             if (!state.activeRun) return state;
-            return { activeRun: { ...state.activeRun, status, error_message: data.error_message || null } };
+            return {
+              activeRun: {
+                ...state.activeRun,
+                status: terminalStatus,
+                error_message: data.error_message || null,
+              },
+            };
           });
         });
         eventSource.close();

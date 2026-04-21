@@ -45,7 +45,10 @@ def get_dashboard_stats(
     # Runs by status
     completed = (
         db.query(func.count(PipelineRun.id))
-        .filter(PipelineRun.user_id == user_id, PipelineRun.status == PipelineStatus.COMPLETED)
+        .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status.in_([PipelineStatus.COMPLETED, PipelineStatus.HEALED]),
+        )
         .scalar() or 0
     )
     failed = (
@@ -61,6 +64,11 @@ def get_dashboard_stats(
     running = (
         db.query(func.count(PipelineRun.id))
         .filter(PipelineRun.user_id == user_id, PipelineRun.status == PipelineStatus.RUNNING)
+        .scalar() or 0
+    )
+    healing = (
+        db.query(func.count(PipelineRun.id))
+        .filter(PipelineRun.user_id == user_id, PipelineRun.status == PipelineStatus.HEALING)
         .scalar() or 0
     )
     cancelled = (
@@ -100,6 +108,7 @@ def get_dashboard_stats(
         "failed": failed,
         "pending": pending,
         "running": running,
+        "healing": healing,
         "cancelled": cancelled,
         "success_rate": success_rate,
         "total_files": total_files,
@@ -108,6 +117,7 @@ def get_dashboard_stats(
             "FAILED": failed,
             "PENDING": pending,
             "RUNNING": running,
+            "HEALING": healing,
             "CANCELLED": cancelled,
         },
         "most_used_pipelines": [

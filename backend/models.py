@@ -25,7 +25,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from backend.database import Base
 
@@ -43,9 +43,12 @@ class PipelineStatus(str, PyEnum):
 
     PENDING = "PENDING"
     RUNNING = "RUNNING"
+    HEALING = "HEALING"
+    HEALED = "HEALED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    TIMEOUT = "TIMEOUT"
 
 
 class StepStatus(str, PyEnum):
@@ -200,16 +203,34 @@ class HealingAttempt(Base):
     __tablename__ = "healing_attempts"
 
     id: Mapped[str] = mapped_column(Uuid, primary_key=True, default=_generate_uuid)
-    pipeline_run_id: Mapped[str] = mapped_column(
+    run_id: Mapped[str] = mapped_column(
+        "pipeline_run_id",
         Uuid, ForeignKey("pipeline_runs.id"), nullable=False, index=True
     )
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[HealingAttemptStatus] = mapped_column(
         SQLEnum(HealingAttemptStatus), nullable=False, default=HealingAttemptStatus.CREATED
     )
-    failed_step_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    pipeline_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    failed_step: Mapped[Optional[str]] = mapped_column(
+        "failed_step_name", String(255), nullable=True
+    )
     error_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    old_schema = mapped_column(PgJSONB, nullable=True)
+    new_schema = mapped_column(PgJSONB, nullable=True)
+    removed_columns = mapped_column(PgJSONB, nullable=True)
+    added_columns = mapped_column(PgJSONB, nullable=True)
+    renamed_candidates = mapped_column(PgJSONB, nullable=True)
+    gemini_patch = mapped_column(PgJSONB, nullable=True)
+    sandbox_result = mapped_column(PgJSONB, nullable=True)
+    applied: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    confidence: Mapped[Optional[float]] = mapped_column(Numeric(5, 4), nullable=True)
+    healed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     classification_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     proposed_yaml: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     diff_lines: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
@@ -225,6 +246,9 @@ class HealingAttempt(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    pipeline_run_id = synonym("run_id")
+    failed_step_name = synonym("failed_step")
 
     pipeline_run: Mapped["PipelineRun"] = relationship(
         "PipelineRun", back_populates="healing_attempts"

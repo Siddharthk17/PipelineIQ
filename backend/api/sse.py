@@ -25,9 +25,11 @@ legacy_router = APIRouter(prefix="/runs", tags=["runs"])
 HEARTBEAT_INTERVAL_SECONDS = 15
 _STATUS_CACHE_TTL_SECONDS = 3600
 _TERMINAL_STATUSES = frozenset({
+    PipelineStatus.HEALED.value,
     PipelineStatus.COMPLETED.value,
     PipelineStatus.FAILED.value,
     PipelineStatus.CANCELLED.value,
+    PipelineStatus.TIMEOUT.value,
 })
 _TERMINAL_EVENT_TYPES = frozenset({
     "pipeline_completed",
@@ -242,10 +244,12 @@ def _extract_event_type(payload: dict) -> str:
 
     step_status = payload.get("status")
     status_to_event = {
+        "HEALED": "pipeline_completed",
         "RUNNING": "step_started",
         "COMPLETED": "step_completed",
         "FAILED": "step_failed",
         "CANCELLED": "pipeline_cancelled",
+        "TIMEOUT": "pipeline_failed",
     }
     if isinstance(step_status, str):
         return status_to_event.get(step_status, "progress")
@@ -259,7 +263,7 @@ def _is_terminal_event(event_type: str, payload: dict) -> bool:
     return isinstance(status_value, str) and status_value in _TERMINAL_STATUSES
 
 def _terminal_event_type(status_value: PipelineStatus) -> str:
-    if status_value == PipelineStatus.COMPLETED:
+    if status_value in {PipelineStatus.COMPLETED, PipelineStatus.HEALED}:
         return "pipeline_completed"
     if status_value == PipelineStatus.CANCELLED:
         return "pipeline_cancelled"

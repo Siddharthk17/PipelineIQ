@@ -5,6 +5,7 @@ import { usePipelineStore } from "@/store/pipelineStore";
 import { usePipelineRun } from "@/hooks/usePipelineRun";
 import { CheckCircle, XCircle, PlayCircle, Clock, AlertTriangle } from "lucide-react";
 import { motion } from "motion/react";
+import { HealingBanner } from "@/components/widgets/HealingBanner";
 
 export function RunMonitorWidget() {
   const { activeRunId, activeRun } = usePipelineStore();
@@ -57,19 +58,31 @@ export function RunMonitorWidget() {
           </div>
         </div>
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border" style={{ borderColor: "var(--widget-border)", backgroundColor: "var(--bg-elevated)" }}>
+          {activeRun.status === "HEALED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
           {activeRun.status === "COMPLETED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
           {activeRun.status === "FAILED" && <XCircle className="w-4 h-4 text-[var(--accent-error)]" />}
           {activeRun.status === "RUNNING" && <div className="w-3 h-3 rounded-full bg-[var(--accent-warning)] animate-pulse" />}
+          {activeRun.status === "HEALING" && <div className="w-3 h-3 rounded-full bg-[var(--accent-primary)] animate-pulse" />}
           {activeRun.status === "PENDING" && <Clock className="w-4 h-4 text-[var(--text-secondary)]" />}
+          {activeRun.status === "TIMEOUT" && <AlertTriangle className="w-4 h-4 text-[var(--accent-error)]" />}
           <span className="text-xs font-bold tracking-wider uppercase" style={{ 
-            color: activeRun.status === "COMPLETED" ? "var(--accent-success)" : 
-                   activeRun.status === "FAILED" ? "var(--accent-error)" : 
-                   activeRun.status === "RUNNING" ? "var(--accent-warning)" : "var(--text-secondary)" 
+            color:
+              activeRun.status === "COMPLETED" || activeRun.status === "HEALED"
+                ? "var(--accent-success)"
+                : activeRun.status === "FAILED" || activeRun.status === "TIMEOUT"
+                  ? "var(--accent-error)"
+                  : activeRun.status === "RUNNING"
+                    ? "var(--accent-warning)"
+                    : activeRun.status === "HEALING"
+                      ? "var(--accent-primary)"
+                      : "var(--text-secondary)" 
           }}>
             {activeRun.status ?? "UNKNOWN"}
           </span>
         </div>
       </div>
+
+      <HealingBanner status={activeRun.status} attempts={activeRun.healing_attempts ?? []} />
 
       {activeRun.error_message && (
         <div className="p-3 bg-[var(--accent-error)]/10 border-b border-[var(--accent-error)]/20 flex items-start gap-2">
@@ -91,7 +104,7 @@ export function RunMonitorWidget() {
                 </span>
                 <span className="text-[var(--text-primary)]">{attempt.status}</span>
                 <span className="truncate text-[var(--text-secondary)] max-w-[50%] text-right">
-                  {attempt.failed_step_name ?? attempt.classification_reason ?? attempt.error_message ?? "—"}
+                  {attempt.failed_step ?? attempt.classification_reason ?? attempt.error_message ?? "—"}
                 </span>
               </div>
             ))}

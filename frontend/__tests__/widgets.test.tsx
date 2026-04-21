@@ -234,9 +234,20 @@ describe("RunMonitorWidget", () => {
             id: "ha-1",
             attempt_number: 1,
             status: "AI_INVALID",
-            failed_step_name: "filter_step",
+            pipeline_name: "healing-run",
+            failed_step: "filter_step",
             error_type: "ColumnNotFoundError",
             error_message: "Column not found",
+            old_schema: null,
+            new_schema: null,
+            removed_columns: [],
+            added_columns: [],
+            renamed_candidates: [],
+            gemini_patch: null,
+            sandbox_result: null,
+            applied: false,
+            confidence: null,
+            healed_at: null,
             classification_reason: "Error looks healable",
             diff_lines: [],
             ai_valid: false,
@@ -259,5 +270,59 @@ describe("RunMonitorWidget", () => {
     expect(screen.getByText("Attempt 1")).toBeInTheDocument();
     expect(screen.getByText("AI_INVALID")).toBeInTheDocument();
     expect(screen.getByText("filter_step")).toBeInTheDocument();
+  });
+
+  it("renders the healed banner when the run status is HEALED", () => {
+    usePipelineStore.setState({
+      activeRunId: "run-healed",
+      activeRun: {
+        id: "run-healed",
+        name: "healed-run",
+        status: "HEALED",
+        created_at: "2024-01-01T00:00:00Z",
+        started_at: null,
+        completed_at: null,
+        total_rows_in: 100,
+        total_rows_out: 95,
+        error_message: null,
+        duration_ms: 1500,
+        step_results: [],
+        healing_attempts: [
+          {
+            id: "ha-2",
+            attempt_number: 1,
+            status: "APPLIED",
+            pipeline_name: "healed-run",
+            failed_step: "filter_step",
+            error_type: "ColumnNotFoundError",
+            error_message: null,
+            old_schema: null,
+            new_schema: null,
+            removed_columns: ["revenue"],
+            added_columns: ["rev_usd"],
+            renamed_candidates: [],
+            gemini_patch: { change_description: "Renamed revenue to rev_usd" },
+            sandbox_result: { output_rows: 100 },
+            applied: true,
+            confidence: 0.93,
+            healed_at: "2024-01-01T00:01:05Z",
+            classification_reason: "revenue -> rev_usd",
+            diff_lines: [],
+            ai_valid: true,
+            ai_error: null,
+            parser_valid: true,
+            sandbox_passed: true,
+            validation_errors: [],
+            validation_warnings: [],
+            created_at: "2024-01-01T00:01:00Z",
+            completed_at: "2024-01-01T00:01:05Z",
+          },
+        ],
+      },
+    });
+
+    render(<RunMonitorWidget />, { wrapper });
+    expect(screen.getByTestId("healing-banner-healed")).toBeInTheDocument();
+    expect(screen.getByText("Auto-healed successfully")).toBeInTheDocument();
   });
 });
