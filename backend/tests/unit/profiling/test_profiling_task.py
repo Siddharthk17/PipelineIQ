@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.models import UploadedFile, User
+from backend.models import FileProfile, UploadedFile, User
 from backend.tasks import profiling as profiling_tasks
 
 
@@ -111,3 +111,15 @@ def test_load_file_from_storage_missing_path_raises_value_error(test_db, monkeyp
 
     exists_mock.assert_called_once_with("missing-key.csv")
     download_mock.assert_not_called()
+
+
+def test_profile_file_missing_record_skips_without_profile_insert(test_db, monkeypatch):
+    missing_file_id = str(_uuid.uuid4())
+    monkeypatch.setattr(profiling_tasks, "SessionLocal", lambda: test_db)
+
+    result = profiling_tasks.profile_file.run(missing_file_id)
+
+    assert result["file_id"] == missing_file_id
+    assert result["status"] == "skipped"
+    assert result["reason"] == "file_not_found"
+    assert test_db.query(FileProfile).count() == 0

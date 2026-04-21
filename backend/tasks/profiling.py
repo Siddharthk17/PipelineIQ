@@ -29,6 +29,10 @@ SUPPORTED_FORMATS = {
 }
 
 
+class ProfileSourceNotFoundError(ValueError):
+    """Raised when the uploaded file record or stored object is no longer available."""
+
+
 @celery_app.task(
     name="tasks.profile_file",
     bind=True,
@@ -42,9 +46,8 @@ def profile_file(self, file_id: str) -> dict:
     """Profile all columns of an uploaded file."""
     db = SessionLocal()
     try:
-        _update_profile_status(db, file_id, "running")
-
         df = _load_file_from_disk(file_id)
+        _update_profile_status(db, file_id, "running")
 
         was_sampled = False
         if len(df) > settings.PROFILE_MAX_ROWS:
@@ -83,6 +86,13 @@ def profile_file(self, file_id: str) -> dict:
             "completeness_pct": completeness,
         }
 
+    except ProfileSourceNotFoundError as exc:
+        logger.warning("Skipping profile for missing source file_id=%s: %s", file_id, exc)
+        return {
+            "file_id": file_id,
+            "status": "skipped",
+            "reason": "file_not_found",
+        }
     except Exception as exc:
         logger.error(f"Profile failed for file_id={file_id}: {exc}", exc_info=True)
         try:
@@ -104,11 +114,13 @@ def _load_file_from_disk(file_id: str) -> pd.DataFrame:
             db.query(UploadedFile).filter(UploadedFile.id == file_uuid).first()
         )
         if uploaded_file is None:
-            raise ValueError(f"File record not found for file_id={file_id}")
+            raise ProfileSourceNotFoundError(
+                f"File record not found for file_id={file_id}"
+            )
 
         stored_path = uploaded_file.stored_path
         if not storage_service.exists(stored_path):
-            raise ValueError(f"File not found at path: {stored_path}")
+            raise ProfileSourceNotFoundError(f"File not found at path: {stored_path}")
 
         extension = Path(stored_path).suffix.lower()
         loader = SUPPORTED_FORMATS.get(extension)
@@ -138,6 +150,16 @@ def _update_profile_status(
     from sqlalchemy import update
 
     file_uuid = as_uuid(file_id)
+    file_exists = (
+        db.query(UploadedFile.id).filter(UploadedFile.id == file_uuid).first() is not None
+    )
+    if not file_exists:
+        logger.warning(
+            "Skipping profile status update for missing uploaded_file file_id=%s",
+            file_id,
+        )
+        return
+
     existing = db.query(FileProfile).filter(FileProfile.file_id == file_uuid).first()
     if existing:
         stmt = (

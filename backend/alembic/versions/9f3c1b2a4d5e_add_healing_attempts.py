@@ -18,27 +18,40 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-_HEALING_STATUS_ENUM = sa.Enum(
+_HEALING_STATUS_VALUES = (
     "CREATED",
     "NON_HEALABLE",
     "AI_INVALID",
     "VALIDATION_FAILED",
     "APPLIED",
     "FAILED",
-    name="healingattemptstatus",
 )
+
+
+def _healing_status_enum(dialect_name: str) -> sa.Enum:
+    if dialect_name == "postgresql":
+        from sqlalchemy.dialects import postgresql
+
+        return postgresql.ENUM(
+            *_HEALING_STATUS_VALUES,
+            name="healingattemptstatus",
+            create_type=False,
+        )
+    return sa.Enum(*_HEALING_STATUS_VALUES, name="healingattemptstatus")
 
 
 def upgrade() -> None:
     bind = op.get_bind()
-    _HEALING_STATUS_ENUM.create(bind, checkfirst=True)
+    healing_status_enum = _healing_status_enum(bind.dialect.name)
+    if bind.dialect.name == "postgresql":
+        healing_status_enum.create(bind, checkfirst=True)
 
     op.create_table(
         "healing_attempts",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("pipeline_run_id", sa.Uuid(), nullable=False),
         sa.Column("attempt_number", sa.Integer(), nullable=False),
-        sa.Column("status", _HEALING_STATUS_ENUM, nullable=False),
+        sa.Column("status", healing_status_enum, nullable=False),
         sa.Column("failed_step_name", sa.String(length=255), nullable=True),
         sa.Column("error_type", sa.String(length=100), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=True),
@@ -82,4 +95,5 @@ def downgrade() -> None:
     op.drop_table("healing_attempts")
 
     bind = op.get_bind()
-    _HEALING_STATUS_ENUM.drop(bind, checkfirst=True)
+    if bind.dialect.name == "postgresql":
+        _healing_status_enum(bind.dialect.name).drop(bind, checkfirst=True)
