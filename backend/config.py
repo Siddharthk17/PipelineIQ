@@ -88,6 +88,10 @@ class Settings(BaseSettings):
     PROFILE_MAX_ROWS: int = 1_000_000
     PROFILE_SAMPLE_ROWS: int = 100_000
 
+    # Autonomous healing
+    AUTONOMOUS_HEALING_ENABLED: bool = True
+    AUTONOMOUS_HEALING_MAX_ATTEMPTS: int = 2
+
     # Versioning
     MAX_VERSIONS_PER_PIPELINE: int = 50
 

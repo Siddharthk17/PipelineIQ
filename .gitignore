@@ -29,5 +29,3 @@ backend/vendor/
 .coverage
 htmlcov/
 .vercel
-A.md
-prompt.md

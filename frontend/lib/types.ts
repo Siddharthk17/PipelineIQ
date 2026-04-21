@@ -36,6 +36,7 @@ export interface PipelineRun {
   error_message: string | null;
   duration_ms: number | null;
   step_results: StepResult[];
+  healing_attempts: HealingAttempt[];
 }
 
 export interface StepResult {
@@ -50,6 +51,31 @@ export interface StepResult {
   duration_ms: number | null;
   error_message: string | null;
   warnings: string[];
+}
+
+export interface HealingAttempt {
+  id: string;
+  attempt_number: number;
+  status:
+    | "CREATED"
+    | "NON_HEALABLE"
+    | "AI_INVALID"
+    | "VALIDATION_FAILED"
+    | "APPLIED"
+    | "FAILED";
+  failed_step_name: string | null;
+  error_type: string | null;
+  error_message: string | null;
+  classification_reason: string | null;
+  ai_valid: boolean | null;
+  ai_error: string | null;
+  parser_valid: boolean | null;
+  sandbox_passed: boolean | null;
+  validation_errors: string[] | null;
+  validation_warnings: string[] | null;
+  diff_lines: { type?: string; content?: string; [key: string]: unknown }[] | null;
+  created_at: string;
+  completed_at: string | null;
 }
 
 export interface ValidationResult {

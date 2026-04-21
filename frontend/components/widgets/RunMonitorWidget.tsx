@@ -78,6 +78,27 @@ export function RunMonitorWidget() {
         </div>
       )}
 
+      {!!activeRun.healing_attempts?.length && (
+        <div className="p-3 border-b bg-[var(--bg-surface)]/60" style={{ borderColor: "var(--widget-border)" }}>
+          <div className="text-[10px] uppercase tracking-wider text-[var(--text-secondary)] mb-2">
+            Autonomous Healing Attempts
+          </div>
+          <div className="space-y-1">
+            {activeRun.healing_attempts.map((attempt) => (
+              <div key={attempt.id} className="text-xs flex items-center justify-between gap-3">
+                <span className="font-mono text-[var(--text-secondary)]">
+                  Attempt {attempt.attempt_number}
+                </span>
+                <span className="text-[var(--text-primary)]">{attempt.status}</span>
+                <span className="truncate text-[var(--text-secondary)] max-w-[50%] text-right">
+                  {attempt.failed_step_name ?? attempt.classification_reason ?? attempt.error_message ?? "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {activeRun.step_results?.map((step, idx) => {
           const isRunning = step.status === "RUNNING";

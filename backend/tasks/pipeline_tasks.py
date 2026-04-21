@@ -16,9 +16,12 @@ import orjson
 from redis.exceptions import RedisError
 
 from backend.celery_app import celery_app
+from backend.config import settings
 from backend.database import SessionLocal
 from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.models import (
+    HealingAttempt,
+    HealingAttemptStatus,
     LineageGraph,
     PipelineRun,
     PipelineStatus,
@@ -27,6 +30,14 @@ from backend.models import (
     UploadedFile,
 )
 from backend.pipeline.cache import get_parsed_pipeline
+from backend.pipeline.healing import (
+    classify_failed_summary,
+    collect_file_ids_from_yaml,
+    collect_registered_file_ids,
+    extract_failed_step_name,
+    generate_healing_candidate,
+    validate_healing_candidate,
+)
 from backend.pipeline.runner import (
     PipelineRunner,
     ProgressCallback,
@@ -53,14 +64,23 @@ def _cache_progress_payload(run_id: str, payload: dict) -> None:
         logger.warning("Failed to cache SSE progress payload for run_id=%s", run_id)
 
 
+def _publish_progress_payload(run_id: str, payload: dict) -> None:
+    """Publish a non-terminal progress payload to Redis and cache it."""
+    try:
+        redis_client = get_pubsub_redis()
+        channel = f"pipeline_progress:{run_id}"
+        redis_client.publish(channel, orjson.dumps(payload))
+    except RedisError:
+        logger.warning("Failed to publish progress payload for run_id=%s", run_id)
+    _cache_progress_payload(run_id, payload)
+
+
 def make_redis_progress_callback(run_id: str) -> ProgressCallback:
     """Create a closure that publishes StepProgressEvent to a Redis channel.
 
     Channel name: f"pipeline_progress:{run_id}"
     Message format: JSON-serialized StepProgressEvent fields.
     """
-    channel = f"pipeline_progress:{run_id}"
-
     def callback(event: StepProgressEvent) -> None:
         """Publish a progress event to Redis."""
         payload = {
@@ -74,13 +94,7 @@ def make_redis_progress_callback(run_id: str) -> ProgressCallback:
             "duration_ms": event.duration_ms,
             "error_message": event.error_message,
         }
-        try:
-            redis_client = get_pubsub_redis()
-            message = orjson.dumps(payload)
-            redis_client.publish(channel, message)
-        except RedisError:
-            logger.warning("Failed to publish progress event for run_id=%s", run_id)
-        _cache_progress_payload(run_id, payload)
+        _publish_progress_payload(run_id, payload)
 
     return callback
 
@@ -100,8 +114,7 @@ def _publish_terminal_event(
             "error_message": error_message,
             "status": _event_type_to_status(event_type),
         }
-        message = orjson.dumps(payload)
-        redis_client.publish(channel, message)
+        redis_client.publish(channel, orjson.dumps(payload))
         _cache_progress_payload(run_id, payload)
     except RedisError:
         logger.warning("Failed to publish terminal event for run_id=%s", run_id)
@@ -142,7 +155,7 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
         db.commit()
 
         _mark_running(db, pipeline_run)
-        summary = _run_pipeline(db, pipeline_run)
+        summary = _execute_with_autonomous_healing(db, pipeline_run)
         _persist_results(db, pipeline_run, summary)
 
         return {"run_id": run_id, "status": pipeline_run.status.value}
@@ -259,6 +272,198 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
         run_id=str(pipeline_run.id),
         progress_callback=progress_callback,
     )
+
+
+def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
+    """Execute pipeline and apply autonomous healing retries on failure."""
+    summary = _run_pipeline(db, pipeline_run)
+    if summary.status == RunnerPipelineStatus.COMPLETED:
+        return summary
+
+    if not settings.AUTONOMOUS_HEALING_ENABLED:
+        return summary
+
+    max_attempts = max(0, int(settings.AUTONOMOUS_HEALING_MAX_ATTEMPTS))
+    if max_attempts == 0:
+        return summary
+
+    run_id = str(pipeline_run.id)
+    registered_file_ids = collect_registered_file_ids(db)
+
+    for _ in range(max_attempts):
+        next_attempt_number = (
+            db.query(HealingAttempt)
+            .filter(HealingAttempt.pipeline_run_id == pipeline_run.id)
+            .count()
+            + 1
+        )
+
+        classification = classify_failed_summary(summary)
+        if not classification.healable:
+            non_healable = HealingAttempt(
+                pipeline_run_id=pipeline_run.id,
+                attempt_number=next_attempt_number,
+                status=HealingAttemptStatus.NON_HEALABLE,
+                failed_step_name=extract_failed_step_name(summary),
+                error_type=summary.error.__class__.__name__ if summary.error else None,
+                error_message=str(summary.error) if summary.error else None,
+                classification_reason=classification.reason,
+                completed_at=utcnow(),
+            )
+            db.add(non_healable)
+            db.commit()
+            _publish_progress_payload(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "event_type": "healing_non_healable",
+                    "attempt_number": non_healable.attempt_number,
+                    "status": pipeline_run.status.value,
+                    "reason": classification.reason,
+                    "failed_step_name": non_healable.failed_step_name,
+                },
+            )
+            break
+
+        failed_step_name = extract_failed_step_name(summary) or ""
+        attempt = HealingAttempt(
+            pipeline_run_id=pipeline_run.id,
+            attempt_number=next_attempt_number,
+            status=HealingAttemptStatus.CREATED,
+            failed_step_name=failed_step_name or None,
+            error_type=summary.error.__class__.__name__ if summary.error else None,
+            error_message=str(summary.error) if summary.error else None,
+            classification_reason=classification.reason,
+        )
+        db.add(attempt)
+        db.commit()
+        db.refresh(attempt)
+
+        _publish_progress_payload(
+            run_id,
+            {
+                "run_id": run_id,
+                "event_type": "healing_attempt_started",
+                "attempt_number": attempt.attempt_number,
+                "status": pipeline_run.status.value,
+                "failed_step_name": failed_step_name,
+            },
+        )
+
+        try:
+            candidate = generate_healing_candidate(
+                original_yaml=pipeline_run.yaml_config,
+                failed_step=failed_step_name,
+                error_type=attempt.error_type or "StepExecutionError",
+                error_message=attempt.error_message or "",
+                file_ids=collect_file_ids_from_yaml(pipeline_run.yaml_config),
+                db=db,
+            )
+        except Exception as exc:
+            attempt.status = HealingAttemptStatus.FAILED
+            attempt.ai_error = str(exc)
+            attempt.completed_at = utcnow()
+            db.commit()
+            _publish_progress_payload(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "event_type": "healing_attempt_failed",
+                    "attempt_number": attempt.attempt_number,
+                    "status": pipeline_run.status.value,
+                    "error_message": str(exc),
+                },
+            )
+            continue
+
+        attempt.proposed_yaml = candidate.corrected_yaml
+        attempt.diff_lines = candidate.diff_lines
+        attempt.ai_valid = candidate.ai_valid
+        attempt.ai_error = candidate.ai_error
+
+        if not candidate.ai_valid:
+            attempt.status = HealingAttemptStatus.AI_INVALID
+            attempt.completed_at = utcnow()
+            db.commit()
+            _publish_progress_payload(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "event_type": "healing_attempt_invalid",
+                    "attempt_number": attempt.attempt_number,
+                    "status": pipeline_run.status.value,
+                    "error_message": attempt.ai_error,
+                },
+            )
+            continue
+
+        validation = validate_healing_candidate(
+            candidate_yaml=candidate.corrected_yaml,
+            registered_file_ids=registered_file_ids,
+            db=db,
+        )
+        attempt.parser_valid = validation.is_valid
+        attempt.sandbox_passed = validation.sandbox_passed
+        attempt.validation_errors = validation.errors
+        attempt.validation_warnings = validation.warnings
+
+        if not validation.is_valid:
+            attempt.status = HealingAttemptStatus.VALIDATION_FAILED
+            attempt.completed_at = utcnow()
+            db.commit()
+            _publish_progress_payload(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "event_type": "healing_attempt_invalid",
+                    "attempt_number": attempt.attempt_number,
+                    "status": pipeline_run.status.value,
+                    "error_message": "; ".join(validation.errors),
+                },
+            )
+            continue
+
+        pipeline_run.yaml_config = candidate.corrected_yaml
+        attempt.status = HealingAttemptStatus.APPLIED
+        attempt.completed_at = utcnow()
+        db.commit()
+        _publish_progress_payload(
+            run_id,
+            {
+                "run_id": run_id,
+                "event_type": "healing_attempt_applied",
+                "attempt_number": attempt.attempt_number,
+                "status": pipeline_run.status.value,
+                "failed_step_name": failed_step_name,
+            },
+        )
+
+        summary = _run_pipeline(db, pipeline_run)
+        if summary.status == RunnerPipelineStatus.COMPLETED:
+            _publish_progress_payload(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "event_type": "healing_succeeded",
+                    "attempt_number": attempt.attempt_number,
+                    "status": PipelineStatus.RUNNING.value,
+                },
+            )
+            return summary
+
+        _publish_progress_payload(
+            run_id,
+            {
+                "run_id": run_id,
+                "event_type": "healing_retry_failed",
+                "attempt_number": attempt.attempt_number,
+                "status": PipelineStatus.RUNNING.value,
+                "error_message": str(summary.error) if summary.error else None,
+                "failed_step_name": extract_failed_step_name(summary),
+            },
+        )
+
+    return summary
 
 
 def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:

@@ -36,11 +36,17 @@ vi.mock("@/lib/api", () => ({
   getSchemaHistory: vi.fn(),
 }));
 
+vi.mock("@/hooks/usePipelineRun", () => ({
+  usePipelineRun: vi.fn(),
+}));
+
 import { getFiles, getPipelineRuns, repairPipelineRunWithAI, uploadFile, deleteFile } from "@/lib/api";
 import { QuickStatsWidget } from "@/components/widgets/QuickStatsWidget";
 import { FileUploadWidget } from "@/components/widgets/FileUploadWidget";
 import { RunHistoryWidget } from "@/components/widgets/RunHistoryWidget";
 import { FileRegistryWidget } from "@/components/widgets/FileRegistryWidget";
+import { RunMonitorWidget } from "@/components/widgets/RunMonitorWidget";
+import { usePipelineStore } from "@/store/pipelineStore";
 
 function wrapper({ children }: { children: React.ReactNode }) {
   const client = new QueryClient({
@@ -58,9 +64,9 @@ describe("QuickStatsWidget", () => {
       { id: "2", original_filename: "b.csv", row_count: 20, column_count: 5, columns: [], dtypes: {}, file_size_bytes: 2048, schema_drift: null },
     ]);
     vi.mocked(getPipelineRuns).mockResolvedValue([
-      { id: "r1", name: "run1", status: "COMPLETED", created_at: "", started_at: null, completed_at: null, total_rows_in: 10, total_rows_out: 5, error_message: null, duration_ms: 100, step_results: [] },
-      { id: "r2", name: "run2", status: "FAILED", created_at: "", started_at: null, completed_at: null, total_rows_in: null, total_rows_out: null, error_message: "err", duration_ms: null, step_results: [] },
-      { id: "r3", name: "run3", status: "COMPLETED", created_at: "", started_at: null, completed_at: null, total_rows_in: 20, total_rows_out: 15, error_message: null, duration_ms: 200, step_results: [] },
+      { id: "r1", name: "run1", status: "COMPLETED", created_at: "", started_at: null, completed_at: null, total_rows_in: 10, total_rows_out: 5, error_message: null, duration_ms: 100, step_results: [], healing_attempts: [] },
+      { id: "r2", name: "run2", status: "FAILED", created_at: "", started_at: null, completed_at: null, total_rows_in: null, total_rows_out: null, error_message: "err", duration_ms: null, step_results: [], healing_attempts: [] },
+      { id: "r3", name: "run3", status: "COMPLETED", created_at: "", started_at: null, completed_at: null, total_rows_in: 20, total_rows_out: 15, error_message: null, duration_ms: 200, step_results: [], healing_attempts: [] },
     ]);
   });
 
@@ -126,9 +132,9 @@ describe("FileUploadWidget", () => {
 
 describe("RunHistoryWidget", () => {
   const mockRuns = [
-    { id: "r1", name: "pipeline_a", status: "COMPLETED" as const, created_at: "2024-01-01T00:00:00Z", started_at: null, completed_at: null, total_rows_in: 100, total_rows_out: 50, error_message: null, duration_ms: 1500, step_results: [] },
-    { id: "r2", name: "pipeline_b", status: "FAILED" as const, created_at: "2024-01-02T00:00:00Z", started_at: null, completed_at: null, total_rows_in: null, total_rows_out: null, error_message: "timeout", duration_ms: null, step_results: [] },
-    { id: "r3", name: "pipeline_c", status: "RUNNING" as const, created_at: "2024-01-03T00:00:00Z", started_at: null, completed_at: null, total_rows_in: null, total_rows_out: null, error_message: null, duration_ms: null, step_results: [] },
+    { id: "r1", name: "pipeline_a", status: "COMPLETED" as const, created_at: "2024-01-01T00:00:00Z", started_at: null, completed_at: null, total_rows_in: 100, total_rows_out: 50, error_message: null, duration_ms: 1500, step_results: [], healing_attempts: [] },
+    { id: "r2", name: "pipeline_b", status: "FAILED" as const, created_at: "2024-01-02T00:00:00Z", started_at: null, completed_at: null, total_rows_in: null, total_rows_out: null, error_message: "timeout", duration_ms: null, step_results: [], healing_attempts: [] },
+    { id: "r3", name: "pipeline_c", status: "RUNNING" as const, created_at: "2024-01-03T00:00:00Z", started_at: null, completed_at: null, total_rows_in: null, total_rows_out: null, error_message: null, duration_ms: null, step_results: [], healing_attempts: [] },
   ];
 
   beforeEach(() => {
@@ -204,5 +210,54 @@ describe("FileRegistryWidget", () => {
     await waitFor(() => {
       expect(screen.getByText(/No files yet/i)).toBeInTheDocument();
     });
+  });
+});
+
+describe("RunMonitorWidget", () => {
+  beforeEach(() => {
+    usePipelineStore.setState({
+      activeRunId: "run-healing",
+      activeRun: {
+        id: "run-healing",
+        name: "healing-run",
+        status: "FAILED",
+        created_at: "2024-01-01T00:00:00Z",
+        started_at: null,
+        completed_at: null,
+        total_rows_in: 100,
+        total_rows_out: 90,
+        error_message: "step failed",
+        duration_ms: 1200,
+        step_results: [],
+        healing_attempts: [
+          {
+            id: "ha-1",
+            attempt_number: 1,
+            status: "AI_INVALID",
+            failed_step_name: "filter_step",
+            error_type: "ColumnNotFoundError",
+            error_message: "Column not found",
+            classification_reason: "Error looks healable",
+            diff_lines: [],
+            ai_valid: false,
+            ai_error: "invalid patch",
+            parser_valid: false,
+            sandbox_passed: false,
+            validation_errors: [],
+            validation_warnings: [],
+            created_at: "2024-01-01T00:01:00Z",
+            completed_at: "2024-01-01T00:01:05Z",
+          },
+        ],
+      },
+    });
+  });
+
+  it("renders autonomous healing attempt details", () => {
+    render(<RunMonitorWidget />, { wrapper });
+    expect(screen.getByText("Autonomous Healing Attempts")).toBeInTheDocument();
+    expect(screen.getByText("Attempt 1")).toBeInTheDocument();
+    expect(screen.getByText("AI_INVALID")).toBeInTheDocument();
+    expect(screen.getByText("filter_step")).toBeInTheDocument();
   });
 });

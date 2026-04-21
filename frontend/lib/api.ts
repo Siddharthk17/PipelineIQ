@@ -3,6 +3,7 @@ import type {
   UploadedFile,
   UploadUrlResponse,
   ValidationResult,
+  HealingAttempt,
   PipelineRun,
   ReactFlowGraph,
   ColumnLineage,
@@ -199,6 +200,19 @@ export async function runPipeline(yamlConfig: string, name?: string): Promise<{ 
 
 export async function getPipelineRun(runId: string): Promise<PipelineRun> {
   return fetchApi<PipelineRun>(`/pipelines/${runId}`);
+}
+
+export async function getHealingAttempts(runId: string): Promise<HealingAttempt[]> {
+  return fetchApi<HealingAttempt[]>(`/pipelines/${runId}/healing-attempts`);
+}
+
+export async function getHealingAttempt(
+  runId: string,
+  attemptNumber: number,
+): Promise<HealingAttempt> {
+  return fetchApi<HealingAttempt>(
+    `/pipelines/${runId}/healing-attempts/${attemptNumber}`,
+  );
 }
 
 export async function getPipelineRuns(page: number, limit: number, status?: string): Promise<PipelineRun[]> {

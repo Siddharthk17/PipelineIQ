@@ -130,7 +130,7 @@ describe("fetchApi (via public functions)", () => {
 
   it("getPipelineRun fetches by runId", async () => {
     setToken("tok");
-    const mockRun = { id: "r1", name: "test", status: "COMPLETED", step_results: [] };
+    const mockRun = { id: "r1", name: "test", status: "COMPLETED", step_results: [], healing_attempts: [] };
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve(mockRun),

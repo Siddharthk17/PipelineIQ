@@ -138,6 +138,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
         error_message: null,
         duration_ms: null,
         step_results: [],
+        healing_attempts: [],
       });
       setActiveRunId(data.run_id);
       // Immediately refresh run history so the new run appears

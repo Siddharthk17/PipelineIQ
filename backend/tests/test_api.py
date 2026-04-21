@@ -9,7 +9,13 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.models import LineageGraph, PipelineRun, PipelineStatus
+from backend.models import (
+    HealingAttempt,
+    HealingAttemptStatus,
+    LineageGraph,
+    PipelineRun,
+    PipelineStatus,
+)
 from backend.pipeline.lineage import LineageRecorder
 from backend.tests.conftest import build_simple_pipeline_yaml, upload_file
 from backend.utils.uuid_utils import as_uuid
@@ -346,6 +352,87 @@ class TestPipelineExecution:
         assert response.headers["content-type"].startswith("text/csv")
         assert output_file.name in response.headers.get("content-disposition", "")
 
+
+
+class TestPipelineHealingAttempts:
+    """Tests for healing-attempt endpoints."""
+
+    def test_list_healing_attempts_returns_ordered_attempts(self, client, test_db):
+        run = PipelineRun(
+            name="healing-run",
+            status=PipelineStatus.FAILED,
+            yaml_config="pipeline:\n  name: healing\n  steps: []\n",
+            user_id=as_uuid("11111111-1111-1111-1111-111111111111"),
+        )
+        test_db.add(run)
+        test_db.flush()
+
+        test_db.add_all(
+            [
+                HealingAttempt(
+                    pipeline_run_id=run.id,
+                    attempt_number=2,
+                    status=HealingAttemptStatus.AI_INVALID,
+                    error_message="attempt two",
+                ),
+                HealingAttempt(
+                    pipeline_run_id=run.id,
+                    attempt_number=1,
+                    status=HealingAttemptStatus.VALIDATION_FAILED,
+                    error_message="attempt one",
+                ),
+            ]
+        )
+        test_db.commit()
+
+        response = client.get(f"/api/v1/pipelines/{run.id}/healing-attempts")
+        assert response.status_code == 200
+        data = response.json()
+        assert [a["attempt_number"] for a in data] == [1, 2]
+        assert data[0]["status"] == "VALIDATION_FAILED"
+        assert data[1]["status"] == "AI_INVALID"
+
+    def test_get_healing_attempt_returns_404_when_missing(self, client, test_db):
+        run = PipelineRun(
+            name="healing-run",
+            status=PipelineStatus.FAILED,
+            yaml_config="pipeline:\n  name: healing\n  steps: []\n",
+            user_id=as_uuid("11111111-1111-1111-1111-111111111111"),
+        )
+        test_db.add(run)
+        test_db.commit()
+
+        response = client.get(f"/api/v1/pipelines/{run.id}/healing-attempts/1")
+        assert response.status_code == 404
+
+    def test_get_healing_attempt_returns_specific_attempt(self, client, test_db):
+        run = PipelineRun(
+            name="healing-run",
+            status=PipelineStatus.FAILED,
+            yaml_config="pipeline:\n  name: healing\n  steps: []\n",
+            user_id=as_uuid("11111111-1111-1111-1111-111111111111"),
+        )
+        test_db.add(run)
+        test_db.flush()
+        test_db.add(
+            HealingAttempt(
+                pipeline_run_id=run.id,
+                attempt_number=3,
+                status=HealingAttemptStatus.APPLIED,
+                failed_step_name="filter_step",
+                ai_valid=True,
+                parser_valid=True,
+                sandbox_passed=True,
+            )
+        )
+        test_db.commit()
+
+        response = client.get(f"/api/v1/pipelines/{run.id}/healing-attempts/3")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["attempt_number"] == 3
+        assert data["status"] == "APPLIED"
+        assert data["failed_step_name"] == "filter_step"
 
 
 class TestLineageEndpoints:

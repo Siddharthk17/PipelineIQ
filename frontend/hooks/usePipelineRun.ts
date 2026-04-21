@@ -73,6 +73,7 @@ export function usePipelineRun(runId: string | null) {
               error_message: null,
               duration_ms: null,
               step_results: [],
+              healing_attempts: [],
             },
           });
         }
@@ -104,6 +105,24 @@ export function usePipelineRun(runId: string | null) {
       eventSource.addEventListener("step_completed", handleStepEvent);
       eventSource.addEventListener("step_failed", handleStepEvent);
 
+      const refreshRun = () => {
+        getPipelineRun(runId!)
+          .then((run) => {
+            if (!cancelled) usePipelineStore.setState({ activeRun: run });
+          })
+          .catch(() => {
+            // Keep local optimistic state if refresh fails transiently.
+          });
+      };
+
+      eventSource.addEventListener("healing_attempt_started", refreshRun);
+      eventSource.addEventListener("healing_attempt_applied", refreshRun);
+      eventSource.addEventListener("healing_attempt_invalid", refreshRun);
+      eventSource.addEventListener("healing_attempt_failed", refreshRun);
+      eventSource.addEventListener("healing_non_healable", refreshRun);
+      eventSource.addEventListener("healing_retry_failed", refreshRun);
+      eventSource.addEventListener("healing_succeeded", refreshRun);
+
       const handleTerminal = (status: PipelineRun["status"]) => (e: MessageEvent) => {
         const data = JSON.parse(e.data);
         getPipelineRun(runId!).then((run) => {
@@ -121,6 +140,7 @@ export function usePipelineRun(runId: string | null) {
 
       eventSource.addEventListener("pipeline_completed", handleTerminal("COMPLETED"));
       eventSource.addEventListener("pipeline_failed", handleTerminal("FAILED"));
+      eventSource.addEventListener("pipeline_cancelled", handleTerminal("CANCELLED"));
 
       eventSource.onerror = () => {
         eventSource.close();

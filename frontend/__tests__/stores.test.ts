@@ -40,6 +40,7 @@ describe("pipelineStore", () => {
       error_message: null,
       duration_ms: 1200,
       step_results: [],
+      healing_attempts: [],
     };
     usePipelineStore.getState().setActiveRun(run);
     expect(usePipelineStore.getState().activeRun).toEqual(run);
@@ -51,7 +52,7 @@ describe("pipelineStore", () => {
   });
 
   it("setActiveRun to null clears it", () => {
-    usePipelineStore.getState().setActiveRun({ id: "r1", name: "x", status: "RUNNING", created_at: "", started_at: null, completed_at: null, total_rows_in: null, total_rows_out: null, error_message: null, duration_ms: null, step_results: [] });
+    usePipelineStore.getState().setActiveRun({ id: "r1", name: "x", status: "RUNNING", created_at: "", started_at: null, completed_at: null, total_rows_in: null, total_rows_out: null, error_message: null, duration_ms: null, step_results: [], healing_attempts: [] });
     usePipelineStore.getState().setActiveRun(null);
     expect(usePipelineStore.getState().activeRun).toBeNull();
   });

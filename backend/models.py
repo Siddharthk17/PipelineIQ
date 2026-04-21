@@ -58,6 +58,17 @@ class StepStatus(str, PyEnum):
     SKIPPED = "SKIPPED"
 
 
+class HealingAttemptStatus(str, PyEnum):
+    """Lifecycle states for autonomous healing attempts."""
+
+    CREATED = "CREATED"
+    NON_HEALABLE = "NON_HEALABLE"
+    AI_INVALID = "AI_INVALID"
+    VALIDATION_FAILED = "VALIDATION_FAILED"
+    APPLIED = "APPLIED"
+    FAILED = "FAILED"
+
+
 def _generate_uuid() -> uuid.UUID:
     return uuid.uuid4()
 
@@ -105,6 +116,12 @@ class PipelineRun(Base):
         "LineageGraph",
         back_populates="pipeline_run",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+    healing_attempts: Mapped[List["HealingAttempt"]] = relationship(
+        "HealingAttempt",
+        back_populates="pipeline_run",
+        order_by="HealingAttempt.attempt_number",
         cascade="all, delete-orphan",
     )
 
@@ -174,6 +191,43 @@ class LineageGraph(Base):
 
     pipeline_run: Mapped["PipelineRun"] = relationship(
         "PipelineRun", back_populates="lineage_graph"
+    )
+
+
+class HealingAttempt(Base):
+    """Stores metadata for each autonomous healing attempt of a failed run."""
+
+    __tablename__ = "healing_attempts"
+
+    id: Mapped[str] = mapped_column(Uuid, primary_key=True, default=_generate_uuid)
+    pipeline_run_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("pipeline_runs.id"), nullable=False, index=True
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[HealingAttemptStatus] = mapped_column(
+        SQLEnum(HealingAttemptStatus), nullable=False, default=HealingAttemptStatus.CREATED
+    )
+    failed_step_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    error_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    classification_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    proposed_yaml: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    diff_lines: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
+    ai_valid: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    ai_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parser_valid: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    sandbox_passed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    validation_errors: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
+    validation_warnings: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    pipeline_run: Mapped["PipelineRun"] = relationship(
+        "PipelineRun", back_populates="healing_attempts"
     )
 
 

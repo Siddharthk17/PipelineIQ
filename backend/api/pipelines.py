@@ -15,12 +15,13 @@ from sqlalchemy.orm import Session
 from backend.auth import get_current_user
 from backend.config import settings
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import PipelineRun, PipelineStatus, UploadedFile, User
+from backend.models import HealingAttempt, PipelineRun, PipelineStatus, UploadedFile, User
 from datetime import timezone
 from backend.pipeline.parser import PipelineParser
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.planner import generate_execution_plan
 from backend.schemas import (
+    HealingAttemptResponse,
     PipelineRunListResponse,
     PipelineRunResponse,
     RunPipelineRequest,
@@ -483,6 +484,94 @@ def get_pipeline_run(
     return _run_to_response(pipeline_run)
 
 
+@router.get(
+    "/{run_id}/healing-attempts",
+    response_model=list[HealingAttemptResponse],
+    summary="List healing attempts for a run",
+)
+@limiter.limit(settings.RATE_LIMIT_READ)
+def list_healing_attempts(
+    run_id: str,
+    request: Request,
+    response: Response,
+    db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> list[HealingAttemptResponse]:
+    """Return all healing attempts for a pipeline run."""
+    _validate_uuid_format(run_id)
+    pipeline_run = (
+        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    )
+    if pipeline_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline run '{run_id}' not found",
+        )
+
+    _check_pipeline_permission(
+        db, current_user, pipeline_run.name, ["owner", "runner", "viewer"]
+    )
+
+    attempts = (
+        db.query(HealingAttempt)
+        .filter(HealingAttempt.pipeline_run_id == pipeline_run.id)
+        .order_by(HealingAttempt.attempt_number.asc())
+        .all()
+    )
+    return [_healing_attempt_to_response(a) for a in attempts]
+
+
+@router.get(
+    "/{run_id}/healing-attempts/{attempt_number}",
+    response_model=HealingAttemptResponse,
+    summary="Get one healing attempt",
+)
+@limiter.limit(settings.RATE_LIMIT_READ)
+def get_healing_attempt(
+    run_id: str,
+    attempt_number: int,
+    request: Request,
+    response: Response,
+    db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> HealingAttemptResponse:
+    """Return one healing attempt by run ID and attempt number."""
+    _validate_uuid_format(run_id)
+    if attempt_number < 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="attempt_number must be >= 1",
+        )
+
+    pipeline_run = (
+        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    )
+    if pipeline_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline run '{run_id}' not found",
+        )
+
+    _check_pipeline_permission(
+        db, current_user, pipeline_run.name, ["owner", "runner", "viewer"]
+    )
+
+    attempt = (
+        db.query(HealingAttempt)
+        .filter(
+            HealingAttempt.pipeline_run_id == pipeline_run.id,
+            HealingAttempt.attempt_number == attempt_number,
+        )
+        .first()
+    )
+    if attempt is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Healing attempt {attempt_number} not found for run '{run_id}'",
+        )
+    return _healing_attempt_to_response(attempt)
+
+
 def _ensure_utc(dt):
     """Attach UTC tzinfo to naive datetimes from SQLite."""
     if dt is not None and dt.tzinfo is None:
@@ -519,6 +608,35 @@ def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
             )
             for sr in pipeline_run.step_results
         ],
+        healing_attempts=[
+            _healing_attempt_to_response(attempt)
+            for attempt in sorted(
+                pipeline_run.healing_attempts,
+                key=lambda a: a.attempt_number,
+            )
+        ],
+    )
+
+
+def _healing_attempt_to_response(attempt: HealingAttempt) -> HealingAttemptResponse:
+    """Convert a HealingAttempt ORM model to an API response."""
+    return HealingAttemptResponse(
+        id=str(attempt.id),
+        attempt_number=attempt.attempt_number,
+        status=attempt.status.value,
+        failed_step_name=attempt.failed_step_name,
+        error_type=attempt.error_type,
+        error_message=attempt.error_message,
+        classification_reason=attempt.classification_reason,
+        ai_valid=attempt.ai_valid,
+        ai_error=attempt.ai_error,
+        parser_valid=attempt.parser_valid,
+        sandbox_passed=attempt.sandbox_passed,
+        validation_errors=attempt.validation_errors,
+        validation_warnings=attempt.validation_warnings,
+        diff_lines=attempt.diff_lines,
+        created_at=_ensure_utc(attempt.created_at),
+        completed_at=_ensure_utc(attempt.completed_at),
     )
 
 

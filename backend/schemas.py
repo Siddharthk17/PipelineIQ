@@ -229,6 +229,43 @@ class StepResultResponse(BaseModel):
     error_message: Optional[str] = Field(None, description="Error details if failed")
 
 
+class HealingAttemptResponse(BaseModel):
+    """Autonomous healing attempt details for a failed pipeline run."""
+
+    id: str = Field(..., description="Healing attempt ID")
+    attempt_number: int = Field(..., description="1-indexed healing attempt number")
+    status: str = Field(..., description="Healing attempt status")
+    failed_step_name: Optional[str] = Field(
+        None, description="Step name where failure was observed"
+    )
+    error_type: Optional[str] = Field(None, description="Failure exception type")
+    error_message: Optional[str] = Field(None, description="Failure exception message")
+    classification_reason: Optional[str] = Field(
+        None, description="Healer classification reason"
+    )
+    ai_valid: Optional[bool] = Field(None, description="AI-reported patch validity")
+    ai_error: Optional[str] = Field(None, description="AI generation error details")
+    parser_valid: Optional[bool] = Field(
+        None, description="Whether parser/semantic validation passed"
+    )
+    sandbox_passed: Optional[bool] = Field(
+        None, description="Whether dry-run planner predicted success"
+    )
+    validation_errors: Optional[List[str]] = Field(
+        None, description="Candidate validation errors"
+    )
+    validation_warnings: Optional[List[str]] = Field(
+        None, description="Candidate validation warnings"
+    )
+    diff_lines: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Line-level patch diff from AI repair"
+    )
+    created_at: datetime = Field(..., description="Attempt creation timestamp")
+    completed_at: Optional[datetime] = Field(
+        None, description="Attempt completion timestamp"
+    )
+
+
 class PipelineRunResponse(BaseModel):
     """Full details of a pipeline run including all step results."""
 
@@ -250,6 +287,10 @@ class PipelineRunResponse(BaseModel):
     error_message: Optional[str] = Field(None, description="Error if failed")
     step_results: List[StepResultResponse] = Field(
         default_factory=list, description="Ordered list of step results"
+    )
+    healing_attempts: List[HealingAttemptResponse] = Field(
+        default_factory=list,
+        description="Ordered healing attempts for this run",
     )
 
 
