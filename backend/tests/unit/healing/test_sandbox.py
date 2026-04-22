@@ -8,7 +8,7 @@ import pandas as pd
 import pyarrow as pa
 
 from backend.execution.duckdb_executor import DuckDBExecutor
-from backend.execution.sandbox import SANDBOX_SAMPLE_ROWS, _run_pipeline_in_sandbox, test_patch_in_sandbox
+from backend.execution.sandbox import SANDBOX_SAMPLE_ROWS, _run_pipeline_in_sandbox, run_patch_in_sandbox
 from backend.pipeline.cache import get_parsed_pipeline
 
 
@@ -17,14 +17,14 @@ def test_sandbox_uses_expected_sample_size():
 
 
 def test_sandbox_source_uses_fresh_duckdb_connection_and_finally_close():
-    source = inspect.getsource(test_patch_in_sandbox)
+    source = inspect.getsource(run_patch_in_sandbox)
     assert 'duckdb.connect(database=":memory:")' in source
     assert "finally" in source
     assert "connection.close()" in source
 
 
 def test_sandbox_does_not_use_worker_connection():
-    source = inspect.getsource(test_patch_in_sandbox)
+    source = inspect.getsource(run_patch_in_sandbox)
     assert "get_worker_duckdb" not in source
 
 

@@ -31,7 +31,7 @@ class SandboxResult:
     duration_ms: float = 0.0
 
 
-def test_patch_in_sandbox(
+def run_patch_in_sandbox(
     *,
     patched_yaml: str,
     file_ids: list[str],

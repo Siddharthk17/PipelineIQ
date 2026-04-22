@@ -292,7 +292,7 @@ def test_terminal_publish_caches_latest_terminal_status(monkeypatch):
     monkeypatch.setattr(pipeline_tasks, "get_pubsub_redis", lambda: fake_pubsub)
     monkeypatch.setattr(pipeline_tasks, "get_cache_redis", lambda: fake_cache)
 
-    pipeline_tasks._publish_terminal_event("run-term", "pipeline_completed")
+    pipeline_tasks._publish_terminal_event("run-term", "pipeline_completed", "COMPLETED")
 
     fake_pubsub.publish.assert_called_once()
     fake_cache.setex.assert_called_once()

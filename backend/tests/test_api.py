@@ -432,7 +432,7 @@ class TestPipelineHealingAttempts:
         data = response.json()
         assert data["attempt_number"] == 3
         assert data["status"] == "APPLIED"
-        assert data["failed_step_name"] == "filter_step"
+        assert data["failed_step"] == "filter_step"
 
 
 class TestLineageEndpoints:

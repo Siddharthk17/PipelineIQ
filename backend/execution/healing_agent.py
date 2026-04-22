@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.ai.generation import compute_yaml_diff
 from backend.ai.healing_prompts import build_healing_prompt, validate_healing_patch
 from backend.execution.patch_applier import apply_patch
-from backend.execution.sandbox import test_patch_in_sandbox
+from backend.execution.sandbox import run_patch_in_sandbox
 from backend.execution.schema_diff import compute_schema_diff
 from backend.models import FileProfile, HealingAttempt, HealingAttemptStatus, SchemaSnapshot, UploadedFile
 from backend.tasks.gemini_tasks import call_gemini_task
@@ -160,7 +160,7 @@ def attempt_heal(
             )
             continue
 
-        sandbox_result = test_patch_in_sandbox(
+        sandbox_result = run_patch_in_sandbox(
             patched_yaml=patched_yaml,
             file_ids=file_ids,
             db=db,
