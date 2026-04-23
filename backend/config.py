@@ -107,7 +107,7 @@ class Settings(BaseSettings):
     STORAGE_TYPE: str = "local"  # "local" or "s3"
     S3_ACCESS_KEY: str = ""
     S3_SECRET_KEY: str = ""
-    S3_BUCKET: str = "pipelineiq"
+    S3_BUCKET: str = "pipelineiq-outputs"  # Dedicated bucket for pipeline outputs
     S3_ENDPOINT_URL: Optional[str] = None  # Required for MinIO
 
     # Sentry

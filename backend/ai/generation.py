@@ -113,7 +113,7 @@ async def generate_pipeline_from_description(
         user_request=description,
     )
 
-    # ── Attempt 1: Generate ───────────────────────────────────────────────
+    # Attempt 1: Generate 
     try:
         raw_yaml = await _call_gemini_async(prompt, temperature=0.1, max_tokens=2000)
         raw_yaml = _clean_yaml_response(raw_yaml)
@@ -132,7 +132,7 @@ async def generate_pipeline_from_description(
     except Exception as validation_error:
         logger.warning(f"Attempt 1 validation failed: {validation_error}")
 
-    # ── Attempt 2: Self-fix ───────────────────────────────────────────────
+    # Attempt 2: Self-fix
     fix_prompt = SELF_FIX_PROMPT.format(
         validation_error=str(validation_error),
         invalid_yaml=raw_yaml,

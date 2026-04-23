@@ -31,6 +31,7 @@ from backend.config import settings
 from backend.database import create_all_tables, write_engine, read_engine
 from backend.db.redis_pools import get_cache_redis
 from backend.pipeline.exceptions import PipelineIQError
+from backend.services.storage_service import storage_service
 from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.ENVIRONMENT == "development":
         create_all_tables()
     _validate_upload_dir()
+    _init_storage_bucket()
     logger.info("Application startup complete")
 
     yield
@@ -89,6 +91,30 @@ def _validate_upload_dir() -> None:
     except OSError as exc:
         logger.error("Upload directory '%s' is not writable: %s", upload_dir, exc)
         raise
+
+
+def _init_storage_bucket() -> None:
+    """Initialize S3/MinIO bucket if using S3 storage."""
+    if settings.STORAGE_TYPE != "s3":
+        return
+    try:
+        import boto3
+        s3_client = boto3.client(
+            "s3",
+            aws_access_key_id=settings.S3_ACCESS_KEY,
+            aws_secret_access_key=settings.S3_SECRET_KEY,
+            endpoint_url=settings.S3_ENDPOINT_URL,
+        )
+        bucket_name = settings.S3_BUCKET
+        try:
+            s3_client.create_bucket(Bucket=bucket_name)
+            logger.info("Created S3 bucket: %s", bucket_name)
+        except s3_client.exceptions.BucketAlreadyOwnedByYou:
+            logger.info("S3 bucket already exists: %s", bucket_name)
+        except s3_client.exceptions.BucketAlreadyExists:
+            logger.warning("S3 bucket name already taken by another account: %s", bucket_name)
+    except Exception as exc:
+        logger.warning("Failed to initialize S3 bucket: %s", exc)
 
 
 app = FastAPI(

@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/ai", tags=["AI"])
 logger = logging.getLogger(__name__)
 
 
-# ── Request/Response Models ────────────────────────────────────────────────
+# Request/Response Models
 
 class GeneratePipelineRequest(BaseModel):
     description: str = Field(
@@ -84,7 +84,7 @@ class ValidateYamlResponse(BaseModel):
     step_count: int = 0
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────
+# Endpoints
 
 @router.post("/generate", response_model=GeneratePipelineResponse)
 async def generate_pipeline(

@@ -20,6 +20,8 @@ import type {
   AIColumnAutocompleteResponse,
   AIColumnBatchAutocompleteResponse,
   AIYamlValidationResponse,
+  PipelineTemplate,
+  PipelineTemplateDetail,
 } from "./types";
 
 export class ApiError extends Error {
@@ -276,6 +278,58 @@ export async function restorePipelineVersion(name: string, version: number): Pro
 export async function getSchemaHistory(fileId: string): Promise<SchemaSnapshot[]> {
   const data = await fetchApi<{ file_id: string; total_snapshots: number; snapshots: SchemaSnapshot[] }>(`/files/${fileId}/schema/history`);
   return data.snapshots;
+}
+
+// Week 7 - Pipeline Templates
+
+export async function getTemplates(): Promise<PipelineTemplate[]> {
+  const data = await fetchApi<{ templates: PipelineTemplate[]; total: number }>("/templates/");
+  return data.templates;
+}
+
+export async function getTemplateDetail(templateId: string): Promise<PipelineTemplateDetail> {
+  return fetchApi<PipelineTemplateDetail>(`/templates/${templateId}`);
+}
+
+// Week 7 - Pipeline Schedules
+
+export interface PipelineSchedule {
+  id: string;
+  pipeline_name: string;
+  yaml_config: string;
+  cron_expression: string;
+  is_active: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  created_at: string;
+}
+
+export async function getSchedules(): Promise<PipelineSchedule[]> {
+  return fetchApi<PipelineSchedule[]>("/schedules/");
+}
+
+export async function createSchedule(data: {
+  pipeline_name: string;
+  yaml_config: string;
+  cron_expression: string;
+}): Promise<PipelineSchedule> {
+  return fetchApi<PipelineSchedule>("/schedules/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteSchedule(scheduleId: string): Promise<void> {
+  await fetchApi<void>(`/schedules/${scheduleId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function toggleSchedule(scheduleId: string): Promise<PipelineSchedule> {
+  return fetchApi<PipelineSchedule>(`/schedules/${scheduleId}/toggle`, {
+    method: "PATCH",
+  });
 }
 
 // AI

@@ -109,12 +109,12 @@ CRITICAL: Your response must be ONLY valid YAML. Nothing else.
 - No "Here is the YAML:" or similar preamble
 - Start your response directly with: pipeline:
 
-=== PIPELINE STEP TYPES ===
+    PIPELINE STEP TYPES
 You may use ONLY these step types with ONLY these parameters:
 
 {step_type_reference}
 
-=== STRICT VALIDATION RULES ===
+    STRICT VALIDATION RULES
 Rule 1: Every step name must be UNIQUE across the entire pipeline
 Rule 2: Every step name must be snake_case (lowercase letters, digits, and underscores only)
 Rule 3: All steps except load must have an input field (join uses left + right instead)
@@ -127,13 +127,13 @@ Rule 7: load steps use file_id (the UUID shown below), NOT the filename
 Rule 8: join.on column must exist in BOTH the left and right input schemas
 Rule 9: Do NOT use the same column name for aggregate.group_by and as an aggregation target
 
-=== AVAILABLE FILES ===
+    AVAILABLE FILES
 {file_schemas_section}
 
-=== USER REQUEST ===
+    USER REQUEST
 {user_request}
 
-=== OUTPUT ===
+    OUTPUT
 Generate a complete, valid, runnable PipelineIQ pipeline YAML that fulfills the request.
 Your response must start with: pipeline:
 """
@@ -146,18 +146,18 @@ CRITICAL: Output ONLY the corrected YAML. Nothing else.
 - No "Here is the fix:" or similar preamble
 - Start directly with: pipeline:
 
-=== ORIGINAL PIPELINE YAML ===
+    ORIGINAL PIPELINE YAML
 {original_yaml}
 
-=== FAILURE INFORMATION ===
+    FAILURE INFORMATION
 Step that failed: "{failed_step}"
 Error type: {error_type}
 Error message: {error_message}
 
-=== FILE SCHEMAS AT TIME OF FAILURE ===
+    FILE SCHEMAS AT TIME OF FAILURE
 {file_schemas_section}
 
-=== INSTRUCTIONS ===
+    INSTRUCTIONS
 Fix the pipeline so it runs successfully.
 Make the MINIMUM change required — do not restructure the pipeline.
 If a column was renamed, update all references to it.

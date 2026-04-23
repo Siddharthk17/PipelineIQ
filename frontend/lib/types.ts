@@ -282,3 +282,15 @@ export interface AIYamlValidationResponse {
   error: string | null;
   step_count: number;
 }
+
+// Week 7 Types - Pipeline Templates
+export interface PipelineTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+}
+
+export interface PipelineTemplateDetail extends PipelineTemplate {
+  yaml_config: string;
+}

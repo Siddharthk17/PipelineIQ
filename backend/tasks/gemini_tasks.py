@@ -63,7 +63,7 @@ def call_gemini_task(
     """
     Single entry point for all Gemini API calls.
     """
-    # ── Step 1: Check response cache ─────────────────────────────────────
+    # Step 1: Check response cache
     cache_input = f"{prompt}|temp={temperature}|max={max_output_tokens}"
     cache_key = f"gemini:resp:{hashlib.sha256(cache_input.encode()).hexdigest()}"
 
@@ -73,7 +73,7 @@ def call_gemini_task(
         logger.info(f"Gemini cache HIT for key {cache_key[:16]}...")
         return cached
 
-    # ── Step 2: Check token budget ────────────────────────────────────────
+    # Step 2: Check token budget 
     estimated_input_tokens = len(prompt) // 4
     estimated_total_tokens = estimated_input_tokens + max_output_tokens
 
@@ -91,7 +91,7 @@ def call_gemini_task(
             countdown=15,
         )
 
-    # ── Step 3: Call Gemini ───────────────────────────────────────────────
+    # Step 3: Call Gemini
     try:
         model = get_gemini_model()
         response = model.generate_content(
@@ -104,13 +104,13 @@ def call_gemini_task(
 
         result_text = response.text.strip()
 
-        # ── Step 4: Update token budget ───────────────────────────────────
+        # Step 4: Update token budget
         actual_tokens = getattr(response.usage_metadata, "total_token_count",
                                  estimated_total_tokens)
         redis.incrby(budget_key, actual_tokens)
         redis.expire(budget_key, TOKEN_BUDGET_WINDOW_SECONDS * 2)
 
-        # ── Step 5: Cache the response ────────────────────────────────────
+        # Step 5: Cache the response
         redis.setex(cache_key, RESPONSE_CACHE_TTL, result_text)
 
         logger.info(

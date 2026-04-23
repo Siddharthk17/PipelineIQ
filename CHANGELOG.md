@@ -3,6 +3,28 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [8.2.6] — Week 14: Scheduling, Templates & Real File Output
+
+*Note: This release transforms PipelineIQ from a manual tool into an automated platform. It introduces cron-based scheduling, pre-built pipeline templates, and real downloadable file outputs.*
+
+### Added
+- **Pipeline Scheduling** — Pipelines can now be scheduled to run automatically using cron expressions.
+  - Added full CRUD API for schedules (`POST`, `GET`, `DELETE`) with pause/resume capabilities.
+  - Integrated dynamic Celery Beat registration to load and manage schedules without restarting the worker.
+  - Added run history tracking (`schedule_runs` table) and a preview endpoint for the next N scheduled runs.
+  - Included a human-readable cron translator (e.g., "0 6 * * 1" → "every Monday at 6:00 AM").
+- **Pipeline Templates** — Added 5 pre-built, forkable pipeline templates to accelerate development:
+  - *Sales Revenue Report*, *Data Quality Audit*, *Weekly Rollup*, *Multi-Source Merge*, and *Customer Segmentation*.
+  - Added a Fork API (`POST /api/templates/{id}/fork`) that safely replaces `{{placeholder}}` variables with actual file UUIDs and returns ready-to-run YAML.
+- **Real MinIO File Output** — The `save` step now writes actual data to the `pipelineiq-outputs` MinIO bucket.
+  - Supported formats: CSV, JSON (with strict NaN/Inf handling via `orjson`), and Parquet (Snappy compressed for large datasets).
+  - Generates secure, presigned download URLs valid for 48 hours.
+  - Added a `GET /api/runs/{id}/download` endpoint to refresh expired URLs.
+- **Frontend Updates** — Added a Schedule creation UI with a cron builder, a Templates browser page, and a "Download Output" button on the run detail page displaying the file format and size.
+- **Test Suite Expansion** — Added 34 new tests covering cron validation, schedule API CRUD, template loading/forking, save step serialization (CSV/JSON/Parquet), and Playwright E2E flows for scheduling.
+
+---
+
 ## [7.9.16] — Week 13: Autonomous AI Healing Agent
 
 *Note: This release implements the most architecturally complex feature in the roadmap: self-correcting pipelines. When a run fails due to schema drift at any hour, the system detects the error, calls Gemini for a JSON patch, validates it in an ephemeral DuckDB sandbox on 100 rows, and resumes the pipeline automatically. Zero human intervention required.*

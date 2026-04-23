@@ -613,7 +613,7 @@ class StepExecutor:
         # Determine extension from filename or default to .csv
         filename = config.filename
         ext = Path(filename).suffix.lower() or ".csv"
-        if ext not in [".csv", ".json"]:
+        if ext not in [".csv", ".json", ".parquet"]:
             ext = ".csv"
 
         stored_path = f"{filename}_{_uuid.uuid4().hex}{ext}"
@@ -622,6 +622,10 @@ class StepExecutor:
             if ext == ".json":
                 buffer = io.BytesIO()
                 input_df.to_json(buffer, orient="records", indent=2)
+                buffer.seek(0)
+            elif ext == ".parquet":
+                buffer = io.BytesIO()
+                input_df.to_parquet(buffer, engine="pyarrow", index=False)
                 buffer.seek(0)
             else:
                 buffer = io.BytesIO()

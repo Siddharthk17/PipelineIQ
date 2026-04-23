@@ -24,8 +24,10 @@ from backend.models import (
     HealingAttemptStatus,
     LineageGraph,
     PipelineRun,
+    PipelineSchedule,
     PipelineStatus,
     PipelineVersion,
+    ScheduleRun,
     StepResult,
     StepStatus,
     UploadedFile,
@@ -608,6 +610,10 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
 
     db.commit()
 
+    # Update schedule stats if this was a scheduled run
+    if pipeline_run.schedule_id:
+        _update_schedule_stats(db, pipeline_run)
+
     try:
         _save_version_if_needed(db=db, pipeline_run=pipeline_run)
     except Exception as exc:
@@ -621,3 +627,67 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         pipeline_run.status.value,
         summary.total_duration_ms,
     )
+
+
+def _update_schedule_stats(db, pipeline_run: PipelineRun) -> None:
+    """Update schedule statistics after a scheduled pipeline run completes."""
+    from datetime import datetime, timezone
+    from sqlalchemy import update
+
+    schedule_id = pipeline_run.schedule_id
+    if not schedule_id:
+        return
+
+    try:
+        # Calculate duration if we have start/complete times
+        duration_seconds = None
+        if pipeline_run.started_at and pipeline_run.completed_at:
+            duration_seconds = int(
+                (pipeline_run.completed_at - pipeline_run.started_at).total_seconds()
+            )
+
+        # Determine status string for schedule_run
+        status_map = {
+            PipelineStatus.COMPLETED: "COMPLETED",
+            PipelineStatus.HEALED: "HEALED",
+            PipelineStatus.FAILED: "FAILED",
+            PipelineStatus.CANCELLED: "CANCELLED",
+            PipelineStatus.RUNNING: "RUNNING",
+            PipelineStatus.PENDING: "PENDING",
+            PipelineStatus.HEALING: "HEALING",
+        }
+        status_str = status_map.get(pipeline_run.status, "UNKNOWN")
+
+        # Update schedule_run record
+        schedule_run = (
+            db.query(ScheduleRun)
+            .filter(ScheduleRun.run_id == pipeline_run.id)
+            .order_by(ScheduleRun.triggered_at.desc())
+            .first()
+        )
+        if schedule_run:
+            schedule_run.status = status_str
+            schedule_run.duration_seconds = duration_seconds
+            if pipeline_run.status == PipelineStatus.FAILED:
+                schedule_run.error_message = (
+                    pipeline_run.error_message[:500] if pipeline_run.error_message else None
+                )
+
+        # Update PipelineSchedule counters
+        update_values = {"last_run_status": status_str}
+        if pipeline_run.status == PipelineStatus.COMPLETED:
+            update_values["successful_runs"] = PipelineSchedule.successful_runs + 1
+        elif pipeline_run.status == PipelineStatus.HEALED:
+            update_values["healed_runs"] = PipelineSchedule.healed_runs + 1
+        elif pipeline_run.status == PipelineStatus.FAILED:
+            update_values["failed_runs"] = PipelineSchedule.failed_runs + 1
+
+        db.execute(
+            update(PipelineSchedule)
+            .where(PipelineSchedule.id == schedule_id)
+            .values(**update_values)
+        )
+        db.commit()
+    except Exception as exc:
+        logger.warning("Failed to update schedule stats: %s", exc)
+        db.rollback()

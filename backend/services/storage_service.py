@@ -49,6 +49,13 @@ class StorageProvider(ABC):
         """Return a presigned URL for direct upload to storage. Return None if not supported."""
         pass
 
+    @abstractmethod
+    def get_presigned_download_url(
+        self, source_path: str, expiration: int = 3600
+    ) -> Optional[str]:
+        """Return a presigned URL for direct download from storage. Return None if not supported."""
+        pass
+
 
 class LocalStorageProvider(StorageProvider):
     """Local filesystem storage provider."""
@@ -105,6 +112,11 @@ class LocalStorageProvider(StorageProvider):
 
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
+    ) -> Optional[str]:
+        return None
+
+    def get_presigned_download_url(
+        self, source_path: str, expiration: int = 3600
     ) -> Optional[str]:
         return None
 
@@ -186,6 +198,19 @@ class S3StorageProvider(StorageProvider):
         except ClientError:
             return None
 
+    def get_presigned_download_url(
+        self, source_path: str, expiration: int = 3600
+    ) -> Optional[str]:
+        key = os.path.basename(source_path)
+        try:
+            return self.s3.generate_presigned_url(
+                ClientMethod="get_object",
+                Params={"Bucket": self.bucket, "Key": key},
+                ExpiresIn=expiration,
+            )
+        except ClientError:
+            return None
+
 
 class StorageService:
     """Service to manage file storage, abstracting the underlying provider."""
@@ -218,6 +243,11 @@ class StorageService:
         self, destination_path: str, expiration: int = 3600
     ) -> Optional[str]:
         return self.provider.get_presigned_upload_url(destination_path, expiration)
+
+    def get_presigned_download_url(
+        self, source_path: str, expiration: int = 3600
+    ) -> Optional[str]:
+        return self.provider.get_presigned_download_url(source_path, expiration)
 
 
 # Singleton instance

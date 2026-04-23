@@ -23,6 +23,8 @@ task_routes = {
     "tasks.call_gemini": {"queue": "gemini"},
     "tasks.generate_pipeline_ai": {"queue": "gemini"},
     "tasks.repair_pipeline_ai": {"queue": "gemini"},
+    "tasks.execute_scheduled_pipeline": {"queue": "bulk"},
+    "tasks.schedule_run_completion_callback": {"queue": "bulk"},
 }
 
 task_serializer = "json"

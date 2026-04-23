@@ -108,6 +108,10 @@ class PipelineRun(Base):
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False, default="manual")
+    schedule_id: Mapped[Optional[str]] = mapped_column(
+        Uuid, ForeignKey("pipeline_schedules.id", ondelete="SET NULL"), nullable=True
+    )
 
     step_results: Mapped[List["StepResult"]] = relationship(
         "StepResult",
@@ -464,9 +468,10 @@ class PipelineSchedule(Base):
     user_id: Mapped[str] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    pipeline_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    pipeline_name: Mapped[str] = mapped_column(String(500), nullable=False)
     yaml_config: Mapped[str] = mapped_column(Text, nullable=False)
     cron_expression: Mapped[str] = mapped_column(String(100), nullable=False)
+    cron_human: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
@@ -476,9 +481,37 @@ class PipelineSchedule(Base):
     next_run_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    last_run_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    total_runs: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    successful_runs: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    failed_runs: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    healed_runs: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ScheduleRun(Base):
+    """Tracks history of runs triggered by a pipeline schedule."""
+
+    __tablename__ = "schedule_runs"
+
+    id: Mapped[str] = mapped_column(Uuid, primary_key=True, default=_generate_uuid)
+    schedule_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("pipeline_schedules.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[Optional[str]] = mapped_column(
+        Uuid, ForeignKey("pipeline_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    triggered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class NotificationConfig(Base):
