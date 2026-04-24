@@ -32,10 +32,50 @@ class CreateScheduleRequest(BaseModel):
     @classmethod
     def validate_cron(cls, value: str) -> str:
         """Ensure the cron expression is valid."""
+        if not value or not value.strip():
+            raise ValueError("Cron expression is required")
+        
+        normalized = value.strip().lower()
+        
+        # Convert common natural language to cron
+        conversions = {
+            "every minute": "* * * * *",
+            "every 5 minutes": "*/5 * * * *",
+            "every 15 minutes": "*/15 * * * *",
+            "every 30 minutes": "*/30 * * * *",
+            "every hour": "0 * * * *",
+            "hourly": "0 * * * *",
+            "daily": "0 0 * * *",
+            "midnight": "0 0 * * *",
+            "weekly": "0 0 * * 0",
+            "monthly": "0 0 1 * *",
+        }
+        
+        if normalized in conversions:
+            return conversions[normalized]
+        
+        # Support @ prefixes
+        if normalized.startswith("@"):
+            cron_map = {
+                "@yearly": "0 0 1 1 *",
+                "@annually": "0 0 1 1 *",
+                "@monthly": "0 0 1 * *",
+                "@weekly": "0 0 * * 0",
+                "@daily": "0 0 * * *",
+                "@midnight": "0 0 * * *",
+                "@hourly": "0 * * * *",
+            }
+            if normalized in cron_map:
+                return cron_map[normalized]
+        
+        # Validate standard cron
         try:
             croniter(value)
         except (ValueError, KeyError) as exc:
-            raise ValueError(f"Invalid cron expression: {exc}") from exc
+            raise ValueError(
+                f"Invalid cron expression '{value}'. Use format like '*/5 * * * *' (every 5 min), "
+                "'0 * * * *' (hourly), '0 0 * * *' (daily), or presets like '@hourly', '@daily'"
+            ) from exc
         return value
 
 class ScheduleResponse(BaseModel):

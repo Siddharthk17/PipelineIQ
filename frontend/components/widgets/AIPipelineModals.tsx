@@ -175,6 +175,11 @@ export function AIRepairDiffModal({
   onApply,
 }: AIRepairDiffModalProps) {
   const rows = useMemo(() => diffLines.slice(0, 400), [diffLines]);
+  const statusMessage = error
+    ? error
+    : valid
+      ? "Corrected YAML validated successfully."
+      : "AI produced YAML but validation still failed.";
 
   if (!isOpen) {
     return null;
@@ -202,13 +207,9 @@ export function AIRepairDiffModal({
 
         <div className="space-y-2 p-4">
           <div className="text-xs">
-            {valid ? (
-              <span className="text-[var(--accent-success)]">Corrected YAML validated successfully.</span>
-            ) : (
-              <span className="text-[var(--accent-error)]">
-                AI produced YAML but validation still failed{error ? `: ${error}` : "."}
-              </span>
-            )}
+            <span className={error || !valid ? "text-[var(--accent-error)]" : "text-[var(--accent-success)]"}>
+              {statusMessage}
+            </span>
           </div>
           <div className="max-h-80 overflow-y-auto rounded border bg-[var(--bg-base)]" style={{ borderColor: "var(--widget-border)" }}>
             <pre className="p-3 text-xs">
@@ -247,7 +248,7 @@ export function AIRepairDiffModal({
           </button>
           <button
             onClick={() => onApply(correctedYaml)}
-            disabled={isApplying || !correctedYaml}
+            disabled={isApplying || !correctedYaml || !valid}
             className="rounded border px-3 py-1.5 text-xs font-medium text-[var(--bg-base)] disabled:cursor-not-allowed disabled:opacity-50"
             style={{
               borderColor: "color-mix(in srgb, var(--accent-primary) 80%, var(--widget-border))",

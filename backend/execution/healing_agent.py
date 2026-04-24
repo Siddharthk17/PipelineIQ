@@ -24,6 +24,50 @@ logger = logging.getLogger(__name__)
 MAX_HEALING_RETRIES = 3
 
 
+def _is_quota_error(error: Exception) -> tuple[bool, str]:
+    """Check if error is a quota/API limit issue.
+    Returns (is_quota_error, user_friendly_message)
+    """
+    error_str = str(error).lower()
+    quota_indicators = [
+        "429",
+        "quota",
+        "resource_exhausted",
+        "limit: 0",
+        "free-tier",
+        "rate_limit",
+        "RESOURCE_EXHAUSTED",
+    ]
+    if any(indicator.lower() in error_str for indicator in quota_indicators):
+        if "limit: 0" in error_str:
+            return True, "AI service temporarily unavailable (quota exceeded). Try again later."
+        if "429" in error_str:
+            return True, "AI service rate limited. Waiting before retry..."
+        return True, "AI quota exceeded. Please wait and try again."
+    return False, ""
+
+
+def _get_user_friendly_error(error: Exception) -> str:
+    """Convert technical errors to user-friendly messages."""
+    is_quota, quota_msg = _is_quota_error(error)
+    if is_quota:
+        return quota_msg
+    
+    error_str = str(error).lower()
+    
+    if "json" in error_str and "parse" in error_str:
+        return "AI returned invalid response format"
+    
+    if "timeout" in error_str:
+        return "AI service request timed out"
+    
+    if "connection" in error_str or "network" in error_str:
+        return "Network error connecting to AI service"
+    
+    # Default: return truncated original error
+    return f"AI error: {str(error)[:100]}"
+
+
 @dataclass
 class HealingResult:
     """Result returned after the healing agent exhausts its attempts."""
@@ -71,6 +115,10 @@ def attempt_heal(
         try:
             raw_response = _call_gemini_for_healing(prompt)
         except Exception as exc:
+            # Check if this is a quota error - if so, stop trying immediately
+            is_quota, _ = _is_quota_error(exc)
+            user_msg = _get_user_friendly_error(exc)
+            
             _record_attempt(
                 db=db,
                 run_id=run_id,
@@ -82,8 +130,16 @@ def attempt_heal(
                 old_schema=old_schema,
                 new_schema=new_schema,
                 schema_diff=schema_diff,
-                ai_error=str(exc),
+                ai_error=user_msg,
             )
+            
+            # Don't retry on quota errors - they won't succeed anyway
+            if is_quota:
+                logger.warning(
+                    f"Healing stopped: AI quota exceeded. "
+                    f"User message: {user_msg}"
+                )
+                break
             continue
 
         try:
@@ -350,27 +406,54 @@ def _normalize_snapshot_schema(*, snapshot, uploaded_file: UploadedFile, profile
         columns = snapshot.columns or []
         dtypes = snapshot.dtypes or {}
 
-    profile = profile_record.profile if profile_record and profile_record.status == "complete" else {}
+    # Safely extract profile - handle various storage types
+    profile = {}
+    if profile_record and profile_record.status == "complete":
+        raw_profile = profile_record.profile
+        if isinstance(raw_profile, dict):
+            profile = raw_profile
+        elif isinstance(raw_profile, list):
+            # Convert list to dict by column name
+            for item in raw_profile:
+                if isinstance(item, dict) and "column" in item:
+                    profile[item["column"]] = item
+    
     normalized: dict[str, dict] = {}
     for column in columns:
         profile_entry = profile.get(column, {}) if isinstance(profile, dict) else {}
         normalized[column] = {
             "dtype": dtypes.get(column),
-            "semantic_type": profile_entry.get("semantic_type", "unknown"),
-            "null_pct": profile_entry.get("null_pct"),
+            "semantic_type": profile_entry.get("semantic_type", "unknown") if isinstance(profile_entry, dict) else "unknown",
+            "null_pct": profile_entry.get("null_pct") if isinstance(profile_entry, dict) else None,
         }
     return normalized
 
 
 def _normalize_current_schema(*, uploaded_file: UploadedFile, profile_record: FileProfile | None) -> dict:
-    if profile_record and profile_record.status == "complete" and isinstance(profile_record.profile, dict):
+    # Safely extract profile - handle various storage types
+    raw_profile = None
+    if profile_record and profile_record.status == "complete":
+        raw_profile = profile_record.profile
+    
+    profile = {}
+    if isinstance(raw_profile, dict):
+        profile = raw_profile
+    elif isinstance(raw_profile, list):
+        for item in raw_profile:
+            if isinstance(item, dict) and "column" in item:
+                profile[item["column"]] = item
+    
+    if profile:
         normalized = {}
-        for column, profile_entry in profile_record.profile.items():
+        for column, profile_entry in profile.items():
+            if not isinstance(profile_entry, dict):
+                profile_entry = {}
             normalized[column] = {
                 "dtype": (uploaded_file.dtypes or {}).get(column),
                 "semantic_type": profile_entry.get("semantic_type", "unknown"),
                 "null_pct": profile_entry.get("null_pct"),
             }
+        return normalized
         return normalized
 
     return {

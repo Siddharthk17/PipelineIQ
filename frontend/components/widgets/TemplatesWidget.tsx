@@ -45,7 +45,6 @@ function TemplateCard({
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      whileHover={{ scale: 1.02 }}
       className="p-4 rounded-lg border cursor-pointer transition-all"
       style={{
         backgroundColor: "var(--bg-surface)",

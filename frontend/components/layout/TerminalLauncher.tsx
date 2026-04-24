@@ -8,7 +8,8 @@ import { Terminal } from "lucide-react";
 export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { widgets, workspaces, activeWorkspaceId, addWidget } = useWidgetStore();
   const visibleWidgetIds = getAllWidgets(workspaces[activeWorkspaceId]);
-  const availableWidgets = widgets.filter(w => !visibleWidgetIds.includes(w.id));
+  const widgetsArray = Array.isArray(widgets) ? widgets : [];
+  const availableWidgets = widgetsArray.filter(w => !visibleWidgetIds.includes(w.id));
   
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [search, setSearch] = useState("");

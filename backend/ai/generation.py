@@ -21,6 +21,21 @@ from backend.ai.prompts import (
 
 logger = logging.getLogger(__name__)
 
+_GEMINI_QUOTA_MARKERS = (
+    "quota exhausted",
+    "free-tier quota",
+    "generate_content_free_tier_requests",
+    "resource_exhausted",
+    "limit: 0",
+)
+
+_GEMINI_PLACEHOLDER_MARKERS = (
+    "[auto-generated due to free-tier quota exhausted]",
+    "prompt summary:",
+    "placeholder output (api unavailable)",
+    "would apply transformations if gemini api was available",
+)
+
 
 @dataclass
 class GenerationResult:
@@ -59,8 +74,20 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
                 sections.append(f"File {i}: [file_id: {file_id}] — file record not found")
                 continue
 
-            # Get profile
+            # Get profile - safely handle any format
             profile_record = db.query(FileProfile).filter(FileProfile.file_id == file_id).first()
+            profile = {}
+            if profile_record and profile_record.status == "complete":
+                raw_profile = profile_record.profile
+                # Handle various storage types: dict, list, string, etc.
+                if isinstance(raw_profile, dict):
+                    profile = raw_profile
+                elif isinstance(raw_profile, list):
+                    # If stored as list, convert to dict by name
+                    for item in raw_profile:
+                        if isinstance(item, dict) and "column" in item:
+                            profile[item["column"]] = item
+                # Otherwise leave as empty dict
 
             if not profile_record or profile_record.status != "complete":
                 sections.append(
@@ -70,9 +97,11 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
                 continue
 
             # Build column list with semantic types
-            profile = profile_record.profile or {}
             column_descriptions = []
             for col_name, col_data in profile.items():
+                #Safely extract profile data
+                if not isinstance(col_data, dict):
+                    col_data = {"semantic_type": "unknown"}
                 semantic_type = col_data.get("semantic_type", "text")
                 null_pct = col_data.get("null_pct", 0.0)
                 desc = f"{col_name} ({semantic_type}"
@@ -125,16 +154,19 @@ async def generate_pipeline_from_description(
             error=f"AI service error: {str(e)}"
         )
 
+    validation_error = None
+
     # Validate Attempt 1
     try:
         get_parsed_pipeline(raw_yaml)
         return GenerationResult(yaml=raw_yaml, valid=True, attempts=1)
-    except Exception as validation_error:
+    except Exception as e:
+        validation_error = str(e)
         logger.warning(f"Attempt 1 validation failed: {validation_error}")
 
     # Attempt 2: Self-fix
     fix_prompt = SELF_FIX_PROMPT.format(
-        validation_error=str(validation_error),
+        validation_error=validation_error,
         invalid_yaml=raw_yaml,
     )
 
@@ -184,14 +216,33 @@ async def repair_pipeline_from_error(
     )
 
     try:
-        corrected_yaml = await _call_gemini_async(prompt, temperature=0.0, max_tokens=3000)
-        corrected_yaml = _clean_yaml_response(corrected_yaml)
+        raw_response = await _call_gemini_async(prompt, temperature=0.0, max_tokens=3000)
+        service_error = _detect_ai_service_error(raw_response)
+        if service_error:
+            return RepairResult(
+                corrected_yaml="",
+                diff_lines=[],
+                valid=False,
+                error=service_error,
+            )
+        corrected_yaml = _clean_yaml_response(raw_response)
     except Exception as e:
         return RepairResult(
-            corrected_yaml=original_yaml,
+            corrected_yaml="",
             diff_lines=[],
             valid=False,
             error=str(e),
+        )
+
+    if not corrected_yaml.startswith("pipeline:"):
+        return RepairResult(
+            corrected_yaml="",
+            diff_lines=[],
+            valid=False,
+            error=(
+                _detect_ai_service_error(corrected_yaml)
+                or "AI repair returned invalid YAML. Please try again later."
+            ),
         )
 
     # Validate
@@ -202,6 +253,14 @@ async def repair_pipeline_from_error(
     except Exception as e:
         valid = False
         validation_error = str(e)
+        service_error = _detect_ai_service_error(corrected_yaml)
+        if service_error:
+            return RepairResult(
+                corrected_yaml="",
+                diff_lines=[],
+                valid=False,
+                error=service_error,
+            )
 
     # Compute diff
     diff_lines = compute_yaml_diff(original_yaml, corrected_yaml)
@@ -244,10 +303,20 @@ def compute_yaml_diff(original: str, corrected: str) -> list[dict]:
     return diff
 
 
+def _detect_ai_service_error(text: str) -> str | None:
+    lowered = text.lower()
+    if any(marker in lowered for marker in _GEMINI_QUOTA_MARKERS):
+        return "Google Gemini AI quota exhausted. Please try again later."
+    if any(marker in lowered for marker in _GEMINI_PLACEHOLDER_MARKERS):
+        return "AI repair service is temporarily unavailable. Please try again later."
+    return None
+
+
 async def _call_gemini_async(prompt: str, temperature: float, max_tokens: int) -> str:
     """
     Submit a Gemini task and await the result.
     Uses Celery task async to respect the gemini queue's rate limits.
+    Raises Exception with user-friendly message when quota exhausted.
     """
     task = call_gemini_task.apply_async(
         args=[prompt],
@@ -255,9 +324,25 @@ async def _call_gemini_async(prompt: str, temperature: float, max_tokens: int) -
         queue="gemini",
     )
     # Wait for result with timeout (Celery task, not coroutine)
-    result = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: task.get(timeout=120)
-    )
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: task.get(timeout=120)
+        )
+    except Exception as e:
+        error_str = str(e)
+        service_error = _detect_ai_service_error(error_str)
+        if service_error:
+            raise Exception(service_error)
+        # Re-raise other errors
+        raise
+
+    # Handle sentinel error values from the task to avoid worker-side tracebacks
+    if result == "GEMINI_QUOTA_EXHAUSTED":
+        raise Exception("Google Gemini AI quota exhausted. Please try again later.")
+    
+    if isinstance(result, str) and result.startswith("GEMINI_ERROR:"):
+        raise Exception(f"Gemini AI service error: {result[14:]}")
+
     return result
 
 

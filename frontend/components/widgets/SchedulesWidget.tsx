@@ -155,6 +155,8 @@ export function SchedulesWidget() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [newSchedule, setNewSchedule] = useState({
     pipeline_name: "",
     yaml_config: "",
@@ -180,28 +182,52 @@ export function SchedulesWidget() {
 
   const handleToggle = useCallback((id: string) => {
     setSchedules((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, is_active: !s.is_active } : s))
+      (Array.isArray(prev) ? prev : []).map((s) => (s.id === id ? { ...s, is_active: !s.is_active } : s))
     );
   }, []);
 
   const handleDelete = useCallback((id: string) => {
-    setSchedules((prev) => prev.filter((s) => s.id !== id));
+    setSchedules((prev) => (Array.isArray(prev) ? prev : []).filter((s) => s.id !== id));
   }, []);
 
   const handleCreate = useCallback(async () => {
-    if (!newSchedule.pipeline_name || !newSchedule.yaml_config) return;
+    if (!newSchedule.pipeline_name || !newSchedule.yaml_config) {
+      setCreateError("Please fill in all fields");
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
     try {
       await createSchedule(newSchedule);
       setShowCreate(false);
       setNewSchedule({ pipeline_name: "", yaml_config: "", cron_expression: "0 * * * *" });
       loadSchedules();
-    } catch (err) {
-      console.error("Failed to create schedule:", err);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to create schedule";
+      // Try to extract more specific error from API response
+      if (typeof err === "object" && err !== null && "response" in err) {
+        try {
+          const response = (err as { response: { json: () => Promise<{ detail?: string; message?: string }> } }).response;
+          const data = await response.json();
+          if (data.detail) {
+            setCreateError(data.detail);
+            return;
+          }
+          if (data.message) {
+            setCreateError(data.message);
+            return;
+          }
+        } catch {}
+      }
+      setCreateError(errorMsg);
+    } finally {
+      setCreating(false);
     }
   }, [newSchedule, loadSchedules]);
 
-  const activeSchedules = schedules.filter((s) => s.is_active);
-  const inactiveSchedules = schedules.filter((s) => !s.is_active);
+  const schedulesArray = Array.isArray(schedules) ? schedules : [];
+  const activeSchedules = schedulesArray.filter((s) => s.is_active);
+  const inactiveSchedules = schedulesArray.filter((s) => !s.is_active);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -354,8 +380,30 @@ export function SchedulesWidget() {
                     placeholder="0 * * * *"
                   />
                   <p className="text-xs text-[var(--text-secondary)] mt-1">
-                    Examples: "0 * * * *" (hourly), "0 0 * * *" (daily), "0 * * * *" (every minute)
+                    Examples: 0 * * * * (hourly), 0 0 * * * (daily), */5 * * * * (every 5 min)
                   </p>
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {[
+                      { label: "Every min", value: "* * * * *" },
+                      { label: "Every 5 min", value: "*/5 * * * *" },
+                      { label: "Every hour", value: "0 * * * *" },
+                      { label: "Daily midnight", value: "0 0 * * *" },
+                      { label: "Weekly", value: "0 0 * * 0" },
+                    ].map((preset) => (
+                      <button
+                        key={preset.value}
+                        onClick={() => setNewSchedule((s) => ({ ...s, cron_expression: preset.value }))}
+                        className="text-xs px-2 py-1 rounded border"
+                        style={{
+                          borderColor: "var(--widget-border)",
+                          color: "var(--text-secondary)",
+                          backgroundColor: newSchedule.cron_expression === preset.value ? "var(--accent-primary)" : "transparent",
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div>
@@ -381,19 +429,24 @@ export function SchedulesWidget() {
               </div>
 
               <div className="flex justify-end gap-2 mt-4">
+                {createError && (
+                  <p className="text-xs text-[var(--accent-error)] w-full">{createError}</p>
+                )}
                 <button
                   onClick={() => setShowCreate(false)}
                   className="px-3 py-1.5 rounded text-sm"
                   style={{ border: "1px solid var(--widget-border)", color: "var(--text-secondary)" }}
+                  disabled={creating}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleCreate}
                   className="px-3 py-1.5 rounded text-sm"
-                  style={{ backgroundColor: "var(--accent-primary)", color: "#fff" }}
+                  style={{ backgroundColor: "var(--accent-primary)", color: "#fff", opacity: creating ? 0.6 : 1 }}
+                  disabled={creating}
                 >
-                  Create
+                  {creating ? "Creating..." : "Create"}
                 </button>
               </div>
             </motion.div>

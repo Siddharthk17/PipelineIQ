@@ -124,12 +124,10 @@ def call_gemini_task(
         error_str = str(e)
 
         if _is_free_tier_hard_quota(error_str):
-            message = (
-                "Gemini free-tier quota is unavailable for this API key/region (limit: 0). "
-                "Use a supported region/key or wait for quota reset."
-            )
-            logger.error(message)
-            raise RuntimeError(message) from e
+            # Free tier exhausted - return ERROR indicator so UI can show message
+            # Don't cache this - user needs to know quota is exhausted
+            logger.warning(f"Gemini free-tier quota exhausted.")
+            return "GEMINI_QUOTA_EXHAUSTED"
 
         if _should_retry_rate_limit(error_str):
             backoff = 10 * (2 ** self.request.retries)
@@ -144,4 +142,4 @@ def call_gemini_task(
             raise self.retry(exc=e, countdown=30)
 
         logger.error(f"Gemini client error (not retrying): {error_str[:500]}")
-        raise
+        return f"GEMINI_ERROR: {error_str[:500]}"

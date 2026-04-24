@@ -305,7 +305,8 @@ export interface PipelineSchedule {
 }
 
 export async function getSchedules(): Promise<PipelineSchedule[]> {
-  return fetchApi<PipelineSchedule[]>("/schedules/");
+  const data = await fetchApi<{ schedules: PipelineSchedule[]; total: number }>("/schedules/");
+  return data.schedules;
 }
 
 export async function createSchedule(data: {

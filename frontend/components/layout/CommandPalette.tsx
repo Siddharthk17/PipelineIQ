@@ -80,8 +80,8 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
   ];
 
   const filtered = query
-    ? commands.filter((c) => c.label.toLowerCase().includes(query.toLowerCase()))
-    : commands;
+    ? (Array.isArray(commands) ? commands : []).filter((c) => c.label.toLowerCase().includes(query.toLowerCase()))
+    : (Array.isArray(commands) ? commands : []);
 
   const prevIsOpen = useRef(isOpen);
   useEffect(() => {

@@ -178,6 +178,33 @@ describe("RunHistoryWidget", () => {
     await user.click(screen.getByText("pipeline_a"));
     expect(usePipelineStore.getState().activeRunId).toBe("r1");
   });
+
+  it("shows a direct quota error message for failed AI repair attempts", async () => {
+    const user = userEvent.setup();
+    vi.mocked(repairPipelineRunWithAI).mockResolvedValueOnce({
+      corrected_yaml: "",
+      diff_lines: [],
+      valid: false,
+      error: "Google Gemini AI quota exhausted. Please try again later.",
+    });
+
+    render(<RunHistoryWidget />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("pipeline_b")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId("repair-pipeline-btn"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Google Gemini AI quota exhausted. Please try again later.")
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/AI produced YAML but validation still failed/i)
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("FileRegistryWidget", () => {
