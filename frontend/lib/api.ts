@@ -141,12 +141,17 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
       negotiated.confirm_endpoint
     ) {
       const token = getToken();
+      const requiresAppAuth =
+        negotiated.upload_url.startsWith("/") ||
+        negotiated.upload_url.includes("/files/direct-upload/");
       const directRes = await fetch(negotiated.upload_url, {
         method: "PUT",
         body: file,
         headers: {
           "Content-Type": file.type || "application/octet-stream",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(requiresAppAuth && token
+            ? { Authorization: `Bearer ${token}` }
+            : {}),
         },
       });
       if (!directRes.ok) {

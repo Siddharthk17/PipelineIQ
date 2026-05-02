@@ -27,6 +27,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
+        extra="ignore",  # docker-compose-only vars (REPLICATION_USER, MINIO_ROOT_USER, etc.) coexist in .env
     )
 
     APP_NAME: str = "PipelineIQ"
@@ -44,10 +45,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
     REDIS_URL: str = "redis://localhost:6379/0"
-    REDIS_BROKER_URL: str = ""
-    REDIS_PUBSUB_URL: str = ""
-    REDIS_CACHE_URL: str = ""
-    REDIS_YJS_URL: str = ""
+    REDIS_BROKER_URL: str = "redis://localhost:6379/0"
+    REDIS_BACKEND_URL: str = "redis://localhost:6379/1"
+    REDIS_PUBSUB_URL: str = "redis://localhost:6380/0"
+    REDIS_CACHE_URL: str = "redis://localhost:6381/0"
+    REDIS_YJS_URL: str = "redis://localhost:6382/0"
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
     CELERY_WORKERS_CRITICAL: int = 2
@@ -55,7 +57,7 @@ class Settings(BaseSettings):
     CELERY_WORKERS_BULK: int = 2
 
     UPLOAD_DIR: Path = Path("./uploads")
-    MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50 MB
+    MAX_UPLOAD_SIZE: int = 500 * 1024 * 1024  # 500 MB
     ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json"})
 
     MAX_PIPELINE_STEPS: int = 50
@@ -168,6 +170,8 @@ class Settings(BaseSettings):
         """Default role-specific Redis URLs to REDIS_URL if not set."""
         if not self.REDIS_BROKER_URL:
             self.REDIS_BROKER_URL = self.REDIS_URL
+        if not self.REDIS_BACKEND_URL:
+            self.REDIS_BACKEND_URL = self.REDIS_BROKER_URL
         if not self.REDIS_PUBSUB_URL:
             self.REDIS_PUBSUB_URL = self.REDIS_URL
         if not self.REDIS_CACHE_URL:
@@ -178,11 +182,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def set_celery_defaults(self) -> "Settings":
-        """Default Celery broker and backend URLs to REDIS_BROKER_URL."""
+        """Default Celery broker/backend URLs to their dedicated Redis roles."""
         if not self.CELERY_BROKER_URL:
             self.CELERY_BROKER_URL = self.REDIS_BROKER_URL
-        if not self.CELERY_RESULT_BACKEND:
-            self.CELERY_RESULT_BACKEND = self.REDIS_BROKER_URL
+        if (
+            not self.CELERY_RESULT_BACKEND
+            or self.CELERY_RESULT_BACKEND == self.REDIS_BROKER_URL
+        ):
+            self.CELERY_RESULT_BACKEND = self.REDIS_BACKEND_URL
         return self
 
     @model_validator(mode="after")

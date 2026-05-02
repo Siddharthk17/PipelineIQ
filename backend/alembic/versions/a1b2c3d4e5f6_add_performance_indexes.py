@@ -14,120 +14,128 @@ branch_labels = None
 depends_on = None
 
 
-def _table_exists(bind, table_name: str) -> bool:
+def _table_names(bind) -> set[str]:
     inspector = sa.inspect(bind)
-    return table_name in inspector.get_table_names()
+    return set(inspector.get_table_names())
 
 
-def _index_exists(bind, table_name: str, index_name: str) -> bool:
-    inspector = sa.inspect(bind)
-    if table_name not in inspector.get_table_names():
-        return False
-    return any(ix.get("name") == index_name for ix in inspector.get_indexes(table_name))
-
-
-def _create_index_if_possible(bind, index_name: str, table_name: str, columns: list[str]) -> None:
-    if not _table_exists(bind, table_name):
+def _execute_if_table_exists(bind, table_names: set[str], table_name: str, sql: str) -> None:
+    if table_name not in table_names:
         return
-    if _index_exists(bind, table_name, index_name):
-        return
-    op.create_index(index_name, table_name, columns, unique=False)
-
-
-def _drop_index_if_exists(bind, index_name: str, table_name: str) -> None:
-    if not _table_exists(bind, table_name):
-        return
-    if not _index_exists(bind, table_name, index_name):
-        return
-    op.drop_index(index_name, table_name=table_name)
+    with op.get_context().autocommit_block():
+        op.execute(sql)
 
 
 def upgrade() -> None:
     bind = op.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
 
-    # 1) pipeline run list by user
-    _create_index_if_possible(
+    table_names = _table_names(bind)
+
+    with op.get_context().autocommit_block():
+        op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+
+    _execute_if_table_exists(
         bind,
-        "ix_pipeline_runs_user_id_created_at",
+        table_names,
         "pipeline_runs",
-        ["user_id", "created_at"],
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pipeline_runs_user_created
+        ON pipeline_runs(user_id, created_at DESC)
+        """,
     )
-
-    # 2) pipeline run status filtering
-    _create_index_if_possible(bind, "ix_pipeline_runs_status", "pipeline_runs", ["status"])
-
-    # 3) pipeline run created_at ordering
-    _create_index_if_possible(bind, "ix_pipeline_runs_created_at", "pipeline_runs", ["created_at"])
-
-    # 4) step results lookup by run
-    _create_index_if_possible(
+    _execute_if_table_exists(
         bind,
-        "ix_step_results_pipeline_run_id",
+        table_names,
         "step_results",
-        ["pipeline_run_id"],
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_step_results_run_id
+        ON step_results(pipeline_run_id, step_index)
+        """,
     )
-
-    # 5) step results ordering inside a run
-    _create_index_if_possible(
+    _execute_if_table_exists(
         bind,
-        "ix_step_results_pipeline_run_id_step_index",
-        "step_results",
-        ["pipeline_run_id", "step_index"],
+        table_names,
+        "schedule_runs",
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_schedule_runs_schedule_id
+        ON schedule_runs(schedule_id, triggered_at DESC)
+        """,
     )
-
-    # 6) webhook delivery filtering by webhook
-    _create_index_if_possible(
+    _execute_if_table_exists(
         bind,
-        "ix_webhook_deliveries_webhook_id",
-        "webhook_deliveries",
-        ["webhook_id"],
+        table_names,
+        "data_assets",
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_data_assets_name_trgm
+        ON data_assets USING gin(name gin_trgm_ops)
+        """,
     )
-
-    # 7) webhook delivery run lookups
-    _create_index_if_possible(
+    _execute_if_table_exists(
         bind,
-        "ix_webhook_deliveries_run_id",
-        "webhook_deliveries",
-        ["run_id"],
+        table_names,
+        "pipeline_runs",
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pipeline_runs_pipeline_name
+        ON pipeline_runs(name, created_at DESC)
+        """,
     )
-
-    # 8) schedule polling for active next runs
-    _create_index_if_possible(
+    _execute_if_table_exists(
         bind,
-        "ix_pipeline_schedules_is_active_next_run_at",
+        table_names,
         "pipeline_schedules",
-        ["is_active", "next_run_at"],
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pipeline_schedules_active
+        ON pipeline_schedules(is_active, next_run_at)
+        WHERE is_active = true
+        """,
     )
-
-    # 9) audit listing by user recency
-    _create_index_if_possible(
+    _execute_if_table_exists(
         bind,
-        "ix_audit_logs_user_id_created_at",
-        "audit_logs",
-        ["user_id", "created_at"],
+        table_names,
+        "lineage_graphs",
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_lineage_graphs_run_id
+        ON lineage_graphs(pipeline_run_id)
+        """,
+    )
+    _execute_if_table_exists(
+        bind,
+        table_names,
+        "asset_relationships",
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_asset_relationships_source
+        ON asset_relationships(source_id)
+        """,
+    )
+    _execute_if_table_exists(
+        bind,
+        table_names,
+        "asset_relationships",
+        """
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_asset_relationships_target
+        ON asset_relationships(target_id)
+        """,
     )
 
 
 def downgrade() -> None:
     bind = op.get_bind()
-    _drop_index_if_exists(bind, "ix_audit_logs_user_id_created_at", "audit_logs")
-    _drop_index_if_exists(
-        bind,
-        "ix_pipeline_schedules_is_active_next_run_at",
-        "pipeline_schedules",
+    if bind.dialect.name != "postgresql":
+        return
+
+    drop_statements = (
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_pipeline_runs_user_created",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_step_results_run_id",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_schedule_runs_schedule_id",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_data_assets_name_trgm",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_pipeline_runs_pipeline_name",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_pipeline_schedules_active",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_lineage_graphs_run_id",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_asset_relationships_source",
+        "DROP INDEX CONCURRENTLY IF EXISTS idx_asset_relationships_target",
     )
-    _drop_index_if_exists(bind, "ix_webhook_deliveries_run_id", "webhook_deliveries")
-    _drop_index_if_exists(bind, "ix_webhook_deliveries_webhook_id", "webhook_deliveries")
-    _drop_index_if_exists(
-        bind,
-        "ix_step_results_pipeline_run_id_step_index",
-        "step_results",
-    )
-    _drop_index_if_exists(bind, "ix_step_results_pipeline_run_id", "step_results")
-    _drop_index_if_exists(bind, "ix_pipeline_runs_created_at", "pipeline_runs")
-    _drop_index_if_exists(bind, "ix_pipeline_runs_status", "pipeline_runs")
-    _drop_index_if_exists(
-        bind,
-        "ix_pipeline_runs_user_id_created_at",
-        "pipeline_runs",
-    )
+    for statement in drop_statements:
+        with op.get_context().autocommit_block():
+            op.execute(statement)

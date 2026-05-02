@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import orjson
 
 
 HEALING_SYSTEM_PROMPT = """You are an autonomous data pipeline repair agent for PipelineIQ.
@@ -87,10 +87,16 @@ def build_healing_prompt(
         error_type=error_type,
         error_message=error_message,
         failed_step_name=failed_step_name,
-        old_schema_json=json.dumps(old_schema, indent=2, sort_keys=True),
-        new_schema_json=json.dumps(new_schema, indent=2, sort_keys=True),
-        removed_columns=json.dumps(schema_diff.get("removed_columns", [])),
-        added_columns=json.dumps(schema_diff.get("added_columns", [])),
+        old_schema_json=orjson.dumps(
+            old_schema,
+            option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS,
+        ).decode("utf-8"),
+        new_schema_json=orjson.dumps(
+            new_schema,
+            option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS,
+        ).decode("utf-8"),
+        removed_columns=orjson.dumps(schema_diff.get("removed_columns", [])).decode("utf-8"),
+        added_columns=orjson.dumps(schema_diff.get("added_columns", [])).decode("utf-8"),
         renamed_candidates_formatted=formatted_candidates,
     )
 

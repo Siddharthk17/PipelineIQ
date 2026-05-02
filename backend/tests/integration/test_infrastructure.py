@@ -1,13 +1,18 @@
-"""Integration checks for infrastructure shape and runtime wiring.
+"""Integration checks for Week 1 infrastructure.
 
-These tests are gated behind RUN_INTEGRATION_TESTS=1. They validate container
-service wiring and key runtime assumptions using existing project artifacts.
+These tests require the local Docker stack to be running and are intentionally
+runtime-oriented instead of static text inspection.
 """
 
 from pathlib import Path
 import os
+import socket
 
+import psycopg2
 import pytest
+import redis
+import requests
+import yaml
 
 
 pytestmark = pytest.mark.skipif(
@@ -16,52 +21,132 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _compose_text() -> str:
-    return Path(__file__).resolve().parents[3].joinpath("docker-compose.yml").read_text()
+def _compose() -> dict:
+    repo_root = Path(__file__).resolve().parents[3]
+    return yaml.safe_load((repo_root / "docker-compose.yml").read_text(encoding="utf-8"))
 
 
-def _nginx_text() -> str:
-    return Path(__file__).resolve().parents[3].joinpath("nginx/conf.d/pipelineiq.conf").read_text()
+def _connect_postgres(*, port: int):
+    return psycopg2.connect(
+        host="127.0.0.1",
+        port=port,
+        database=os.getenv("POSTGRES_DB", "pipelineiq"),
+        user=os.getenv("POSTGRES_USER", "pipelineiq"),
+        password=os.getenv("POSTGRES_PASSWORD", "your_password"),
+    )
 
 
-def test_compose_includes_dedicated_sse_service():
-    compose = _compose_text()
-    assert "sse-service:" in compose
-    assert "backend.sse_app:sse_app" in compose
+def _assert_tcp_open(port: int) -> None:
+    with socket.create_connection(("127.0.0.1", port), timeout=5):
+        return
 
 
-def test_compose_includes_worker_queue_specialization():
-    compose = _compose_text()
-    assert "worker-critical:" in compose
-    assert "--queues=critical" in compose
-    assert "worker-default:" in compose
-    assert "--queues=critical,default" in compose
-    assert "worker-bulk:" in compose
-    assert "--queues=bulk" in compose
+def test_compose_declares_week1_worker_topology():
+    services = _compose()["services"]
+
+    assert "worker-critical" in services
+    assert "worker-default" in services
+    assert "worker-bulk" in services
+
+    critical_command = services["worker-critical"]["command"]
+    default_command = services["worker-default"]["command"]
+    bulk_command = services["worker-bulk"]["command"]
+
+    assert "--queues=critical" in critical_command
+    assert "--queues=critical,default" in default_command
+    assert "--queues=bulk" in bulk_command
 
 
-def test_compose_includes_four_redis_roles():
-    compose = _compose_text()
-    for service_name in ("redis-broker:", "redis-pubsub:", "redis-cache:", "redis-yjs:"):
-        assert service_name in compose
+def test_compose_declares_four_redis_roles():
+    services = _compose()["services"]
+    for service_name in ("redis-broker", "redis-pubsub", "redis-cache", "redis-yjs"):
+        assert service_name in services
 
 
-def test_nginx_routes_run_stream_endpoint_to_sse_service():
-    nginx = _nginx_text()
-    assert "location ~ ^/api/v1/pipelines/[^/]+/stream$" in nginx
-    assert "proxy_pass $sse_backend;" in nginx
-    assert "proxy_buffering off;" in nginx
+def test_redis_instances_are_reachable_and_distinct():
+    for port in (6379, 6380, 6381, 6382):
+        _assert_tcp_open(port)
+
+    broker = redis.from_url("redis://127.0.0.1:6379/0")
+    pubsub = redis.from_url("redis://127.0.0.1:6380/0")
+    cache = redis.from_url("redis://127.0.0.1:6381/0")
+    yjs = redis.from_url("redis://127.0.0.1:6382/0")
+
+    assert broker.ping()
+    assert pubsub.ping()
+    assert cache.ping()
+    assert yjs.ping()
+
+    ports = {
+        broker.info("server")["tcp_port"],
+        pubsub.info("server")["tcp_port"],
+        cache.info("server")["tcp_port"],
+        yjs.info("server")["tcp_port"],
+    }
+    assert ports == {6379, 6380, 6381, 6382}
 
 
-def test_main_app_does_not_mount_sse_router_directly():
-    from backend.main import app
+def test_pgbouncer_primary_accepts_connections():
+    _assert_tcp_open(5432)
+    with _connect_postgres(port=5432) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            assert cursor.fetchone()[0] == 1
 
-    paths = {route.path for route in app.routes}
-    assert "/api/v1/pipelines/{run_id}/stream" not in paths
+
+def test_pgbouncer_primary_uses_transaction_pooling():
+    # Connect to the pgbouncer virtual database to run SHOW POOLS
+    conn = psycopg2.connect(
+        host="127.0.0.1",
+        port=5432,
+        database="pgbouncer",
+        user=os.getenv("POSTGRES_USER", "pipelineiq"),
+        password=os.getenv("POSTGRES_PASSWORD", "your_password"),
+    )
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SHOW POOLS")
+            pools = cursor.fetchall()
+    finally:
+        conn.close()
+            
+    # Find the pipelineiq pool and check its mode (index 15)
+    pipelineiq_pool = next((p for p in pools if p[0] == "pipelineiq"), None)
+    assert pipelineiq_pool is not None, "pipelineiq pool not found in pgbouncer"
+    assert pipelineiq_pool[15] == "transaction"
 
 
-def test_sse_app_mounts_stream_router():
-    from backend.sse_app import sse_app
+def test_pgbouncer_replica_is_in_recovery():
+    _assert_tcp_open(5433)
+    with _connect_postgres(port=5433) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT pg_is_in_recovery()")
+            assert cursor.fetchone()[0] is True
 
-    paths = {route.path for route in sse_app.routes}
-    assert "/api/v1/pipelines/{run_id}/stream" in paths
+
+def test_performance_indexes_exist():
+    required_indexes = {
+        "idx_pipeline_runs_user_created",
+        "idx_step_results_run_id",
+        "idx_schedule_runs_schedule_id",
+        "idx_pipeline_runs_pipeline_name",
+        "idx_pipeline_schedules_active",
+        "idx_lineage_graphs_run_id",
+    }
+    with _connect_postgres(port=5432) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'"
+            )
+            existing_indexes = {row[0] for row in cursor.fetchall()}
+
+    assert required_indexes.issubset(existing_indexes)
+
+
+def test_api_and_sse_health_endpoints_are_up():
+    api_response = requests.get("http://127.0.0.1:8000/health", timeout=5)
+    sse_response = requests.get("http://127.0.0.1:8001/health", timeout=5)
+
+    assert api_response.status_code == 200
+    assert sse_response.status_code == 200

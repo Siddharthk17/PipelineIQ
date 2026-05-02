@@ -36,6 +36,7 @@ celery_app.config_from_object("backend.celery_config")
 # Upstash Redis requires TLS — configure SSL for both broker and backend
 if settings.CELERY_BROKER_URL.startswith("rediss://"):
     celery_app.conf.broker_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+if settings.CELERY_RESULT_BACKEND.startswith("rediss://"):
     celery_app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="pipeline_tasks")

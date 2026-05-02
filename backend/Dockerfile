@@ -31,5 +31,4 @@ USER appuser
 EXPOSE 8000
 EXPOSE 8001
 
-# No default CMD — each compose service defines its own entrypoint.
-# This image is used by api, sse-service, worker-*, celery-beat, and flower.
+CMD ["gunicorn", "backend.main:app", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--worker-connections", "1000", "--max-requests", "10000", "--max-requests-jitter", "1000", "--timeout", "30", "--graceful-timeout", "30", "--bind", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info"]

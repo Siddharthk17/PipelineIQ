@@ -8,6 +8,8 @@ services:
       -c max_wal_senders=5
       -c wal_keep_size=256MB
       -c hot_standby=on
+      -c log_min_duration_statement=100
+      -c shared_preload_libraries=pg_stat_statements
     environment:
       POSTGRES_DB: pipelineiq
       POSTGRES_USER: ${POSTGRES_USER}
@@ -72,7 +74,7 @@ services:
       DATABASES_CLIENT_ALIAS_USER: pipelineiq_user
       PGBOUNCER_LISTEN_PORT: "5432"
       PGBOUNCER_POOL_MODE: transaction
-      PGBOUNCER_MAX_CLIENT_CONN: "1000"
+      PGBOUNCER_MAX_CLIENT_CONN: "10000"
       PGBOUNCER_DEFAULT_POOL_SIZE: "25"
       PGBOUNCER_MIN_POOL_SIZE: "5"
       PGBOUNCER_RESERVE_POOL_SIZE: "5"
@@ -107,7 +109,7 @@ services:
       DATABASES_CLIENT_ALIAS_USER: pipelineiq_user
       PGBOUNCER_LISTEN_PORT: "5432"
       PGBOUNCER_POOL_MODE: transaction
-      PGBOUNCER_MAX_CLIENT_CONN: "1000"
+      PGBOUNCER_MAX_CLIENT_CONN: "10000"
       PGBOUNCER_DEFAULT_POOL_SIZE: "25"
       PGBOUNCER_MIN_POOL_SIZE: "5"
       PGBOUNCER_RESERVE_POOL_SIZE: "5"
@@ -145,9 +147,17 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-524288000}
+      - STORAGE_TYPE=${STORAGE_TYPE:-s3}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -162,6 +172,8 @@ services:
       redis-cache:
         condition: service_healthy
       redis-yjs:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     shm_size: '2gb'
     volumes:
@@ -212,9 +224,16 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - STORAGE_TYPE=${STORAGE_TYPE:-s3}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -229,6 +248,8 @@ services:
       redis-cache:
         condition: service_healthy
       redis-yjs:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     ports:
       - "8001:8001"
@@ -270,9 +291,16 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - STORAGE_TYPE=${STORAGE_TYPE:-s3}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -287,6 +315,8 @@ services:
       redis-cache:
         condition: service_healthy
       redis-yjs:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     shm_size: '2gb'
     volumes:
@@ -314,7 +344,7 @@ services:
     container_name: pipelineiq-worker-default
     command: >
       celery -A backend.celery_app:celery_app worker
-      --queues=default
+      --queues=critical,default
       --concurrency=${CELERY_WORKERS_DEFAULT:-3}
       --prefetch-multiplier=1
       --hostname=default@%h
@@ -328,9 +358,16 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - STORAGE_TYPE=${STORAGE_TYPE:-s3}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -345,6 +382,8 @@ services:
       redis-cache:
         condition: service_healthy
       redis-yjs:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     shm_size: '2gb'
     volumes:
@@ -385,9 +424,16 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - STORAGE_TYPE=${STORAGE_TYPE:-s3}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -402,6 +448,8 @@ services:
       redis-cache:
         condition: service_healthy
       redis-yjs:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     shm_size: '2gb'
     volumes:
@@ -423,31 +471,71 @@ services:
       - pipelineiq-network
 
   worker-gemini:
-    image: pipelineiq-backend
-    build: ./backend
-    env_file:
-      - .env
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pipelineiq-worker-gemini
     command: >
-      celery -A backend.celery_app:celery_app worker
+      celery -A backend.celery_app:celery_app worker -E
       --queues=gemini
       --concurrency=1
       --prefetch-multiplier=1
       --hostname=gemini@%h
       --loglevel=info
+    env_file:
+      - .env
     environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
+      - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_BACKEND_URL=redis://redis-broker:6379/1
+      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
+      - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - GEMINI_FALLBACK_MODELS=${GEMINI_FALLBACK_MODELS:-gemini-2.0-flash,gemini-1.5-flash}
-      - CELERY_CONCURRENCY=1
+      - STORAGE_TYPE=${STORAGE_TYPE:-s3}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
-      - redis-broker
-      - redis-cache
+      pgbouncer:
+        condition: service_healthy
+      pgbouncer-replica:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+      redis-pubsub:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-yjs:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    shm_size: '1gb'
+    volumes:
+      - uploads:/app/uploads
+      - ./backend:/app/backend
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import pathlib,sys; sys.exit(0 if b'celery' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
-    deploy:
-      replicas: 1
     networks:
       - pipelineiq-network
 
@@ -468,9 +556,11 @@ services:
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
       - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -584,7 +674,6 @@ services:
 
   minio:
     image: minio/minio:${MINIO_IMAGE_TAG:-latest}
-    profiles: ["storage"]
     container_name: pipelineiq-minio
     command: server /data --console-address ":9001"
     environment:
@@ -596,7 +685,7 @@ services:
     volumes:
       - minio_data:/data
     healthcheck:
-      test: ["CMD", "/minio", "--help"]
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:9000/minio/health/live || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

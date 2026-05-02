@@ -1,5 +1,6 @@
 import os
 import shutil
+import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import BinaryIO, Optional, Union
@@ -139,25 +140,29 @@ class S3StorageProvider(StorageProvider):
         return key
 
     async def upload_stream(self, stream, destination_path: str, max_size: int) -> int:
-        import io
-
-        buffer = io.BytesIO()
-        total_read = 0
-        async for chunk in stream:
-            if not chunk:
-                continue
-            total_read += len(chunk)
-            if total_read > max_size:
-                raise Exception(f"File size exceeds maximum ({max_size} bytes)")
-            buffer.write(chunk)
-
-        if total_read == 0:
-            raise Exception("Uploaded file is empty")
-
-        buffer.seek(0)
         key = os.path.basename(destination_path)
-        self.s3.upload_fileobj(buffer, self.bucket, key)
-        return total_read
+        total_read = 0
+        temp_file_path: Optional[str] = None
+
+        try:
+            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                temp_file_path = temp_file.name
+                async for chunk in stream:
+                    if not chunk:
+                        continue
+                    total_read += len(chunk)
+                    if total_read > max_size:
+                        raise Exception(f"File size exceeds maximum ({max_size} bytes)")
+                    temp_file.write(chunk)
+
+            if total_read == 0:
+                raise Exception("Uploaded file is empty")
+
+            self.s3.upload_file(temp_file_path, self.bucket, key)
+            return total_read
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
 
     def download(self, path: str) -> BinaryIO:
         key = os.path.basename(path)

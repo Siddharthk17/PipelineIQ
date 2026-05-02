@@ -75,6 +75,9 @@ class TestQueueConfiguration:
         assert celery_app.conf.result_serializer == "json"
         assert "json" in celery_app.conf.accept_content
 
+    def test_celery_result_backend_is_isolated_from_broker(self):
+        assert celery_app.conf.result_backend != celery_app.conf.broker_url
+
 
 class TestQueuePriorityModel:
     def test_worker_queue_assignment_model(self):

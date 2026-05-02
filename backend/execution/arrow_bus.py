@@ -9,11 +9,9 @@ Routing contract:
 from __future__ import annotations
 
 import io
-import json
 import logging
 import os
 import re
-import ssl
 import threading
 import time
 import uuid
@@ -24,11 +22,10 @@ from typing import Dict, Optional
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
-from redis import Redis
+import orjson
 from redis.exceptions import RedisError
 
-from backend.config import settings
-from backend.db.redis_pools import get_cache_redis
+from backend.db.redis_pools import get_cache_redis_binary
 from backend.services.storage_service import storage_service
 
 logger = logging.getLogger(__name__)
@@ -100,7 +97,7 @@ class ArrowDataBus:
             return None
 
         try:
-            shared_client = get_cache_redis()
+            shared_client = get_cache_redis_binary()
             decode_responses = (
                 shared_client.connection_pool.connection_kwargs.get(
                     "decode_responses", False
@@ -113,15 +110,8 @@ class ArrowDataBus:
         except Exception:
             pass
 
-        try:
-            kwargs = {"decode_responses": False}
-            if settings.REDIS_CACHE_URL.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
-            self._redis = Redis.from_url(settings.REDIS_CACHE_URL, **kwargs)
-            self._redis_retry_after = 0.0
-        except Exception:
-            self._redis = None
-            self._redis_retry_after = time.monotonic() + 15.0
+        self._redis = None
+        self._redis_retry_after = time.monotonic() + 15.0
         return self._redis
 
     @staticmethod
@@ -176,7 +166,7 @@ class ArrowDataBus:
         if redis_client is None:
             return
 
-        payload = json.dumps(
+        payload = orjson.dumps(
             {
                 "tier": location.tier,
                 "pointer": location.pointer,
@@ -226,7 +216,7 @@ class ArrowDataBus:
         for raw_key, raw_payload in entries.items():
             try:
                 key = self._decode_redis_value(raw_key)
-                payload = json.loads(self._decode_redis_value(raw_payload))
+                payload = orjson.loads(raw_payload)
                 tier = str(payload.get("tier", "")).lower()
                 if tier not in {"redis", "shm", "spill"}:
                     continue
@@ -239,7 +229,7 @@ class ArrowDataBus:
                         size_bytes=int(payload.get("size_bytes", 0)),
                     )
                 )
-            except (ValueError, TypeError, json.JSONDecodeError):
+            except (ValueError, TypeError, orjson.JSONDecodeError):
                 logger.warning(
                     "Skipping malformed Arrow bus manifest entry for run_id=%s",
                     run_id,
