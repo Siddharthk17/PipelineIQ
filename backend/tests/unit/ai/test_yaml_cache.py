@@ -8,6 +8,22 @@ import pytest
 from backend.pipeline import cache as cache_module
 
 
+@pytest.fixture(autouse=True)
+def reset_cache_state():
+    """Reset cache state before each test to ensure clean state in CI.
+
+    This fixes the issue where _redis_cache_disabled gets set to True
+    during module import or first test execution in CI (no Redis available),
+    causing subsequent tests to fail.
+    """
+    cache_module._redis_cache_disabled = False
+    cache_module._local_parsed_cache.clear()
+    yield
+    # Clean up after test as well
+    cache_module._redis_cache_disabled = False
+    cache_module._local_parsed_cache.clear()
+
+
 class _FakeRedis:
     def __init__(self):
         self._data: dict[str, str] = {}
