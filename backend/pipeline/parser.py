@@ -953,7 +953,7 @@ class PipelineParser:
                             step_name=step.name,
                             field="file_id",
                             message=(
-                                f"file_id '{step.file_id}' is not registered. " f"Registered IDs: {sorted(registered_file_ids)}"),
+                                f"file_id '{step.file_id}' is not registered. Registered IDs: {sorted(registered_file_ids)}"),
                         ))
 
     def _check_filter_operators(
@@ -1026,8 +1026,7 @@ class PipelineParser:
                         errors.append(
                             ValidationError(
                                 step_name=step.name, field="aggregations.function", message=(
-                                    f"Invalid aggregation function '{func_name}'. " f"Valid functions: {
-                                        sorted(VALID_AGGREGATION_FUNCTIONS)}"), ))
+                                    f"Invalid aggregation function '{func_name}'. Valid functions: {sorted(VALID_AGGREGATION_FUNCTIONS)}"), ))
 
     def _check_has_save_step(
         self,
@@ -1085,9 +1084,7 @@ class PipelineParser:
                     errors.append(
                         ValidationError(
                             step_name=step.name, field="rules", message=(
-                                f"Unknown check type '{check}'. " f"Supported: {
-                                    ', '.join(
-                                        sorted(SUPPORTED_CHECKS))}"), ))
+                                f"Unknown check type '{check}'. Supported: {', '.join(sorted(SUPPORTED_CHECKS))}"), ))
 
     def _check_sql_steps(
         self,
