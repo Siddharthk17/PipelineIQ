@@ -153,8 +153,7 @@ if settings.ENVIRONMENT != "production":
     async def redoc_html() -> HTMLResponse:
         return get_redoc_html(
             openapi_url=app.openapi_url,
-            title=f"{
-                app.title} - ReDoc",
+            title=f"{app.title} - ReDoc",
             redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js",
         )
 
