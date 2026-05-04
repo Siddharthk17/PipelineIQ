@@ -5,7 +5,7 @@ authenticated user's pipeline runs, files, and audit history.
 """
 
 import logging
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -44,51 +44,61 @@ def get_dashboard_stats(
 
     # Runs by status
     completed = (
-        db.query(func.count(PipelineRun.id))
-        .filter(
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
             PipelineRun.user_id == user_id,
-            PipelineRun.status.in_([PipelineStatus.COMPLETED, PipelineStatus.HEALED]),
-        )
-        .scalar() or 0
-    )
+            PipelineRun.status.in_(
+                [
+                    PipelineStatus.COMPLETED,
+                    PipelineStatus.HEALED]),
+        ) .scalar() or 0)
     failed = (
-        db.query(func.count(PipelineRun.id))
-        .filter(PipelineRun.user_id == user_id, PipelineRun.status == PipelineStatus.FAILED)
-        .scalar() or 0
-    )
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.FAILED) .scalar() or 0)
     pending = (
-        db.query(func.count(PipelineRun.id))
-        .filter(PipelineRun.user_id == user_id, PipelineRun.status == PipelineStatus.PENDING)
-        .scalar() or 0
-    )
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.PENDING) .scalar() or 0)
     running = (
-        db.query(func.count(PipelineRun.id))
-        .filter(PipelineRun.user_id == user_id, PipelineRun.status == PipelineStatus.RUNNING)
-        .scalar() or 0
-    )
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.RUNNING) .scalar() or 0)
     healing = (
-        db.query(func.count(PipelineRun.id))
-        .filter(PipelineRun.user_id == user_id, PipelineRun.status == PipelineStatus.HEALING)
-        .scalar() or 0
-    )
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.HEALING) .scalar() or 0)
     cancelled = (
-        db.query(func.count(PipelineRun.id))
-        .filter(PipelineRun.user_id == user_id, PipelineRun.status == PipelineStatus.CANCELLED)
-        .scalar() or 0
-    )
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.CANCELLED) .scalar() or 0)
 
     # Success rate
-    success_rate = round(completed / total_runs * 100, 1) if total_runs > 0 else 0.0
+    success_rate = round(
+        completed / total_runs * 100,
+        1) if total_runs > 0 else 0.0
 
     # Most used files (by pipeline name frequency)
     most_used_pipelines = (
-        db.query(PipelineRun.name, func.count(PipelineRun.id).label("run_count"))
-        .filter(PipelineRun.user_id == user_id)
-        .group_by(PipelineRun.name)
-        .order_by(func.count(PipelineRun.id).desc())
-        .limit(5)
-        .all()
-    )
+        db.query(
+            PipelineRun.name,
+            func.count(
+                PipelineRun.id).label("run_count")) .filter(
+            PipelineRun.user_id == user_id) .group_by(
+                    PipelineRun.name) .order_by(
+                        func.count(
+                            PipelineRun.id).desc()) .limit(5) .all())
 
     # Recent activity from audit_logs
     recent_activity = (

@@ -20,14 +20,12 @@ from backend.pipeline.parser import (
     PivotStepConfig,
     RenameStepConfig,
     SampleStepConfig,
-    SaveStepConfig,
     SelectStepConfig,
     SqlStepConfig,
     SortOrder,
     SortStepConfig,
     StepType,
     UnpivotStepConfig,
-    ValidateStepConfig,
 )
 from backend.execution.smart_executor import SmartExecutor
 from backend.execution.duckdb_executor import DuckDBExecutor
@@ -192,10 +190,13 @@ class TestFilterStep:
         assert result.rows_out == 0
         assert len(result.warnings) > 0
 
-    def test_filter_on_column_with_all_nulls_returns_empty_df(self, executor, recorder):
+    def test_filter_on_column_with_all_nulls_returns_empty_df(
+            self, executor, recorder):
         """Filter on a column with 100% nulls returns 0 rows without crashing."""
         df = pd.DataFrame({"col": [None, None, None], "val": [1, 2, 3]})
-        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
+        df_registry = {
+            "source": pa.Table.from_pandas(
+                df, preserve_index=False)}
         config = FilterStepConfig(
             name="filter_nulls",
             step_type=StepType.FILTER,
@@ -386,7 +387,9 @@ class TestAggregateStep:
                 "value": [10.0, 20.0, 30.0, 40.0],
             }
         )
-        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
+        df_registry = {
+            "source": pa.Table.from_pandas(
+                df, preserve_index=False)}
         config = AggregateStepConfig(
             name="agg_totals",
             step_type=StepType.AGGREGATE,
@@ -396,9 +399,8 @@ class TestAggregateStep:
         )
         result = executor.execute_aggregate(df_registry, config, recorder)
         assert result.rows_out == 2
-        a_total = result.output_df[result.output_df["group"] == "a"]["value_sum"].iloc[
-            0
-        ]
+        a_total = result.output_df[result.output_df["group"]
+                                   == "a"]["value_sum"].iloc[0]
         assert a_total == 30.0
 
     def test_aggregate_count_includes_all_groups(
@@ -416,10 +418,13 @@ class TestAggregateStep:
         result = executor.execute_aggregate(df_registry, config, recorder)
         assert result.rows_out == sample_sales_df["region"].nunique()
 
-    def test_aggregate_on_string_column_with_sum_raises_error(self, executor, recorder):
+    def test_aggregate_on_string_column_with_sum_raises_error(
+            self, executor, recorder):
         """AggregationError raised when summing a string column."""
         df = pd.DataFrame({"group": ["a", "b"], "val": ["x", "y"]})
-        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
+        df_registry = {
+            "source": pa.Table.from_pandas(
+                df, preserve_index=False)}
         config = AggregateStepConfig(
             name="agg_bad",
             step_type=StepType.AGGREGATE,
@@ -572,7 +577,9 @@ class TestStepEdgeCases:
     def test_pivot_empty_df_returns_empty_df(self, executor, recorder):
         """Pivot on empty DataFrame should not crash and return empty result."""
         df = pd.DataFrame(columns=["idx", "cols", "vals"])
-        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
+        df_registry = {
+            "source": pa.Table.from_pandas(
+                df, preserve_index=False)}
         config = PivotStepConfig(
             name="pivot_empty",
             step_type=StepType.PIVOT,
@@ -587,7 +594,9 @@ class TestStepEdgeCases:
     def test_unpivot_overlapping_vars_raises_error(self, executor, recorder):
         """Unpivot with overlapping id_vars and value_vars must raise ValueError."""
         df = pd.DataFrame({"a": [1], "b": [2], "c": [3]})
-        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
+        df_registry = {
+            "source": pa.Table.from_pandas(
+                df, preserve_index=False)}
         config = UnpivotStepConfig(
             name="unpivot_overlap",
             step_type=StepType.UNPIVOT,
@@ -601,7 +610,9 @@ class TestStepEdgeCases:
     def test_deduplicate_no_subset_uses_all_columns(self, executor, recorder):
         """Deduplicate without subset should consider all columns."""
         df = pd.DataFrame({"a": [1, 1, 2], "b": [1, 1, 3]})
-        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
+        df_registry = {
+            "source": pa.Table.from_pandas(
+                df, preserve_index=False)}
         config = DeduplicateStepConfig(
             name="dedup_all",
             step_type=StepType.DEDUPLICATE,
@@ -611,10 +622,13 @@ class TestStepEdgeCases:
         result = executor.execute_deduplicate(df_registry, config, recorder)
         assert result.rows_out == 2
 
-    def test_fill_nulls_mean_on_non_numeric_raises_error(self, executor, recorder):
+    def test_fill_nulls_mean_on_non_numeric_raises_error(
+            self, executor, recorder):
         """Fill nulls with mean on string column should raise ValueError."""
         df = pd.DataFrame({"a": ["x", None, "z"]})
-        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
+        df_registry = {
+            "source": pa.Table.from_pandas(
+                df, preserve_index=False)}
         config = FillNullsStepConfig(
             name="fill_bad",
             step_type=StepType.FILL_NULLS,

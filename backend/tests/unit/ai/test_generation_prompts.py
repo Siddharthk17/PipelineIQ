@@ -32,7 +32,10 @@ class TestGenerationPrompt:
             assert step_type in STEP_TYPE_REFERENCE
 
     def test_generation_prompt_has_required_template_markers(self):
-        for marker in ("{step_type_reference}", "{file_schemas_section}", "{user_request}"):
+        for marker in (
+            "{step_type_reference}",
+            "{file_schemas_section}",
+                "{user_request}"):
             assert marker in GENERATION_SYSTEM_PROMPT
 
     def test_generation_prompt_demands_yaml_only(self):
@@ -84,4 +87,3 @@ class TestCleanYamlResponse:
     def test_clean_yaml_stays_unchanged(self):
         clean = "pipeline:\n  name: test\n  steps: []"
         assert _clean_yaml_response(clean) == clean
-

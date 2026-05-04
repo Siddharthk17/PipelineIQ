@@ -6,7 +6,6 @@ from backend.profiling.analyzer import (
     profile_dataframe,
     infer_semantic_type,
     detect_semantic_flags,
-    compute_histogram,
     compute_completeness,
 )
 
@@ -90,7 +89,8 @@ class TestCategoricalColumnProfiling:
 
 class TestSemanticTypeInference:
     def test_integer_column_is_numeric(self):
-        assert infer_semantic_type(pd.Series([1, 2, 3, 4]), "count") == "numeric"
+        assert infer_semantic_type(
+            pd.Series([1, 2, 3, 4]), "count") == "numeric"
 
     def test_email_column_detected(self):
         s = pd.Series(["user@example.com", "other@test.org", "name@site.net"])

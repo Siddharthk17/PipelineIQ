@@ -2,11 +2,10 @@ import time
 import uuid
 import pandas as pd
 import pyarrow as pa
-import pytest
 import numpy as np
 
 from backend.execution.smart_executor import SmartExecutor
-from backend.execution.arrow_bus import ArrowDataBus, get_arrow_bus
+from backend.execution.arrow_bus import get_arrow_bus
 from backend.execution.duckdb_executor import DuckDBExecutor
 from backend.pipeline.steps import StepExecutor
 from backend.pipeline.parser import (
@@ -29,7 +28,13 @@ def generate_dataset(rows: int, cols: int = 5):
     return pd.DataFrame(data)
 
 
-def run_benchmark_step(executor, bus, run_id, step_name, step_config, input_key=None):
+def run_benchmark_step(
+        executor,
+        bus,
+        run_id,
+        step_name,
+        step_config,
+        input_key=None):
     """Executes a step and measures duration."""
     start = time.perf_counter()
 
@@ -126,9 +131,10 @@ if __name__ == "__main__":
         print(f"\nBenchmarking {size:,} rows...", end=" ", flush=True)
         res = benchmark_pipeline(size)
 
-        print(f"Done.")
+        print("Done.")
         print(f"{'Step':<12} | {'Time':<10} | {'Tier':<10} | {'Size':<10}")
         print("-" * 45)
         for step in ["filter", "agg", "sql"]:
             t, tier, s = res[step]
-            print(f"{step:<12} | {t:.4f}s    | {tier:<10} | {s / (1024 * 1024):.2f} MB")
+            print(
+                f"{step:<12} | {t:.4f}s    | {tier:<10} | {s / (1024 * 1024):.2f} MB")

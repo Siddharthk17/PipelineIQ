@@ -38,7 +38,8 @@ class TestRecordLoad:
         )
         assert "file::f1" in lineage_recorder.graph.nodes
 
-    def test_record_load_creates_column_nodes_for_each_column(self, lineage_recorder):
+    def test_record_load_creates_column_nodes_for_each_column(
+            self, lineage_recorder):
         """Load step creates column nodes for each column."""
         lineage_recorder.record_load(
             file_id="f1",
@@ -51,7 +52,8 @@ class TestRecordLoad:
         assert "col::load_data::amount" in lineage_recorder.graph.nodes
         assert "col::load_data::status" in lineage_recorder.graph.nodes
 
-    def test_record_load_creates_edges_from_file_to_step_to_columns(self, lineage_recorder):
+    def test_record_load_creates_edges_from_file_to_step_to_columns(
+            self, lineage_recorder):
         """Load step creates edges: file → step → column nodes."""
         lineage_recorder.record_load(
             file_id="f1",
@@ -61,7 +63,8 @@ class TestRecordLoad:
             dtypes={},
         )
         assert lineage_recorder.graph.has_edge("file::f1", "step::load_data")
-        assert lineage_recorder.graph.has_edge("step::load_data", "col::load_data::amount")
+        assert lineage_recorder.graph.has_edge(
+            "step::load_data", "col::load_data::amount")
 
     def test_record_load_creates_file_and_column_nodes(self, lineage_recorder):
         """Load step creates correct total node count."""
@@ -90,7 +93,8 @@ class TestRecordPassthrough:
         )
         assert "step::filter_del" in loaded_recorder.graph.nodes
 
-    def test_record_passthrough_connects_input_to_step_to_output(self, loaded_recorder):
+    def test_record_passthrough_connects_input_to_step_to_output(
+            self, loaded_recorder):
         """Passthrough creates edges: input_col → step → output_col."""
         loaded_recorder.record_passthrough(
             step_name="filter_del",
@@ -98,8 +102,10 @@ class TestRecordPassthrough:
             input_step="load_sales",
             columns=["amount"],
         )
-        assert loaded_recorder.graph.has_edge("col::load_sales::amount", "step::filter_del")
-        assert loaded_recorder.graph.has_edge("step::filter_del", "col::filter_del::amount")
+        assert loaded_recorder.graph.has_edge(
+            "col::load_sales::amount", "step::filter_del")
+        assert loaded_recorder.graph.has_edge(
+            "step::filter_del", "col::filter_del::amount")
 
     def test_record_passthrough_preserves_all_columns(self, loaded_recorder):
         """Passthrough step creates output nodes for all input columns."""
@@ -118,7 +124,8 @@ class TestRecordPassthrough:
 class TestRecordProjection:
     """Tests for LineageRecorder.record_projection()."""
 
-    def test_record_projection_does_not_create_edges_for_dropped_columns(self, loaded_recorder):
+    def test_record_projection_does_not_create_edges_for_dropped_columns(
+            self, loaded_recorder):
         """Projection step only creates output nodes for kept columns."""
         loaded_recorder.record_projection(
             step_name="select_step",
@@ -149,9 +156,20 @@ class TestRecordJoin:
             step_name="join_data",
             left_step="load_sales",
             right_step="load_customers",
-            left_cols=["order_id", "customer_id", "amount", "status"],
-            right_cols=["customer_id", "name"],
-            output_cols=["order_id", "customer_id", "amount", "status", "name"],
+            left_cols=[
+                "order_id",
+                "customer_id",
+                "amount",
+                "status"],
+            right_cols=[
+                "customer_id",
+                "name"],
+            output_cols=[
+                "order_id",
+                "customer_id",
+                "amount",
+                "status",
+                "name"],
             join_key="customer_id",
             how="inner",
         )
@@ -219,7 +237,8 @@ class TestColumnAncestry:
 class TestImpactAnalysis:
     """Tests for LineageRecorder.get_impact_analysis()."""
 
-    def test_get_impact_analysis_identifies_downstream_steps(self, loaded_recorder):
+    def test_get_impact_analysis_identifies_downstream_steps(
+            self, loaded_recorder):
         """Impact analysis finds all steps that use the source column."""
         loaded_recorder.record_passthrough(
             step_name="filter_sales",
@@ -235,13 +254,15 @@ class TestImpactAnalysis:
 class TestReactFlowExport:
     """Tests for LineageRecorder.to_react_flow_format()."""
 
-    def test_to_react_flow_format_returns_nodes_and_edges(self, loaded_recorder):
+    def test_to_react_flow_format_returns_nodes_and_edges(
+            self, loaded_recorder):
         """React Flow export produces nodes and edges."""
         flow = loaded_recorder.to_react_flow_format()
         assert len(flow.nodes) > 0
         assert "nodes" in dir(flow) or hasattr(flow, "nodes")
 
-    def test_to_react_flow_format_all_nodes_have_positions(self, loaded_recorder):
+    def test_to_react_flow_format_all_nodes_have_positions(
+            self, loaded_recorder):
         """React Flow nodes have x/y positions."""
         flow = loaded_recorder.to_react_flow_format()
         for node in flow.nodes:
@@ -250,7 +271,8 @@ class TestReactFlowExport:
             assert node.position["x"] >= 0
             assert node.position["y"] >= 0
 
-    def test_to_react_flow_format_no_overlapping_positions(self, loaded_recorder):
+    def test_to_react_flow_format_no_overlapping_positions(
+            self, loaded_recorder):
         """No two nodes at exactly the same x,y position."""
         loaded_recorder.record_passthrough(
             step_name="filter_sales",
@@ -266,7 +288,8 @@ class TestReactFlowExport:
 class TestSerialization:
     """Tests for LineageRecorder.serialize()."""
 
-    def test_serialize_deserialize_roundtrip_preserves_all_nodes(self, loaded_recorder):
+    def test_serialize_deserialize_roundtrip_preserves_all_nodes(
+            self, loaded_recorder):
         """Serialized graph preserves all nodes."""
         import networkx as nx
         loaded_recorder.record_passthrough(
@@ -279,7 +302,8 @@ class TestSerialization:
         reconstructed = nx.node_link_graph(serialized["graph_data"])
         assert set(loaded_recorder.graph.nodes) == set(reconstructed.nodes)
 
-    def test_serialize_deserialize_roundtrip_preserves_all_edges(self, loaded_recorder):
+    def test_serialize_deserialize_roundtrip_preserves_all_edges(
+            self, loaded_recorder):
         """Serialized graph preserves all edges."""
         import networkx as nx
         loaded_recorder.record_passthrough(

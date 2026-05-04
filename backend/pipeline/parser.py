@@ -7,10 +7,9 @@ error messages and suggestions.
 """
 
 import logging
-import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 import yaml
 
@@ -315,6 +314,14 @@ class PipelineParser:
         raw = self._parse_yaml(yaml_string)
         return self._build_pipeline_config(raw)
 
+    def parse_raw(self, yaml_string: str) -> dict:
+        """Parse a YAML string into a raw Python dictionary."""
+        return self._parse_yaml(yaml_string)
+
+    def build_from_dict(self, raw: dict) -> PipelineConfig:
+        """Build a PipelineConfig from a raw dictionary."""
+        return self._build_pipeline_config(raw)
+
     def validate(
         self,
         config: PipelineConfig,
@@ -361,7 +368,8 @@ class PipelineParser:
             raise InvalidYAMLError(str(exc), line=line_num) from exc
 
         if not isinstance(raw, dict):
-            raise InvalidYAMLError("YAML root must be a mapping, not a scalar or list")
+            raise InvalidYAMLError(
+                "YAML root must be a mapping, not a scalar or list")
         return raw
 
     def _build_pipeline_config(self, raw: dict) -> PipelineConfig:
@@ -411,8 +419,11 @@ class PipelineParser:
         try:
             step_type = StepType(step_type_str)
         except ValueError:
-            # Return a base StepConfig so validation can report the invalid type
-            return StepConfig(name=step_name, step_type=step_type_str)  # type: ignore[arg-type]
+            # Return a base StepConfig so validation can report the invalid
+            # type
+            return StepConfig(
+                name=step_name,
+                step_type=step_type_str)  # type: ignore[arg-type]
 
         return self._build_typed_step(step_name, step_type, step_raw)
 
@@ -449,9 +460,8 @@ class PipelineParser:
             raw_aggs = raw.get("aggregations", [])
             # Convert {column: function} dict to [{column, function}] list
             if isinstance(raw_aggs, dict):
-                raw_aggs = [
-                    {"column": col, "function": func} for col, func in raw_aggs.items()
-                ]
+                raw_aggs = [{"column": col, "function": func}
+                            for col, func in raw_aggs.items()]
             return AggregateStepConfig(
                 name=name,
                 step_type=step_type,
@@ -478,7 +488,8 @@ class PipelineParser:
         if step_type == StepType.PIVOT:
             index_raw = raw.get("index", "")
             # Handle both string and list for index
-            index_list = [index_raw] if isinstance(index_raw, str) else index_raw
+            index_list = [index_raw] if isinstance(
+                index_raw, str) else index_raw
             return PivotStepConfig(
                 name=name,
                 step_type=step_type,
@@ -655,8 +666,7 @@ class PipelineParser:
                         step_name=name,
                         field="name",
                         message=f"Step name '{name}' is used {count} times. Names must be unique.",
-                    )
-                )
+                    ))
 
     def _check_step_name_format(
         self, config: PipelineConfig, errors: List[ValidationError]
@@ -682,15 +692,16 @@ class PipelineParser:
         valid_types = [t.value for t in StepType]
         for step in config.steps:
             if not isinstance(step.step_type, StepType):
-                suggestion = find_closest_column(str(step.step_type), valid_types)
+                suggestion = find_closest_column(
+                    str(step.step_type), valid_types)
                 errors.append(
                     ValidationError(
                         step_name=step.name,
                         field="type",
-                        message=f"Invalid step type '{step.step_type}'. Valid types: {valid_types}",
+                        message=f"Invalid step type '{
+                            step.step_type}'. Valid types: {valid_types}",
                         suggestion=suggestion,
-                    )
-                )
+                    ))
 
     def _check_required_step_fields(
         self, config: PipelineConfig, errors: List[ValidationError]
@@ -719,8 +730,7 @@ class PipelineParser:
                             step_name=step_name,
                             field="file_id",
                             message="Load step must specify a non-empty file_id",
-                        )
-                    )
+                        ))
                 continue
 
             if isinstance(step, JoinStepConfig):
@@ -730,16 +740,14 @@ class PipelineParser:
                             step_name=step_name,
                             field="left",
                             message="Join step must specify a non-empty left input",
-                        )
-                    )
+                        ))
                 if not step.right or not step.right.strip():
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="right",
                             message="Join step must specify a non-empty right input",
-                        )
-                    )
+                        ))
             else:
                 input_ref = getattr(step, "input", None)
                 if isinstance(input_ref, str) and not input_ref.strip():
@@ -748,8 +756,7 @@ class PipelineParser:
                             step_name=step_name,
                             field="input",
                             message="Step must specify a non-empty input reference",
-                        )
-                    )
+                        ))
 
             if isinstance(step, FilterStepConfig):
                 if not step.column or not step.column.strip():
@@ -758,8 +765,7 @@ class PipelineParser:
                             step_name=step_name,
                             field="column",
                             message="Filter step must specify a non-empty column",
-                        )
-                    )
+                        ))
                 if (
                     isinstance(step.operator, FilterOperator)
                     and step.operator
@@ -771,8 +777,7 @@ class PipelineParser:
                             step_name=step_name,
                             field="value",
                             message="Filter step must specify a value for this operator",
-                        )
-                    )
+                        ))
 
             if isinstance(step, SelectStepConfig) and not step.columns:
                 errors.append(
@@ -798,8 +803,7 @@ class PipelineParser:
                         step_name=step_name,
                         field="group_by",
                         message="Aggregate step must specify at least one group_by column",
-                    )
-                )
+                    ))
 
             if isinstance(step, SortStepConfig) and not step.by.strip():
                 errors.append(
@@ -807,8 +811,7 @@ class PipelineParser:
                         step_name=step_name,
                         field="by",
                         message="Sort step must specify a non-empty 'by' column",
-                    )
-                )
+                    ))
 
             if isinstance(step, ValidateStepConfig) and not step.rules:
                 errors.append(
@@ -826,24 +829,21 @@ class PipelineParser:
                             step_name=step_name,
                             field="index",
                             message="Pivot step must specify at least one index column",
-                        )
-                    )
+                        ))
                 if not step.columns or not step.columns.strip():
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="columns",
                             message="Pivot step must specify a non-empty columns field",
-                        )
-                    )
+                        ))
                 if not step.values or not step.values.strip():
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="values",
                             message="Pivot step must specify a non-empty values field",
-                        )
-                    )
+                        ))
 
             if isinstance(step, UnpivotStepConfig):
                 if not step.id_vars:
@@ -852,16 +852,14 @@ class PipelineParser:
                             step_name=step_name,
                             field="id_vars",
                             message="Unpivot step must define at least one id_vars column",
-                        )
-                    )
+                        ))
                 if not step.value_vars:
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="value_vars",
                             message="Unpivot step must define at least one value_vars column",
-                        )
-                    )
+                        ))
 
             if (
                 isinstance(step, FillNullsStepConfig)
@@ -873,8 +871,7 @@ class PipelineParser:
                         step_name=step_name,
                         field="value",
                         message="Fill nulls step with 'constant' strategy must provide a value",
-                    )
-                )
+                    ))
 
             if isinstance(step, SampleStepConfig):
                 if step.n is None and step.fraction is None:
@@ -883,16 +880,14 @@ class PipelineParser:
                             step_name=step_name,
                             field="sample",
                             message="Sample step must specify either 'n' or 'fraction'",
-                        )
-                    )
+                        ))
                 if step.n is not None and step.fraction is not None:
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="sample",
                             message="Sample step must specify only one of 'n' or 'fraction'",
-                        )
-                    )
+                        ))
 
             if isinstance(step, SqlStepConfig) and not step.query.strip():
                 errors.append(
@@ -959,11 +954,10 @@ class PipelineParser:
                             step_name=step.name,
                             field="file_id",
                             message=(
-                                f"file_id '{step.file_id}' is not registered. "
-                                f"Registered IDs: {sorted(registered_file_ids)}"
-                            ),
-                        )
-                    )
+                                f"file_id '{
+                                    step.file_id}' is not registered. " f"Registered IDs: {
+                                    sorted(registered_file_ids)}"),
+                        ))
 
     def _check_filter_operators(
         self, config: PipelineConfig, errors: List[ValidationError]
@@ -1000,8 +994,7 @@ class PipelineParser:
                             step_name=step.name,
                             field="on",
                             message="Join step must specify a join key via 'on' field",
-                        )
-                    )
+                        ))
                 if not isinstance(step.how, JoinHow):
                     errors.append(
                         ValidationError(
@@ -1026,8 +1019,7 @@ class PipelineParser:
                             step_name=step.name,
                             field="aggregations",
                             message="Aggregate step must define at least one aggregation",
-                        )
-                    )
+                        ))
                 for agg in step.aggregations:
                     if isinstance(agg, dict):
                         func_name = agg.get("function", "")
@@ -1036,14 +1028,9 @@ class PipelineParser:
                     if func_name not in VALID_AGGREGATION_FUNCTIONS:
                         errors.append(
                             ValidationError(
-                                step_name=step.name,
-                                field="aggregations.function",
-                                message=(
-                                    f"Invalid aggregation function '{func_name}'. "
-                                    f"Valid functions: {sorted(VALID_AGGREGATION_FUNCTIONS)}"
-                                ),
-                            )
-                        )
+                                step_name=step.name, field="aggregations.function", message=(
+                                    f"Invalid aggregation function '{func_name}'. " f"Valid functions: {
+                                        sorted(VALID_AGGREGATION_FUNCTIONS)}"), ))
 
     def _check_has_save_step(
         self,
@@ -1052,17 +1039,14 @@ class PipelineParser:
         warnings: List[ValidationWarning],
     ) -> None:
         """Check 11: At least one save step exists."""
-        has_save = any(isinstance(step, SaveStepConfig) for step in config.steps)
+        has_save = any(isinstance(step, SaveStepConfig)
+                       for step in config.steps)
         if not has_save:
             warnings.append(
                 ValidationWarning(
-                    step_name=None,
-                    message=(
+                    step_name=None, message=(
                         "Pipeline has no 'save' step. Results will be computed "
-                        "but not persisted to an output file."
-                    ),
-                )
-            )
+                        "but not persisted to an output file."), ))
 
     def _check_save_filenames(
         self, config: PipelineConfig, errors: List[ValidationError]
@@ -1083,9 +1067,9 @@ class PipelineParser:
                         ValidationError(
                             step_name=step.name,
                             field="filename",
-                            message=f"Invalid filename '{step.filename}'. Path traversal characters are forbidden.",
-                        )
-                    )
+                            message=f"Invalid filename '{
+                                step.filename}'. Path traversal characters are forbidden.",
+                        ))
 
     def _check_validate_rules(
         self,
@@ -1103,14 +1087,10 @@ class PipelineParser:
                 if check not in SUPPORTED_CHECKS:
                     errors.append(
                         ValidationError(
-                            step_name=step.name,
-                            field="rules",
-                            message=(
-                                f"Unknown check type '{check}'. "
-                                f"Supported: {', '.join(sorted(SUPPORTED_CHECKS))}"
-                            ),
-                        )
-                    )
+                            step_name=step.name, field="rules", message=(
+                                f"Unknown check type '{check}'. " f"Supported: {
+                                    ', '.join(
+                                        sorted(SUPPORTED_CHECKS))}"), ))
 
     def _check_sql_steps(
         self,
@@ -1122,7 +1102,8 @@ class PipelineParser:
             if not isinstance(step, SqlStepConfig):
                 continue
             try:
-                validate_sql_step_query(step.query, require_input_placeholder=True)
+                validate_sql_step_query(
+                    step.query, require_input_placeholder=True)
             except ValueError as exc:
                 errors.append(
                     ValidationError(

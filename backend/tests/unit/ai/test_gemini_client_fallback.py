@@ -16,8 +16,7 @@ class _FakeModels:
         if model == "gemini-1.5-flash":
             raise Exception(
                 "404 NOT_FOUND. {'error': {'message': "
-                "'models/gemini-1.5-flash is not found for API version v1beta'}}"
-            )
+                "'models/gemini-1.5-flash is not found for API version v1beta'}}")
         return SimpleNamespace(text=f"ok from {model}")
 
 

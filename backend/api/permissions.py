@@ -23,7 +23,8 @@ router = APIRouter(prefix="/pipelines", tags=["permissions"])
 class GrantPermissionRequest(BaseModel):
     """Request body to grant a permission on a pipeline."""
 
-    user_id: str = Field(..., description="UUID of the user to grant permission to")
+    user_id: str = Field(...,
+                         description="UUID of the user to grant permission to")
     permission_level: str = Field(
         ..., description="Permission level: 'owner', 'runner', or 'viewer'"
     )
@@ -97,15 +98,17 @@ def grant_permission(
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid permission level '{body.permission_level}'. Must be 'owner', 'runner', or 'viewer'.",
+            detail=f"Invalid permission level '{
+                body.permission_level}'. Must be 'owner', 'runner', or 'viewer'.",
         )
 
     validate_uuid_format(body.user_id)
-    target_user = db.query(User).filter(User.id == as_uuid(body.user_id)).first()
+    target_user = db.query(User).filter(
+        User.id == as_uuid(body.user_id)).first()
     if not target_user:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Target user not found"
-        )
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Target user not found")
 
     # Check if permission already exists
     existing = (
@@ -200,8 +203,8 @@ def revoke_permission(
     )
     if not perm:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Permission not found"
-        )
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Permission not found")
 
     db.delete(perm)
     db.commit()

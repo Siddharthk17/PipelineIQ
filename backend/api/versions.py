@@ -4,7 +4,6 @@ Provides access to pipeline version history, diffs, and restore.
 """
 
 import logging
-from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -40,7 +39,8 @@ def _check_pipeline_permission(
     if not permission or permission.permission_level not in required_levels:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User lacks required permissions ({', '.join(required_levels)}) to access pipeline '{pipeline_name}'",
+            detail=f"User lacks required permissions ({
+                ', '.join(required_levels)}) to access pipeline '{pipeline_name}'",
         )
 
 
@@ -60,22 +60,17 @@ def list_versions(
         .order_by(PipelineVersion.version_number.desc())
         .all()
     )
-    return {
-        "pipeline_name": pipeline_name,
-        "total_versions": len(versions),
-        "versions": [
-            {
-                "id": str(v.id),
-                "version_number": v.version_number,
-                "pipeline_name": v.pipeline_name,
-                "yaml_config": v.yaml_config,
-                "run_id": str(v.run_id) if v.run_id else None,
-                "change_summary": v.change_summary,
-                "created_at": v.created_at.isoformat() if v.created_at else None,
+    return {"pipeline_name": pipeline_name,
+            "total_versions": len(versions),
+            "versions": [{"id": str(v.id),
+                          "version_number": v.version_number,
+                          "pipeline_name": v.pipeline_name,
+                          "yaml_config": v.yaml_config,
+                          "run_id": str(v.run_id) if v.run_id else None,
+                          "change_summary": v.change_summary,
+                          "created_at": v.created_at.isoformat() if v.created_at else None,
+                          } for v in versions],
             }
-            for v in versions
-        ],
-    }
 
 
 @router.get("/{pipeline_name}/{version_number}")
@@ -173,7 +168,9 @@ def restore_version(
     current_user: User = Depends(get_current_user),
 ):
     """Restore a pipeline to a previous version by creating a new version."""
-    _check_pipeline_permission(db, current_user, pipeline_name, ["owner", "runner"])
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, [
+            "owner", "runner"])
     old_version = (
         db.query(PipelineVersion)
         .filter(

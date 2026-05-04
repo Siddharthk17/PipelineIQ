@@ -23,7 +23,8 @@ pytestmark = pytest.mark.skipif(
 
 def _compose() -> dict:
     repo_root = Path(__file__).resolve().parents[3]
-    return yaml.safe_load((repo_root / "docker-compose.yml").read_text(encoding="utf-8"))
+    return yaml.safe_load(
+        (repo_root / "docker-compose.yml").read_text(encoding="utf-8"))
 
 
 def _connect_postgres(*, port: int):
@@ -59,7 +60,11 @@ def test_compose_declares_week1_worker_topology():
 
 def test_compose_declares_four_redis_roles():
     services = _compose()["services"]
-    for service_name in ("redis-broker", "redis-pubsub", "redis-cache", "redis-yjs"):
+    for service_name in (
+        "redis-broker",
+        "redis-pubsub",
+        "redis-cache",
+            "redis-yjs"):
         assert service_name in services
 
 
@@ -110,7 +115,7 @@ def test_pgbouncer_primary_uses_transaction_pooling():
             pools = cursor.fetchall()
     finally:
         conn.close()
-            
+
     # Find the pipelineiq pool and check its mode (index 15)
     pipelineiq_pool = next((p for p in pools if p[0] == "pipelineiq"), None)
     assert pipelineiq_pool is not None, "pipelineiq pool not found in pgbouncer"

@@ -14,7 +14,10 @@ from backend.execution.sql_builder import (
 
 
 def test_build_filter_sql_generates_where_clause() -> None:
-    step = SimpleNamespace(column="status", operator="equals", value="delivered")
+    step = SimpleNamespace(
+        column="status",
+        operator="equals",
+        value="delivered")
     sql = build_filter_sql(step)
     assert "FROM __input__" in sql
     assert "WHERE" in sql
@@ -44,7 +47,8 @@ def test_validate_sql_step_query_requires_input_placeholder() -> None:
 
 def test_validate_sql_step_query_rejects_write_keywords() -> None:
     with pytest.raises(ValueError, match="disallowed"):
-        validate_sql_step_query("SELECT * FROM {{input}} WHERE status = 'ok' DROP TABLE x")
+        validate_sql_step_query(
+            "SELECT * FROM {{input}} WHERE status = 'ok' DROP TABLE x")
 
 
 def test_validate_sql_step_query_allows_keywords_in_literals_and_comments() -> None:
@@ -60,7 +64,8 @@ def test_validate_sql_step_query_rejects_multiple_statements() -> None:
 
 
 def test_build_sql_step_sql_replaces_input_placeholder() -> None:
-    step = SimpleNamespace(query="SELECT customer_id FROM {{input}} WHERE amount > 5")
+    step = SimpleNamespace(
+        query="SELECT customer_id FROM {{input}} WHERE amount > 5")
     sql = build_sql_step_sql(step)
     assert "{{input}}" not in sql
     assert "__input__" in sql

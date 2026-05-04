@@ -3,12 +3,11 @@
 Provides user registration, login, profile, and admin user management.
 """
 
-import re
 import logging
-from typing import Optional
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.orm import Session
 
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
@@ -24,7 +23,6 @@ from backend.auth import (
 )
 from backend.services.audit_service import log_action
 from backend.utils.rate_limiter import limiter
-from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +49,8 @@ class RegisterRequest(BaseModel):
         if len(v) < 3 or len(v) > 50:
             raise ValueError("Username must be 3-50 characters")
         if not re.match(r"^[a-zA-Z0-9_]+$", v):
-            raise ValueError("Username must be alphanumeric with underscores only")
+            raise ValueError(
+                "Username must be alphanumeric with underscores only")
         return v
 
     @field_validator("password")
@@ -60,11 +59,13 @@ class RegisterRequest(BaseModel):
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
         if not any(c.isupper() for c in v):
-            raise ValueError("Password must contain at least one uppercase letter")
+            raise ValueError(
+                "Password must contain at least one uppercase letter")
         if not any(c.isdigit() for c in v):
             raise ValueError("Password must contain at least one number")
         if not any(c in "!@#$%^&*()_+-=[]{}|;:',.<>?/`~" for c in v):
-            raise ValueError("Password must contain at least one special character")
+            raise ValueError(
+                "Password must contain at least one special character")
         return v
 
 

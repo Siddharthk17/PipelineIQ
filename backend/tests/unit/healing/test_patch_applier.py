@@ -103,6 +103,7 @@ def test_validate_healing_patch_accepts_valid_payload():
 
 
 def test_validate_healing_patch_rejects_missing_fields():
-    valid, error = validate_healing_patch({"confidence": 0.8, "change_description": "bad"})
+    valid, error = validate_healing_patch(
+        {"confidence": 0.8, "change_description": "bad"})
     assert valid is False
     assert "patches" in error

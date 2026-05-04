@@ -1,20 +1,19 @@
 """Tests for JWT authentication endpoints."""
 
-import time
-from unittest.mock import patch
 
-import pytest
 from jose import jwt
 
-from backend.auth import ALGORITHM, get_password_hash, create_access_token
+from backend.auth import ALGORITHM
 
 
 # Helpers
 
 
 def register_user(
-    auth_client, email="test@example.com", username="testuser", password="Str0ngP@ss!"
-):
+        auth_client,
+        email="test@example.com",
+        username="testuser",
+        password="Str0ngP@ss!"):
     return auth_client.post(
         "/auth/register",
         json={
@@ -137,7 +136,8 @@ def test_get_me_with_expired_token_returns_401(auth_client):
 
 
 def test_protected_route_without_token_returns_401(auth_client):
-    r = auth_client.post("/api/v1/pipelines/validate", json={"yaml_config": "test"})
+    r = auth_client.post("/api/v1/pipelines/validate",
+                         json={"yaml_config": "test"})
     assert r.status_code in [401, 403]
 
 
@@ -159,14 +159,16 @@ def test_protected_route_with_valid_token_succeeds(auth_client):
 def test_admin_route_with_viewer_token_returns_403(auth_client):
     register_user(auth_client, "adm@test.com", "admuser")  # admin (first)
     register_user(auth_client, "view@test.com", "viewuser")  # viewer
-    viewer_token = login_user(auth_client, "view@test.com").json()["access_token"]
+    viewer_token = login_user(auth_client,
+                              "view@test.com").json()["access_token"]
     r = auth_client.get("/auth/users", headers=auth_header(viewer_token))
     assert r.status_code == 403
 
 
 def test_admin_route_with_admin_token_succeeds(auth_client):
     register_user(auth_client, "boss@test.com", "bossuser")
-    admin_token = login_user(auth_client, "boss@test.com").json()["access_token"]
+    admin_token = login_user(auth_client,
+                             "boss@test.com").json()["access_token"]
     r = auth_client.get("/auth/users", headers=auth_header(admin_token))
     assert r.status_code == 200
 

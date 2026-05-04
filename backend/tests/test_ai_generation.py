@@ -4,7 +4,9 @@ from backend.ai.generation import repair_pipeline_from_error
 
 
 @pytest.mark.asyncio
-async def test_repair_pipeline_handles_quota_placeholder_without_leaking_text(monkeypatch, test_db):
+async def test_repair_pipeline_handles_quota_placeholder_without_leaking_text(
+        monkeypatch,
+        test_db):
     original_yaml = """
 pipeline:
   name: test

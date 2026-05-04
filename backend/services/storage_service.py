@@ -3,7 +3,7 @@ import shutil
 import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import BinaryIO, Optional, Union
+from typing import BinaryIO, Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -16,46 +16,42 @@ class StorageProvider(ABC):
     @abstractmethod
     def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
         """Upload a file and return the stored path/key."""
-        pass
 
     @abstractmethod
-    async def upload_stream(self, stream, destination_path: str, max_size: int) -> int:
+    async def upload_stream(
+            self,
+            stream,
+            destination_path: str,
+            max_size: int) -> int:
         """Upload a stream of bytes and return total bytes written."""
-        pass
 
     @abstractmethod
     def download(self, path: str) -> BinaryIO:
         """Download a file as a binary stream."""
-        pass
 
     @abstractmethod
     def delete(self, path: str) -> None:
         """Delete a file from storage."""
-        pass
 
     @abstractmethod
     def exists(self, path: str) -> bool:
         """Check if a file exists in storage."""
-        pass
 
     @abstractmethod
     def get_size(self, path: str) -> int:
         """Return file size in bytes."""
-        pass
 
     @abstractmethod
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
     ) -> Optional[str]:
         """Return a presigned URL for direct upload to storage. Return None if not supported."""
-        pass
 
     @abstractmethod
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
     ) -> Optional[str]:
         """Return a presigned URL for direct download from storage. Return None if not supported."""
-        pass
 
 
 class LocalStorageProvider(StorageProvider):
@@ -76,7 +72,11 @@ class LocalStorageProvider(StorageProvider):
             shutil.copyfileobj(file_obj, f)
         return str(full_path)
 
-    async def upload_stream(self, stream, destination_path: str, max_size: int) -> int:
+    async def upload_stream(
+            self,
+            stream,
+            destination_path: str,
+            max_size: int) -> int:
         full_path = self._get_full_path(destination_path)
         total_read = 0
         with open(full_path, "wb") as output:
@@ -87,7 +87,8 @@ class LocalStorageProvider(StorageProvider):
                 if total_read > max_size:
                     output.close()
                     full_path.unlink(missing_ok=True)
-                    raise Exception(f"File size exceeds maximum ({max_size} bytes)")
+                    raise Exception(
+                        f"File size exceeds maximum ({max_size} bytes)")
                 output.write(chunk)
         if total_read == 0:
             full_path.unlink(missing_ok=True)
@@ -139,7 +140,11 @@ class S3StorageProvider(StorageProvider):
         self.s3.upload_fileobj(file_obj, self.bucket, key)
         return key
 
-    async def upload_stream(self, stream, destination_path: str, max_size: int) -> int:
+    async def upload_stream(
+            self,
+            stream,
+            destination_path: str,
+            max_size: int) -> int:
         key = os.path.basename(destination_path)
         total_read = 0
         temp_file_path: Optional[str] = None
@@ -152,7 +157,8 @@ class S3StorageProvider(StorageProvider):
                         continue
                     total_read += len(chunk)
                     if total_read > max_size:
-                        raise Exception(f"File size exceeds maximum ({max_size} bytes)")
+                        raise Exception(
+                            f"File size exceeds maximum ({max_size} bytes)")
                     temp_file.write(chunk)
 
             if total_read == 0:
@@ -229,7 +235,11 @@ class StorageService:
     def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
         return self.provider.upload(file_obj, destination_path)
 
-    async def upload_stream(self, stream, destination_path: str, max_size: int) -> int:
+    async def upload_stream(
+            self,
+            stream,
+            destination_path: str,
+            max_size: int) -> int:
         return await self.provider.upload_stream(stream, destination_path, max_size)
 
     def download(self, path: str) -> BinaryIO:
@@ -247,12 +257,14 @@ class StorageService:
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
     ) -> Optional[str]:
-        return self.provider.get_presigned_upload_url(destination_path, expiration)
+        return self.provider.get_presigned_upload_url(
+            destination_path, expiration)
 
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
     ) -> Optional[str]:
-        return self.provider.get_presigned_download_url(source_path, expiration)
+        return self.provider.get_presigned_download_url(
+            source_path, expiration)
 
 
 # Singleton instance

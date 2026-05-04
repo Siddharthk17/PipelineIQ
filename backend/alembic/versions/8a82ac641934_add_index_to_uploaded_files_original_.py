@@ -9,7 +9,6 @@ Create Date: 2026-04-06 20:13:40.172420
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
@@ -29,4 +28,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_uploaded_files_original_filename", table_name="uploaded_files")
+    op.drop_index(
+        "ix_uploaded_files_original_filename",
+        table_name="uploaded_files")

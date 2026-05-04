@@ -3,8 +3,7 @@
 15 tests covering row estimation, duration, and API endpoints.
 """
 
-import pytest
-from backend.pipeline.planner import generate_execution_plan, _estimate_duration
+from backend.pipeline.planner import generate_execution_plan
 from backend.tests.conftest import upload_file
 
 
@@ -30,7 +29,8 @@ SIMPLE_YAML_TEMPLATE = """pipeline:
 class TestPlannerRowEstimation:
     """Tests for row count estimation heuristics."""
 
-    def test_plan_load_uses_actual_file_row_count(self, client, test_db, sales_csv_bytes):
+    def test_plan_load_uses_actual_file_row_count(
+            self, client, test_db, sales_csv_bytes):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = SIMPLE_YAML_TEMPLATE.format(file_id=file_id)
         plan = generate_execution_plan(yaml_config, test_db)
@@ -53,16 +53,19 @@ class TestPlannerRowEstimation:
         plan = generate_execution_plan(yaml_config, test_db)
         assert plan.steps[0].will_fail is True
 
-    def test_plan_filter_estimates_70_percent(self, client, test_db, sales_csv_bytes):
+    def test_plan_filter_estimates_70_percent(
+            self, client, test_db, sales_csv_bytes):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = SIMPLE_YAML_TEMPLATE.format(file_id=file_id)
         plan = generate_execution_plan(yaml_config, test_db)
         filter_step = plan.steps[1]
         assert filter_step.estimated_rows_out == int(20 * 0.7)
 
-    def test_plan_join_inner_estimates_min_of_inputs(self, client, test_db, sales_csv_bytes, customers_csv_bytes):
+    def test_plan_join_inner_estimates_min_of_inputs(
+            self, client, test_db, sales_csv_bytes, customers_csv_bytes):
         sales_id = upload_file(client, sales_csv_bytes, "sales.csv")
-        customers_id = upload_file(client, customers_csv_bytes, "customers.csv")
+        customers_id = upload_file(
+            client, customers_csv_bytes, "customers.csv")
         yaml_config = f"""pipeline:
   name: join_test
   steps:
@@ -83,9 +86,11 @@ class TestPlannerRowEstimation:
         join_step = plan.steps[2]
         assert join_step.estimated_rows_out == min(20, 10)
 
-    def test_plan_join_left_preserves_left_count(self, client, test_db, sales_csv_bytes, customers_csv_bytes):
+    def test_plan_join_left_preserves_left_count(
+            self, client, test_db, sales_csv_bytes, customers_csv_bytes):
         sales_id = upload_file(client, sales_csv_bytes, "sales.csv")
-        customers_id = upload_file(client, customers_csv_bytes, "customers.csv")
+        customers_id = upload_file(
+            client, customers_csv_bytes, "customers.csv")
         yaml_config = f"""pipeline:
   name: join_test
   steps:
@@ -106,7 +111,8 @@ class TestPlannerRowEstimation:
         join_step = plan.steps[2]
         assert join_step.estimated_rows_out == 20
 
-    def test_plan_aggregate_estimates_fewer_rows(self, client, test_db, sales_csv_bytes):
+    def test_plan_aggregate_estimates_fewer_rows(
+            self, client, test_db, sales_csv_bytes):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = f"""pipeline:
   name: agg_test
@@ -126,7 +132,8 @@ class TestPlannerRowEstimation:
         agg_step = plan.steps[1]
         assert agg_step.estimated_rows_out < 20
 
-    def test_plan_sort_preserves_row_count(self, client, test_db, sales_csv_bytes):
+    def test_plan_sort_preserves_row_count(
+            self, client, test_db, sales_csv_bytes):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = f"""pipeline:
   name: sort_test
@@ -148,7 +155,8 @@ class TestPlannerRowEstimation:
 class TestPlannerDuration:
     """Tests for duration estimation."""
 
-    def test_plan_total_duration_sums_steps(self, client, test_db, sales_csv_bytes):
+    def test_plan_total_duration_sums_steps(
+            self, client, test_db, sales_csv_bytes):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = SIMPLE_YAML_TEMPLATE.format(file_id=file_id)
         plan = generate_execution_plan(yaml_config, test_db)
@@ -159,13 +167,15 @@ class TestPlannerDuration:
 class TestPlannerMetadata:
     """Tests for plan metadata fields."""
 
-    def test_plan_files_read_contains_file_ids(self, client, test_db, sales_csv_bytes):
+    def test_plan_files_read_contains_file_ids(
+            self, client, test_db, sales_csv_bytes):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = SIMPLE_YAML_TEMPLATE.format(file_id=file_id)
         plan = generate_execution_plan(yaml_config, test_db)
         assert file_id in plan.files_read
 
-    def test_plan_files_written_contains_output_names(self, client, test_db, sales_csv_bytes):
+    def test_plan_files_written_contains_output_names(
+            self, client, test_db, sales_csv_bytes):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = SIMPLE_YAML_TEMPLATE.format(file_id=file_id)
         plan = generate_execution_plan(yaml_config, test_db)
@@ -176,7 +186,8 @@ class TestPlannerMetadata:
         plan = generate_execution_plan(yaml_config, test_db)
         assert plan.will_succeed is False
 
-    def test_plan_will_succeed_true_for_valid_pipeline(self, client, test_db, sales_csv_bytes):
+    def test_plan_will_succeed_true_for_valid_pipeline(
+            self, client, test_db, sales_csv_bytes):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = SIMPLE_YAML_TEMPLATE.format(file_id=file_id)
         plan = generate_execution_plan(yaml_config, test_db)
@@ -186,7 +197,8 @@ class TestPlannerMetadata:
 class TestPlannerEndpoint:
     """Tests for /pipelines/plan API endpoint."""
 
-    def test_plan_endpoint_returns_200_for_valid_yaml(self, client, sales_csv_bytes):
+    def test_plan_endpoint_returns_200_for_valid_yaml(
+            self, client, sales_csv_bytes):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = SIMPLE_YAML_TEMPLATE.format(file_id=file_id)
         response = client.post(

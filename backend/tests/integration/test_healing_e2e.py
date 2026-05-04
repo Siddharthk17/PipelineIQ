@@ -32,7 +32,8 @@ def test_healing_history_endpoint_returns_structured_attempts(client, test_db):
     test_db.add(attempt)
     test_db.commit()
 
-    response = client.get(f"/api/v1/pipelines/{pipeline_run.id}/healing-history")
+    response = client.get(
+        f"/api/v1/pipelines/{pipeline_run.id}/healing-history")
     assert response.status_code == 200
     payload = response.json()
     assert payload["run_id"] == str(pipeline_run.id)

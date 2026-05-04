@@ -6,14 +6,11 @@ Results are cached in Redis for performance.
 """
 
 import logging
-import uuid
-from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Query, status, Depends
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
-from backend.config import settings
 from backend.dependencies import get_read_db_dependency
 from backend.models import LineageGraph, PipelineRun, User
 from backend.pipeline.lineage import LineageRecorder
@@ -25,7 +22,7 @@ from backend.schemas import (
     ReactFlowNodeResponse,
     TransformationStepResponse,
 )
-from backend.utils.cache import cache_delete, cache_delete_pattern, cache_get, cache_set
+from backend.utils.cache import cache_get, cache_set
 from backend.utils.uuid_utils import (
     validate_uuid_format as _validate_uuid_format,
     as_uuid as _as_uuid,
@@ -87,12 +84,11 @@ def get_lineage_graph(
     return response
 
 
-@router.get(
-    "/{run_id}/column",
-    response_model=ColumnLineageResponse,
-    summary="Trace column ancestry",
-    description="Trace a column backward to its source file and all transformations.",
-)
+@router.get("/{run_id}/column",
+            response_model=ColumnLineageResponse,
+            summary="Trace column ancestry",
+            description="Trace a column backward to its source file and all transformations.",
+            )
 def get_column_lineage(
     run_id: str,
     step: str = Query(..., description="Step name containing the column"),
@@ -191,7 +187,10 @@ def get_impact_analysis(
     return response
 
 
-def _get_lineage_record(run_id: str, db: Session, current_user: User) -> LineageGraph:
+def _get_lineage_record(
+        run_id: str,
+        db: Session,
+        current_user: User) -> LineageGraph:
     """Fetch the lineage graph record, raising 404 if not found."""
     _validate_run_exists(run_id, db, current_user)
 
@@ -213,7 +212,8 @@ def _get_lineage_record(run_id: str, db: Session, current_user: User) -> Lineage
 
 def _validate_run_exists(run_id: str, db: Session, current_user: User) -> None:
     """Raise 404 if the pipeline run does not exist or user lacks access."""
-    exists = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    exists = db.query(PipelineRun).filter(
+        PipelineRun.id == _as_uuid(run_id)).first()
     if exists is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

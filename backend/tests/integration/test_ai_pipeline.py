@@ -21,7 +21,8 @@ pytestmark = pytest.mark.skipif(
 
 
 class TestAIPipelineIntegration:
-    def test_generate_then_validate_yaml(self, client, sales_csv_bytes, monkeypatch):
+    def test_generate_then_validate_yaml(
+            self, client, sales_csv_bytes, monkeypatch):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
 
         generated_yaml = f"""
@@ -69,7 +70,8 @@ pipeline:
         assert validate_response.json()["valid"] is True
         assert validate_response.json()["step_count"] == 2
 
-    def test_repair_failed_run_returns_diff(self, client, test_db, sales_csv_bytes, monkeypatch):
+    def test_repair_failed_run_returns_diff(
+            self, client, test_db, sales_csv_bytes, monkeypatch):
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = build_simple_pipeline_yaml(file_id)
         run_id = client.post(
@@ -77,7 +79,8 @@ pipeline:
             json={"yaml_config": yaml_config},
         ).json()["run_id"]
 
-        run = test_db.query(PipelineRun).filter(PipelineRun.id == as_uuid(run_id)).first()
+        run = test_db.query(PipelineRun).filter(
+            PipelineRun.id == as_uuid(run_id)).first()
         assert run is not None
         run.status = PipelineStatus.FAILED
         run.error_message = "Column 'ammount' not found"
@@ -86,11 +89,11 @@ pipeline:
         async def _fake_repair_pipeline_from_error(**kwargs):
             assert kwargs["failed_step"]
             return SimpleNamespace(
-                corrected_yaml=yaml_config.replace("ammount", "amount"),
-                diff_lines=[{"type": "removed", "content": "ammount"}, {"type": "added", "content": "amount"}],
-                valid=True,
-                error=None,
-            )
+                corrected_yaml=yaml_config.replace(
+                    "ammount", "amount"), diff_lines=[
+                    {
+                        "type": "removed", "content": "ammount"}, {
+                        "type": "added", "content": "amount"}], valid=True, error=None, )
 
         monkeypatch.setattr(
             "backend.routers.ai.repair_pipeline_from_error",
@@ -102,4 +105,3 @@ pipeline:
         payload = response.json()
         assert payload["valid"] is True
         assert payload["diff_lines"]
-

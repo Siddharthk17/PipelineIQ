@@ -5,7 +5,6 @@ This separation makes the core logic fully unit testable.
 """
 
 import math
-import re
 import pandas as pd
 import numpy as np
 from typing import Any
@@ -47,7 +46,8 @@ def infer_semantic_type(series: pd.Series, column_name: str) -> str:
     if pd.api.types.is_bool_dtype(series):
         return "boolean"
 
-    if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
+    if pd.api.types.is_object_dtype(
+            series) or pd.api.types.is_string_dtype(series):
         non_null = series.dropna().astype(str)
         if len(non_null) == 0:
             return "text"
@@ -76,14 +76,17 @@ def infer_semantic_type(series: pd.Series, column_name: str) -> str:
             return "email"
 
         phone_pattern = r"^[\+\d\-\(\)\s]{7,15}$"
-        if any(x in name_lower for x in ["phone", "mobile", "tel", "contact"]) or (
-            sample.str.match(phone_pattern).mean() > 0.7
-        ):
+        if any(
+                x in name_lower for x in [
+                    "phone",
+                    "mobile",
+                    "tel",
+                    "contact"]) or (
+                sample.str.match(phone_pattern).mean() > 0.7):
             return "phone"
 
         if any(x in name_lower for x in ["url", "link", "href", "website"]) or (
-            sample.str.startswith(("http://", "https://")).mean() > 0.5
-        ):
+                sample.str.startswith(("http://", "https://")).mean() > 0.5):
             return "url"
 
         if any(
@@ -236,19 +239,21 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
         if pd.api.types.is_numeric_dtype(series):
             non_null = series.dropna()
             if len(non_null) > 0:
-                # Convert to float64 to avoid numpy boolean subtract issues with masked arrays
-                numeric_series = pd.to_numeric(series, errors="coerce").dropna()
+                # Convert to float64 to avoid numpy boolean subtract issues
+                # with masked arrays
+                numeric_series = pd.to_numeric(
+                    series, errors="coerce").dropna()
                 if len(numeric_series) > 0:
-                    # Convert to regular numpy array to avoid masked array issues with quantile
+                    # Convert to regular numpy array to avoid masked array
+                    # issues with quantile
                     values = numeric_series.values.astype(np.float64)
                     values = values[~np.isnan(values)]
                     q1 = q3 = 0.0  # Default values
                     if len(values) > 0:
-                        desc = pd.Series(values).describe()
                         q1 = float(np.percentile(values, 25))
                         q3 = float(np.percentile(values, 75))
                     else:
-                        desc = numeric_series.describe()
+                        numeric_series.describe()
                     iqr = q3 - q1
                     lower_fence = q1 - 1.5 * iqr
                     upper_fence = q3 + 1.5 * iqr

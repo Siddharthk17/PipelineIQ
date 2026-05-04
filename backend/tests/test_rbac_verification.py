@@ -1,6 +1,5 @@
 import pytest
 from typing import Generator
-from fastapi import Depends
 from sqlalchemy.orm import Session
 from backend.main import app
 from backend.auth import get_current_user
@@ -21,9 +20,6 @@ from unittest.mock import MagicMock, patch
 def set_current_user(user: User):
     """Override get_current_user dependency to return the specified user."""
     app.dependency_overrides[get_current_user] = lambda: user
-
-
-from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture()
@@ -174,19 +170,27 @@ def test_run_pipeline_rbac(rbac_client, users, sample_pipeline, test_db):
 
     # Admin can run
     set_current_user(users["admin"])
-    assert rbac_client.post("/api/v1/pipelines/run", json=payload).status_code == 202
+    assert rbac_client.post(
+        "/api/v1/pipelines/run",
+        json=payload).status_code == 202
 
     # Owner can run
     set_current_user(users["owner"])
-    assert rbac_client.post("/api/v1/pipelines/run", json=payload).status_code == 202
+    assert rbac_client.post(
+        "/api/v1/pipelines/run",
+        json=payload).status_code == 202
 
     # Runner can run
     set_current_user(users["runner"])
-    assert rbac_client.post("/api/v1/pipelines/run", json=payload).status_code == 202
+    assert rbac_client.post(
+        "/api/v1/pipelines/run",
+        json=payload).status_code == 202
 
     # Viewer cannot run
     set_current_user(users["viewer"])
-    assert rbac_client.post("/api/v1/pipelines/run", json=payload).status_code == 403
+    assert rbac_client.post(
+        "/api/v1/pipelines/run",
+        json=payload).status_code == 403
 
 
 def test_cancel_pipeline_rbac(rbac_client, users, test_db, sample_pipeline):
@@ -207,7 +211,8 @@ def test_cancel_pipeline_rbac(rbac_client, users, test_db, sample_pipeline):
 
     # Admin can cancel
     set_current_user(users["admin"])
-    assert rbac_client.post(f"/api/v1/pipelines/{run_id}/cancel").status_code == 200
+    assert rbac_client.post(
+        f"/api/v1/pipelines/{run_id}/cancel").status_code == 200
 
     # Reset status to RUNNING for next tests
     run.status = PipelineStatus.RUNNING
@@ -215,21 +220,24 @@ def test_cancel_pipeline_rbac(rbac_client, users, test_db, sample_pipeline):
 
     # Owner can cancel
     set_current_user(users["owner"])
-    assert rbac_client.post(f"/api/v1/pipelines/{run_id}/cancel").status_code == 200
+    assert rbac_client.post(
+        f"/api/v1/pipelines/{run_id}/cancel").status_code == 200
 
     run.status = PipelineStatus.RUNNING
     test_db.commit()
 
     # Runner can cancel
     set_current_user(users["runner"])
-    assert rbac_client.post(f"/api/v1/pipelines/{run_id}/cancel").status_code == 200
+    assert rbac_client.post(
+        f"/api/v1/pipelines/{run_id}/cancel").status_code == 200
 
     run.status = PipelineStatus.RUNNING
     test_db.commit()
 
     # Viewer cannot cancel
     set_current_user(users["viewer"])
-    assert rbac_client.post(f"/api/v1/pipelines/{run_id}/cancel").status_code == 403
+    assert rbac_client.post(
+        f"/api/v1/pipelines/{run_id}/cancel").status_code == 403
 
 
 def test_export_pipeline_rbac(rbac_client, users, sample_run):
@@ -305,27 +313,23 @@ def test_list_permissions_rbac(rbac_client, users, sample_pipeline):
     # Admin can list
     set_current_user(users["admin"])
     assert (
-        rbac_client.get(f"/api/v1/pipelines/{pipeline_name}/permissions").status_code
-        == 200
-    )
+        rbac_client.get(
+            f"/api/v1/pipelines/{pipeline_name}/permissions").status_code == 200)
 
     # Owner can list
     set_current_user(users["owner"])
     assert (
-        rbac_client.get(f"/api/v1/pipelines/{pipeline_name}/permissions").status_code
-        == 200
-    )
+        rbac_client.get(
+            f"/api/v1/pipelines/{pipeline_name}/permissions").status_code == 200)
 
     # Runner cannot list
     set_current_user(users["runner"])
     assert (
-        rbac_client.get(f"/api/v1/pipelines/{pipeline_name}/permissions").status_code
-        == 403
-    )
+        rbac_client.get(
+            f"/api/v1/pipelines/{pipeline_name}/permissions").status_code == 403)
 
     # Viewer cannot list
     set_current_user(users["viewer"])
     assert (
-        rbac_client.get(f"/api/v1/pipelines/{pipeline_name}/permissions").status_code
-        == 403
-    )
+        rbac_client.get(
+            f"/api/v1/pipelines/{pipeline_name}/permissions").status_code == 403)

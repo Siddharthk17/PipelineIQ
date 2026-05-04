@@ -78,8 +78,8 @@ def truncate_string(
     """
     if max_length < len(suffix):
         raise ValueError(
-            f"max_length ({max_length}) must be >= suffix length ({len(suffix)})"
-        )
+            f"max_length ({max_length}) must be >= suffix length ({
+                len(suffix)})")
     if len(text) <= max_length:
         return text
     return text[: max_length - len(suffix)] + suffix

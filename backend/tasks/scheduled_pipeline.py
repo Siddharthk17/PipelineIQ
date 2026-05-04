@@ -33,8 +33,6 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
     Returns:
         dict with run_id and status
     """
-    import asyncio
-    from sqlalchemy import select, update
     from backend.database import SessionLocal
     from backend.models import PipelineSchedule, ScheduleRun, PipelineRun, PipelineStatus
 
@@ -44,7 +42,8 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
     db = SessionLocal()
     try:
         # Get the schedule
-        schedule = db.query(PipelineSchedule).filter(PipelineSchedule.id == schedule_id).first()
+        schedule = db.query(PipelineSchedule).filter(
+            PipelineSchedule.id == schedule_id).first()
 
         if not schedule:
             logger.error(f"Schedule not found: {schedule_id}")
@@ -65,7 +64,8 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
         schedule.last_run_at = datetime.now(timezone.utc)
         schedule.total_runs += 1
         # Note: last_run_status is updated when the run actually completes.
-        # We update it here to 'RUNNING' or similar if we want, but normally it's the final status.
+        # We update it here to 'RUNNING' or similar if we want, but normally
+        # it's the final status.
 
         # Submit the pipeline for execution
         from backend.tasks.pipeline_tasks import execute_pipeline_task
@@ -103,7 +103,9 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
         return {"run_id": run_id, "status": "submitted"}
 
     except Exception as exc:
-        logger.error(f"Failed to execute scheduled pipeline {schedule_id}: {exc}", exc_info=True)
+        logger.error(
+            f"Failed to execute scheduled pipeline {schedule_id}: {exc}",
+            exc_info=True)
         db.rollback()
         raise self.retry(exc=exc)
     finally:

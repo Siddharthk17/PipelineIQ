@@ -32,9 +32,10 @@ def upgrade() -> None:
 
     # Add user_id to pipeline_runs
     op.add_column(
-        "pipeline_runs",
-        sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
-    )
+        "pipeline_runs", sa.Column(
+            "user_id", UUID(
+                as_uuid=True), sa.ForeignKey(
+                "users.id", ondelete="SET NULL"), nullable=True), )
 
 
 def downgrade() -> None:

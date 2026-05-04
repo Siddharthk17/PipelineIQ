@@ -12,7 +12,6 @@ from backend.pipeline.parser import (
     PipelineParser,
     SaveStepConfig,
     SqlStepConfig,
-    StepType,
 )
 
 
@@ -178,7 +177,8 @@ pipeline:
         config = parser.parse(yaml_str)
         result = parser.validate(config, {"f1", "f2"})
         assert result.is_valid is False
-        assert any("duplicate" in e.message.lower() or "used" in e.message.lower() for e in result.errors)
+        assert any("duplicate" in e.message.lower()
+                   or "used" in e.message.lower() for e in result.errors)
 
     def test_validate_forward_reference_returns_error(self, parser):
         """Step referencing a step defined AFTER it returns error."""
@@ -276,8 +276,7 @@ pipeline:
         result = parser.validate(config, {"f1"})
         assert result.is_valid is False
         assert any(
-            e.field == "input" and "missing_step" in e.message for e in result.errors
-        )
+            e.field == "input" and "missing_step" in e.message for e in result.errors)
 
     def test_validate_nonexistent_file_id_returns_error(self, parser):
         """Load step referencing file_id not in registered set returns error."""
@@ -309,9 +308,12 @@ pipeline:
         config = parser.parse(yaml_str)
         result = parser.validate(config, {"f1"})
         assert result.is_valid is False
-        assert any(e.step_name == "filter_data" and e.field == "input" for e in result.errors)
+        assert any(e.step_name == "filter_data" and e.field ==
+                   "input" for e in result.errors)
 
-    def test_validate_join_requires_non_empty_left_and_right_inputs(self, parser):
+    def test_validate_join_requires_non_empty_left_and_right_inputs(
+            self,
+            parser):
         """Join step must include both left and right references."""
         yaml_str = """
 pipeline:
@@ -337,7 +339,8 @@ pipeline:
         config = parser.parse(yaml_str)
         result = parser.validate(config, {"f1", "f2"})
         assert result.is_valid is False
-        assert any(e.step_name == "join_step" and e.field == "left" for e in result.errors)
+        assert any(e.step_name == "join_step" and e.field ==
+                   "left" for e in result.errors)
 
     def test_validate_sample_requires_n_or_fraction(self, parser):
         """Sample step must define exactly one sizing mode."""
@@ -359,7 +362,8 @@ pipeline:
         config = parser.parse(yaml_str)
         result = parser.validate(config, {"f1"})
         assert result.is_valid is False
-        assert any(e.step_name == "sample_data" and e.field == "sample" for e in result.errors)
+        assert any(e.step_name == "sample_data" and e.field ==
+                   "sample" for e in result.errors)
 
     def test_validate_invalid_filter_operator_returns_error(self, parser):
         """Filter step with operator='invalid_op' returns error."""
@@ -430,9 +434,12 @@ pipeline:
         config = parser.parse(yaml_str)
         result = parser.validate(config, {"f1"})
         assert result.is_valid is False
-        assert any("invalid characters" in e.message.lower() or "space" in e.message.lower() for e in result.errors)
+        assert any("invalid characters" in e.message.lower()
+                   or "space" in e.message.lower() for e in result.errors)
 
-    def test_validate_aggregate_with_invalid_function_returns_error(self, parser):
+    def test_validate_aggregate_with_invalid_function_returns_error(
+            self,
+            parser):
         """aggregate: revenue: invalid_func returns error."""
         yaml_str = """
 pipeline:
@@ -456,7 +463,8 @@ pipeline:
         config = parser.parse(yaml_str)
         result = parser.validate(config, {"f1"})
         assert result.is_valid is False
-        assert any("aggregat" in e.field.lower() or "function" in e.message.lower() for e in result.errors)
+        assert any("aggregat" in e.field.lower()
+                   or "function" in e.message.lower() for e in result.errors)
 
     def test_parse_filter_operator_enum_conversion(self, parser):
         """operator: 'equals' correctly converts to FilterOperator.EQUALS."""

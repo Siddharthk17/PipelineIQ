@@ -48,7 +48,10 @@ def send_slack_notification(webhook_url: str, message: str) -> bool:
         return False
 
 
-def send_email_notification(recipients: list[str], subject: str, body: str) -> bool:
+def send_email_notification(
+        recipients: list[str],
+        subject: str,
+        body: str) -> bool:
     """Send a plain-text email notification via SMTP."""
     if not recipients:
         logger.info("Email notification skipped: no recipients provided")
@@ -121,7 +124,7 @@ def notify_pipeline_event(
 
     Returns the number of notifications successfully sent.
     """
-    query = db.query(NotificationConfig).filter(NotificationConfig.is_active == True)
+    query = db.query(NotificationConfig).filter(NotificationConfig.is_active)
     if user_id:
         query = query.filter(NotificationConfig.user_id == user_id)
     configs = query.all()
@@ -158,7 +161,11 @@ def _build_message(
     error_message: Optional[str],
 ) -> str:
     """Build a human-readable notification message."""
-    emoji = {"pipeline_completed": "✅", "pipeline_failed": "❌"}.get(event_type, "ℹ️")
+    emoji = {
+        "pipeline_completed": "✅",
+        "pipeline_failed": "❌"}.get(
+        event_type,
+        "ℹ️")
     parts = [f"{emoji} *Pipeline Event: {event_type}*"]
     parts.append(f"• Pipeline: {pipeline_name}")
     if run_id:

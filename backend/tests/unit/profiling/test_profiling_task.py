@@ -56,7 +56,10 @@ def test_load_file_from_storage_csv_uses_storage_service(test_db, monkeypatch):
 
     monkeypatch.setattr(profiling_tasks, "SessionLocal", lambda: test_db)
     monkeypatch.setattr(profiling_tasks.storage_service, "exists", exists_mock)
-    monkeypatch.setattr(profiling_tasks.storage_service, "download", download_mock)
+    monkeypatch.setattr(
+        profiling_tasks.storage_service,
+        "download",
+        download_mock)
 
     df = profiling_tasks._load_file_from_disk(file_id)
 
@@ -67,7 +70,9 @@ def test_load_file_from_storage_csv_uses_storage_service(test_db, monkeypatch):
     download_mock.assert_called_once_with("stored-key.csv")
 
 
-def test_load_file_from_storage_json_uses_storage_service(test_db, monkeypatch):
+def test_load_file_from_storage_json_uses_storage_service(
+        test_db,
+        monkeypatch):
     file_id = _create_uploaded_file_record(
         test_db,
         stored_path="stored-key.json",
@@ -81,7 +86,10 @@ def test_load_file_from_storage_json_uses_storage_service(test_db, monkeypatch):
 
     monkeypatch.setattr(profiling_tasks, "SessionLocal", lambda: test_db)
     monkeypatch.setattr(profiling_tasks.storage_service, "exists", exists_mock)
-    monkeypatch.setattr(profiling_tasks.storage_service, "download", download_mock)
+    monkeypatch.setattr(
+        profiling_tasks.storage_service,
+        "download",
+        download_mock)
 
     df = profiling_tasks._load_file_from_disk(file_id)
 
@@ -92,7 +100,9 @@ def test_load_file_from_storage_json_uses_storage_service(test_db, monkeypatch):
     download_mock.assert_called_once_with("stored-key.json")
 
 
-def test_load_file_from_storage_missing_path_raises_value_error(test_db, monkeypatch):
+def test_load_file_from_storage_missing_path_raises_value_error(
+        test_db,
+        monkeypatch):
     file_id = _create_uploaded_file_record(
         test_db,
         stored_path="missing-key.csv",
@@ -104,7 +114,10 @@ def test_load_file_from_storage_missing_path_raises_value_error(test_db, monkeyp
 
     monkeypatch.setattr(profiling_tasks, "SessionLocal", lambda: test_db)
     monkeypatch.setattr(profiling_tasks.storage_service, "exists", exists_mock)
-    monkeypatch.setattr(profiling_tasks.storage_service, "download", download_mock)
+    monkeypatch.setattr(
+        profiling_tasks.storage_service,
+        "download",
+        download_mock)
 
     with pytest.raises(ValueError, match="File not found at path: missing-key.csv"):
         profiling_tasks._load_file_from_disk(file_id)
@@ -113,7 +126,9 @@ def test_load_file_from_storage_missing_path_raises_value_error(test_db, monkeyp
     download_mock.assert_not_called()
 
 
-def test_profile_file_missing_record_skips_without_profile_insert(test_db, monkeypatch):
+def test_profile_file_missing_record_skips_without_profile_insert(
+        test_db,
+        monkeypatch):
     missing_file_id = str(_uuid.uuid4())
     monkeypatch.setattr(profiling_tasks, "SessionLocal", lambda: test_db)
 

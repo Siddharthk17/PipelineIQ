@@ -214,7 +214,8 @@ class TestUnpivotStep:
         result = executor.execute({"load1": wide_df}, step, recorder)
         assert len(result.output_df) == 6
 
-    def test_unpivot_default_var_value_names(self, executor, wide_df, recorder):
+    def test_unpivot_default_var_value_names(
+            self, executor, wide_df, recorder):
         step = UnpivotStepConfig(
             name="test",
             step_type=StepType.UNPIVOT,
@@ -252,22 +253,29 @@ class TestUnpivotStep:
 class TestDeduplicateStep:
     def test_dedup_keep_first(self, executor, df_with_dupes, recorder):
         step = DeduplicateStepConfig(
-            name="test", step_type=StepType.DEDUPLICATE, input="load1", keep="first"
-        )
+            name="test",
+            step_type=StepType.DEDUPLICATE,
+            input="load1",
+            keep="first")
         result = executor.execute({"load1": df_with_dupes}, step, recorder)
         assert len(result.output_df) == 4
 
     def test_dedup_keep_last(self, executor, df_with_dupes, recorder):
         step = DeduplicateStepConfig(
-            name="test", step_type=StepType.DEDUPLICATE, input="load1", keep="last"
-        )
+            name="test",
+            step_type=StepType.DEDUPLICATE,
+            input="load1",
+            keep="last")
         result = executor.execute({"load1": df_with_dupes}, step, recorder)
         assert len(result.output_df) == 4
 
-    def test_dedup_keep_none_removes_all_dupes(self, executor, df_with_dupes, recorder):
+    def test_dedup_keep_none_removes_all_dupes(
+            self, executor, df_with_dupes, recorder):
         step = DeduplicateStepConfig(
-            name="test", step_type=StepType.DEDUPLICATE, input="load1", keep="none"
-        )
+            name="test",
+            step_type=StepType.DEDUPLICATE,
+            input="load1",
+            keep="none")
         result = executor.execute({"load1": df_with_dupes}, step, recorder)
         assert len(result.output_df) == 2
 
@@ -310,9 +318,11 @@ class TestDeduplicateStep:
             name="test", step_type=StepType.DEDUPLICATE, input="load1"
         )
         result = executor.execute({"load1": df_with_dupes}, step, recorder)
-        assert list(result.output_df.index) == list(range(len(result.output_df)))
+        assert list(result.output_df.index) == list(
+            range(len(result.output_df)))
 
-    def test_dedup_output_is_dataframe(self, executor, df_with_dupes, recorder):
+    def test_dedup_output_is_dataframe(
+            self, executor, df_with_dupes, recorder):
         step = DeduplicateStepConfig(
             name="test", step_type=StepType.DEDUPLICATE, input="load1"
         )
@@ -379,7 +389,8 @@ class TestFillNullsStep:
         result = executor.execute({"load1": df_with_nulls}, step, recorder)
         assert result.output_df["numeric_col"].iloc[1] == -999
 
-    def test_constant_without_value_raises(self, executor, df_with_nulls, recorder):
+    def test_constant_without_value_raises(
+            self, executor, df_with_nulls, recorder):
         step = FillNullsStepConfig(
             name="test",
             step_type=StepType.FILL_NULLS,
@@ -391,7 +402,8 @@ class TestFillNullsStep:
         with pytest.raises(ValueError):
             executor.execute({"load1": df_with_nulls}, step, recorder)
 
-    def test_mean_on_string_column_raises(self, executor, df_with_nulls, recorder):
+    def test_mean_on_string_column_raises(
+            self, executor, df_with_nulls, recorder):
         step = FillNullsStepConfig(
             name="test",
             step_type=StepType.FILL_NULLS,
@@ -414,7 +426,8 @@ class TestFillNullsStep:
         with pytest.raises(Exception):
             executor.execute({"load1": df_with_nulls}, step, recorder)
 
-    def test_only_specified_columns_filled(self, executor, df_with_nulls, recorder):
+    def test_only_specified_columns_filled(
+            self, executor, df_with_nulls, recorder):
         step = FillNullsStepConfig(
             name="test",
             step_type=StepType.FILL_NULLS,
@@ -459,14 +472,16 @@ class TestSampleStep:
         result = executor.execute({"load1": large_df}, step, recorder)
         assert len(result.output_df) == 500
 
-    def test_sample_fraction_approximate_row_count(self, executor, large_df, recorder):
+    def test_sample_fraction_approximate_row_count(
+            self, executor, large_df, recorder):
         step = SampleStepConfig(
             name="test", step_type=StepType.SAMPLE, input="load1", fraction=0.1
         )
         result = executor.execute({"load1": large_df}, step, recorder)
         assert 990 <= len(result.output_df) <= 1010
 
-    def test_sample_reproducible_with_same_seed(self, executor, large_df, recorder):
+    def test_sample_reproducible_with_same_seed(
+            self, executor, large_df, recorder):
         step1 = SampleStepConfig(
             name="test",
             step_type=StepType.SAMPLE,
@@ -506,7 +521,8 @@ class TestSampleStep:
         result2 = executor.execute({"load1": large_df}, step2, recorder)
         assert list(result1.output_df["id"]) != list(result2.output_df["id"])
 
-    def test_sample_n_and_fraction_together_raises(self, executor, large_df, recorder):
+    def test_sample_n_and_fraction_together_raises(
+            self, executor, large_df, recorder):
         step = SampleStepConfig(
             name="test",
             step_type=StepType.SAMPLE,
@@ -517,19 +533,25 @@ class TestSampleStep:
         with pytest.raises(ValueError):
             executor.execute({"load1": large_df}, step, recorder)
 
-    def test_sample_n_exceeds_rows_returns_all(self, executor, large_df, recorder):
+    def test_sample_n_exceeds_rows_returns_all(
+            self, executor, large_df, recorder):
         step = SampleStepConfig(
             name="test", step_type=StepType.SAMPLE, input="load1", n=99999
         )
         result = executor.execute({"load1": large_df}, step, recorder)
         assert len(result.output_df) == len(large_df)
 
-    def test_sample_neither_n_nor_fraction_raises(self, executor, large_df, recorder):
-        step = SampleStepConfig(name="test", step_type=StepType.SAMPLE, input="load1")
+    def test_sample_neither_n_nor_fraction_raises(
+            self, executor, large_df, recorder):
+        step = SampleStepConfig(
+            name="test",
+            step_type=StepType.SAMPLE,
+            input="load1")
         with pytest.raises(ValueError):
             executor.execute({"load1": large_df}, step, recorder)
 
-    def test_sample_index_reset_after_sampling(self, executor, large_df, recorder):
+    def test_sample_index_reset_after_sampling(
+            self, executor, large_df, recorder):
         step = SampleStepConfig(
             name="test", step_type=StepType.SAMPLE, input="load1", n=100
         )
@@ -552,7 +574,8 @@ class TestSampleStep:
         north_pct = (result.output_df["region"] == "North").mean()
         assert 0.30 <= north_pct <= 0.50
 
-    def test_stratify_by_missing_column_raises(self, executor, large_df, recorder):
+    def test_stratify_by_missing_column_raises(
+            self, executor, large_df, recorder):
         step = SampleStepConfig(
             name="test",
             step_type=StepType.SAMPLE,

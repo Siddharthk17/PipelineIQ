@@ -29,4 +29,3 @@ class TestYamlDiff:
         types = {line["type"] for line in diff}
         assert "removed" in types
         assert "added" in types
-

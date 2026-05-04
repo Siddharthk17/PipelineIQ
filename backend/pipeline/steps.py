@@ -70,7 +70,8 @@ class StepExecutionResult:
         return self.output_table.to_pandas()
 
 
-# Maps FilterOperator → a callable that takes (pd.Series, value) → pd.Series[bool]
+# Maps FilterOperator → a callable that takes (pd.Series, value) →
+# pd.Series[bool]
 FILTER_OPERATIONS: Dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] = {
     FilterOperator.EQUALS: lambda s, v: s == v,
     FilterOperator.NOT_EQUALS: lambda s, v: s != v,
@@ -148,8 +149,11 @@ class StepExecutor:
 
         if config.step_type == StepType.LOAD:
             return executor(
-                table_registry, config, recorder, file_paths or {}, file_metadata or {}
-            )
+                table_registry,
+                config,
+                recorder,
+                file_paths or {},
+                file_metadata or {})
         return executor(table_registry, config, recorder)
 
     def execute_load(
@@ -238,7 +242,8 @@ class StepExecutor:
 
         def _pandas_filter() -> pa.Table:
             mask = self._apply_filter_operator(config)
-            filtered_df = input_df[mask(input_df[config.column], config.value)].copy()
+            filtered_df = input_df[mask(
+                input_df[config.column], config.value)].copy()
             return pa.Table.from_pandas(filtered_df, preserve_index=False)
 
         filtered_table = _pandas_filter()
@@ -471,7 +476,8 @@ class StepExecutor:
         agg_dict = self._build_aggregation_dict(config, columns_in)
 
         def _pandas_aggregate() -> pa.Table:
-            aggregated_df = self._perform_aggregation(config, input_df, agg_dict)
+            aggregated_df = self._perform_aggregation(
+                config, input_df, agg_dict)
             return pa.Table.from_pandas(aggregated_df, preserve_index=False)
 
         aggregated_table = _pandas_aggregate()
@@ -528,7 +534,8 @@ class StepExecutor:
                         step_name=config.name,
                         column=col,
                         function=func,
-                        reason=f"Aggregation function '{func}' requires numeric column, but '{col}' is {input_df[col].dtype}",
+                        reason=f"Aggregation function '{func}' requires numeric column, but '{col}' is {
+                            input_df[col].dtype}",
                     )
 
         try:
@@ -543,8 +550,8 @@ class StepExecutor:
 
         # Flatten multi-level column names: (column, func) → column_func
         grouped.columns = [
-            f"{col}_{func}" if func != col else col for col, func in grouped.columns
-        ]
+            f"{col}_{func}" if func != col else col for col,
+            func in grouped.columns]
         return grouped.reset_index()
 
     def execute_sort(
@@ -602,8 +609,6 @@ class StepExecutor:
         """Save the input DataFrame to a file on disk (CSV or JSON)."""
         import uuid as _uuid
         import io
-
-        from backend.config import settings
 
         start = time.perf_counter()
         input_table = table_registry[config.input]
@@ -690,7 +695,9 @@ class StepExecutor:
                 f"{result.warning_count} warnings"
             )
         elif result.warning_count > 0:
-            warnings.append(f"Validation passed with {result.warning_count} warnings")
+            warnings.append(
+                f"Validation passed with {
+                    result.warning_count} warnings")
 
         recorder.record_passthrough(
             step_name=config.name,
@@ -772,7 +779,8 @@ class StepExecutor:
                 ]
             else:
                 result_df.columns = [str(col) for col in result_df.columns]
-            return pa.Table.from_pandas(result_df.reset_index(), preserve_index=False)
+            return pa.Table.from_pandas(
+                result_df.reset_index(), preserve_index=False)
 
         result_table = _pandas_pivot()
         result_df = result_table.to_pandas()
@@ -816,7 +824,8 @@ class StepExecutor:
 
         overlap = set(config.id_vars) & set(config.value_vars)
         if overlap:
-            raise ValueError(f"id_vars and value_vars must not overlap: {overlap}")
+            raise ValueError(
+                f"id_vars and value_vars must not overlap: {overlap}")
 
         def _pandas_unpivot() -> pa.Table:
             result_df = input_df.melt(
@@ -917,19 +926,24 @@ class StepExecutor:
                         raise ValueError(
                             "constant_value required when strategy is 'constant'"
                         )
-                    result_df[col] = result_df[col].fillna(config.constant_value)
+                    result_df[col] = result_df[col].fillna(
+                        config.constant_value)
                 elif config.strategy == "forward_fill":
                     result_df[col] = result_df[col].ffill()
                 elif config.strategy == "backward_fill":
                     result_df[col] = result_df[col].bfill()
                 elif config.strategy == "mean":
                     if not pd.api.types.is_numeric_dtype(result_df[col]):
-                        raise ValueError("Strategy 'mean' requires numeric column")
-                    result_df[col] = result_df[col].fillna(result_df[col].mean())
+                        raise ValueError(
+                            "Strategy 'mean' requires numeric column")
+                    result_df[col] = result_df[col].fillna(
+                        result_df[col].mean())
                 elif config.strategy == "median":
                     if not pd.api.types.is_numeric_dtype(result_df[col]):
-                        raise ValueError("Strategy 'median' requires numeric column")
-                    result_df[col] = result_df[col].fillna(result_df[col].median())
+                        raise ValueError(
+                            "Strategy 'median' requires numeric column")
+                    result_df[col] = result_df[col].fillna(
+                        result_df[col].median())
                 elif config.strategy == "mode":
                     mode_val = result_df[col].mode()
                     if len(mode_val) > 0:
@@ -975,7 +989,8 @@ class StepExecutor:
             raise ValueError("Specify either n or fraction, not both")
 
         if config.stratify_by:
-            self._validate_column_exists(config.name, config.stratify_by, columns_in)
+            self._validate_column_exists(
+                config.name, config.stratify_by, columns_in)
 
         def _pandas_sample() -> pa.Table:
             if config.n is not None and config.n > len(input_df):
@@ -984,7 +999,9 @@ class StepExecutor:
                 groups = []
                 target_n = config.n or int(len(input_df) * config.fraction)
                 for _, group_df in input_df.groupby(config.stratify_by):
-                    group_n = max(1, int(len(group_df) / len(input_df) * target_n))
+                    group_n = max(
+                        1, int(
+                            len(group_df) / len(input_df) * target_n))
                     groups.append(
                         group_df.sample(
                             n=min(group_n, len(group_df)),

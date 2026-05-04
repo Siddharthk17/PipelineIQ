@@ -21,12 +21,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 
+
 class CreateScheduleRequest(BaseModel):
     """Request body to create a pipeline schedule."""
 
-    pipeline_name: str = Field(..., max_length=255, description="Name for the scheduled pipeline")
-    yaml_config: str = Field(..., min_length=10, description="YAML pipeline configuration")
-    cron_expression: str = Field(..., description="Cron expression for scheduling (e.g. '*/5 * * * *')")
+    pipeline_name: str = Field(..., max_length=255,
+                               description="Name for the scheduled pipeline")
+    yaml_config: str = Field(..., min_length=10,
+                             description="YAML pipeline configuration")
+    cron_expression: str = Field(...,
+                                 description="Cron expression for scheduling (e.g. '*/5 * * * *')")
 
     @field_validator("cron_expression")
     @classmethod
@@ -34,9 +38,9 @@ class CreateScheduleRequest(BaseModel):
         """Ensure the cron expression is valid."""
         if not value or not value.strip():
             raise ValueError("Cron expression is required")
-        
+
         normalized = value.strip().lower()
-        
+
         # Convert common natural language to cron
         conversions = {
             "every minute": "* * * * *",
@@ -50,10 +54,10 @@ class CreateScheduleRequest(BaseModel):
             "weekly": "0 0 * * 0",
             "monthly": "0 0 1 * *",
         }
-        
+
         if normalized in conversions:
             return conversions[normalized]
-        
+
         # Support @ prefixes
         if normalized.startswith("@"):
             cron_map = {
@@ -67,7 +71,7 @@ class CreateScheduleRequest(BaseModel):
             }
             if normalized in cron_map:
                 return cron_map[normalized]
-        
+
         # Validate standard cron
         try:
             croniter(value)
@@ -77,6 +81,7 @@ class CreateScheduleRequest(BaseModel):
                 "'0 * * * *' (hourly), '0 0 * * *' (daily), or presets like '@hourly', '@daily'"
             ) from exc
         return value
+
 
 class ScheduleResponse(BaseModel):
     """Response for a pipeline schedule."""
@@ -89,10 +94,12 @@ class ScheduleResponse(BaseModel):
     next_run_at: str | None = None
     created_at: str | None = None
 
+
 def _compute_next_run(cron_expression: str) -> datetime:
     """Compute the next run time from a cron expression."""
     cron = croniter(cron_expression, datetime.now(timezone.utc))
     return cron.get_next(datetime).replace(tzinfo=timezone.utc)
+
 
 def _schedule_to_response(schedule: PipelineSchedule) -> ScheduleResponse:
     return ScheduleResponse(
@@ -104,6 +111,7 @@ def _schedule_to_response(schedule: PipelineSchedule) -> ScheduleResponse:
         next_run_at=schedule.next_run_at.isoformat() if schedule.next_run_at else None,
         created_at=schedule.created_at.isoformat() if schedule.created_at else None,
     )
+
 
 @router.post(
     "/",
@@ -132,15 +140,22 @@ def create_schedule(
     db.commit()
     db.refresh(schedule)
 
-    log_action(db, "schedule_created", user_id=current_user.id,
-               resource_type="schedule", resource_id=schedule.id,
-               details={"pipeline_name": body.pipeline_name, "cron": body.cron_expression},
-               request=request)
+    log_action(
+        db,
+        "schedule_created",
+        user_id=current_user.id,
+        resource_type="schedule",
+        resource_id=schedule.id,
+        details={
+            "pipeline_name": body.pipeline_name,
+            "cron": body.cron_expression},
+        request=request)
 
     logger.info("Schedule created: id=%s, pipeline=%s, cron=%s",
                 schedule.id, body.pipeline_name, body.cron_expression)
 
     return _schedule_to_response(schedule)
+
 
 @router.get(
     "/",
@@ -163,6 +178,7 @@ def list_schedules(
         "total": len(schedules),
     }
 
+
 @router.delete(
     "/{schedule_id}",
     summary="Delete a pipeline schedule",
@@ -184,7 +200,9 @@ def delete_schedule(
         .first()
     )
     if not schedule:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Schedule not found")
 
     db.delete(schedule)
     db.commit()
@@ -194,6 +212,7 @@ def delete_schedule(
                request=request)
 
     return {"detail": f"Schedule '{schedule_id}' deleted"}
+
 
 @router.patch(
     "/{schedule_id}/toggle",
@@ -217,7 +236,9 @@ def toggle_schedule(
         .first()
     )
     if not schedule:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Schedule not found")
 
     schedule.is_active = not schedule.is_active
     if schedule.is_active:

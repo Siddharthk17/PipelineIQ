@@ -16,9 +16,12 @@ class ColumnDriftResponse(BaseModel):
     """A single schema drift item."""
 
     column: str = Field(..., description="Column name affected")
-    drift_type: str = Field(..., description="Type of drift: added, removed, type_changed")
-    old_value: Optional[str] = Field(None, description="Previous type (for type_changed)")
-    new_value: Optional[str] = Field(None, description="New type (for type_changed)")
+    drift_type: str = Field(...,
+                            description="Type of drift: added, removed, type_changed")
+    old_value: Optional[str] = Field(
+        None, description="Previous type (for type_changed)")
+    new_value: Optional[str] = Field(
+        None, description="New type (for type_changed)")
     severity: str = Field(..., description="Severity: breaking, warning, info")
 
 
@@ -37,7 +40,8 @@ class FileUploadResponse(BaseModel):
     """Response returned after a successful file upload."""
 
     id: str = Field(..., description="Unique identifier for the uploaded file")
-    original_filename: str = Field(..., description="Original filename as uploaded")
+    original_filename: str = Field(...,
+                                   description="Original filename as uploaded")
     row_count: int = Field(..., description="Number of data rows in the file")
     column_count: int = Field(..., description="Number of columns in the file")
     columns: List[str] = Field(..., description="Ordered list of column names")
@@ -46,8 +50,7 @@ class FileUploadResponse(BaseModel):
     )
     file_size_bytes: int = Field(..., description="File size in bytes")
     schema_drift: Optional[SchemaDriftResponse] = Field(
-        None, description="Schema drift report (null for first upload of a file)"
-    )
+        None, description="Schema drift report (null for first upload of a file)")
 
     model_config = {
         "json_schema_extra": {
@@ -56,7 +59,12 @@ class FileUploadResponse(BaseModel):
                 "original_filename": "sales.csv",
                 "row_count": 50,
                 "column_count": 5,
-                "columns": ["order_id", "customer_id", "amount", "status", "date"],
+                "columns": [
+                    "order_id",
+                    "customer_id",
+                    "amount",
+                    "status",
+                    "date"],
                 "dtypes": {
                     "order_id": "int64",
                     "customer_id": "int64",
@@ -65,16 +73,16 @@ class FileUploadResponse(BaseModel):
                     "date": "object",
                 },
                 "file_size_bytes": 2048,
-            }
-        }
-    }
+            }}}
 
 
 class UploadUrlRequest(BaseModel):
     """Request body for upload URL negotiation."""
 
     filename: str = Field(..., description="Original filename to upload")
-    file_size: int = Field(..., description="Client-reported file size in bytes", ge=1)
+    file_size: int = Field(...,
+                           description="Client-reported file size in bytes",
+                           ge=1)
 
 
 class UploadUrlResponse(BaseModel):
@@ -146,7 +154,8 @@ class RunPipelineRequest(BaseModel):
 class RunPipelineResponse(BaseModel):
     """Response returned immediately after queueing a pipeline run."""
 
-    run_id: str = Field(..., description="Unique identifier for this pipeline run")
+    run_id: str = Field(...,
+                        description="Unique identifier for this pipeline run")
     status: str = Field(..., description="Initial status (always PENDING)")
 
     model_config = {
@@ -217,28 +226,40 @@ class StepResultResponse(BaseModel):
     """Execution result for a single pipeline step."""
 
     step_name: str = Field(..., description="Name of the step")
-    step_type: str = Field(..., description="Type of the step (filter, join, etc.)")
-    step_index: int = Field(..., description="Zero-based position in the pipeline")
+    step_type: str = Field(...,
+                           description="Type of the step (filter, join, etc.)")
+    step_index: int = Field(...,
+                            description="Zero-based position in the pipeline")
     status: str = Field(..., description="Step execution status")
     rows_in: Optional[int] = Field(None, description="Number of input rows")
     rows_out: Optional[int] = Field(None, description="Number of output rows")
-    columns_in: Optional[List[str]] = Field(None, description="Input column names")
-    columns_out: Optional[List[str]] = Field(None, description="Output column names")
-    duration_ms: Optional[int] = Field(None, description="Execution time in ms")
-    warnings: Optional[List[str]] = Field(None, description="Non-fatal warnings")
-    error_message: Optional[str] = Field(None, description="Error details if failed")
+    columns_in: Optional[List[str]] = Field(
+        None, description="Input column names")
+    columns_out: Optional[List[str]] = Field(
+        None, description="Output column names")
+    duration_ms: Optional[int] = Field(
+        None, description="Execution time in ms")
+    warnings: Optional[List[str]] = Field(
+        None, description="Non-fatal warnings")
+    error_message: Optional[str] = Field(
+        None, description="Error details if failed")
 
 
 class HealingAttemptResponse(BaseModel):
     """Autonomous healing attempt details for a failed pipeline run."""
 
     id: str = Field(..., description="Healing attempt ID")
-    attempt_number: int = Field(..., description="1-indexed healing attempt number")
+    attempt_number: int = Field(...,
+                                description="1-indexed healing attempt number")
     status: str = Field(..., description="Healing attempt status")
-    pipeline_name: Optional[str] = Field(None, description="Pipeline name for this run")
-    failed_step: Optional[str] = Field(None, description="Step name where failure was observed")
-    error_type: Optional[str] = Field(None, description="Failure exception type")
-    error_message: Optional[str] = Field(None, description="Failure exception message")
+    pipeline_name: Optional[str] = Field(
+        None, description="Pipeline name for this run")
+    failed_step: Optional[str] = Field(
+        None, description="Step name where failure was observed")
+    error_type: Optional[str] = Field(
+        None, description="Failure exception type")
+    error_message: Optional[str] = Field(
+        None, description="Failure exception message")
     old_schema: Optional[Dict[str, Any]] = Field(
         None, description="Schema snapshot captured when the run started"
     )
@@ -260,7 +281,8 @@ class HealingAttemptResponse(BaseModel):
     sandbox_result: Optional[Dict[str, Any]] = Field(
         None, description="DuckDB sandbox validation result for the patch"
     )
-    applied: bool = Field(False, description="Whether the candidate patch was applied")
+    applied: bool = Field(
+        False, description="Whether the candidate patch was applied")
     confidence: Optional[float] = Field(
         None, description="Gemini confidence score for the selected patch"
     )
@@ -270,8 +292,10 @@ class HealingAttemptResponse(BaseModel):
     classification_reason: Optional[str] = Field(
         None, description="Healer classification reason"
     )
-    ai_valid: Optional[bool] = Field(None, description="AI-reported patch validity")
-    ai_error: Optional[str] = Field(None, description="AI generation error details")
+    ai_valid: Optional[bool] = Field(
+        None, description="AI-reported patch validity")
+    ai_error: Optional[str] = Field(
+        None, description="AI generation error details")
     parser_valid: Optional[bool] = Field(
         None, description="Whether parser/semantic validation passed"
     )
@@ -310,7 +334,8 @@ class PipelineRunResponse(BaseModel):
         None, description="Total execution time in ms"
     )
     total_rows_in: Optional[int] = Field(None, description="Total input rows")
-    total_rows_out: Optional[int] = Field(None, description="Total output rows")
+    total_rows_out: Optional[int] = Field(
+        None, description="Total output rows")
     error_message: Optional[str] = Field(None, description="Error if failed")
     step_results: List[StepResultResponse] = Field(
         default_factory=list, description="Ordered list of step results"
@@ -324,7 +349,8 @@ class PipelineRunResponse(BaseModel):
 class PipelineRunListResponse(BaseModel):
     """Response listing pipeline runs."""
 
-    runs: List[PipelineRunResponse] = Field(..., description="List of pipeline runs")
+    runs: List[PipelineRunResponse] = Field(...,
+                                            description="List of pipeline runs")
     total: int = Field(..., description="Total number of runs")
 
 
@@ -332,9 +358,8 @@ class ReactFlowNodeResponse(BaseModel):
     """A single node in the React Flow lineage visualization."""
 
     id: str = Field(..., description="Unique node identifier")
-    type: str = Field(
-        ..., description="Node type: sourceFile, stepNode, columnNode, outputFile"
-    )
+    type: str = Field(...,
+                      description="Node type: sourceFile, stepNode, columnNode, outputFile")
     data: Dict[str, Any] = Field(  # Any needed: React Flow data is polymorphic
         ..., description="Node display data (label, metadata)"
     )
@@ -358,8 +383,10 @@ class ReactFlowEdgeResponse(BaseModel):
 class LineageGraphResponse(BaseModel):
     """Complete React Flow lineage graph for a pipeline run."""
 
-    nodes: List[ReactFlowNodeResponse] = Field(..., description="All graph nodes")
-    edges: List[ReactFlowEdgeResponse] = Field(..., description="All graph edges")
+    nodes: List[ReactFlowNodeResponse] = Field(...,
+                                               description="All graph nodes")
+    edges: List[ReactFlowEdgeResponse] = Field(...,
+                                               description="All graph edges")
 
 
 class TransformationStepResponse(BaseModel):
@@ -393,7 +420,8 @@ class ColumnLineageResponse(BaseModel):
 class ImpactAnalysisResponse(BaseModel):
     """Forward impact analysis for a column — what downstream outputs it affects."""
 
-    source_step: str = Field(..., description="Step containing the source column")
+    source_step: str = Field(...,
+                             description="Step containing the source column")
     source_column: str = Field(..., description="The column being analyzed")
     affected_steps: List[str] = Field(
         ..., description="All downstream steps that use this column"

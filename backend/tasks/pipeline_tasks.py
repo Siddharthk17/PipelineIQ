@@ -56,9 +56,14 @@ def _cache_progress_payload(run_id: str, payload: dict) -> None:
     """Cache latest progress payload for reconnecting SSE clients."""
     try:
         cache_client = get_cache_redis()
-        cache_client.setex(_status_cache_key(run_id), 3600, orjson.dumps(payload))
+        cache_client.setex(
+            _status_cache_key(run_id),
+            3600,
+            orjson.dumps(payload))
     except RedisError:
-        logger.warning("Failed to cache SSE progress payload for run_id=%s", run_id)
+        logger.warning(
+            "Failed to cache SSE progress payload for run_id=%s",
+            run_id)
 
 
 def _publish_progress_payload(run_id: str, payload: dict) -> None:
@@ -68,7 +73,9 @@ def _publish_progress_payload(run_id: str, payload: dict) -> None:
         channel = f"pipeline_progress:{run_id}"
         redis_client.publish(channel, orjson.dumps(payload))
     except RedisError:
-        logger.warning("Failed to publish progress payload for run_id=%s", run_id)
+        logger.warning(
+            "Failed to publish progress payload for run_id=%s",
+            run_id)
     _cache_progress_payload(run_id, payload)
 
 
@@ -115,7 +122,9 @@ def _publish_terminal_event(
         redis_client.publish(channel, orjson.dumps(payload))
         _cache_progress_payload(run_id, payload)
     except RedisError:
-        logger.warning("Failed to publish terminal event for run_id=%s", run_id)
+        logger.warning(
+            "Failed to publish terminal event for run_id=%s",
+            run_id)
 
 
 @celery_app.task(
@@ -132,7 +141,8 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
     """
     db = SessionLocal()
     try:
-        pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+        pipeline_run = db.query(PipelineRun).filter(
+            PipelineRun.id == run_id).first()
 
         if pipeline_run is None:
             logger.error("Pipeline run %s not found in database", run_id)
@@ -205,7 +215,8 @@ def _mark_running(db, pipeline_run: PipelineRun) -> None:
 def _mark_failed(db, run_id: str, error_message: str) -> None:
     """Mark a pipeline run as FAILED in the database."""
     try:
-        pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+        pipeline_run = db.query(PipelineRun).filter(
+            PipelineRun.id == run_id).first()
         if pipeline_run:
             pipeline_run.status = PipelineStatus.FAILED
             pipeline_run.completed_at = utcnow()
@@ -418,8 +429,12 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
             "event_type": "healing_failed",
             "status": PipelineStatus.FAILED.value,
             "attempts": healing_result.attempts,
-            "failed_step": getattr(retry_summary.error, "step_name", failed_step_name),
-            "error_message": str(retry_summary.error) if retry_summary.error else None,
+            "failed_step": getattr(
+                retry_summary.error,
+                "step_name",
+                failed_step_name),
+            "error_message": str(
+                retry_summary.error) if retry_summary.error else None,
         },
     )
     _publish_progress_payload(
@@ -429,8 +444,12 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
             "event_type": "healing_retry_failed",
             "status": PipelineStatus.FAILED.value,
             "attempt_number": healing_result.attempts,
-            "failed_step": getattr(retry_summary.error, "step_name", failed_step_name),
-            "error_message": str(retry_summary.error) if retry_summary.error else None,
+            "failed_step": getattr(
+                retry_summary.error,
+                "step_name",
+                failed_step_name),
+            "error_message": str(
+                retry_summary.error) if retry_summary.error else None,
         },
     )
     return retry_summary
@@ -451,7 +470,9 @@ def _collect_file_ids_from_config(yaml_config: str) -> list[str]:
     seen_file_ids: set[str] = set()
     for step in parsed_pipeline.steps:
         file_id = getattr(step, "file_id", None)
-        if isinstance(file_id, str) and file_id and file_id not in seen_file_ids:
+        if isinstance(
+                file_id,
+                str) and file_id and file_id not in seen_file_ids:
             seen_file_ids.add(file_id)
             file_ids.append(file_id)
     return file_ids
@@ -476,7 +497,12 @@ def _save_version_if_needed(*, db, pipeline_run: PipelineRun) -> None:
     )
 
 
-def _record_healing_audit(*, db, pipeline_run: PipelineRun, healing_result, failed_step: str) -> None:
+def _record_healing_audit(
+    *,
+    db,
+    pipeline_run: PipelineRun,
+    healing_result,
+        failed_step: str) -> None:
     log_action(
         db,
         "pipeline_auto_healed",
@@ -525,7 +551,8 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         )
     else:
         pipeline_run.status = PipelineStatus.FAILED
-        pipeline_run.error_message = str(summary.error) if summary.error else None
+        pipeline_run.error_message = str(
+            summary.error) if summary.error else None
         PIPELINE_RUNS_TOTAL.labels(status="failed").inc()
         event_type = "pipeline_failed"
         _publish_terminal_event(
@@ -538,7 +565,9 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     pipeline_run.completed_at = utcnow()
     duration = 0.0
     if pipeline_run.started_at and pipeline_run.completed_at:
-        duration = (pipeline_run.completed_at - pipeline_run.started_at).total_seconds()
+        duration = (
+            pipeline_run.completed_at -
+            pipeline_run.started_at).total_seconds()
         PIPELINE_DURATION_SECONDS.observe(duration)
     pipeline_run.total_rows_in = summary.total_rows_processed
     pipeline_run.total_rows_out = (
@@ -558,8 +587,9 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         )
     except Exception as exc:
         logger.error(
-            "Failed to queue notification task for run %s: %s", pipeline_run.id, exc
-        )
+            "Failed to queue notification task for run %s: %s",
+            pipeline_run.id,
+            exc)
 
     try:
         from backend.tasks.webhook_tasks import deliver_webhooks_task
@@ -617,7 +647,8 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     try:
         _save_version_if_needed(db=db, pipeline_run=pipeline_run)
     except Exception as exc:
-        # Keep session usable even if version write fails after persistence commit.
+        # Keep session usable even if version write fails after persistence
+        # commit.
         db.rollback()
         logger.warning("Failed to save pipeline version: %s", exc)
 
@@ -631,7 +662,6 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
 
 def _update_schedule_stats(db, pipeline_run: PipelineRun) -> None:
     """Update schedule statistics after a scheduled pipeline run completes."""
-    from datetime import datetime, timezone
     from sqlalchemy import update
 
     schedule_id = pipeline_run.schedule_id
@@ -643,8 +673,8 @@ def _update_schedule_stats(db, pipeline_run: PipelineRun) -> None:
         duration_seconds = None
         if pipeline_run.started_at and pipeline_run.completed_at:
             duration_seconds = int(
-                (pipeline_run.completed_at - pipeline_run.started_at).total_seconds()
-            )
+                (pipeline_run.completed_at -
+                 pipeline_run.started_at).total_seconds())
 
         # Determine status string for schedule_run
         status_map = {

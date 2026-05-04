@@ -23,7 +23,8 @@ _MODEL_NOT_FOUND_MARKERS = (
 def _model_not_found_error(exc: Exception) -> bool:
     message = str(exc)
     lower = message.lower()
-    return "404" in message and any(marker in lower for marker in _MODEL_NOT_FOUND_MARKERS)
+    return "404" in message and any(
+        marker in lower for marker in _MODEL_NOT_FOUND_MARKERS)
 
 
 def _configured_model_candidates() -> list[str]:
@@ -35,8 +36,10 @@ def _configured_model_candidates() -> list[str]:
             if stripped:
                 fallbacks.append(stripped)
 
-    # Keep a safety fallback chain in case env config points to a retired model.
-    fallbacks.extend(["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"])
+    # Keep a safety fallback chain in case env config points to a retired
+    # model.
+    fallbacks.extend(
+        ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"])
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -91,9 +94,7 @@ class GeminiModelAdapter:
                 if _model_not_found_error(exc):
                     last_error = exc
                     logger.warning(
-                        "Gemini model '%s' unavailable; trying next fallback model.",
-                        model_name,
-                    )
+                        "Gemini model '%s' unavailable; trying next fallback model.", model_name, )
                     continue
                 raise
 

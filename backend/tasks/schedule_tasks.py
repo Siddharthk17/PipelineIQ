@@ -70,7 +70,8 @@ def check_schedules() -> dict:
                 schedule.last_run_status = "RUNNING"
                 schedule.total_runs += 1
                 cron = croniter(schedule.cron_expression, now)
-                schedule.next_run_at = cron.get_next(datetime).replace(tzinfo=timezone.utc)
+                schedule.next_run_at = cron.get_next(
+                    datetime).replace(tzinfo=timezone.utc)
                 db.commit()
 
                 triggered += 1
@@ -79,7 +80,10 @@ def check_schedules() -> dict:
                     schedule.id, pipeline_run.id,
                 )
             except Exception as exc:
-                logger.error("Failed to trigger schedule %s: %s", schedule.id, exc)
+                logger.error(
+                    "Failed to trigger schedule %s: %s",
+                    schedule.id,
+                    exc)
                 db.rollback()
 
     except Exception as exc:

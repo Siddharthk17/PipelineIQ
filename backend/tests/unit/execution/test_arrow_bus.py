@@ -94,7 +94,9 @@ def test_store_medium_table_in_shm(tmp_path) -> None:
 
 def test_store_large_table_in_spill(monkeypatch, tmp_path) -> None:
     fake_storage = _FakeStorage()
-    monkeypatch.setattr("backend.execution.arrow_bus.storage_service", fake_storage)
+    monkeypatch.setattr(
+        "backend.execution.arrow_bus.storage_service",
+        fake_storage)
     bus = ArrowDataBus(
         small_threshold_mb=0.00001,
         medium_threshold_mb=0.00002,
@@ -130,7 +132,9 @@ def test_cleanup_run_recovers_spill_from_manifest_after_restart(
 ) -> None:
     fake_storage = _FakeStorage()
     fake_redis = _FakeRedis()
-    monkeypatch.setattr("backend.execution.arrow_bus.storage_service", fake_storage)
+    monkeypatch.setattr(
+        "backend.execution.arrow_bus.storage_service",
+        fake_storage)
 
     bus_one = ArrowDataBus(
         small_threshold_mb=0.00001,
@@ -157,7 +161,8 @@ def test_cleanup_run_recovers_spill_from_manifest_after_restart(
     assert spill_pointer not in fake_storage._store
 
 
-def test_cleanup_run_removes_orphaned_shm_files_by_run_pattern(tmp_path) -> None:
+def test_cleanup_run_removes_orphaned_shm_files_by_run_pattern(
+        tmp_path) -> None:
     fake_redis = _FakeRedis()
     bus_one = ArrowDataBus(
         small_threshold_mb=0.00001,

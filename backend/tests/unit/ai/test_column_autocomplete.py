@@ -44,4 +44,3 @@ class TestSuggestColumnsBatch:
         suggestions = suggest_columns_batch(["reveue", "region"], COLUMNS)
         assert suggestions["reveue"] == "revenue"
         assert suggestions["region"] is None
-

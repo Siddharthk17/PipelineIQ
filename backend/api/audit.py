@@ -15,6 +15,7 @@ from backend.models import AuditLog, User
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/audit", tags=["Audit"])
 
+
 class AuditLogResponse(BaseModel):
     id: str
     user_id: Optional[str]
@@ -26,6 +27,7 @@ class AuditLogResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
 
 @router.get("/logs", response_model=List[AuditLogResponse])
 def get_audit_logs(
@@ -52,14 +54,15 @@ def get_audit_logs(
     )
     return [
         AuditLogResponse(
-            id=str(l.id), user_id=str(l.user_id) if l.user_id else None,
-            action=l.action, resource_type=l.resource_type,
-            resource_id=str(l.resource_id) if l.resource_id else None,
-            details=l.details, ip_address=l.ip_address,
-            created_at=l.created_at,
+            id=str(log.id), user_id=str(log.user_id) if log.user_id else None,
+            action=log.action, resource_type=log.resource_type,
+            resource_id=str(log.resource_id) if log.resource_id else None,
+            details=log.details, ip_address=log.ip_address,
+            created_at=log.created_at,
         )
-        for l in logs
+        for log in logs
     ]
+
 
 @router.get("/logs/mine", response_model=List[AuditLogResponse])
 def get_my_audit_logs(
@@ -79,11 +82,11 @@ def get_my_audit_logs(
     )
     return [
         AuditLogResponse(
-            id=str(l.id), user_id=str(l.user_id) if l.user_id else None,
-            action=l.action, resource_type=l.resource_type,
-            resource_id=str(l.resource_id) if l.resource_id else None,
-            details=l.details, ip_address=l.ip_address,
-            created_at=l.created_at,
+            id=str(log.id), user_id=str(log.user_id) if log.user_id else None,
+            action=log.action, resource_type=log.resource_type,
+            resource_id=str(log.resource_id) if log.resource_id else None,
+            details=log.details, ip_address=log.ip_address,
+            created_at=log.created_at,
         )
-        for l in logs
+        for log in logs
     ]

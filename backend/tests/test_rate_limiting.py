@@ -3,15 +3,14 @@
 6 tests verifying rate limiting on key endpoints.
 """
 
-import pytest
-from unittest.mock import patch
 from backend.tests.conftest import upload_file, build_simple_pipeline_yaml
 
 
 class TestRateLimiting:
     """Tests for rate limiting behavior."""
 
-    def test_pipeline_run_rate_limit_blocks_11th_request(self, client, sales_csv_bytes):
+    def test_pipeline_run_rate_limit_blocks_11th_request(
+            self, client, sales_csv_bytes):
         """First 10 run requests succeed, 11th returns 429."""
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = build_simple_pipeline_yaml(file_id)
@@ -21,7 +20,8 @@ class TestRateLimiting:
                 "/api/v1/pipelines/run",
                 json={"yaml_config": yaml_config, "name": "test_pipeline"},
             )
-            assert response.status_code in [200, 202, 422], f"Request {i+1} failed: {response.status_code}"
+            assert response.status_code in [
+                200, 202, 422], f"Request {i + 1} failed: {response.status_code}"
 
         response = client.post(
             "/api/v1/pipelines/run",

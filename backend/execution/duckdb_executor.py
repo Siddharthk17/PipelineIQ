@@ -69,7 +69,8 @@ class DuckDBExecutor:
     def __init__(
         self,
         *,
-        connection_getter: Callable[[], duckdb.DuckDBPyConnection] = get_worker_duckdb,
+        connection_getter: Callable[[],
+                                    duckdb.DuckDBPyConnection] = get_worker_duckdb,
         local_fallback: bool = True,
         local_threads: int = 2,
     ) -> None:
@@ -134,8 +135,10 @@ class DuckDBExecutor:
                 try:
                     conn.unregister(name)
                 except Exception:
-                    # Best-effort cleanup; unregister failure should not mask step errors.
-                    logger.debug("DuckDB relation '%s' could not be unregistered", name)
+                    # Best-effort cleanup; unregister failure should not mask
+                    # step errors.
+                    logger.debug(
+                        "DuckDB relation '%s' could not be unregistered", name)
 
     def close(self) -> None:
         """Close local fallback connection if it exists."""

@@ -50,14 +50,25 @@ class TestQueueConfiguration:
         import backend.tasks as tasks_pkg
 
         defined_task_names = set()
-        for _, module_name, _ in pkgutil.walk_packages(tasks_pkg.__path__, tasks_pkg.__name__ + "."):
+        for _, module_name, _ in pkgutil.walk_packages(
+                tasks_pkg.__path__, tasks_pkg.__name__ + "."):
             module = importlib.import_module(module_name)
             for attr_name in dir(module):
                 attr = getattr(module, attr_name)
-                if hasattr(attr, "name") and hasattr(attr, "delay") and isinstance(getattr(attr, "name", None), str):
+                if hasattr(
+                    attr,
+                    "name") and hasattr(
+                    attr,
+                    "delay") and isinstance(
+                    getattr(
+                        attr,
+                        "name",
+                        None),
+                        str):
                     defined_task_names.add(attr.name)
 
-        unrouted = {name for name in defined_task_names if not name.startswith("celery.")} - set(task_routes.keys())
+        unrouted = {name for name in defined_task_names if not name.startswith(
+            "celery.")} - set(task_routes.keys())
         assert not unrouted
 
     def test_task_acks_late_enabled(self):

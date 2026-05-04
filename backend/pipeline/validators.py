@@ -6,7 +6,7 @@ and sample failing values.
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 import pandas as pd
@@ -52,8 +52,10 @@ def execute_validate(
 ) -> ValidationStepResult:
     """Execute all validation rules against a DataFrame."""
     results = [_execute_single_rule(df, rule) for rule in rules]
-    error_count = sum(1 for r in results if not r.passed and r.severity == "error")
-    warning_count = sum(1 for r in results if not r.passed and r.severity == "warning")
+    error_count = sum(
+        1 for r in results if not r.passed and r.severity == "error")
+    warning_count = sum(
+        1 for r in results if not r.passed and r.severity == "warning")
     return ValidationStepResult(
         passed=error_count == 0,
         error_count=error_count,

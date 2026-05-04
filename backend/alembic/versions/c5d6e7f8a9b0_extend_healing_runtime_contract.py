@@ -23,18 +23,42 @@ def upgrade() -> None:
     if bind.dialect.name == "postgresql":
         for status_value in ("HEALING", "HEALED", "TIMEOUT"):
             op.execute(
-                f"ALTER TYPE pipelinestatus ADD VALUE IF NOT EXISTS '{status_value}'"
-            )
+                f"ALTER TYPE pipelinestatus ADD VALUE IF NOT EXISTS '{status_value}'")
 
     with op.batch_alter_table("healing_attempts") as batch_op:
-        batch_op.add_column(sa.Column("pipeline_name", sa.String(length=500), nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "pipeline_name",
+                sa.String(
+                    length=500),
+                nullable=True))
         batch_op.add_column(sa.Column("old_schema", sa.JSON(), nullable=True))
         batch_op.add_column(sa.Column("new_schema", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("removed_columns", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("added_columns", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("renamed_candidates", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("gemini_patch", sa.JSON(), nullable=True))
-        batch_op.add_column(sa.Column("sandbox_result", sa.JSON(), nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "removed_columns",
+                sa.JSON(),
+                nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "added_columns",
+                sa.JSON(),
+                nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "renamed_candidates",
+                sa.JSON(),
+                nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "gemini_patch",
+                sa.JSON(),
+                nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "sandbox_result",
+                sa.JSON(),
+                nullable=True))
         batch_op.add_column(
             sa.Column(
                 "applied",
@@ -43,8 +67,19 @@ def upgrade() -> None:
                 server_default=sa.text("false"),
             )
         )
-        batch_op.add_column(sa.Column("confidence", sa.Numeric(5, 4), nullable=True))
-        batch_op.add_column(sa.Column("healed_at", sa.DateTime(timezone=True), nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "confidence",
+                sa.Numeric(
+                    5,
+                    4),
+                nullable=True))
+        batch_op.add_column(
+            sa.Column(
+                "healed_at",
+                sa.DateTime(
+                    timezone=True),
+                nullable=True))
 
     op.create_index(
         "ix_healing_attempts_applied",
@@ -54,8 +89,10 @@ def upgrade() -> None:
     )
 
     if bind.dialect.name == "postgresql":
-        op.execute("DROP RULE IF EXISTS healing_attempts_no_delete ON healing_attempts")
-        op.execute("DROP RULE IF EXISTS healing_attempts_no_update ON healing_attempts")
+        op.execute(
+            "DROP RULE IF EXISTS healing_attempts_no_delete ON healing_attempts")
+        op.execute(
+            "DROP RULE IF EXISTS healing_attempts_no_update ON healing_attempts")
         op.execute(
             """
             CREATE RULE healing_attempts_no_delete AS
@@ -76,8 +113,10 @@ def downgrade() -> None:
     bind = op.get_bind()
 
     if bind.dialect.name == "postgresql":
-        op.execute("DROP RULE IF EXISTS healing_attempts_no_update ON healing_attempts")
-        op.execute("DROP RULE IF EXISTS healing_attempts_no_delete ON healing_attempts")
+        op.execute(
+            "DROP RULE IF EXISTS healing_attempts_no_update ON healing_attempts")
+        op.execute(
+            "DROP RULE IF EXISTS healing_attempts_no_delete ON healing_attempts")
 
     op.drop_index("ix_healing_attempts_applied", table_name="healing_attempts")
 

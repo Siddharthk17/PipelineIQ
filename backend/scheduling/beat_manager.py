@@ -4,10 +4,9 @@ Beat Manager — dynamic registration of pipeline schedules with Celery Beat.
 The beat_schedule is rebuilt from the database on every call so Celery Beat
 can pick up changes without a restart (it reads the schedule dict on each tick).
 """
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
-from celery.schedules import crontab
 
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
@@ -23,7 +22,8 @@ def _build_beat_schedule() -> dict:
     """
     db = SessionLocal()
     try:
-        schedules = db.query(PipelineSchedule).filter(PipelineSchedule.is_active == True).all()
+        schedules = db.query(PipelineSchedule).filter(
+            PipelineSchedule.is_active).all()
     finally:
         db.close()
 
@@ -64,7 +64,8 @@ def get_next_run_for_schedule(schedule_id: str) -> Optional[datetime]:
 
     db = SessionLocal()
     try:
-        schedule = db.query(PipelineSchedule).filter(PipelineSchedule.id == schedule_id).first()
+        schedule = db.query(PipelineSchedule).filter(
+            PipelineSchedule.id == schedule_id).first()
         if not schedule:
             return None
         return get_next_run_at(schedule.cron_expression)
@@ -107,7 +108,8 @@ def sync_beats_from_db() -> dict:
     """
     db = SessionLocal()
     try:
-        schedules = db.query(PipelineSchedule).filter(PipelineSchedule.is_active == True).all()
+        schedules = db.query(PipelineSchedule).filter(
+            PipelineSchedule.is_active).all()
     finally:
         db.close()
 

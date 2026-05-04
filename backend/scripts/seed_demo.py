@@ -4,6 +4,9 @@ Run: python -m backend.scripts.seed_demo
 Or:  python scripts/seed_demo.py   (from /app inside Docker)
 """
 
+from backend.auth import get_password_hash
+from backend.models import User
+from backend.database import SessionLocal
 import sys
 import os
 import uuid
@@ -11,9 +14,6 @@ import uuid
 # Ensure the project root is on sys.path when run from /app
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from backend.database import SessionLocal
-from backend.models import User
-from backend.auth import get_password_hash
 
 DEMO_EMAIL = "demo@pipelineiq.app"
 DEMO_USERNAME = "demo"

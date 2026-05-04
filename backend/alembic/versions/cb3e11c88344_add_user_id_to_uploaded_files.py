@@ -22,7 +22,12 @@ FK_UPLOADED_FILES_USER_ID_USERS = "fk_uploaded_files_user_id_users"
 
 def upgrade() -> None:
     # Add user_id as nullable first to handle existing data
-    op.add_column("uploaded_files", sa.Column("user_id", sa.Uuid(), nullable=True))
+    op.add_column(
+        "uploaded_files",
+        sa.Column(
+            "user_id",
+            sa.Uuid(),
+            nullable=True))
     op.create_foreign_key(
         FK_UPLOADED_FILES_USER_ID_USERS,
         "uploaded_files",
@@ -34,7 +39,8 @@ def upgrade() -> None:
 
     # Assign existing files to the first available user
     connection = op.get_bind()
-    user_id_res = connection.execute(sa.text("SELECT id FROM users LIMIT 1")).fetchone()
+    user_id_res = connection.execute(
+        sa.text("SELECT id FROM users LIMIT 1")).fetchone()
     if user_id_res:
         user_id = user_id_res[0]
         connection.execute(

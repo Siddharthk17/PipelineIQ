@@ -48,7 +48,8 @@ class GenerationResult:
 @dataclass
 class RepairResult:
     corrected_yaml: str
-    diff_lines: list[dict]   # [{line_number, type: 'added'|'removed'|'unchanged', content}]
+    # [{line_number, type: 'added'|'removed'|'unchanged', content}]
+    diff_lines: list[dict]
     valid: bool
     error: str | None = None
 
@@ -68,14 +69,17 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
     for i, file_id in enumerate(file_ids, 1):
         try:
             # Get file record
-            file_record = db.query(UploadedFile).filter(UploadedFile.id == file_id).first()
+            file_record = db.query(UploadedFile).filter(
+                UploadedFile.id == file_id).first()
 
             if not file_record:
-                sections.append(f"File {i}: [file_id: {file_id}] — file record not found")
+                sections.append(
+                    f"File {i}: [file_id: {file_id}] — file record not found")
                 continue
 
             # Get profile - safely handle any format
-            profile_record = db.query(FileProfile).filter(FileProfile.file_id == file_id).first()
+            profile_record = db.query(FileProfile).filter(
+                FileProfile.file_id == file_id).first()
             profile = {}
             if profile_record and profile_record.status == "complete":
                 raw_profile = profile_record.profile
@@ -99,7 +103,7 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
             # Build column list with semantic types
             column_descriptions = []
             for col_name, col_data in profile.items():
-                #Safely extract profile data
+                # Safely extract profile data
                 if not isinstance(col_data, dict):
                     col_data = {"semantic_type": "unknown"}
                 semantic_type = col_data.get("semantic_type", "text")
@@ -119,7 +123,8 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
 
         except Exception as e:
             logger.error(f"Error building schema for file_id={file_id}: {e}")
-            sections.append(f"File {i}: [file_id: {file_id}] — error loading schema")
+            sections.append(
+                f"File {i}: [file_id: {file_id}] — error loading schema")
 
     return "\n\n".join(sections)
 
@@ -142,7 +147,7 @@ async def generate_pipeline_from_description(
         user_request=description,
     )
 
-    # Attempt 1: Generate 
+    # Attempt 1: Generate
     try:
         raw_yaml = await _call_gemini_async(prompt, temperature=0.1, max_tokens=2000)
         raw_yaml = _clean_yaml_response(raw_yaml)
@@ -312,7 +317,10 @@ def _detect_ai_service_error(text: str) -> str | None:
     return None
 
 
-async def _call_gemini_async(prompt: str, temperature: float, max_tokens: int) -> str:
+async def _call_gemini_async(
+        prompt: str,
+        temperature: float,
+        max_tokens: int) -> str:
     """
     Submit a Gemini task and await the result.
     Uses Celery task async to respect the gemini queue's rate limits.
@@ -336,10 +344,12 @@ async def _call_gemini_async(prompt: str, temperature: float, max_tokens: int) -
         # Re-raise other errors
         raise
 
-    # Handle sentinel error values from the task to avoid worker-side tracebacks
+    # Handle sentinel error values from the task to avoid worker-side
+    # tracebacks
     if result == "GEMINI_QUOTA_EXHAUSTED":
-        raise Exception("Google Gemini AI quota exhausted. Please try again later.")
-    
+        raise Exception(
+            "Google Gemini AI quota exhausted. Please try again later.")
+
     if isinstance(result, str) and result.startswith("GEMINI_ERROR:"):
         raise Exception(f"Gemini AI service error: {result[14:]}")
 

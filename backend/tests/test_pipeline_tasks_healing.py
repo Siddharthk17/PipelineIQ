@@ -45,11 +45,26 @@ def test_healing_marks_non_healable_and_stops(monkeypatch, test_db):
     test_db.commit()
     test_db.refresh(pipeline_run)
 
-    failed = _failed_summary(FileReadError("load_sales", "/tmp/missing.csv", "missing"))
+    failed = _failed_summary(
+        FileReadError(
+            "load_sales",
+            "/tmp/missing.csv",
+            "missing"))
 
-    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_ENABLED", True, raising=False)
-    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_MAX_ATTEMPTS", 3, raising=False)
-    monkeypatch.setattr("backend.tasks.pipeline_tasks._run_pipeline", lambda db, run: failed)
+    monkeypatch.setattr(
+        settings,
+        "AUTONOMOUS_HEALING_ENABLED",
+        True,
+        raising=False)
+    monkeypatch.setattr(
+        settings,
+        "AUTONOMOUS_HEALING_MAX_ATTEMPTS",
+        3,
+        raising=False)
+    monkeypatch.setattr(
+        "backend.tasks.pipeline_tasks._run_pipeline",
+        lambda db,
+        run: failed)
 
     published_events = []
     monkeypatch.setattr(
@@ -68,7 +83,8 @@ def test_healing_marks_non_healable_and_stops(monkeypatch, test_db):
     assert len(attempts) == 1
     assert attempts[0].status == HealingAttemptStatus.NON_HEALABLE
     assert attempts[0].failed_step == "load_sales"
-    assert any(event["event_type"] == "healing_non_healable" for event in published_events)
+    assert any(event["event_type"] ==
+               "healing_non_healable" for event in published_events)
 
 
 def test_healing_failure_publishes_healing_failed(monkeypatch, test_db):
@@ -81,11 +97,25 @@ def test_healing_failure_publishes_healing_failed(monkeypatch, test_db):
     test_db.commit()
     test_db.refresh(pipeline_run)
 
-    failed = _failed_summary(ColumnNotFoundError("filter_step", "ammount", ["amount", "status"]))
+    failed = _failed_summary(
+        ColumnNotFoundError(
+            "filter_step", "ammount", [
+                "amount", "status"]))
 
-    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_ENABLED", True, raising=False)
-    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_MAX_ATTEMPTS", 3, raising=False)
-    monkeypatch.setattr("backend.tasks.pipeline_tasks._run_pipeline", lambda db, run: failed)
+    monkeypatch.setattr(
+        settings,
+        "AUTONOMOUS_HEALING_ENABLED",
+        True,
+        raising=False)
+    monkeypatch.setattr(
+        settings,
+        "AUTONOMOUS_HEALING_MAX_ATTEMPTS",
+        3,
+        raising=False)
+    monkeypatch.setattr(
+        "backend.tasks.pipeline_tasks._run_pipeline",
+        lambda db,
+        run: failed)
     monkeypatch.setattr(
         "backend.tasks.pipeline_tasks.attempt_heal",
         lambda **kwargs: HealingResult(success=False, attempts=3, error="sandbox failed"),
@@ -115,13 +145,27 @@ def test_healing_applies_patch_and_marks_run_healed(monkeypatch, test_db):
     test_db.commit()
     test_db.refresh(pipeline_run)
 
-    failed = _failed_summary(ColumnNotFoundError("filter_step", "ammount", ["amount", "status"]))
+    failed = _failed_summary(
+        ColumnNotFoundError(
+            "filter_step", "ammount", [
+                "amount", "status"]))
     completed = _completed_summary()
     run_results = iter([failed, completed])
 
-    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_ENABLED", True, raising=False)
-    monkeypatch.setattr(settings, "AUTONOMOUS_HEALING_MAX_ATTEMPTS", 3, raising=False)
-    monkeypatch.setattr("backend.tasks.pipeline_tasks._run_pipeline", lambda db, run: next(run_results))
+    monkeypatch.setattr(
+        settings,
+        "AUTONOMOUS_HEALING_ENABLED",
+        True,
+        raising=False)
+    monkeypatch.setattr(
+        settings,
+        "AUTONOMOUS_HEALING_MAX_ATTEMPTS",
+        3,
+        raising=False)
+    monkeypatch.setattr(
+        "backend.tasks.pipeline_tasks._run_pipeline",
+        lambda db,
+        run: next(run_results))
     monkeypatch.setattr(
         "backend.tasks.pipeline_tasks.attempt_heal",
         lambda **kwargs: HealingResult(
@@ -134,8 +178,12 @@ def test_healing_applies_patch_and_marks_run_healed(monkeypatch, test_db):
             schema_diff={"summary": "ammount -> amount"},
         ),
     )
-    monkeypatch.setattr("backend.tasks.pipeline_tasks._save_version_if_needed", lambda **kwargs: None)
-    monkeypatch.setattr("backend.tasks.pipeline_tasks._record_healing_audit", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "backend.tasks.pipeline_tasks._save_version_if_needed",
+        lambda **kwargs: None)
+    monkeypatch.setattr(
+        "backend.tasks.pipeline_tasks._record_healing_audit",
+        lambda **kwargs: None)
 
     published_events = []
     monkeypatch.setattr(

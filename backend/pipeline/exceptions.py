@@ -26,6 +26,7 @@ Hierarchy:
 import difflib
 from typing import Any, Dict, List, Optional
 
+
 class PipelineIQError(Exception):
     """Base exception for all PipelineIQ errors.
 
@@ -43,10 +44,10 @@ class PipelineIQError(Exception):
             "message": self.message,
         }
 
+
 class PipelineConfigError(PipelineIQError):
     """Base for all pipeline configuration errors."""
 
-    pass
 
 class InvalidYAMLError(PipelineConfigError):
     """Raised when the YAML string cannot be parsed."""
@@ -64,6 +65,7 @@ class InvalidYAMLError(PipelineConfigError):
             "yaml_error": self.yaml_error,
             "line": self.line,
         }
+
 
 class MissingRequiredFieldError(PipelineConfigError):
     """Raised when a required field is missing from the pipeline config."""
@@ -91,6 +93,7 @@ class MissingRequiredFieldError(PipelineConfigError):
             "step_name": self.step_name,
         }
 
+
 class DuplicateStepNameError(PipelineConfigError):
     """Raised when two or more steps share the same name."""
 
@@ -109,6 +112,7 @@ class DuplicateStepNameError(PipelineConfigError):
             "step_name": self.step_name,
             "occurrences": self.occurrences,
         }
+
 
 class InvalidStepTypeError(PipelineConfigError):
     """Raised when a step specifies an unrecognized type."""
@@ -138,6 +142,7 @@ class InvalidStepTypeError(PipelineConfigError):
             "valid_types": self.valid_types,
             "suggestion": self.suggestion,
         }
+
 
 class InvalidStepReferenceError(PipelineConfigError):
     """Raised when a step references a non-existent or later step."""
@@ -172,6 +177,7 @@ class InvalidStepReferenceError(PipelineConfigError):
             "suggestion": self.suggestion,
         }
 
+
 class FileNotRegisteredError(PipelineConfigError):
     """Raised when a load step references a file_id that hasn't been uploaded."""
 
@@ -198,6 +204,7 @@ class FileNotRegisteredError(PipelineConfigError):
             "registered_file_ids": self.registered_file_ids,
         }
 
+
 class StepExecutionError(PipelineIQError):
     """Base for all errors occurring during step execution."""
 
@@ -211,6 +218,7 @@ class StepExecutionError(PipelineIQError):
             "message": self.message,
             "step_name": self.step_name,
         }
+
 
 class ColumnNotFoundError(StepExecutionError):
     """Raised when a referenced column does not exist in the DataFrame.
@@ -249,6 +257,7 @@ class ColumnNotFoundError(StepExecutionError):
             "suggestion": self.suggestion,
         }
 
+
 class InvalidOperatorError(StepExecutionError):
     """Raised when a filter step specifies an unsupported operator."""
 
@@ -274,6 +283,7 @@ class InvalidOperatorError(StepExecutionError):
             "operator": self.operator,
             "valid_operators": self.valid_operators,
         }
+
 
 class JoinKeyMissingError(StepExecutionError):
     """Raised when a join key column is missing from one of the DataFrames."""
@@ -311,6 +321,7 @@ class JoinKeyMissingError(StepExecutionError):
             "suggestion": self.suggestion,
         }
 
+
 class AggregationError(StepExecutionError):
     """Raised when an aggregation operation fails."""
 
@@ -339,6 +350,7 @@ class AggregationError(StepExecutionError):
             "reason": self.reason,
         }
 
+
 class FileReadError(StepExecutionError):
     """Raised when a data file cannot be read or parsed."""
 
@@ -363,6 +375,7 @@ class FileReadError(StepExecutionError):
             "file_path": self.file_path,
             "reason": self.reason,
         }
+
 
 class UnsupportedFileFormatError(StepExecutionError):
     """Raised when a file has an unsupported extension."""
@@ -393,6 +406,7 @@ class UnsupportedFileFormatError(StepExecutionError):
             "supported_extensions": self.supported_extensions,
         }
 
+
 class StepTimeoutError(StepExecutionError):
     """Raised when a step exceeds its allowed execution time."""
 
@@ -418,6 +432,7 @@ class StepTimeoutError(StepExecutionError):
             "timeout_seconds": self.timeout_seconds,
             "elapsed_seconds": self.elapsed_seconds,
         }
+
 
 def _find_closest_match(
     target: str, candidates: List[str], cutoff: float = 0.6

@@ -4,7 +4,6 @@ import hashlib
 import hmac
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 from uuid import UUID
 
 import httpx
@@ -111,7 +110,8 @@ def deliver_with_retry(
 
             try:
                 with httpx.Client(timeout=10) as client:
-                    resp = client.post(webhook.url, content=body, headers=headers)
+                    resp = client.post(
+                        webhook.url, content=body, headers=headers)
                 delivery.response_status = resp.status_code
                 delivery.response_body = resp.text[:1000] if resp.text else None
                 if 200 <= resp.status_code < 300:
@@ -119,8 +119,9 @@ def deliver_with_retry(
                     db.add(delivery)
                     db.commit()
                     logger.info(
-                        "Webhook %s delivered on attempt %d", webhook_id, attempt
-                    )
+                        "Webhook %s delivered on attempt %d",
+                        webhook_id,
+                        attempt)
                     return
                 else:
                     delivery.failed_at = datetime.now(timezone.utc)
@@ -140,8 +141,9 @@ def deliver_with_retry(
             )
 
         logger.error(
-            "Webhook %s permanently failed after %d attempts", webhook_id, MAX_ATTEMPTS
-        )
+            "Webhook %s permanently failed after %d attempts",
+            webhook_id,
+            MAX_ATTEMPTS)
     finally:
         db.close()
 
@@ -172,7 +174,7 @@ def trigger_webhooks_for_run(
 
     db = SessionLocal()
     try:
-        query = db.query(Webhook).filter(Webhook.is_active == True)
+        query = db.query(Webhook).filter(Webhook.is_active)
         if user_id:
             query = query.filter(Webhook.user_id == user_id)
         webhooks = query.all()

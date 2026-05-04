@@ -1,8 +1,6 @@
 import io
 import os
 import time
-import json
-import uuid
 
 import numpy as np
 import pandas as pd
@@ -42,7 +40,10 @@ def upload_file(token, filename, rows=1000):
 
     files = {"file": (filename, csv_buffer, "text/csv")}
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.post(f"{API_URL}/files/upload", headers=headers, files=files)
+    resp = requests.post(
+        f"{API_URL}/files/upload",
+        headers=headers,
+        files=files)
     resp.raise_for_status()
     return resp.json()["id"]
 
@@ -141,8 +142,8 @@ pipeline:
       type: sql
       input: load_sql
       query: |
-        SELECT cat, AVG(val) as avg_val 
-        FROM {{{{input}}}} 
+        SELECT cat, AVG(val) as avg_val
+        FROM {{{{input}}}}
         GROUP BY cat
     - name: save_sql
       type: save
@@ -174,8 +175,11 @@ pipeline:
 """
     allowed_resp = requests.post(
         f"{API_URL}/pipelines/run",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Literal Keyword Test", "yaml_config": yaml_literal_keyword},
+        headers={
+            "Authorization": f"Bearer {token}"},
+        json={
+            "name": "Literal Keyword Test",
+            "yaml_config": yaml_literal_keyword},
     )
     print(f"Literal keyword response: {allowed_resp.text}")
     print(f"Literal keyword status: {allowed_resp.status_code}")
@@ -210,7 +214,8 @@ pipeline:
     print(f"Malicious run response: {blocked_resp.text}")
     print(f"Malicious run response status: {blocked_resp.status_code}")
     assert blocked_resp.status_code == 400
-    assert "disallowed" in blocked_resp.text.lower() or "single sql statement" in blocked_resp.text.lower()
+    assert "disallowed" in blocked_resp.text.lower(
+    ) or "single sql statement" in blocked_resp.text.lower()
 
     print("\nALL FUNCTIONAL TESTS PASSED!")
 

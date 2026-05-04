@@ -12,8 +12,8 @@ Node naming convention (consistent everywhere):
 """
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Set
 
 import networkx as nx
 
@@ -594,8 +594,7 @@ class LineageRecorder:
                         source_column = src_col
                     else:
                         source_column = self.graph.nodes[source_col_nodes[0]].get(
-                            "column_name", column_name
-                        )
+                            "column_name", column_name)
                 else:
                     source_column = self.graph.nodes[source_col_nodes[0]].get(
                         "column_name", column_name
@@ -609,7 +608,10 @@ class LineageRecorder:
             total_steps=len(transformation_chain),
         )
 
-    def get_impact_analysis(self, step_name: str, column_name: str) -> ImpactAnalysis:
+    def get_impact_analysis(
+            self,
+            step_name: str,
+            column_name: str) -> ImpactAnalysis:
         """Analyze the downstream impact of a column.
 
         Traverses the graph forward from a column node to find all
@@ -659,7 +661,8 @@ class LineageRecorder:
         try:
             topo_order = list(nx.topological_sort(self.graph))
         except nx.NetworkXUnfeasible:
-            logger.warning("Lineage graph contains cycles — layout may be suboptimal")
+            logger.warning(
+                "Lineage graph contains cycles — layout may be suboptimal")
             topo_order = list(self.graph.nodes())
         layers = self._assign_layers(topo_order)
         return self._position_nodes(layers)
@@ -682,7 +685,8 @@ class LineageRecorder:
 
         return layers
 
-    def _position_nodes(self, layers: Dict[int, List[str]]) -> List[ReactFlowNode]:
+    def _position_nodes(
+            self, layers: Dict[int, List[str]]) -> List[ReactFlowNode]:
         """Position nodes in a layered layout."""
         nodes: List[ReactFlowNode] = []
 
@@ -717,7 +721,8 @@ class LineageRecorder:
         """Build React Flow edges with join key styling."""
         edges: List[ReactFlowEdge] = []
 
-        for idx, (source, target, data) in enumerate(self.graph.edges(data=True)):
+        for idx, (source, target, data) in enumerate(
+                self.graph.edges(data=True)):
             is_join_key = data.get("is_join_key", False)
             edge = ReactFlowEdge(
                 id=f"edge-{idx}",

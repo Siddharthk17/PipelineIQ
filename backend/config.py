@@ -27,7 +27,9 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
-        extra="ignore",  # docker-compose-only vars (REPLICATION_USER, MINIO_ROOT_USER, etc.) coexist in .env
+        extra="ignore",
+        # docker-compose-only vars (REPLICATION_USER, MINIO_ROOT_USER, etc.)
+        # coexist in .env
     )
 
     APP_NAME: str = "PipelineIQ"
@@ -44,12 +46,12 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-me-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
-    REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_BROKER_URL: str = "redis://localhost:6379/0"
     REDIS_BACKEND_URL: str = "redis://localhost:6379/1"
     REDIS_PUBSUB_URL: str = "redis://localhost:6380/0"
     REDIS_CACHE_URL: str = "redis://localhost:6381/0"
     REDIS_YJS_URL: str = "redis://localhost:6382/0"
+
     CELERY_BROKER_URL: str = ""
     CELERY_RESULT_BACKEND: str = ""
     CELERY_WORKERS_CRITICAL: int = 2
@@ -166,21 +168,6 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def set_redis_defaults(self) -> "Settings":
-        """Default role-specific Redis URLs to REDIS_URL if not set."""
-        if not self.REDIS_BROKER_URL:
-            self.REDIS_BROKER_URL = self.REDIS_URL
-        if not self.REDIS_BACKEND_URL:
-            self.REDIS_BACKEND_URL = self.REDIS_BROKER_URL
-        if not self.REDIS_PUBSUB_URL:
-            self.REDIS_PUBSUB_URL = self.REDIS_URL
-        if not self.REDIS_CACHE_URL:
-            self.REDIS_CACHE_URL = self.REDIS_URL
-        if not self.REDIS_YJS_URL:
-            self.REDIS_YJS_URL = self.REDIS_URL
-        return self
-
-    @model_validator(mode="after")
     def set_celery_defaults(self) -> "Settings":
         """Default Celery broker/backend URLs to their dedicated Redis roles."""
         if not self.CELERY_BROKER_URL:
@@ -201,8 +188,7 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "SECRET_KEY must be changed from the default value in production. "
-                "Set the SECRET_KEY environment variable to a strong random string."
-            )
+                "Set the SECRET_KEY environment variable to a strong random string.")
         return self
 
 

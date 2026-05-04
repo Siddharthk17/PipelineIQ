@@ -10,11 +10,10 @@ business logic with no infrastructure coupling.
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 
-import pandas as pd
 import pyarrow as pa
 
 from backend.execution.arrow_bus import get_arrow_bus, ArrowDataBus
@@ -23,7 +22,6 @@ from backend.execution.smart_executor import SmartExecutor
 from backend.pipeline.exceptions import StepExecutionError
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import (
-    LoadStepConfig,
     PipelineConfig,
     StepConfig,
 )
@@ -88,7 +86,6 @@ class PipelineExecutionSummary:
 
 def _noop_progress_callback(event: StepProgressEvent) -> None:
     """Default no-op progress callback used when none is provided."""
-    pass
 
 
 class PipelineRunner:

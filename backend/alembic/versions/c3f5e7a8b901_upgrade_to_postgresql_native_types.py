@@ -8,8 +8,6 @@ Create Date: 2025-01-20 00:00:00.000000
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 # revision identifiers, used by Alembic.
 revision: str = 'c3f5e7a8b901'
@@ -89,14 +87,12 @@ def upgrade() -> None:
     # 3. Convert VARCHAR(36) → UUID
     for table, column in UUID_COLUMNS:
         op.execute(
-            f'ALTER TABLE {table} ALTER COLUMN {column} TYPE uuid USING {column}::uuid'
-        )
+            f'ALTER TABLE {table} ALTER COLUMN {column} TYPE uuid USING {column}::uuid')
 
     # 4. Convert JSON → JSONB
     for table, column in JSONB_COLUMNS:
         op.execute(
-            f'ALTER TABLE {table} ALTER COLUMN {column} TYPE jsonb USING {column}::jsonb'
-        )
+            f'ALTER TABLE {table} ALTER COLUMN {column} TYPE jsonb USING {column}::jsonb')
 
     # 5. Restore FK constraints
     for table, name, col, ref_table, ref_col in FK_REFERENCES:
@@ -121,8 +117,7 @@ def downgrade() -> None:
 
     for table, column in JSONB_COLUMNS:
         op.execute(
-            f'ALTER TABLE {table} ALTER COLUMN {column} TYPE json USING {column}::json'
-        )
+            f'ALTER TABLE {table} ALTER COLUMN {column} TYPE json USING {column}::json')
 
     for table, name, col, ref_table, ref_col in FK_REFERENCES:
         op.create_foreign_key(name, table, ref_table, [col], [ref_col])

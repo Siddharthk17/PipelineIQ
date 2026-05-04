@@ -57,7 +57,8 @@ def is_healable(error: Exception) -> bool:
         return False
 
     if error_type_name in {"ValueError", "TypeError", "AggregationError"}:
-        return any(marker in error_message for marker in HEALABLE_ERROR_MESSAGE_PATTERNS)
+        return any(
+            marker in error_message for marker in HEALABLE_ERROR_MESSAGE_PATTERNS)
 
     return True
 
@@ -66,4 +67,6 @@ def get_healing_scenario(error: Exception) -> Optional[str]:
     """Return the human-readable healing scenario when an error is healable."""
     if not is_healable(error):
         return None
-    return HEALABLE_ERROR_TYPES.get(type(error).__name__, "schema_drift_detected")
+    return HEALABLE_ERROR_TYPES.get(
+        type(error).__name__,
+        "schema_drift_detected")

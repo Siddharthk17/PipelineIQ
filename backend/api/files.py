@@ -10,7 +10,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import List, Optional, BinaryIO
+from typing import Optional, BinaryIO
 
 import orjson
 import pandas as pd
@@ -75,21 +75,27 @@ def _cache_pending_upload(file_id: str, payload: dict) -> None:
             orjson.dumps(payload),
         )
     except RedisError:
-        logger.warning("Failed to cache pending upload state for file_id=%s", file_id)
+        logger.warning(
+            "Failed to cache pending upload state for file_id=%s",
+            file_id)
 
 
 def _get_pending_upload(file_id: str) -> Optional[dict]:
     try:
         raw = get_cache_redis().get(_pending_upload_key(file_id))
     except RedisError:
-        logger.warning("Failed to read pending upload state for file_id=%s", file_id)
+        logger.warning(
+            "Failed to read pending upload state for file_id=%s",
+            file_id)
         return None
     if not raw:
         return None
     try:
         return orjson.loads(raw)
     except Exception:
-        logger.warning("Invalid pending upload payload for file_id=%s", file_id)
+        logger.warning(
+            "Invalid pending upload payload for file_id=%s",
+            file_id)
         return None
 
 
@@ -97,7 +103,9 @@ def _clear_pending_upload(file_id: str) -> None:
     try:
         get_cache_redis().delete(_pending_upload_key(file_id))
     except RedisError:
-        logger.warning("Failed to clear pending upload state for file_id=%s", file_id)
+        logger.warning(
+            "Failed to clear pending upload state for file_id=%s",
+            file_id)
 
 
 @router.post(
@@ -116,7 +124,8 @@ async def request_upload_url(
     current_user: User = Depends(get_current_user),
 ) -> UploadUrlResponse:
     """Negotiate file upload method based on file size."""
-    request_payload = _resolve_upload_request_payload(body, filename, file_size)
+    request_payload = _resolve_upload_request_payload(
+        body, filename, file_size)
 
     filename = os.path.basename(request_payload.filename or "")
     if not filename:
@@ -152,7 +161,8 @@ async def request_upload_url(
             },
         )
 
-        presigned_url = storage_service.get_presigned_upload_url(str(stored_path))
+        presigned_url = storage_service.get_presigned_upload_url(
+            str(stored_path))
         if presigned_url:
             return UploadUrlResponse(
                 method="direct",
@@ -545,14 +555,16 @@ def _extract_file_metadata(
     )
 
 
-def _extract_csv_metadata(stored_path: str) -> tuple[int, list[str], dict[str, str]]:
+def _extract_csv_metadata(
+        stored_path: str) -> tuple[int, list[str], dict[str, str]]:
     """Read CSV metadata with bounded memory usage."""
     try:
         with storage_service.download(stored_path) as handle:
             # Convert binary stream to text wrapper for csv reader
             import io
 
-            text_handle = io.TextIOWrapper(handle, encoding="utf-8", newline="")
+            text_handle = io.TextIOWrapper(
+                handle, encoding="utf-8", newline="")
             reader = csv.reader(text_handle)
             header = next(reader, None)
             if header is None:
@@ -564,7 +576,8 @@ def _extract_csv_metadata(stored_path: str) -> tuple[int, list[str], dict[str, s
             with storage_service.download(stored_path) as handle:
                 import io
 
-                text_handle = io.TextIOWrapper(handle, encoding="utf-8-sig", newline="")
+                text_handle = io.TextIOWrapper(
+                    handle, encoding="utf-8-sig", newline="")
                 reader = csv.reader(text_handle)
                 header = next(reader, None)
                 if header is None:
@@ -625,14 +638,16 @@ def _extract_json_metadata(
 
                 # Sample first line for dtypes
                 sample_df = pd.DataFrame([first_obj])
-                dtypes = {col: str(dtype) for col, dtype in sample_df.dtypes.items()}
+                dtypes = {col: str(dtype)
+                          for col, dtype in sample_df.dtypes.items()}
                 return row_count - 1, columns, dtypes
 
         # Fallback to standard JSON list
         with storage_service.download(stored_path) as handle:
             df = pd.read_json(handle)
             columns = list(df.columns)
-            dtypes = {column: str(dtype) for column, dtype in df.dtypes.items()}
+            dtypes = {column: str(dtype)
+                      for column, dtype in df.dtypes.items()}
             return len(df), columns, dtypes
     except Exception as exc:
         raise HTTPException(
@@ -735,7 +750,8 @@ def _finalize_uploaded_file(
     current_user: User,
 ) -> FileUploadResponse:
     """Persist uploaded file metadata, snapshot, and optional drift report."""
-    row_count, columns, dtypes = _extract_file_metadata(original_filename, stored_path)
+    row_count, columns, dtypes = _extract_file_metadata(
+        original_filename, stored_path)
     if row_count > settings.MAX_ROWS_PER_FILE:
         storage_service.delete(stored_path)
         raise HTTPException(
@@ -809,7 +825,10 @@ def _finalize_uploaded_file(
     )
 
 
-def _parse_file_preview(filename: str, handle: BinaryIO, nrows: int) -> pd.DataFrame:
+def _parse_file_preview(
+        filename: str,
+        handle: BinaryIO,
+        nrows: int) -> pd.DataFrame:
     """Parse only the first N rows of a file for preview (avoids reading full file)."""
     extension = Path(filename).suffix.lower()
     try:

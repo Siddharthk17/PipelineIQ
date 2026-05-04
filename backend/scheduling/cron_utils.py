@@ -4,7 +4,6 @@ Uses `croniter` for validation and next-run calculation.
 Uses a lookup table for human-readable descriptions.
 """
 from datetime import datetime, timezone
-from typing import Optional
 
 try:
     from croniter import croniter
@@ -65,29 +64,29 @@ def get_next_n_runs(expression: str, n: int = 5) -> list[datetime]:
 
 # Common patterns → human descriptions
 CRON_HUMAN_MAP: dict[str, str] = {
-    "0 * * * *":        "every hour",
-    "0 */2 * * *":      "every 2 hours",
-    "0 */4 * * *":      "every 4 hours",
-    "0 */6 * * *":      "every 6 hours",
-    "0 */12 * * *":     "every 12 hours",
-    "0 0 * * *":        "every day at midnight",
-    "0 6 * * *":        "every day at 6:00 AM",
-    "0 8 * * *":        "every day at 8:00 AM",
-    "0 9 * * *":        "every day at 9:00 AM",
-    "0 12 * * *":       "every day at noon",
-    "0 18 * * *":       "every day at 6:00 PM",
-    "0 0 * * 0":        "every Sunday at midnight",
-    "0 9 * * 1":        "every Monday at 9:00 AM",
-    "0 6 * * 1":        "every Monday at 6:00 AM",
-    "0 9 * * 2":        "every Tuesday at 9:00 AM",
-    "0 9 * * 3":        "every Wednesday at 9:00 AM",
-    "0 9 * * 4":        "every Thursday at 9:00 AM",
-    "0 9 * * 5":        "every Friday at 9:00 AM",
-    "0 0 1 * *":        "on the 1st of every month",
-    "0 0 1 1 *":        "on January 1st",
-    "*/5 * * * *":      "every 5 minutes",
-    "*/15 * * * *":     "every 15 minutes",
-    "*/30 * * * *":     "every 30 minutes",
+    "0 * * * *": "every hour",
+    "0 */2 * * *": "every 2 hours",
+    "0 */4 * * *": "every 4 hours",
+    "0 */6 * * *": "every 6 hours",
+    "0 */12 * * *": "every 12 hours",
+    "0 0 * * *": "every day at midnight",
+    "0 6 * * *": "every day at 6:00 AM",
+    "0 8 * * *": "every day at 8:00 AM",
+    "0 9 * * *": "every day at 9:00 AM",
+    "0 12 * * *": "every day at noon",
+    "0 18 * * *": "every day at 6:00 PM",
+    "0 0 * * 0": "every Sunday at midnight",
+    "0 9 * * 1": "every Monday at 9:00 AM",
+    "0 6 * * 1": "every Monday at 6:00 AM",
+    "0 9 * * 2": "every Tuesday at 9:00 AM",
+    "0 9 * * 3": "every Wednesday at 9:00 AM",
+    "0 9 * * 4": "every Thursday at 9:00 AM",
+    "0 9 * * 5": "every Friday at 9:00 AM",
+    "0 0 1 * *": "on the 1st of every month",
+    "0 0 1 1 *": "on January 1st",
+    "*/5 * * * *": "every 5 minutes",
+    "*/15 * * * *": "every 15 minutes",
+    "*/30 * * * *": "every 30 minutes",
 }
 
 
@@ -113,7 +112,12 @@ def cron_to_human(expression: str) -> str:
         return f"custom schedule: {normalized}"
 
 
-def _build_cron_description(minute: str, hour: str, dom: str, month: str, dow: str) -> str:
+def _build_cron_description(
+        minute: str,
+        hour: str,
+        dom: str,
+        month: str,
+        dow: str) -> str:
     """Build a human-readable description from cron parts."""
     dow_names = {
         "0": "Sunday", "1": "Monday", "2": "Tuesday",

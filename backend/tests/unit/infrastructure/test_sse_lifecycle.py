@@ -8,7 +8,8 @@ def test_terminal_statuses_are_frozenset():
 
 
 def test_terminal_statuses_include_all_run_terminal_states():
-    assert {"COMPLETED", "FAILED", "CANCELLED"}.issubset(sse_module._TERMINAL_STATUSES)
+    assert {"COMPLETED", "FAILED", "CANCELLED"}.issubset(
+        sse_module._TERMINAL_STATUSES)
 
 
 def test_terminal_event_types_include_stream_end():
@@ -34,10 +35,14 @@ def test_format_sse_event_uses_double_newline():
 
 
 def test_extract_event_type_falls_back_to_status_mapping():
-    assert sse_module._extract_event_type({"status": "RUNNING"}) == "step_started"
-    assert sse_module._extract_event_type({"status": "COMPLETED"}) == "step_completed"
+    assert sse_module._extract_event_type(
+        {"status": "RUNNING"}) == "step_started"
+    assert sse_module._extract_event_type(
+        {"status": "COMPLETED"}) == "step_completed"
 
 
 def test_is_terminal_event_true_for_terminal_status():
-    assert sse_module._is_terminal_event("progress", {"status": "FAILED"}) is True
-    assert sse_module._is_terminal_event("progress", {"status": "RUNNING"}) is False
+    assert sse_module._is_terminal_event(
+        "progress", {"status": "FAILED"}) is True
+    assert sse_module._is_terminal_event(
+        "progress", {"status": "RUNNING"}) is False

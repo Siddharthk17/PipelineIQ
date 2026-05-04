@@ -8,8 +8,7 @@ class TestGeminiRateLimitPolicy:
         error_message = (
             "429 RESOURCE_EXHAUSTED. Quota exceeded for metric: "
             "generativelanguage.googleapis.com/generate_content_free_tier_requests, "
-            "limit: 0, model: gemini-2.0-flash"
-        )
+            "limit: 0, model: gemini-2.0-flash")
         assert _should_retry_rate_limit(error_message) is False
 
     def test_retries_on_transient_quota_exhaustion(self):

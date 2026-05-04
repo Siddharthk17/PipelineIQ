@@ -54,8 +54,8 @@ def profile_file(self, file_id: str) -> dict:
             df = df.sample(n=settings.PROFILE_SAMPLE_ROWS, random_state=42)
             was_sampled = True
             logger.info(
-                f"Sampled to {settings.PROFILE_SAMPLE_ROWS} rows for file_id={file_id}"
-            )
+                f"Sampled to {
+                    settings.PROFILE_SAMPLE_ROWS} rows for file_id={file_id}")
 
         profile = profile_dataframe(df)
         completeness = compute_completeness(df)
@@ -87,14 +87,19 @@ def profile_file(self, file_id: str) -> dict:
         }
 
     except ProfileSourceNotFoundError as exc:
-        logger.warning("Skipping profile for missing source file_id=%s: %s", file_id, exc)
+        logger.warning(
+            "Skipping profile for missing source file_id=%s: %s",
+            file_id,
+            exc)
         return {
             "file_id": file_id,
             "status": "skipped",
             "reason": "file_not_found",
         }
     except Exception as exc:
-        logger.error(f"Profile failed for file_id={file_id}: {exc}", exc_info=True)
+        logger.error(
+            f"Profile failed for file_id={file_id}: {exc}",
+            exc_info=True)
         try:
             _update_profile_status(db, file_id, "failed", error=str(exc)[:500])
         except Exception:
@@ -120,7 +125,8 @@ def _load_file_from_disk(file_id: str) -> pd.DataFrame:
 
         stored_path = uploaded_file.stored_path
         if not storage_service.exists(stored_path):
-            raise ProfileSourceNotFoundError(f"File not found at path: {stored_path}")
+            raise ProfileSourceNotFoundError(
+                f"File not found at path: {stored_path}")
 
         extension = Path(stored_path).suffix.lower()
         loader = SUPPORTED_FORMATS.get(extension)
@@ -151,8 +157,9 @@ def _update_profile_status(
 
     file_uuid = as_uuid(file_id)
     file_exists = (
-        db.query(UploadedFile.id).filter(UploadedFile.id == file_uuid).first() is not None
-    )
+        db.query(
+            UploadedFile.id).filter(
+            UploadedFile.id == file_uuid).first() is not None)
     if not file_exists:
         logger.warning(
             "Skipping profile status update for missing uploaded_file file_id=%s",
@@ -160,7 +167,8 @@ def _update_profile_status(
         )
         return
 
-    existing = db.query(FileProfile).filter(FileProfile.file_id == file_uuid).first()
+    existing = db.query(FileProfile).filter(
+        FileProfile.file_id == file_uuid).first()
     if existing:
         stmt = (
             update(FileProfile)
@@ -188,7 +196,8 @@ def _save_profile(
 ) -> None:
     """Upsert the profile into the database."""
     file_uuid = as_uuid(file_id)
-    existing = db.query(FileProfile).filter(FileProfile.file_id == file_uuid).first()
+    existing = db.query(FileProfile).filter(
+        FileProfile.file_id == file_uuid).first()
     if existing:
         existing.profile = profile
         existing.row_count = row_count

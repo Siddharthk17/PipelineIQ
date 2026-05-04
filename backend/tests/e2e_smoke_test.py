@@ -16,8 +16,10 @@ FILE_PATH = os.getenv("E2E_FILE_PATH", "sample_data/sales.csv")
 
 class TestE2ESmoke:
     def setup_method(self):
-        # Use demo admin user for E2E test (has admin role, can run any pipeline)
-        self.user_email = os.environ.get("TEST_ADMIN_EMAIL", "demo@pipelineiq.app")
+        # Use demo admin user for E2E test (has admin role, can run any
+        # pipeline)
+        self.user_email = os.environ.get(
+            "TEST_ADMIN_EMAIL", "demo@pipelineiq.app")
         self.password = os.environ.get("TEST_ADMIN_PASSWORD", "Demo1234!")
         self.token = None
 
@@ -27,7 +29,8 @@ class TestE2ESmoke:
             f"{AUTH_URL}/login",
             json={"email": self.user_email, "password": self.password},
         )
-        assert login_resp.status_code == 200, f"Login failed: {login_resp.text}"
+        assert login_resp.status_code == 200, f"Login failed: {
+            login_resp.text}"
         self.token = login_resp.json()["access_token"]
         headers = {"Authorization": f"Bearer {self.token}"}
 
@@ -38,7 +41,8 @@ class TestE2ESmoke:
                 headers=headers,
                 files={"file": (FILE_PATH, f, "text/csv")},
             )
-        assert upload_resp.status_code == 201, f"Upload failed: {upload_resp.text}"
+        assert upload_resp.status_code == 201, f"Upload failed: {
+            upload_resp.text}"
         file_id = upload_resp.json()["id"]
 
         # 3. Validate Pipeline
@@ -90,8 +94,8 @@ pipeline:
                 break
             elif status_resp.json()["status"] == "FAILED":
                 pytest.fail(
-                    f"Pipeline failed: {status_resp.json().get('error_message')}"
-                )
+                    f"Pipeline failed: {
+                        status_resp.json().get('error_message')}")
             time.sleep(2)
 
         assert completed, "Pipeline timed out"
@@ -104,7 +108,9 @@ pipeline:
         assert "text/csv" in export_resp.headers.get("Content-Type", "")
 
         # 7. Verify Lineage
-        lineage_resp = requests.get(f"{BASE_URL}/lineage/{run_id}", headers=headers)
+        lineage_resp = requests.get(
+            f"{BASE_URL}/lineage/{run_id}",
+            headers=headers)
         assert lineage_resp.status_code == 200
         data = lineage_resp.json()
         assert "nodes" in data

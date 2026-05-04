@@ -5,7 +5,6 @@ Run with: RUN_INTEGRATION_TESTS=1 pytest backend/tests/integration/test_profilin
 """
 
 import os
-import time
 
 import pytest
 

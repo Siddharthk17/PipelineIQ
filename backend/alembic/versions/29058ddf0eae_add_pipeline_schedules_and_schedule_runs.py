@@ -13,6 +13,7 @@ down_revision = 'c5d6e7f8a9b0'
 branch_labels = None
 depends_on = None
 
+
 def upgrade() -> None:
     # Create schedule_runs table
     op.create_table(
@@ -33,7 +34,7 @@ def upgrade() -> None:
     )
 
     op.create_index('idx_schedule_runs_schedule_id',
-                     'schedule_runs', ['schedule_id', 'triggered_at'])
+                    'schedule_runs', ['schedule_id', 'triggered_at'])
 
     # Add trigger + schedule_id to pipeline_runs
     op.execute("""
@@ -78,14 +79,14 @@ def upgrade() -> None:
 
     # Index for active schedules (queried by Celery Beat)
     op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_pipeline_schedules_active 
-        ON pipeline_schedules (is_active, next_run_at) 
+        CREATE INDEX IF NOT EXISTS idx_pipeline_schedules_active
+        ON pipeline_schedules (is_active, next_run_at)
         WHERE is_active = true;
     """)
 
     # Index for listing by user
     op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_pipeline_schedules_user 
+        CREATE INDEX IF NOT EXISTS idx_pipeline_schedules_user
         ON pipeline_schedules (user_id, created_at);
     """)
 
@@ -97,4 +98,5 @@ def downgrade() -> None:
     op.drop_table('schedule_runs')
     op.execute("DROP INDEX IF EXISTS idx_pipeline_schedules_user")
     op.execute("DROP INDEX IF EXISTS idx_pipeline_schedules_active")
-    # Note: We don't drop pipeline_schedules table because it already existed before this migration
+    # Note: We don't drop pipeline_schedules table because it already existed
+    # before this migration

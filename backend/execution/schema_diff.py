@@ -50,7 +50,10 @@ def find_rename_candidates(old_schema: dict, new_schema: dict) -> list[dict]:
                 }
             )
 
-    return sorted(candidates, key=lambda item: item["confidence"], reverse=True)
+    return sorted(
+        candidates,
+        key=lambda item: item["confidence"],
+        reverse=True)
 
 
 def compute_schema_diff(old_schema: dict, new_schema: dict) -> dict:
@@ -63,7 +66,8 @@ def compute_schema_diff(old_schema: dict, new_schema: dict) -> dict:
         "removed_columns": removed_columns,
         "added_columns": added_columns,
         "renamed_candidates": renamed_candidates,
-        "has_changes": bool(removed_columns or added_columns or renamed_candidates),
+        "has_changes": bool(
+            removed_columns or added_columns or renamed_candidates),
         "summary": _build_summary(
             removed_columns=removed_columns,
             added_columns=added_columns,

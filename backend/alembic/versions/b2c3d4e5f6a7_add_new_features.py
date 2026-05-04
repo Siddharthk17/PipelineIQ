@@ -28,11 +28,16 @@ def upgrade() -> None:
     op.execute("ALTER TYPE pipelinestatus ADD VALUE IF NOT EXISTS 'CANCELLED'")
 
     # Add version and previous_version_id to uploaded_files
-    uploaded_columns = {column["name"] for column in inspector.get_columns("uploaded_files")}
+    uploaded_columns = {column["name"]
+                        for column in inspector.get_columns("uploaded_files")}
     if "version" not in uploaded_columns:
         op.add_column(
             "uploaded_files",
-            sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
+            sa.Column(
+                "version",
+                sa.Integer(),
+                nullable=False,
+                server_default="1"),
         )
         uploaded_columns.add("version")
 
@@ -43,7 +48,8 @@ def upgrade() -> None:
         )
         uploaded_columns.add("previous_version_id")
 
-    uploaded_fks = {fk["name"] for fk in inspector.get_foreign_keys("uploaded_files")}
+    uploaded_fks = {fk["name"]
+                    for fk in inspector.get_foreign_keys("uploaded_files")}
     if "fk_uploaded_files_previous_version_id" not in uploaded_fks:
         op.create_foreign_key(
             "fk_uploaded_files_previous_version_id",
@@ -72,9 +78,11 @@ def upgrade() -> None:
     # Create notification_configs table
     from sqlalchemy.dialects import postgresql
 
-    # Use create_type=False for Postgres to avoid 'type already exists' error in create_table
+    # Use create_type=False for Postgres to avoid 'type already exists' error
+    # in create_table
     if op.get_bind().dialect.name == "postgresql":
-        notification_type = postgresql.ENUM("slack", "email", name="notificationtype", create_type=False)
+        notification_type = postgresql.ENUM(
+            "slack", "email", name="notificationtype", create_type=False)
         notification_type.create(op.get_bind(), checkfirst=True)
     else:
         notification_type = sa.Enum("slack", "email", name="notificationtype")
@@ -93,21 +101,28 @@ def upgrade() -> None:
 
     # Create pipeline_permissions table
     if op.get_bind().dialect.name == "postgresql":
-        permission_level = postgresql.ENUM("owner", "runner", "viewer", name="permissionlevel", create_type=False)
+        permission_level = postgresql.ENUM(
+            "owner",
+            "runner",
+            "viewer",
+            name="permissionlevel",
+            create_type=False)
         permission_level.create(op.get_bind(), checkfirst=True)
     else:
-        permission_level = sa.Enum("owner", "runner", "viewer", name="permissionlevel")
+        permission_level = sa.Enum(
+            "owner", "runner", "viewer", name="permissionlevel")
 
     if "pipeline_permissions" not in existing_tables:
         op.create_table(
-            "pipeline_permissions",
-            sa.Column("id", sa.Uuid(), primary_key=True),
-            sa.Column("pipeline_name", sa.String(255), nullable=False, index=True),
-            sa.Column("user_id", sa.Uuid(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
-            sa.Column("permission_level", permission_level, nullable=False),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.UniqueConstraint("pipeline_name", "user_id"),
-        )
+            "pipeline_permissions", sa.Column(
+                "id", sa.Uuid(), primary_key=True), sa.Column(
+                "pipeline_name", sa.String(255), nullable=False, index=True), sa.Column(
+                "user_id", sa.Uuid(), sa.ForeignKey(
+                    "users.id", ondelete="CASCADE"), nullable=False), sa.Column(
+                        "permission_level", permission_level, nullable=False), sa.Column(
+                            "created_at", sa.DateTime(
+                                timezone=True), server_default=sa.func.now()), sa.UniqueConstraint(
+                                    "pipeline_name", "user_id"), )
 
 
 def downgrade() -> None:
@@ -119,7 +134,10 @@ def downgrade() -> None:
 
     op.drop_table("pipeline_schedules")
 
-    op.drop_constraint("fk_uploaded_files_previous_version_id", "uploaded_files", type_="foreignkey")
+    op.drop_constraint(
+        "fk_uploaded_files_previous_version_id",
+        "uploaded_files",
+        type_="foreignkey")
     op.drop_column("uploaded_files", "previous_version_id")
     op.drop_column("uploaded_files", "version")
 

@@ -98,7 +98,8 @@ sql:
     FROM {input}
     WHERE amount > 1000
 """
-# Note: {input} in the sql step references the upstream DataFrame by the input step name.
+# Note: {input} in the sql step references the upstream DataFrame by the
+# input step name.
 
 GENERATION_SYSTEM_PROMPT = """You are a PipelineIQ YAML generator.
 

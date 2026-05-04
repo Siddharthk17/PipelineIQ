@@ -65,8 +65,6 @@ SessionLocal = WriteSessionLocal
 class Base(DeclarativeBase):
     """Declarative base class for all SQLAlchemy ORM models."""
 
-    pass
-
 
 def get_db() -> Generator[Session, None, None]:
     """Yield a database session and ensure it is closed after use.

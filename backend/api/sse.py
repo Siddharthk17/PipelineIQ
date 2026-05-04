@@ -38,6 +38,7 @@ _TERMINAL_EVENT_TYPES = frozenset({
     "stream_end",
 })
 
+
 @router.get(
     "/{run_id}/stream",
     summary="Stream pipeline progress via SSE",
@@ -51,7 +52,8 @@ async def stream_pipeline_progress(
 ) -> StreamingResponse:
     """Stream real-time pipeline execution progress via Server-Sent Events."""
     _validate_uuid_format(run_id)
-    pipeline_run = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    pipeline_run = db.query(PipelineRun).filter(
+        PipelineRun.id == _as_uuid(run_id)).first()
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -93,7 +95,10 @@ async def stream_pipeline_progress_legacy(
         current_user=current_user,
     )
 
-def _authorize_run_access(pipeline_run: PipelineRun, current_user: User) -> None:
+
+def _authorize_run_access(
+        pipeline_run: PipelineRun,
+        current_user: User) -> None:
     """Raise 403 if the user cannot access this pipeline run stream."""
     if current_user.role == "admin":
         return
@@ -109,6 +114,7 @@ def _authorize_run_access(pipeline_run: PipelineRun, current_user: User) -> None
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to access this pipeline stream",
         )
+
 
 async def _live_event_generator(
     run_id: str,
@@ -131,7 +137,9 @@ async def _live_event_generator(
             cached_event_type = _extract_event_type(cached_event)
             yield _format_sse_event(cached_event_type, cached_event)
             if _is_terminal_event(cached_event_type, cached_event):
-                logger.info("SSE stream immediate close from cached terminal state: run_id=%s", run_id)
+                logger.info(
+                    "SSE stream immediate close from cached terminal state: run_id=%s",
+                    run_id)
                 yield _format_sse_event(
                     "stream_end",
                     {"run_id": run_id, "event_type": "stream_end", "status": cached_event.get("status")},
@@ -149,7 +157,8 @@ async def _live_event_generator(
 
         while True:
             if await request.is_disconnected():
-                logger.info("SSE stream disconnected by client: run_id=%s", run_id)
+                logger.info(
+                    "SSE stream disconnected by client: run_id=%s", run_id)
                 return
 
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
@@ -169,7 +178,10 @@ async def _live_event_generator(
             last_emit_at = now
 
             if _is_terminal_event(event_type, payload):
-                logger.info("SSE stream closing: run_id=%s, event=%s", run_id, event_type)
+                logger.info(
+                    "SSE stream closing: run_id=%s, event=%s",
+                    run_id,
+                    event_type)
                 yield _format_sse_event(
                     "stream_end",
                     {"run_id": run_id, "event_type": "stream_end", "status": payload.get("status")},
@@ -184,6 +196,7 @@ async def _live_event_generator(
         await pubsub.aclose()
         await redis_client.aclose()
         await cache_client.aclose()
+
 
 async def _completed_event_generator(
     pipeline_run: PipelineRun,
@@ -202,8 +215,10 @@ async def _completed_event_generator(
         {"run_id": str(pipeline_run.id), "event_type": "stream_end", "status": pipeline_run.status.value},
     )
 
+
 def _status_cache_key(run_id: str) -> str:
     return f"pipeline_progress:last:{run_id}"
+
 
 async def _get_cached_event(cache_client, run_id: str) -> Optional[dict]:
     """Return the latest cached progress payload for this run, if present."""
@@ -219,10 +234,13 @@ async def _get_cached_event(cache_client, run_id: str) -> Optional[dict]:
     try:
         parsed = orjson.loads(cached_payload)
     except orjson.JSONDecodeError:
-        logger.warning("SSE cache payload is not valid JSON for run_id=%s", run_id)
+        logger.warning(
+            "SSE cache payload is not valid JSON for run_id=%s",
+            run_id)
         return None
 
     return parsed if isinstance(parsed, dict) else None
+
 
 def _parse_message_payload(data) -> Optional[dict]:
     """Parse Redis pub/sub message payload into a dict."""
@@ -235,6 +253,7 @@ def _parse_message_payload(data) -> Optional[dict]:
     except orjson.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
 
 def _extract_event_type(payload: dict) -> str:
     """Extract the SSE event type from a progress payload."""
@@ -255,12 +274,14 @@ def _extract_event_type(payload: dict) -> str:
         return status_to_event.get(step_status, "progress")
     return "progress"
 
+
 def _is_terminal_event(event_type: str, payload: dict) -> bool:
     """Return True when no more events should be emitted for this run."""
     if event_type in _TERMINAL_EVENT_TYPES:
         return True
     status_value = payload.get("status")
     return isinstance(status_value, str) and status_value in _TERMINAL_STATUSES
+
 
 def _terminal_event_type(status_value: PipelineStatus) -> str:
     if status_value in {PipelineStatus.COMPLETED, PipelineStatus.HEALED}:
@@ -269,10 +290,12 @@ def _terminal_event_type(status_value: PipelineStatus) -> str:
         return "pipeline_cancelled"
     return "pipeline_failed"
 
+
 def _format_sse_event(event_type: str, payload: dict) -> str:
     """Format an SSE message with event and data lines."""
     serialized = orjson.dumps(payload).decode("utf-8")
     return f"event: {event_type}\ndata: {serialized}\n\n"
+
 
 def _sse_headers() -> dict:
     """Standard headers for SSE responses."""

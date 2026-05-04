@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 _FORBIDDEN_SQL_KEYWORDS = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|attach|detach|copy|export|import|call|pragma)\b",
@@ -200,19 +200,28 @@ def build_filter_sql(step: Any) -> str:
     if operator in compare_ops:
         predicate = f"{column} {compare_ops[operator]} {sql_literal(value)}"
     elif operator == "contains":
-        predicate = f"CAST({column} AS VARCHAR) LIKE {sql_literal(f'%{value}%')}"
+        predicate = f"CAST({column} AS VARCHAR) LIKE {
+            sql_literal(
+                f'%{value}%')}"
     elif operator == "not_contains":
-        predicate = f"CAST({column} AS VARCHAR) NOT LIKE {sql_literal(f'%{value}%')}"
+        predicate = f"CAST({column} AS VARCHAR) NOT LIKE {
+            sql_literal(
+                f'%{value}%')}"
     elif operator == "starts_with":
-        predicate = f"CAST({column} AS VARCHAR) LIKE {sql_literal(f'{value}%')}"
+        predicate = f"CAST({column} AS VARCHAR) LIKE {
+            sql_literal(
+                f'{value}%')}"
     elif operator == "ends_with":
-        predicate = f"CAST({column} AS VARCHAR) LIKE {sql_literal(f'%{value}')}"
+        predicate = f"CAST({column} AS VARCHAR) LIKE {
+            sql_literal(
+                f'%{value}')}"
     elif operator == "is_null":
         predicate = f"{column} IS NULL"
     elif operator == "is_not_null":
         predicate = f"{column} IS NOT NULL"
     else:
-        raise ValueError(f"Unsupported filter operator '{operator}' for DuckDB routing")
+        raise ValueError(
+            f"Unsupported filter operator '{operator}' for DuckDB routing")
 
     return f"SELECT * FROM __input__ WHERE {predicate}"
 
@@ -258,12 +267,16 @@ def build_sort_sql(step: Any) -> str:
 
 
 def build_aggregate_sql(step: Any) -> str:
-    group_by = [str(col) for col in _as_list(_step_value(step, "group_by", []))]
+    group_by = [
+        str(col) for col in _as_list(
+            _step_value(
+                step,
+                "group_by",
+                []))]
     aggregations = _step_value(step, "aggregations", [])
     if isinstance(aggregations, dict):
-        aggregations = [
-            {"column": col, "function": func} for col, func in aggregations.items()
-        ]
+        aggregations = [{"column": col, "function": func}
+                        for col, func in aggregations.items()]
     if not aggregations:
         raise ValueError("Aggregate step requires at least one aggregation")
 
@@ -332,7 +345,8 @@ def build_deduplicate_sql(step: Any) -> str:
 
     if not subset:
         if keep in {"none", "false"}:
-            raise ValueError("DuckDB deduplicate with keep='none' requires subset columns")
+            raise ValueError(
+                "DuckDB deduplicate with keep='none' requires subset columns")
         return "SELECT DISTINCT * FROM __input__"
 
     partition = ", ".join(quote_identifier(col) for col in subset)
@@ -397,7 +411,8 @@ def build_fill_nulls_sql(step: Any) -> str:
     ).lower()
     columns = [str(col) for col in _as_list(_step_value(step, "columns", []))]
     if not columns:
-        raise ValueError("fill_nulls DuckDB routing requires explicit 'columns'")
+        raise ValueError(
+            "fill_nulls DuckDB routing requires explicit 'columns'")
 
     strategy_map = {
         "ffill": "forward_fill",
@@ -406,11 +421,14 @@ def build_fill_nulls_sql(step: Any) -> str:
     strategy = strategy_map.get(strategy, strategy)
 
     if strategy == "constant":
-        constant_value = _step_value(step, "constant_value", _step_value(step, "value"))
+        constant_value = _step_value(
+            step, "constant_value", _step_value(
+                step, "value"))
         expressions = [
-            f"COALESCE({quote_identifier(col)}, {sql_literal(constant_value)}) AS {quote_identifier(col)}"
-            for col in columns
-        ]
+            f"COALESCE({
+                quote_identifier(col)}, {
+                sql_literal(constant_value)}) AS {
+                quote_identifier(col)}" for col in columns]
         return f"SELECT * REPLACE ({', '.join(expressions)}) FROM __input__"
 
     if strategy in {"mean", "median", "mode"}:
@@ -462,7 +480,8 @@ def build_pivot_sql(step: Any) -> str:
     if not columns_col or not values_col:
         raise ValueError("Pivot step requires 'columns' and 'values'")
     if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", aggfunc):
-        raise ValueError("Pivot aggfunc must be a simple SQL function identifier")
+        raise ValueError(
+            "Pivot aggfunc must be a simple SQL function identifier")
 
     group_by_clause = ""
     if index_cols:
@@ -480,7 +499,12 @@ def build_pivot_sql(step: Any) -> str:
 
 def build_unpivot_sql(step: Any) -> str:
     id_vars = [str(col) for col in _as_list(_step_value(step, "id_vars", []))]
-    value_vars = [str(col) for col in _as_list(_step_value(step, "value_vars", []))]
+    value_vars = [
+        str(col) for col in _as_list(
+            _step_value(
+                step,
+                "value_vars",
+                []))]
     var_name = str(_step_value(step, "var_name", "variable"))
     value_name = str(_step_value(step, "value_name", "value"))
     if not value_vars:
@@ -523,5 +547,6 @@ def build_sql_for_step(step: Any) -> str:
     }
     builder = builders.get(step_type)
     if builder is None:
-        raise ValueError(f"No SQL builder registered for step type '{step_type}'")
+        raise ValueError(
+            f"No SQL builder registered for step type '{step_type}'")
     return builder(step)

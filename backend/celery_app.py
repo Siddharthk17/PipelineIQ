@@ -42,10 +42,14 @@ if settings.CELERY_RESULT_BACKEND.startswith("rediss://"):
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="pipeline_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="webhook_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="schedule_tasks")
-celery_app.autodiscover_tasks(["backend.tasks"], related_name="notification_tasks")
+celery_app.autodiscover_tasks(
+    ["backend.tasks"],
+    related_name="notification_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="profiling")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="gemini_tasks")
-celery_app.autodiscover_tasks(["backend.tasks"], related_name="scheduled_pipeline")
+celery_app.autodiscover_tasks(
+    ["backend.tasks"],
+    related_name="scheduled_pipeline")
 
 
 @worker_process_init.connect

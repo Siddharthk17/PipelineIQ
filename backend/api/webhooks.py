@@ -5,7 +5,6 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import List, Optional
-from uuid import UUID
 
 import httpx
 import orjson
@@ -23,6 +22,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 # Schemas
+
+
 class WebhookCreate(BaseModel):
     url: str
     secret: Optional[str] = None
@@ -35,6 +36,7 @@ class WebhookCreate(BaseModel):
             raise ValueError("URL must start with http:// or https://")
         return v
 
+
 class WebhookResponse(BaseModel):
     id: str
     url: str
@@ -44,6 +46,7 @@ class WebhookResponse(BaseModel):
     has_secret: bool = False
 
     model_config = ConfigDict(from_attributes=True)
+
 
 class DeliveryResponse(BaseModel):
     id: str
@@ -57,22 +60,29 @@ class DeliveryResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
 class TestWebhookResponse(BaseModel):
     delivered: bool
     response_status: Optional[int] = None
     error: Optional[str] = None
 
 # Endpoints
-@router.post("/", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
+
+
+@router.post("/", response_model=WebhookResponse,
+             status_code=status.HTTP_201_CREATED)
 def create_webhook(
     body: WebhookCreate,
     db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """Register a new webhook URL."""
-    count = db.query(Webhook).filter(Webhook.user_id == current_user.id).count()
+    count = db.query(Webhook).filter(
+        Webhook.user_id == current_user.id).count()
     if count >= 10:
-        raise HTTPException(status_code=400, detail="Maximum 10 webhooks per user")
+        raise HTTPException(
+            status_code=400,
+            detail="Maximum 10 webhooks per user")
 
     webhook = Webhook(
         user_id=current_user.id,
@@ -84,8 +94,14 @@ def create_webhook(
     db.commit()
     db.refresh(webhook)
 
-    log_action(db, "webhook_created", user_id=current_user.id, resource_type="webhook",
-               resource_id=webhook.id, details={"url": body.url})
+    log_action(
+        db,
+        "webhook_created",
+        user_id=current_user.id,
+        resource_type="webhook",
+        resource_id=webhook.id,
+        details={
+            "url": body.url})
 
     return WebhookResponse(
         id=str(webhook.id),
@@ -96,13 +112,15 @@ def create_webhook(
         has_secret=webhook.secret is not None,
     )
 
+
 @router.get("/", response_model=List[WebhookResponse])
 def list_webhooks(
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
     """List current user's webhooks."""
-    webhooks = db.query(Webhook).filter(Webhook.user_id == current_user.id).all()
+    webhooks = db.query(Webhook).filter(
+        Webhook.user_id == current_user.id).all()
     return [
         WebhookResponse(
             id=str(w.id), url=w.url, events=w.events,
@@ -111,6 +129,7 @@ def list_webhooks(
         )
         for w in webhooks
     ]
+
 
 @router.delete("/{webhook_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_webhook(
@@ -127,11 +146,16 @@ def delete_webhook(
     if str(webhook.user_id) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not your webhook")
 
-    log_action(db, "webhook_deleted", user_id=current_user.id, resource_type="webhook",
-               resource_id=webhook.id)
+    log_action(
+        db,
+        "webhook_deleted",
+        user_id=current_user.id,
+        resource_type="webhook",
+        resource_id=webhook.id)
 
     db.delete(webhook)
     db.commit()
+
 
 @router.get("/{webhook_id}/deliveries", response_model=List[DeliveryResponse])
 def list_deliveries(
@@ -166,6 +190,7 @@ def list_deliveries(
         for d in deliveries
     ]
 
+
 @router.post("/{webhook_id}/test", response_model=TestWebhookResponse)
 def test_webhook(
     webhook_id: str,
@@ -192,7 +217,10 @@ def test_webhook(
         "X-PipelineIQ-Event": "test",
     }
     if webhook.secret:
-        sig = hmac.new(webhook.secret.encode(), body, hashlib.sha256).hexdigest()
+        sig = hmac.new(
+            webhook.secret.encode(),
+            body,
+            hashlib.sha256).hexdigest()
         headers["X-PipelineIQ-Signature"] = f"sha256={sig}"
 
     try:

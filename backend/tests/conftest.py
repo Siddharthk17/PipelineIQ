@@ -4,8 +4,6 @@ Provides deterministic sample DataFrames, in-memory SQLite DB sessions,
 FastAPI test clients, and pre-configured LineageRecorder instances.
 """
 
-import io
-import os
 from typing import Generator
 from unittest.mock import MagicMock, patch
 
@@ -51,7 +49,10 @@ def test_engine():
 @pytest.fixture()
 def test_db(test_engine) -> Generator[Session, None, None]:
     """In-memory SQLite database for each test."""
-    TestingSession = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+    TestingSession = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=test_engine)
     db = TestingSession()
     try:
         yield db

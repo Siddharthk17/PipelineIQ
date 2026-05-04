@@ -48,7 +48,11 @@ def no_auth_main_client(test_db):
         app.dependency_overrides.clear()
 
 
-def _create_user(test_db, email: str, username: str, role: str = "viewer") -> User:
+def _create_user(
+        test_db,
+        email: str,
+        username: str,
+        role: str = "viewer") -> User:
     user = User(
         email=email,
         username=username,
@@ -93,7 +97,8 @@ def test_sse_stream_forbidden_for_non_owner(sse_client, test_db):
     run = _create_run(test_db, owner.id)
     token = _token_for(other)
 
-    response = sse_client.get(f"/api/v1/pipelines/{run.id}/stream?token={token}")
+    response = sse_client.get(
+        f"/api/v1/pipelines/{run.id}/stream?token={token}")
     assert response.status_code == 403
 
 
@@ -102,13 +107,18 @@ def test_sse_stream_owner_receives_events(sse_client, test_db, monkeypatch):
     run = _create_run(test_db, owner.id)
     token = _token_for(owner)
 
-    async def fake_live_event_generator(run_id: str, request, initial_status: str):
+    async def fake_live_event_generator(
+            run_id: str, request, initial_status: str):
         _ = request
         _ = initial_status
         yield f"event: progress\ndata: {orjson.dumps({'run_id': run_id}).decode('utf-8')}\n\n"
 
-    monkeypatch.setattr(sse_module, "_live_event_generator", fake_live_event_generator)
-    response = sse_client.get(f"/api/v1/pipelines/{run.id}/stream?token={token}")
+    monkeypatch.setattr(
+        sse_module,
+        "_live_event_generator",
+        fake_live_event_generator)
+    response = sse_client.get(
+        f"/api/v1/pipelines/{run.id}/stream?token={token}")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -120,7 +130,8 @@ def test_terminal_run_emits_stream_end_event(sse_client, test_db):
     run = _create_run(test_db, owner.id, status=PipelineStatus.COMPLETED)
     token = _token_for(owner)
 
-    response = sse_client.get(f"/api/v1/pipelines/{run.id}/stream?token={token}")
+    response = sse_client.get(
+        f"/api/v1/pipelines/{run.id}/stream?token={token}")
     assert response.status_code == 200
     assert "event: pipeline_completed" in response.text
     assert "event: stream_end" in response.text
@@ -196,7 +207,8 @@ class _FakeCacheClient:
 
 
 @pytest.mark.asyncio
-async def test_live_generator_emits_cached_terminal_and_stream_end(monkeypatch):
+async def test_live_generator_emits_cached_terminal_and_stream_end(
+        monkeypatch):
     payload = orjson.dumps(
         {
             "run_id": "r-1",
@@ -211,7 +223,10 @@ async def test_live_generator_emits_cached_terminal_and_stream_end(monkeypatch):
     monkeypatch.setattr(
         sse_module, "get_pubsub_redis_async", lambda: fake_pubsub_client
     )
-    monkeypatch.setattr(sse_module, "get_cache_redis_async", lambda: fake_cache)
+    monkeypatch.setattr(
+        sse_module,
+        "get_cache_redis_async",
+        lambda: fake_cache)
 
     request = _FakeRequest([False])
     generator = sse_module._live_event_generator("r-1", request, "RUNNING")
@@ -244,7 +259,10 @@ async def test_live_generator_emits_heartbeat_when_idle(monkeypatch):
     monkeypatch.setattr(
         sse_module, "get_pubsub_redis_async", lambda: fake_pubsub_client
     )
-    monkeypatch.setattr(sse_module, "get_cache_redis_async", lambda: fake_cache)
+    monkeypatch.setattr(
+        sse_module,
+        "get_cache_redis_async",
+        lambda: fake_cache)
 
     request = _FakeRequest([False, True])
     generator = sse_module._live_event_generator("r-2", request, "RUNNING")
@@ -266,7 +284,10 @@ async def test_live_generator_emits_heartbeat_when_idle(monkeypatch):
 def test_progress_callback_publishes_and_caches_status(monkeypatch):
     fake_pubsub = MagicMock()
     fake_cache = MagicMock()
-    monkeypatch.setattr(pipeline_tasks, "get_pubsub_redis", lambda: fake_pubsub)
+    monkeypatch.setattr(
+        pipeline_tasks,
+        "get_pubsub_redis",
+        lambda: fake_pubsub)
     monkeypatch.setattr(pipeline_tasks, "get_cache_redis", lambda: fake_cache)
 
     callback = pipeline_tasks.make_redis_progress_callback("run-cache")
@@ -289,10 +310,14 @@ def test_progress_callback_publishes_and_caches_status(monkeypatch):
 def test_terminal_publish_caches_latest_terminal_status(monkeypatch):
     fake_pubsub = MagicMock()
     fake_cache = MagicMock()
-    monkeypatch.setattr(pipeline_tasks, "get_pubsub_redis", lambda: fake_pubsub)
+    monkeypatch.setattr(
+        pipeline_tasks,
+        "get_pubsub_redis",
+        lambda: fake_pubsub)
     monkeypatch.setattr(pipeline_tasks, "get_cache_redis", lambda: fake_cache)
 
-    pipeline_tasks._publish_terminal_event("run-term", "pipeline_completed", "COMPLETED")
+    pipeline_tasks._publish_terminal_event(
+        "run-term", "pipeline_completed", "COMPLETED")
 
     fake_pubsub.publish.assert_called_once()
     fake_cache.setex.assert_called_once()

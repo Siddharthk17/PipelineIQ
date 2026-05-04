@@ -19,20 +19,24 @@ Cache backend: redis-cache (not redis-broker)
 import hashlib
 import logging
 import os
-import pickle
 from urllib.parse import urlparse
 from collections import OrderedDict
 
 from backend.config import settings
 from backend.db.redis_pools import get_cache_redis
 from backend.pipeline.parser import PipelineParser
+import yaml
 
 logger = logging.getLogger(__name__)
 
 YAML_CACHE_TTL = 3600  # 1 hour in seconds
 YAML_CACHE_PREFIX = "yaml:parsed:"
 LOCAL_CACHE_MAX_ENTRIES = 256
-_DOCKER_INTERNAL_REDIS_HOSTS = {"redis-cache", "redis-broker", "redis-pubsub", "redis-yjs"}
+_DOCKER_INTERNAL_REDIS_HOSTS = {
+    "redis-cache",
+    "redis-broker",
+    "redis-pubsub",
+    "redis-yjs"}
 
 # Module-level parser instance — stateless, safe to reuse
 _parser = PipelineParser()
@@ -57,13 +61,15 @@ def _local_cache_set(cache_key: str, pipeline_obj: object) -> None:
 
 def _should_use_redis_cache() -> bool:
     """Skip Redis cache when running outside Docker with Docker-only hostnames."""
-    # Unit tests monkeypatch get_cache_redis() to in-memory fakes; keep Redis path enabled.
+    # Unit tests monkeypatch get_cache_redis() to in-memory fakes; keep Redis
+    # path enabled.
     if getattr(get_cache_redis, "__module__", "") != "backend.db.redis_pools":
         return True
 
     parsed = urlparse(settings.REDIS_CACHE_URL or "")
     host = parsed.hostname or ""
-    if host in _DOCKER_INTERNAL_REDIS_HOSTS and not os.path.exists("/.dockerenv"):
+    if host in _DOCKER_INTERNAL_REDIS_HOSTS and not os.path.exists(
+            "/.dockerenv"):
         return False
     return True
 
@@ -117,15 +123,16 @@ def get_parsed_pipeline(yaml_text: str):
         cached = _redis_call(redis, "get", cache_key)
         if cached:
             try:
-                # redis pool returns str (decode_responses=True); pickle needs bytes
-                if isinstance(cached, str):
-                    cached = cached.encode("latin-1")
-                pipeline = pickle.loads(cached)
+                if isinstance(cached, bytes):
+                    cached = cached.decode("utf-8")
+                raw = yaml.safe_load(cached)
+                pipeline = _parser.build_from_dict(raw)
                 _local_cache_set(cache_key, pipeline)
                 logger.debug(f"YAML cache HIT: {cache_key[:24]}...")
                 return pipeline
             except Exception as e:
-                logger.warning(f"YAML cache decode failed: {e}. Parsing fresh.")
+                logger.warning(
+                    f"YAML cache decode failed: {e}. Parsing fresh.")
 
     # Cache miss — parse the YAML (~5ms)
     pipeline = _parser.parse(yaml_text)
@@ -135,17 +142,18 @@ def get_parsed_pipeline(yaml_text: str):
     if _should_use_redis_cache():
         redis = get_cache_redis()
         try:
-            pickled = pickle.dumps(pipeline)
-            # Store raw bytes — use the connection without decode_responses
-            # Since pool uses decode_responses=True, we encode to latin-1 which
-            # is a lossless round-trip for binary pickle data
             stored = _redis_call(
-                redis, "set", cache_key, pickled.decode("latin-1"), ex=YAML_CACHE_TTL
+                redis,
+                "set",
+                cache_key,
+                yaml_text,
+                ex=YAML_CACHE_TTL,
             )
             if stored:
                 logger.debug(f"YAML cache MISS → stored: {cache_key[:24]}...")
         except Exception as e:
-            # Cache write failure is non-fatal — pipeline was parsed successfully
+            # Cache write failure is non-fatal — pipeline was parsed
+            # successfully
             logger.warning(f"YAML cache write failed: {e}")
 
     return pipeline

@@ -39,6 +39,7 @@ class GeneratePipelineRequest(BaseModel):
         description="UUIDs of uploaded files the pipeline can reference"
     )
 
+
 class GeneratePipelineResponse(BaseModel):
     yaml: str
     valid: bool
@@ -61,6 +62,7 @@ class AutocompleteRequest(BaseModel):
     typed: str
     available_columns: list[str]
 
+
 class AutocompleteResponse(BaseModel):
     suggestion: str | None
     confidence: float | None
@@ -77,6 +79,7 @@ class AutocompleteBatchResponse(BaseModel):
 
 class ValidateYamlRequest(BaseModel):
     yaml_text: str
+
 
 class ValidateYamlResponse(BaseModel):
     valid: bool
@@ -139,20 +142,25 @@ async def repair_failed_run(
         raise HTTPException(400, "Invalid run_id format")
 
     # Get the failed run
-    run = db.query(PipelineRun).filter(PipelineRun.id == run_uuid, PipelineRun.user_id == current_user.id).first()
+    run = db.query(PipelineRun).filter(
+        PipelineRun.id == run_uuid,
+        PipelineRun.user_id == current_user.id).first()
     if not run:
         raise HTTPException(404, "Run not found")
-    
+
     # Actually the string in DB is "FAILED" for enum PipelineStatus
     if run.status.value != "FAILED":
-        raise HTTPException(400, f"Cannot repair a run with status '{run.status.value}'. Only 'failed' runs can be repaired.")
+        raise HTTPException(
+            400, f"Cannot repair a run with status '{
+                run.status.value}'. Only 'failed' runs can be repaired.")
 
     # Extract error information from the run
-    # PipelineRun error details are usually in `error_message` or `step_results`
+    # PipelineRun error details are usually in `error_message` or
+    # `step_results`
     failed_step = "unknown"
     error_type = "Exception"
     error_message = run.error_message or "Unknown error"
-    
+
     # Try to find the step that failed
     for step_result in run.step_results:
         if step_result.status.value == "FAILED":

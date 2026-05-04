@@ -40,7 +40,7 @@ def suggest_column(typed: str, available_columns: list[str]) -> str | None:
     # Exact match: no suggestion needed
     if typed in available_columns:
         return None
-        
+
     # Case insensitive exact match check
     typed_lower = typed.lower()
     for col in available_columns:
@@ -73,4 +73,5 @@ def suggest_columns_batch(
     Batch version of suggest_column for checking multiple column references at once.
     Returns a dict mapping each query to its suggestion (or None if no suggestion).
     """
-    return {typed: suggest_column(typed, available_columns) for typed in queries}
+    return {typed: suggest_column(typed, available_columns)
+            for typed in queries}

@@ -28,9 +28,8 @@ class CreateNotificationConfigRequest(BaseModel):
     """Request body to create a notification config."""
 
     type: str = Field(..., description="Notification type: 'slack' or 'email'")
-    config: dict = Field(
-        ..., description="Channel-specific config (e.g. {'slack_webhook_url': '...'})"
-    )
+    config: dict = Field(...,
+                         description="Channel-specific config (e.g. {'slack_webhook_url': '...'})")
     events: list[str] = Field(
         default=["pipeline_completed", "pipeline_failed"],
         description="Events to subscribe to",
@@ -54,7 +53,8 @@ class NotificationConfigResponse(BaseModel):
     created_at: str | None = None
 
 
-def _config_to_response(config: NotificationConfig) -> NotificationConfigResponse:
+def _config_to_response(
+        config: NotificationConfig) -> NotificationConfigResponse:
     return NotificationConfigResponse(
         id=str(config.id),
         type=config.type.value if hasattr(config.type, "value") else str(config.type),
@@ -83,7 +83,8 @@ def create_notification_config(
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid notification type '{body.type}'. Must be 'slack' or 'email'.",
+            detail=f"Invalid notification type '{
+                body.type}'. Must be 'slack' or 'email'.",
         )
 
     if notif_type == NotificationType.SLACK:

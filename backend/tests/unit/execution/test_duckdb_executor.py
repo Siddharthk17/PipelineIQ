@@ -45,7 +45,9 @@ def test_execute_filter_step_on_arrow_table() -> None:
         value=100,
     )
     df = pd.DataFrame({"amount": [10, 150, 250], "status": ["a", "b", "c"]})
-    output = executor.execute_step(step, pa.Table.from_pandas(df, preserve_index=False))
+    output = executor.execute_step(
+        step, pa.Table.from_pandas(
+            df, preserve_index=False))
     out_df = output.to_pandas()
     assert len(out_df) == 2
     assert out_df["amount"].min() > 100
@@ -95,4 +97,3 @@ def test_execute_sql_step_template_query() -> None:
     out_df = output.to_pandas()
     assert list(out_df.columns) == ["customer_id", "amount_x2"]
     assert out_df["amount_x2"].tolist() == [20, 40]
-

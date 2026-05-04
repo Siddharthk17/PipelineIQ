@@ -52,14 +52,16 @@ class TestAIEndpoints:
             json={"yaml_config": yaml_config},
         ).json()["run_id"]
 
-        run = test_db.query(PipelineRun).filter(PipelineRun.id == as_uuid(run_id)).first()
+        run = test_db.query(PipelineRun).filter(
+            PipelineRun.id == as_uuid(run_id)).first()
         assert run is not None
         run.status = PipelineStatus.FAILED
         run.error_message = "Column 'ammount' not found"
         test_db.commit()
 
         async def _fake_repair_pipeline_from_error(**kwargs):
-            assert kwargs["failed_step"] in {"unknown", "load_data", "filter_data"}
+            assert kwargs["failed_step"] in {
+                "unknown", "load_data", "filter_data"}
             return SimpleNamespace(
                 corrected_yaml="pipeline:\n  name: repaired\n  steps: []\n",
                 diff_lines=[{"type": "added", "content": "  name: repaired"}],

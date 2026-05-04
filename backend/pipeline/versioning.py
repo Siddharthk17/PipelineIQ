@@ -6,8 +6,8 @@ diffs between versions for change tracking.
 
 import difflib
 import uuid as _uuid
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import List, Optional
 
 import yaml
 from sqlalchemy.exc import IntegrityError
@@ -127,7 +127,8 @@ def save_version(
     if max_retries < 1:
         raise ValueError("max_retries must be >= 1")
 
-    normalized_run_id = _uuid.UUID(run_id) if isinstance(run_id, str) else run_id
+    normalized_run_id = _uuid.UUID(
+        run_id) if isinstance(run_id, str) else run_id
     last_error: Optional[Exception] = None
 
     for attempt in range(max_retries):
@@ -170,4 +171,5 @@ def save_version(
         db.refresh(version)
         return version
 
-    raise RuntimeError("Unable to save pipeline version after retries") from last_error
+    raise RuntimeError(
+        "Unable to save pipeline version after retries") from last_error

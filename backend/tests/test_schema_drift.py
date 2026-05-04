@@ -3,16 +3,15 @@
 10 tests covering drift detection, snapshot storage, and upload integration.
 """
 
-import io
-import pytest
 import pandas as pd
-from backend.pipeline.schema_drift import detect_schema_drift, SchemaDriftReport
+from backend.pipeline.schema_drift import detect_schema_drift
 
 
 class TestSchemaDriftDetection:
     """Unit tests for the detect_schema_drift function."""
 
-    def test_no_drift_on_first_upload_returns_null(self, client, sales_csv_bytes):
+    def test_no_drift_on_first_upload_returns_null(
+            self, client, sales_csv_bytes):
         """First upload has no previous snapshot, so no drift."""
         response = client.post(
             "/api/v1/files/upload",
@@ -37,7 +36,8 @@ class TestSchemaDriftDetection:
         old_dtypes = {"a": "int64", "b": "float64"}
         new_cols = ["a", "b", "c"]
         new_dtypes = {"a": "int64", "b": "float64", "c": "object"}
-        report = detect_schema_drift(old_cols, old_dtypes, new_cols, new_dtypes)
+        report = detect_schema_drift(
+            old_cols, old_dtypes, new_cols, new_dtypes)
         assert report.has_drift is True
         assert "c" in report.columns_added
 
@@ -47,7 +47,8 @@ class TestSchemaDriftDetection:
         old_dtypes = {"a": "int64", "b": "float64", "c": "object"}
         new_cols = ["a", "b"]
         new_dtypes = {"a": "int64", "b": "float64"}
-        report = detect_schema_drift(old_cols, old_dtypes, new_cols, new_dtypes)
+        report = detect_schema_drift(
+            old_cols, old_dtypes, new_cols, new_dtypes)
         assert report.has_drift is True
         assert "c" in report.columns_removed
 
@@ -69,7 +70,8 @@ class TestSchemaDriftDetection:
         old_dtypes = {"a": "int64", "b": "float64", "c": "object"}
         new_cols = ["a", "b", "d"]
         new_dtypes = {"a": "object", "b": "float64", "d": "int64"}
-        report = detect_schema_drift(old_cols, old_dtypes, new_cols, new_dtypes)
+        report = detect_schema_drift(
+            old_cols, old_dtypes, new_cols, new_dtypes)
         assert report.has_drift is True
         assert "d" in report.columns_added
         assert "c" in report.columns_removed
@@ -81,7 +83,8 @@ class TestSchemaDriftDetection:
         old_dtypes = {"a": "int64", "b": "float64", "c": "object"}
         new_cols = ["a"]
         new_dtypes = {"a": "int64"}
-        report = detect_schema_drift(old_cols, old_dtypes, new_cols, new_dtypes)
+        report = detect_schema_drift(
+            old_cols, old_dtypes, new_cols, new_dtypes)
         assert len(report.columns_removed) == 2
 
     def test_snapshot_saved_after_upload(self, client, sales_csv_bytes):
@@ -95,7 +98,8 @@ class TestSchemaDriftDetection:
         assert history.status_code == 200
         assert history.json()["total_snapshots"] >= 1
 
-    def test_latest_snapshot_returns_most_recent(self, client, sales_csv_bytes):
+    def test_latest_snapshot_returns_most_recent(
+            self, client, sales_csv_bytes):
         """Schema history should return newest snapshot first."""
         response = client.post(
             "/api/v1/files/upload",
@@ -111,7 +115,8 @@ class TestSchemaDriftDetection:
     def test_drift_report_included_in_upload_response(self, client):
         """Schema diff endpoint works when snapshots exist."""
         # Upload a file
-        csv1 = pd.DataFrame({"a": [1, 2], "b": [3, 4]}).to_csv(index=False).encode()
+        csv1 = pd.DataFrame({"a": [1, 2], "b": [3, 4]}).to_csv(
+            index=False).encode()
         resp1 = client.post(
             "/api/v1/files/upload",
             files={"file": ("test.csv", csv1, "text/csv")},

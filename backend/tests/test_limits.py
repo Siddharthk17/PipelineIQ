@@ -50,12 +50,6 @@ def test_pipeline_step_count_limit(auth_token):
             }
         )
 
-    pipeline_yaml = (
-        f"pipeline:\n  name: too_many_steps\n  steps:\n    - "
-        + "\n    - ".join([str(s) for s in steps])
-    )
-    # Note: The above is a bit messy, I'll use a proper YAML dump.
-
     import yaml
 
     config = {"pipeline": {"name": "too_many_steps", "steps": steps}}

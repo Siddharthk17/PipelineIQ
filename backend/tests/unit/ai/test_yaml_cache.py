@@ -46,7 +46,8 @@ class TestYamlCacheKeys:
     def test_cache_key_is_sha256_of_raw_yaml(self):
         yaml_text = "pipeline:\n  name: test\n  steps: []"
         yaml_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
-        assert f"{cache_module.YAML_CACHE_PREFIX}{yaml_hash}" == f"yaml:parsed:{yaml_hash}"
+        assert f"{
+            cache_module.YAML_CACHE_PREFIX}{yaml_hash}" == f"yaml:parsed:{yaml_hash}"
 
     def test_identical_yaml_produces_identical_hash(self):
         yaml_text = "pipeline:\n  name: test\n  steps: []"
@@ -72,14 +73,17 @@ class TestYamlCacheModule:
             f"{hashlib.sha256(yaml_text.encode('utf-8')).hexdigest()}"
         )
         cached_pipeline = {"name": "from_cache"}
-        fake_redis._data[cache_key] = pickle.dumps(cached_pipeline).decode("latin-1")
+        fake_redis._data[cache_key] = pickle.dumps(
+            cached_pipeline).decode("latin-1")
 
-        monkeypatch.setattr(cache_module, "get_cache_redis", lambda: fake_redis)
         monkeypatch.setattr(
-            cache_module._parser,
-            "parse",
-            lambda _: (_ for _ in ()).throw(AssertionError("parser should not run")),
-        )
+            cache_module,
+            "get_cache_redis",
+            lambda: fake_redis)
+        monkeypatch.setattr(
+            cache_module._parser, "parse", lambda _: (
+                _ for _ in ()).throw(
+                AssertionError("parser should not run")), )
 
         result = cache_module.get_parsed_pipeline(yaml_text)
         assert result == cached_pipeline
@@ -89,8 +93,14 @@ class TestYamlCacheModule:
         yaml_text = "pipeline:\n  name: cache_miss\n  steps: []"
         parsed_pipeline = {"name": "parsed"}
 
-        monkeypatch.setattr(cache_module, "get_cache_redis", lambda: fake_redis)
-        monkeypatch.setattr(cache_module._parser, "parse", lambda _: parsed_pipeline)
+        monkeypatch.setattr(
+            cache_module,
+            "get_cache_redis",
+            lambda: fake_redis)
+        monkeypatch.setattr(
+            cache_module._parser,
+            "parse",
+            lambda _: parsed_pipeline)
 
         result = cache_module.get_parsed_pipeline(yaml_text)
         assert result == parsed_pipeline
@@ -105,4 +115,3 @@ class TestYamlCacheModule:
     def test_whitespace_only_yaml_raises(self):
         with pytest.raises(ValueError, match="must not be empty"):
             cache_module.get_parsed_pipeline(" \n\t ")
-

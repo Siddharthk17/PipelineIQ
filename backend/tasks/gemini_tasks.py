@@ -4,10 +4,8 @@ Runs on the 'gemini' queue with concurrency=1 and rate_limit='50/m'.
 This ensures we never exceed Gemini's free tier limits.
 """
 import hashlib
-import logging
 import time
 
-import orjson
 from celery.utils.log import get_task_logger
 
 from backend.celery_app import celery_app
@@ -65,7 +63,9 @@ def call_gemini_task(
     """
     # Step 1: Check response cache
     cache_input = f"{prompt}|temp={temperature}|max={max_output_tokens}"
-    cache_key = f"gemini:resp:{hashlib.sha256(cache_input.encode()).hexdigest()}"
+    cache_key = f"gemini:resp:{
+        hashlib.sha256(
+            cache_input.encode()).hexdigest()}"
 
     redis = get_cache_redis()
     cached = redis.get(cache_key)
@@ -73,11 +73,12 @@ def call_gemini_task(
         logger.info(f"Gemini cache HIT for key {cache_key[:16]}...")
         return cached
 
-    # Step 2: Check token budget 
+    # Step 2: Check token budget
     estimated_input_tokens = len(prompt) // 4
     estimated_total_tokens = estimated_input_tokens + max_output_tokens
 
-    budget_key = f"gemini:tokens:{int(time.time() // TOKEN_BUDGET_WINDOW_SECONDS)}"
+    budget_key = f"gemini:tokens:{int(time.time() //
+                                      TOKEN_BUDGET_WINDOW_SECONDS)}"
     current_usage = int(redis.get(budget_key) or 0)
 
     if current_usage + estimated_total_tokens > TOKEN_BUDGET_PER_MINUTE:
@@ -106,7 +107,7 @@ def call_gemini_task(
 
         # Step 4: Update token budget
         actual_tokens = getattr(response.usage_metadata, "total_token_count",
-                                 estimated_total_tokens)
+                                estimated_total_tokens)
         redis.incrby(budget_key, actual_tokens)
         redis.expire(budget_key, TOKEN_BUDGET_WINDOW_SECONDS * 2)
 
@@ -126,7 +127,7 @@ def call_gemini_task(
         if _is_free_tier_hard_quota(error_str):
             # Free tier exhausted - return ERROR indicator so UI can show message
             # Don't cache this - user needs to know quota is exhausted
-            logger.warning(f"Gemini free-tier quota exhausted.")
+            logger.warning("Gemini free-tier quota exhausted.")
             return "GEMINI_QUOTA_EXHAUSTED"
 
         if _should_retry_rate_limit(error_str):
@@ -137,8 +138,14 @@ def call_gemini_task(
             )
             raise self.retry(exc=e, countdown=backoff)
 
-        if any(code in error_str for code in ["500", "503", "INTERNAL", "UNAVAILABLE"]):
-            logger.warning(f"Gemini server error: {error_str[:200]}. Retrying in 30s.")
+        if any(
+            code in error_str for code in [
+                "500",
+                "503",
+                "INTERNAL",
+                "UNAVAILABLE"]):
+            logger.warning(
+                f"Gemini server error: {error_str[:200]}. Retrying in 30s.")
             raise self.retry(exc=e, countdown=30)
 
         logger.error(f"Gemini client error (not retrying): {error_str[:500]}")

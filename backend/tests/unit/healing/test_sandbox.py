@@ -55,7 +55,9 @@ pipeline:
 
     connection = duckdb.connect(database=":memory:")
     try:
-        executor = DuckDBExecutor(connection_getter=lambda: connection, local_fallback=False)
+        executor = DuckDBExecutor(
+            connection_getter=lambda: connection,
+            local_fallback=False)
         result_table = _run_pipeline_in_sandbox(
             config=config,
             executor=executor,
@@ -71,22 +73,27 @@ pipeline:
 def test_run_pipeline_in_sandbox_validates_rename_columns():
     config = SimpleNamespace(
         steps=[
-            SimpleNamespace(name="load_data", step_type="load", file_id="file-1"),
+            SimpleNamespace(
+                name="load_data",
+                step_type="load",
+                file_id="file-1"),
             SimpleNamespace(
                 name="rename_data",
                 step_type="rename",
                 input="load_data",
-                mapping={"amount": "revenue"},
+                mapping={
+                    "amount": "revenue"},
             ),
-        ]
-    )
+        ])
     sample_table = pa.Table.from_pandas(
         pd.DataFrame({"amount": [10, 20]}),
         preserve_index=False,
     )
     connection = duckdb.connect(database=":memory:")
     try:
-        executor = DuckDBExecutor(connection_getter=lambda: connection, local_fallback=False)
+        executor = DuckDBExecutor(
+            connection_getter=lambda: connection,
+            local_fallback=False)
         result_table = _run_pipeline_in_sandbox(
             config=config,
             executor=executor,

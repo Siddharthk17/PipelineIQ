@@ -1,7 +1,6 @@
 import pytest
 import pandas as pd
 import numpy as np
-import io
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.dependencies import get_db, get_read_db, get_write_db
@@ -36,7 +35,8 @@ def stress_client(test_db: Session, tmp_path):
     from backend.api.pipelines import execute_pipeline_task
     from unittest.mock import MagicMock
 
-    execute_pipeline_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
+    execute_pipeline_task.delay = MagicMock(
+        return_value=MagicMock(id="mock-task-id"))
 
     return TestClient(app)
 
@@ -60,7 +60,8 @@ def test_upload_max_rows_limit(stress_client, admin_user, test_db):
     set_current_user(admin_user)
 
     # 1. Test exactly 1,000,000 rows (should pass)
-    df_limit = pd.DataFrame({"id": np.arange(1000000), "val": np.random.randn(1000000)})
+    df_limit = pd.DataFrame(
+        {"id": np.arange(1000000), "val": np.random.randn(1000000)})
     csv_bytes = df_limit.to_csv(index=False).encode()
 
     response = stress_client.post(
@@ -70,7 +71,8 @@ def test_upload_max_rows_limit(stress_client, admin_user, test_db):
     assert response.status_code == 201
 
     # 2. Test 1,000,001 rows (should fail)
-    df_over = pd.DataFrame({"id": np.arange(1000001), "val": np.random.randn(1000001)})
+    df_over = pd.DataFrame(
+        {"id": np.arange(1000001), "val": np.random.randn(1000001)})
     csv_bytes_over = df_over.to_csv(index=False).encode()
 
     response = stress_client.post(

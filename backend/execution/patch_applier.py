@@ -42,7 +42,8 @@ def apply_patch(yaml_text: str, patch: dict) -> str:
     )
 
 
-def _apply_patch_item(*, step_map: dict[str, dict], patch_item: dict[str, Any]) -> None:
+def _apply_patch_item(
+        *, step_map: dict[str, dict], patch_item: dict[str, Any]) -> None:
     step_name = str(patch_item["step_name"])
     field_name = str(patch_item["field"])
     old_value = patch_item["old_value"]
@@ -70,12 +71,23 @@ def _apply_patch_item(*, step_map: dict[str, dict], patch_item: dict[str, Any]) 
         "aggregations": _patch_aggregations_field,
     }
     handler = handlers.get(field_name, _patch_scalar_field)
-    handler(step=step, field_name=field_name, old_value=old_value, new_value=new_value)
+    handler(
+        step=step,
+        field_name=field_name,
+        old_value=old_value,
+        new_value=new_value)
 
 
-def _patch_scalar_field(*, step: dict, field_name: str, old_value: Any, new_value: Any) -> None:
+def _patch_scalar_field(
+    *,
+    step: dict,
+    field_name: str,
+    old_value: Any,
+        new_value: Any) -> None:
     if field_name not in step:
-        raise ValueError(f"Step '{step.get('name')}' has no '{field_name}' field")
+        raise ValueError(
+            f"Step '{
+                step.get('name')}' has no '{field_name}' field")
     current_value = step.get(field_name)
     if current_value != old_value:
         logger.warning(
@@ -88,18 +100,32 @@ def _patch_scalar_field(*, step: dict, field_name: str, old_value: Any, new_valu
     step[field_name] = new_value
 
 
-def _patch_list_field(*, step: dict, field_name: str, old_value: Any, new_value: Any) -> None:
+def _patch_list_field(
+    *,
+    step: dict,
+    field_name: str,
+    old_value: Any,
+        new_value: Any) -> None:
     current_value = step.get(field_name)
     if not isinstance(current_value, list):
-        raise ValueError(f"Step '{step.get('name')}' has no list field '{field_name}'")
+        raise ValueError(
+            f"Step '{
+                step.get('name')}' has no list field '{field_name}'")
 
-    step[field_name] = [new_value if item == old_value else item for item in current_value]
+    step[field_name] = [new_value if item ==
+                        old_value else item for item in current_value]
 
 
-def _patch_sort_field(*, step: dict, field_name: str, old_value: Any, new_value: Any) -> None:
+def _patch_sort_field(
+    *,
+    step: dict,
+    field_name: str,
+    old_value: Any,
+        new_value: Any) -> None:
     current_value = step.get(field_name)
     if isinstance(current_value, list):
-        step[field_name] = [new_value if item == old_value else item for item in current_value]
+        step[field_name] = [new_value if item ==
+                            old_value else item for item in current_value]
         return
 
     if current_value != old_value:
@@ -113,10 +139,17 @@ def _patch_sort_field(*, step: dict, field_name: str, old_value: Any, new_value:
     step[field_name] = new_value
 
 
-def _patch_mapping_field(*, step: dict, field_name: str, old_value: Any, new_value: Any) -> None:
+def _patch_mapping_field(
+    *,
+    step: dict,
+    field_name: str,
+    old_value: Any,
+        new_value: Any) -> None:
     current_value = step.get(field_name)
     if not isinstance(current_value, dict):
-        raise ValueError(f"Step '{step.get('name')}' has no dict field '{field_name}'")
+        raise ValueError(
+            f"Step '{
+                step.get('name')}' has no dict field '{field_name}'")
 
     updated_mapping: dict[Any, Any] = {}
     for key, value in current_value.items():
@@ -135,8 +168,11 @@ def _patch_aggregations_field(
 ) -> None:
     current_value = step.get(field_name)
     if not isinstance(current_value, list):
-        raise ValueError(f"Step '{step.get('name')}' has no list field '{field_name}'")
+        raise ValueError(
+            f"Step '{
+                step.get('name')}' has no list field '{field_name}'")
 
     for aggregation in current_value:
-        if isinstance(aggregation, dict) and aggregation.get("column") == old_value:
+        if isinstance(aggregation, dict) and aggregation.get(
+                "column") == old_value:
             aggregation["column"] = new_value

@@ -45,9 +45,12 @@ def run_patch_in_sandbox(
     try:
         config = get_parsed_pipeline(patched_yaml)
         if not getattr(config, "steps", None):
-            return SandboxResult(success=False, error="Patched pipeline has no steps")
+            return SandboxResult(
+                success=False,
+                error="Patched pipeline has no steps")
 
-        sampled_tables = _load_sample_tables(file_ids=file_ids, db=db, sample_rows=sample_rows)
+        sampled_tables = _load_sample_tables(
+            file_ids=file_ids, db=db, sample_rows=sample_rows)
         connection = duckdb.connect(database=":memory:")
         connection.execute("PRAGMA threads=2")
         connection.execute("SET memory_limit='500MB'")
@@ -78,7 +81,11 @@ def run_patch_in_sandbox(
             connection.close()
 
 
-def _run_pipeline_in_sandbox(*, config, executor: DuckDBExecutor, sampled_tables: dict[str, pa.Table]) -> pa.Table:
+def _run_pipeline_in_sandbox(*,
+                             config,
+                             executor: DuckDBExecutor,
+                             sampled_tables: dict[str,
+                                                  pa.Table]) -> pa.Table:
     table_registry: dict[str, pa.Table] = {}
     last_result: pa.Table | None = None
 
@@ -89,8 +96,9 @@ def _run_pipeline_in_sandbox(*, config, executor: DuckDBExecutor, sampled_tables
             sample_table = sampled_tables.get(step.file_id)
             if sample_table is None:
                 raise ValueError(
-                    f"Load step '{step.name}' references file_id '{step.file_id}' with no sampled table"
-                )
+                    f"Load step '{
+                        step.name}' references file_id '{
+                        step.file_id}' with no sampled table")
             table_registry[step.name] = sample_table
             last_result = sample_table
             continue
@@ -100,13 +108,16 @@ def _run_pipeline_in_sandbox(*, config, executor: DuckDBExecutor, sampled_tables
             continue
 
         if step_type == "rename":
-            input_table = _require_input_table(step.name, getattr(step, "input", ""), table_registry)
+            input_table = _require_input_table(
+                step.name, getattr(
+                    step, "input", ""), table_registry)
             input_df = input_table.to_pandas()
-            missing_columns = [column for column in step.mapping.keys() if column not in input_df.columns]
+            missing_columns = [
+                column for column in step.mapping.keys() if column not in input_df.columns]
             if missing_columns:
                 raise ValueError(
-                    f"Rename step '{step.name}' references missing columns: {missing_columns}"
-                )
+                    f"Rename step '{
+                        step.name}' references missing columns: {missing_columns}")
             renamed_table = pa.Table.from_pandas(
                 input_df.rename(columns=step.mapping),
                 preserve_index=False,
@@ -116,25 +127,27 @@ def _run_pipeline_in_sandbox(*, config, executor: DuckDBExecutor, sampled_tables
             continue
 
         if step_type == "validate":
-            validated_table = _require_input_table(step.name, getattr(step, "input", ""), table_registry)
+            validated_table = _require_input_table(
+                step.name, getattr(step, "input", ""), table_registry)
             table_registry[step.name] = validated_table
             last_result = validated_table
             continue
 
         if step_type == "join":
-            left_table = _require_input_table(step.name, step.left, table_registry)
-            right_table = _require_input_table(step.name, step.right, table_registry)
+            left_table = _require_input_table(
+                step.name, step.left, table_registry)
+            right_table = _require_input_table(
+                step.name, step.right, table_registry)
             result_table = executor.execute_step(
-                step,
-                left_table,
-                extra_tables={"__left__": left_table, "__right__": right_table},
-            )
+                step, left_table, extra_tables={
+                    "__left__": left_table, "__right__": right_table}, )
             table_registry[step.name] = result_table
             last_result = result_table
             continue
 
         input_name = getattr(step, "input", "")
-        input_table = _require_input_table(step.name, input_name, table_registry)
+        input_table = _require_input_table(
+            step.name, input_name, table_registry)
         result_table = executor.execute_step(step, input_table)
         table_registry[step.name] = result_table
         last_result = result_table
@@ -145,23 +158,31 @@ def _run_pipeline_in_sandbox(*, config, executor: DuckDBExecutor, sampled_tables
     return last_result
 
 
-def _require_input_table(step_name: str, input_name: str, table_registry: dict[str, pa.Table]) -> pa.Table:
+def _require_input_table(step_name: str,
+                         input_name: str,
+                         table_registry: dict[str,
+                                              pa.Table]) -> pa.Table:
     table = table_registry.get(input_name)
     if table is None:
         raise ValueError(
-            f"Step '{step_name}' input '{input_name}' is not available in the sandbox"
-        )
+            f"Step '{step_name}' input '{input_name}' is not available in the sandbox")
     return table
 
 
-def _load_sample_tables(*, file_ids: list[str], db: Session, sample_rows: int) -> dict[str, pa.Table]:
+def _load_sample_tables(*,
+                        file_ids: list[str],
+                        db: Session,
+                        sample_rows: int) -> dict[str,
+                                                  pa.Table]:
     sampled_tables: dict[str, pa.Table] = {}
     for file_id in file_ids:
-        file_record = db.query(UploadedFile).filter(UploadedFile.id == as_uuid(file_id)).first()
+        file_record = db.query(UploadedFile).filter(
+            UploadedFile.id == as_uuid(file_id)).first()
         if file_record is None:
             raise ValueError(f"File '{file_id}' not found")
 
-        sampled_frame = _load_sample_frame(file_record=file_record, sample_rows=sample_rows)
+        sampled_frame = _load_sample_frame(
+            file_record=file_record, sample_rows=sample_rows)
         sampled_tables[str(file_record.id)] = pa.Table.from_pandas(
             sampled_frame,
             preserve_index=False,
@@ -169,7 +190,8 @@ def _load_sample_tables(*, file_ids: list[str], db: Session, sample_rows: int) -
     return sampled_tables
 
 
-def _load_sample_frame(*, file_record: UploadedFile, sample_rows: int) -> pd.DataFrame:
+def _load_sample_frame(*, file_record: UploadedFile,
+                       sample_rows: int) -> pd.DataFrame:
     extension = Path(file_record.stored_path).suffix.lower()
     with storage_service.download(file_record.stored_path) as handle:
         if extension == ".csv":
@@ -177,5 +199,5 @@ def _load_sample_frame(*, file_record: UploadedFile, sample_rows: int) -> pd.Dat
         if extension == ".json":
             return pd.read_json(handle).head(sample_rows)
     raise ValueError(
-        f"Sandbox only supports CSV and JSON inputs, got '{extension}' for '{file_record.original_filename}'"
-    )
+        f"Sandbox only supports CSV and JSON inputs, got '{extension}' for '{
+            file_record.original_filename}'")

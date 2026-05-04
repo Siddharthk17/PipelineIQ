@@ -5,6 +5,7 @@ middleware, route mounting, and health checks. This is the single
 entry point for the application.
 """
 
+from backend.routers.ai import router as ai_router
 import logging
 import time
 import uuid
@@ -20,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, ORJSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from backend.api.router import api_router, legacy_api_router
@@ -31,7 +32,6 @@ from backend.config import settings
 from backend.database import create_all_tables, write_engine, read_engine
 from backend.db.redis_pools import get_cache_redis
 from backend.pipeline.exceptions import PipelineIQError
-from backend.services.storage_service import storage_service
 from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,10 @@ def _validate_upload_dir() -> None:
         test_file.unlink()
         logger.info("Upload directory validated: %s", upload_dir)
     except OSError as exc:
-        logger.error("Upload directory '%s' is not writable: %s", upload_dir, exc)
+        logger.error(
+            "Upload directory '%s' is not writable: %s",
+            upload_dir,
+            exc)
         raise
 
 
@@ -112,7 +115,9 @@ def _init_storage_bucket() -> None:
         except s3_client.exceptions.BucketAlreadyOwnedByYou:
             logger.info("S3 bucket already exists: %s", bucket_name)
         except s3_client.exceptions.BucketAlreadyExists:
-            logger.warning("S3 bucket name already taken by another account: %s", bucket_name)
+            logger.warning(
+                "S3 bucket name already taken by another account: %s",
+                bucket_name)
     except Exception as exc:
         logger.warning("Failed to initialize S3 bucket: %s", exc)
 
@@ -148,7 +153,8 @@ if settings.ENVIRONMENT != "production":
     async def redoc_html() -> HTMLResponse:
         return get_redoc_html(
             openapi_url=app.openapi_url,
-            title=f"{app.title} - ReDoc",
+            title=f"{
+                app.title} - ReDoc",
             redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js",
         )
 
@@ -156,14 +162,8 @@ if settings.ENVIRONMENT != "production":
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Prometheus metrics — imported from centralized module to avoid circular imports
-from backend.metrics import (
-    PIPELINE_RUNS_TOTAL,
-    PIPELINE_DURATION_SECONDS,
-    FILES_UPLOADED_TOTAL,
-    ACTIVE_USERS,
-    CELERY_QUEUE_DEPTH,
-)
+# Prometheus metrics — imported from centralized module to avoid circular
+# imports
 
 Instrumentator(
     should_group_status_codes=False,
@@ -215,7 +215,9 @@ async def validation_error_handler(
 
 
 @app.exception_handler(Exception)
-async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
+async def generic_error_handler(
+        request: Request,
+        exc: Exception) -> JSONResponse:
     """Handle unexpected errors with a safe error response.
 
     Never exposes internal details to the client. The request_id
@@ -282,7 +284,6 @@ app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(webhooks_router)
 app.include_router(audit_router)
 
-from backend.routers.ai import router as ai_router
 app.include_router(ai_router)
 
 if settings.ENVIRONMENT != "production":

@@ -17,7 +17,6 @@ from backend.main import app
 from backend.models import LineageGraph, PipelineRun, PipelineStatus, User
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import StepType, FilterOperator, FilterStepConfig
-from backend.tests.conftest import upload_file
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -82,8 +81,10 @@ class TestLineagePerformance:
 
         start = time.time()
         recorder.record_load("f1", "big.csv", "load_step", columns, {})
-        recorder.record_passthrough("filter_step", "filter", "load_step", columns)
-        recorder.record_passthrough("sort_step", "sort", "filter_step", columns)
+        recorder.record_passthrough(
+            "filter_step", "filter", "load_step", columns)
+        recorder.record_passthrough(
+            "sort_step", "sort", "filter_step", columns)
 
         for col in columns[:5]:
             recorder.get_column_ancestry("sort_step", col)
@@ -158,7 +159,8 @@ class TestApiLatency:
             latencies.append(time.perf_counter() - start)
 
         avg_latency = sum(latencies) / len(latencies)
-        assert avg_latency < 0.1, f"Average /stats latency too high: {avg_latency:.4f}s"
+        assert avg_latency < 0.1, f"Average /stats latency too high: {
+            avg_latency:.4f}s"
 
 
 class TestLineageRetrieval:

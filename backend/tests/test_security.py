@@ -5,10 +5,9 @@ These tests simulate real attacks. They must ALL return safe responses.
 
 import json
 
-import pytest
-from fastapi.testclient import TestClient
 
 from backend.tests.conftest import upload_file
+
 
 class TestFileUploadAttacks:
     """Security tests for the file upload endpoint."""
@@ -51,7 +50,11 @@ class TestFileUploadAttacks:
             current = current["a"]
         response = client.post(
             "/api/v1/files/upload",
-            files={"file": ("nested.json", json.dumps(nested).encode(), "application/json")},
+            files={
+                "file": (
+                    "nested.json",
+                    json.dumps(nested).encode(),
+                    "application/json")},
         )
         assert response.status_code in [201, 400, 422]
 
@@ -63,6 +66,7 @@ class TestFileUploadAttacks:
             files={"file": ("nullbytes.csv", null_content, "text/csv")},
         )
         assert response.status_code in [201, 400, 422]
+
 
 class TestAPIInjectionAttacks:
     """Security tests for API injection vectors."""
@@ -78,7 +82,8 @@ class TestAPIInjectionAttacks:
             response = client.get(f"/api/v1/files/{payload}")
             assert response.status_code == 422
 
-    def test_xss_in_pipeline_name_is_stored_safely(self, client, sales_csv_bytes):
+    def test_xss_in_pipeline_name_is_stored_safely(
+            self, client, sales_csv_bytes):
         """XSS payloads in pipeline name are stored as plain text."""
         xss_name = "<script>alert('xss')</script>"
         file_id = upload_file(client, sales_csv_bytes)

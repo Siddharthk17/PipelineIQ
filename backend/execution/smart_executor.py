@@ -89,8 +89,7 @@ class SmartExecutor:
 
         if step_type == "load":
             return self.pandas_executor.execute_load(
-                table_registry, step, recorder, file_paths or {}, file_metadata or {}
-            )
+                table_registry, step, recorder, file_paths or {}, file_metadata or {})
 
         if step_type in self._ALWAYS_PANDAS_STEPS:
             return self.pandas_executor.execute(table_registry, step, recorder)
@@ -99,12 +98,17 @@ class SmartExecutor:
             left_name = getattr(step, "left", None)
             right_name = getattr(step, "right", None)
             left_table = table_registry.get(left_name) if left_name else None
-            right_table = table_registry.get(right_name) if right_name else None
+            right_table = table_registry.get(
+                right_name) if right_name else None
             if left_table is None or right_table is None:
-                return self.pandas_executor.execute(table_registry, step, recorder)
+                return self.pandas_executor.execute(
+                    table_registry, step, recorder)
 
-            if max(left_table.num_rows, right_table.num_rows) <= self.DUCKDB_THRESHOLD:
-                return self.pandas_executor.execute(table_registry, step, recorder)
+            if max(
+                    left_table.num_rows,
+                    right_table.num_rows) <= self.DUCKDB_THRESHOLD:
+                return self.pandas_executor.execute(
+                    table_registry, step, recorder)
 
             logger.debug(
                 "Routing join step '%s' to DuckDB (left_rows=%d, right_rows=%d)",
@@ -133,7 +137,8 @@ class SmartExecutor:
             )
 
         input_step_name = getattr(step, "input", None)
-        input_table = table_registry.get(input_step_name) if input_step_name else None
+        input_table = table_registry.get(
+            input_step_name) if input_step_name else None
         if input_table is None:
             return self.pandas_executor.execute(table_registry, step, recorder)
 

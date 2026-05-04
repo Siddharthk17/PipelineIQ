@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 
 
-RESULTS_PATH = Path(__file__).resolve().parents[3] / "benchmark" / "results.json"
+RESULTS_PATH = Path(__file__).resolve(
+).parents[3] / "benchmark" / "results.json"
 REQUIRED_OPS = {"filter", "aggregate", "join", "sort", "sql_projection"}
 
 

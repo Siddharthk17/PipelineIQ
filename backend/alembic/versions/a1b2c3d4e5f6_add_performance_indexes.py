@@ -19,7 +19,11 @@ def _table_names(bind) -> set[str]:
     return set(inspector.get_table_names())
 
 
-def _execute_if_table_exists(bind, table_names: set[str], table_name: str, sql: str) -> None:
+def _execute_if_table_exists(
+        bind,
+        table_names: set[str],
+        table_name: str,
+        sql: str) -> None:
     if table_name not in table_names:
         return
     with op.get_context().autocommit_block():

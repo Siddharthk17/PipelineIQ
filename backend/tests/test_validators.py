@@ -5,7 +5,7 @@
 
 import pytest
 import pandas as pd
-from backend.pipeline.validators import execute_validate, _execute_single_rule
+from backend.pipeline.validators import execute_validate
 
 
 @pytest.fixture
@@ -54,7 +54,8 @@ class TestValidationRules:
 
     def test_in_values_passes_valid(self):
         df = pd.DataFrame({"status": ["a", "b", "c"]})
-        rules = [{"column": "status", "check": "in_values", "values": ["a", "b", "c"]}]
+        rules = [{"column": "status", "check": "in_values",
+                  "values": ["a", "b", "c"]}]
         result = execute_validate(df, rules, "test")
         assert result.rule_results[0].passed is True
 
@@ -164,7 +165,7 @@ class TestValidationEdgeCases:
         self, client, sales_csv_bytes
     ):
         """Validate step type is accepted in pipeline validation."""
-        from backend.tests.conftest import upload_file, build_simple_pipeline_yaml
+        from backend.tests.conftest import upload_file
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = f"""pipeline:
   name: test_validate

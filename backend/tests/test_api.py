@@ -6,8 +6,6 @@ Celery task dispatch is mocked to avoid needing a running worker.
 
 import time
 
-import pytest
-from fastapi.testclient import TestClient
 
 from backend.models import (
     HealingAttempt,
@@ -35,7 +33,8 @@ class TestHealthEndpoint:
 class TestFileUpload:
     """Tests for file upload endpoints."""
 
-    def test_upload_valid_csv_returns_201_with_metadata(self, client, sales_csv_bytes):
+    def test_upload_valid_csv_returns_201_with_metadata(
+            self, client, sales_csv_bytes):
         """Valid CSV upload returns 201 with file metadata."""
         response = client.post(
             "/api/v1/files/upload",
@@ -51,7 +50,11 @@ class TestFileUpload:
         """Valid JSON upload returns 201."""
         response = client.post(
             "/api/v1/files/upload",
-            files={"file": ("data.json", sample_json_bytes, "application/json")},
+            files={
+                "file": (
+                    "data.json",
+                    sample_json_bytes,
+                    "application/json")},
         )
         assert response.status_code == 201
 
@@ -59,7 +62,11 @@ class TestFileUpload:
         """Uploading .exe returns 400 with extension error."""
         response = client.post(
             "/api/v1/files/upload",
-            files={"file": ("malware.exe", b"MZ\x90", "application/octet-stream")},
+            files={
+                "file": (
+                    "malware.exe",
+                    b"MZ\x90",
+                    "application/octet-stream")},
         )
         assert response.status_code == 400
         assert "extension" in response.json()["detail"].lower()
@@ -72,11 +79,17 @@ class TestFileUpload:
         )
         assert response.status_code == 400
 
-    def test_upload_csv_with_path_traversal_filename_is_sanitized(self, client):
+    def test_upload_csv_with_path_traversal_filename_is_sanitized(
+            self,
+            client):
         """Path traversal in filename is sanitized."""
         response = client.post(
             "/api/v1/files/upload",
-            files={"file": ("../../etc/passwd.csv", b"col1\nval1", "text/csv")},
+            files={
+                "file": (
+                    "../../etc/passwd.csv",
+                    b"col1\nval1",
+                    "text/csv")},
         )
         if response.status_code == 201:
             data = response.json()
@@ -106,9 +119,11 @@ class TestFileUpload:
         assert data["upload_url"].startswith("/api/v1/files/direct-upload/")
         assert data["confirm_endpoint"].startswith("/api/v1/files/")
 
-    def test_direct_upload_then_confirm_returns_file_metadata(self, client, monkeypatch):
+    def test_direct_upload_then_confirm_returns_file_metadata(
+            self, client, monkeypatch):
         """Direct upload flow should allow PUT + confirm to finalize metadata."""
-        # Lower threshold for this unit test so tiny payloads take the direct path.
+        # Lower threshold for this unit test so tiny payloads take the direct
+        # path.
         monkeypatch.setattr("backend.api.files.LARGE_FILE_THRESHOLD", 7)
         pending_uploads = {}
 
@@ -121,15 +136,23 @@ class TestFileUpload:
         def _clear_pending_upload(file_id):
             pending_uploads.pop(file_id, None)
 
-        monkeypatch.setattr("backend.api.files._cache_pending_upload", _cache_pending_upload)
-        monkeypatch.setattr("backend.api.files._get_pending_upload", _get_pending_upload)
-        monkeypatch.setattr("backend.api.files._clear_pending_upload", _clear_pending_upload)
+        monkeypatch.setattr(
+            "backend.api.files._cache_pending_upload",
+            _cache_pending_upload)
+        monkeypatch.setattr(
+            "backend.api.files._get_pending_upload",
+            _get_pending_upload)
+        monkeypatch.setattr(
+            "backend.api.files._clear_pending_upload",
+            _clear_pending_upload)
         payload_bytes = b"a,b\n1,2\n"
 
         # Mismatch should fail and remove staged file.
         negotiate = client.post(
             "/api/v1/files/request-upload-url",
-            json={"filename": "large.csv", "file_size": len(payload_bytes) + 1},
+            json={
+                "filename": "large.csv",
+                "file_size": len(payload_bytes) + 1},
         )
         assert negotiate.status_code == 200
         mismatch = negotiate.json()
@@ -177,7 +200,8 @@ class TestFileGet:
 
     def test_get_nonexistent_file_returns_404(self, client):
         """GET /files/{id} with nonexistent UUID returns 404."""
-        response = client.get("/api/v1/files/00000000-0000-0000-0000-000000000000")
+        response = client.get(
+            "/api/v1/files/00000000-0000-0000-0000-000000000000")
         assert response.status_code == 404
 
     def test_get_file_with_invalid_uuid_returns_422(self, client):
@@ -198,15 +222,16 @@ class TestFileDelete:
 
     def test_delete_nonexistent_file_returns_404(self, client):
         """DELETE /files/{id} with nonexistent UUID returns 404."""
-        response = client.delete("/api/v1/files/00000000-0000-0000-0000-000000000000")
+        response = client.delete(
+            "/api/v1/files/00000000-0000-0000-0000-000000000000")
         assert response.status_code == 404
-
 
 
 class TestPipelineValidation:
     """Tests for pipeline validation endpoints."""
 
-    def test_validate_valid_pipeline_returns_is_valid_true(self, client, sales_csv_bytes):
+    def test_validate_valid_pipeline_returns_is_valid_true(
+            self, client, sales_csv_bytes):
         """Valid pipeline YAML returns is_valid=True."""
         file_id = upload_file(client, sales_csv_bytes)
         yaml_config = build_simple_pipeline_yaml(file_id)
@@ -220,7 +245,8 @@ class TestPipelineValidation:
 
     def test_validate_yaml_with_unknown_file_id_returns_error(self, client):
         """Pipeline with unknown file_id returns is_valid=False."""
-        yaml_config = build_simple_pipeline_yaml("00000000-0000-0000-0000-000000000000")
+        yaml_config = build_simple_pipeline_yaml(
+            "00000000-0000-0000-0000-000000000000")
         response = client.post(
             "/api/v1/pipelines/validate",
             json={"yaml_config": yaml_config},
@@ -247,7 +273,7 @@ pipeline:
   steps: []
 """
         start = time.time()
-        response = client.post(
+        client.post(
             "/api/v1/pipelines/validate",
             json={"yaml_config": yaml_bomb},
         )
@@ -274,11 +300,11 @@ pipeline:
         assert response.status_code in [200, 400, 422]
 
 
-
 class TestPipelineExecution:
     """Tests for pipeline execution endpoints."""
 
-    def test_run_pipeline_returns_immediately_with_run_id(self, client, sales_csv_bytes):
+    def test_run_pipeline_returns_immediately_with_run_id(
+            self, client, sales_csv_bytes):
         """Pipeline run returns immediately with run_id (async dispatch)."""
         file_id = upload_file(client, sales_csv_bytes)
         yaml_config = build_simple_pipeline_yaml(file_id)
@@ -292,7 +318,8 @@ class TestPipelineExecution:
         assert "run_id" in response.json()
         assert duration < 1.0
 
-    def test_run_pipeline_creates_db_record_with_pending_status(self, client, sales_csv_bytes):
+    def test_run_pipeline_creates_db_record_with_pending_status(
+            self, client, sales_csv_bytes):
         """Pipeline run creates a DB record with PENDING status."""
         file_id = upload_file(client, sales_csv_bytes)
         yaml_config = build_simple_pipeline_yaml(file_id)
@@ -305,7 +332,8 @@ class TestPipelineExecution:
 
     def test_get_nonexistent_pipeline_returns_404(self, client):
         """GET /pipelines/{id} with nonexistent UUID returns 404."""
-        response = client.get("/api/v1/pipelines/00000000-0000-0000-0000-000000000000")
+        response = client.get(
+            "/api/v1/pipelines/00000000-0000-0000-0000-000000000000")
         assert response.status_code == 404
 
     def test_list_pipelines_returns_paginated_results(self, client):
@@ -335,29 +363,35 @@ class TestPipelineExecution:
             json={"yaml_config": yaml_config},
         ).json()["run_id"]
 
-        run = test_db.query(PipelineRun).filter(PipelineRun.id == as_uuid(run_id)).first()
+        run = test_db.query(PipelineRun).filter(
+            PipelineRun.id == as_uuid(run_id)).first()
         assert run is not None
         run.status = PipelineStatus.COMPLETED
         test_db.commit()
 
         export_dir = tmp_path / "export-files"
         export_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setattr("backend.api.pipelines.settings.UPLOAD_DIR", export_dir)
+        monkeypatch.setattr(
+            "backend.api.pipelines.settings.UPLOAD_DIR",
+            export_dir)
 
         output_file = export_dir / "output.csv_deadbeef.csv"
-        output_file.write_text("order_id,status\\n1,delivered\\n", encoding="utf-8")
+        output_file.write_text(
+            "order_id,status\\n1,delivered\\n",
+            encoding="utf-8")
 
         response = client.get(f"/api/v1/pipelines/{run_id}/export")
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/csv")
-        assert output_file.name in response.headers.get("content-disposition", "")
-
+        assert output_file.name in response.headers.get(
+            "content-disposition", "")
 
 
 class TestPipelineHealingAttempts:
     """Tests for healing-attempt endpoints."""
 
-    def test_list_healing_attempts_returns_ordered_attempts(self, client, test_db):
+    def test_list_healing_attempts_returns_ordered_attempts(
+            self, client, test_db):
         run = PipelineRun(
             name="healing-run",
             status=PipelineStatus.FAILED,
@@ -392,7 +426,8 @@ class TestPipelineHealingAttempts:
         assert data[0]["status"] == "VALIDATION_FAILED"
         assert data[1]["status"] == "AI_INVALID"
 
-    def test_get_healing_attempt_returns_404_when_missing(self, client, test_db):
+    def test_get_healing_attempt_returns_404_when_missing(
+            self, client, test_db):
         run = PipelineRun(
             name="healing-run",
             status=PipelineStatus.FAILED,
@@ -405,7 +440,8 @@ class TestPipelineHealingAttempts:
         response = client.get(f"/api/v1/pipelines/{run.id}/healing-attempts/1")
         assert response.status_code == 404
 
-    def test_get_healing_attempt_returns_specific_attempt(self, client, test_db):
+    def test_get_healing_attempt_returns_specific_attempt(
+            self, client, test_db):
         run = PipelineRun(
             name="healing-run",
             status=PipelineStatus.FAILED,
@@ -484,7 +520,8 @@ class TestLineageEndpoints:
 
     def test_get_lineage_for_nonexistent_run_returns_404(self, client):
         """GET /lineage/{id} with nonexistent run returns 404."""
-        response = client.get("/api/v1/lineage/00000000-0000-0000-0000-000000000000")
+        response = client.get(
+            "/api/v1/lineage/00000000-0000-0000-0000-000000000000")
         assert response.status_code == 404
 
     def test_get_lineage_with_invalid_uuid_returns_422(self, client):
@@ -505,7 +542,8 @@ class TestLineageEndpoints:
         assert payload["source_column"] == "amount"
         assert payload["total_steps"] >= 1
 
-    def test_get_impact_analysis_returns_downstream_dependencies(self, client, test_db):
+    def test_get_impact_analysis_returns_downstream_dependencies(
+            self, client, test_db):
         """GET /lineage/{id}/impact returns impacted steps for a source column."""
         run_id = self._create_lineage_run(test_db)
         response = client.get(
@@ -602,7 +640,8 @@ class TestSchemaEndpoints:
 
     def test_schema_history_nonexistent_file_returns_404(self, client):
         """Schema history for nonexistent file returns 404."""
-        response = client.get("/api/v1/files/00000000-0000-0000-0000-000000000000/schema/history")
+        response = client.get(
+            "/api/v1/files/00000000-0000-0000-0000-000000000000/schema/history")
         assert response.status_code == 404
 
 

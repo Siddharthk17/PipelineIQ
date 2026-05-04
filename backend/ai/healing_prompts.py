@@ -95,8 +95,14 @@ def build_healing_prompt(
             new_schema,
             option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS,
         ).decode("utf-8"),
-        removed_columns=orjson.dumps(schema_diff.get("removed_columns", [])).decode("utf-8"),
-        added_columns=orjson.dumps(schema_diff.get("added_columns", [])).decode("utf-8"),
+        removed_columns=orjson.dumps(
+            schema_diff.get(
+                "removed_columns",
+                [])).decode("utf-8"),
+        added_columns=orjson.dumps(
+            schema_diff.get(
+                "added_columns",
+                [])).decode("utf-8"),
         renamed_candidates_formatted=formatted_candidates,
     )
 

@@ -19,7 +19,8 @@ from backend.models import User
 from backend.config import settings
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = getattr(settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 1440)
+ACCESS_TOKEN_EXPIRE_MINUTES = getattr(
+    settings, "ACCESS_TOKEN_EXPIRE_MINUTES", 1440)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
 
@@ -32,7 +33,9 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+        data: dict,
+        expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -43,7 +46,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 def verify_token(token: str) -> Optional[dict]:
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[ALGORITHM])
         return payload
     except JWTError:
         return None
@@ -86,13 +92,16 @@ async def get_current_user(
         uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
     except (ValueError, AttributeError):
         raise HTTPException(status_code=401, detail="Invalid token payload")
-    user = db.query(User).filter(User.id == uid, User.is_active == True).first()
+    user = db.query(User).filter(User.id == uid, User.is_active).first()
     if not user:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
+        raise HTTPException(
+            status_code=401,
+            detail="User not found or inactive")
     return user
 
 
-async def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+async def get_current_admin(
+        current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -145,9 +154,11 @@ async def get_current_user_sse(
     except (ValueError, AttributeError):
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
-    user = db.query(User).filter(User.id == uid, User.is_active == True).first()
+    user = db.query(User).filter(User.id == uid, User.is_active).first()
     if not user:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
+        raise HTTPException(
+            status_code=401,
+            detail="User not found or inactive")
     return user
 
 
@@ -170,4 +181,4 @@ def get_optional_user(
         uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
     except (ValueError, AttributeError):
         return None
-    return db.query(User).filter(User.id == uid, User.is_active == True).first()
+    return db.query(User).filter(User.id == uid, User.is_active).first()

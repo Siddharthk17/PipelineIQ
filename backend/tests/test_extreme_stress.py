@@ -1,7 +1,6 @@
 import pytest
 import pandas as pd
 import numpy as np
-import io
 from fastapi.testclient import TestClient
 from backend.main import app
 from backend.dependencies import get_db, get_read_db, get_write_db
@@ -9,7 +8,6 @@ from sqlalchemy.orm import Session
 from backend.auth import get_current_user
 from backend.models import User, UploadedFile
 import uuid as _uuid
-from backend.config import settings
 import yaml
 
 
@@ -38,7 +36,8 @@ def stress_client(test_db: Session, tmp_path):
     from backend.api.pipelines import execute_pipeline_task
     from unittest.mock import MagicMock
 
-    execute_pipeline_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
+    execute_pipeline_task.delay = MagicMock(
+        return_value=MagicMock(id="mock-task-id"))
 
     return TestClient(app)
 
@@ -62,7 +61,8 @@ def test_upload_max_rows_edge_case(stress_client, admin_user, test_db):
     set_current_user(admin_user)
 
     # 1M rows
-    df = pd.DataFrame({"id": np.arange(1000000), "val": np.random.randn(1000000)})
+    df = pd.DataFrame(
+        {"id": np.arange(1000000), "val": np.random.randn(1000000)})
     csv_bytes = df.to_csv(index=False).encode()
 
     response = stress_client.post(
@@ -78,7 +78,7 @@ def test_pipeline_max_steps_limit(stress_client, admin_user, test_db):
     set_current_user(admin_user)
 
     # Create a file to load
-    file_id = str(_uuid.uuid4())
+    str(_uuid.uuid4())
     test_db.add(
         UploadedFile(
             id=_uuid.uuid4(),
@@ -121,9 +121,8 @@ def test_pipeline_max_steps_limit(stress_client, admin_user, test_db):
     assert response.json()["is_valid"] is True
 
     # Test 51 steps (should fail)
-    steps.append(
-        {"name": "step_50", "type": "select", "input": "step_49", "columns": ["col1"]}
-    )
+    steps.append({"name": "step_50", "type": "select",
+                  "input": "step_49", "columns": ["col1"]})
     config_dict["pipeline"]["steps"] = steps
     yaml_string_over = yaml.dump(config_dict)
 

@@ -52,18 +52,18 @@ def _get_user_friendly_error(error: Exception) -> str:
     is_quota, quota_msg = _is_quota_error(error)
     if is_quota:
         return quota_msg
-    
+
     error_str = str(error).lower()
-    
+
     if "json" in error_str and "parse" in error_str:
         return "AI returned invalid response format"
-    
+
     if "timeout" in error_str:
         return "AI service request timed out"
-    
+
     if "connection" in error_str or "network" in error_str:
         return "Network error connecting to AI service"
-    
+
     # Default: return truncated original error
     return f"AI error: {str(error)[:100]}"
 
@@ -118,7 +118,7 @@ def attempt_heal(
             # Check if this is a quota error - if so, stop trying immediately
             is_quota, _ = _is_quota_error(exc)
             user_msg = _get_user_friendly_error(exc)
-            
+
             _record_attempt(
                 db=db,
                 run_id=run_id,
@@ -132,7 +132,7 @@ def attempt_heal(
                 schema_diff=schema_diff,
                 ai_error=user_msg,
             )
-            
+
             # Don't retry on quota errors - they won't succeed anyway
             if is_quota:
                 logger.warning(
@@ -236,10 +236,13 @@ def attempt_heal(
                 gemini_patch=patch,
                 sandbox_result=_sandbox_payload(sandbox_result),
                 proposed_yaml=patched_yaml,
-                diff_lines=compute_yaml_diff(pipeline_yaml, patched_yaml),
+                diff_lines=compute_yaml_diff(
+                    pipeline_yaml,
+                    patched_yaml),
                 parser_valid=True,
                 sandbox_passed=False,
-                validation_errors=[sandbox_result.error] if sandbox_result.error else None,
+                validation_errors=[
+                    sandbox_result.error] if sandbox_result.error else None,
             )
             continue
 
@@ -367,7 +370,12 @@ def _sandbox_payload(sandbox_result) -> dict:
     }
 
 
-def _load_schema_pair(*, run_id: str, file_ids: list[str], db: Session, error: Exception) -> tuple[dict, dict]:
+def _load_schema_pair(*,
+                      run_id: str,
+                      file_ids: list[str],
+                      db: Session,
+                      error: Exception) -> tuple[dict,
+                                                 dict]:
     old_schema: dict = {}
     new_schema: dict = {}
 
@@ -380,7 +388,8 @@ def _load_schema_pair(*, run_id: str, file_ids: list[str], db: Session, error: E
         if uploaded_file is None:
             continue
 
-        profile_record = db.query(FileProfile).filter(FileProfile.file_id == uploaded_file.id).first()
+        profile_record = db.query(FileProfile).filter(
+            FileProfile.file_id == uploaded_file.id).first()
         snapshot = (
             db.query(SchemaSnapshot)
             .filter(
@@ -391,14 +400,25 @@ def _load_schema_pair(*, run_id: str, file_ids: list[str], db: Session, error: E
             .first()
         )
 
-        old_schema.update(_normalize_snapshot_schema(snapshot=snapshot, uploaded_file=uploaded_file, profile_record=profile_record))
-        new_schema.update(_normalize_current_schema(uploaded_file=uploaded_file, profile_record=profile_record))
+        old_schema.update(
+            _normalize_snapshot_schema(
+                snapshot=snapshot,
+                uploaded_file=uploaded_file,
+                profile_record=profile_record))
+        new_schema.update(
+            _normalize_current_schema(
+                uploaded_file=uploaded_file,
+                profile_record=profile_record))
 
     _overlay_error_context(new_schema=new_schema, error=error)
     return old_schema, new_schema
 
 
-def _normalize_snapshot_schema(*, snapshot, uploaded_file: UploadedFile, profile_record: FileProfile | None) -> dict:
+def _normalize_snapshot_schema(
+    *,
+    snapshot,
+    uploaded_file: UploadedFile,
+        profile_record: FileProfile | None) -> dict:
     if snapshot is None:
         columns = uploaded_file.columns or []
         dtypes = uploaded_file.dtypes or {}
@@ -417,24 +437,35 @@ def _normalize_snapshot_schema(*, snapshot, uploaded_file: UploadedFile, profile
             for item in raw_profile:
                 if isinstance(item, dict) and "column" in item:
                     profile[item["column"]] = item
-    
+
     normalized: dict[str, dict] = {}
     for column in columns:
-        profile_entry = profile.get(column, {}) if isinstance(profile, dict) else {}
+        profile_entry = profile.get(
+            column, {}) if isinstance(
+            profile, dict) else {}
         normalized[column] = {
             "dtype": dtypes.get(column),
-            "semantic_type": profile_entry.get("semantic_type", "unknown") if isinstance(profile_entry, dict) else "unknown",
-            "null_pct": profile_entry.get("null_pct") if isinstance(profile_entry, dict) else None,
+            "semantic_type": profile_entry.get(
+                "semantic_type",
+                "unknown") if isinstance(
+                profile_entry,
+                dict) else "unknown",
+            "null_pct": profile_entry.get("null_pct") if isinstance(
+                profile_entry,
+                dict) else None,
         }
     return normalized
 
 
-def _normalize_current_schema(*, uploaded_file: UploadedFile, profile_record: FileProfile | None) -> dict:
+def _normalize_current_schema(
+    *,
+    uploaded_file: UploadedFile,
+        profile_record: FileProfile | None) -> dict:
     # Safely extract profile - handle various storage types
     raw_profile = None
     if profile_record and profile_record.status == "complete":
         raw_profile = profile_record.profile
-    
+
     profile = {}
     if isinstance(raw_profile, dict):
         profile = raw_profile
@@ -442,7 +473,7 @@ def _normalize_current_schema(*, uploaded_file: UploadedFile, profile_record: Fi
         for item in raw_profile:
             if isinstance(item, dict) and "column" in item:
                 profile[item["column"]] = item
-    
+
     if profile:
         normalized = {}
         for column, profile_entry in profile.items():

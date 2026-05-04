@@ -64,7 +64,8 @@ class ArrowDataBus:
         if small_threshold_mb <= 0:
             raise ValueError("small_threshold_mb must be > 0")
         if medium_threshold_mb <= small_threshold_mb:
-            raise ValueError("medium_threshold_mb must be > small_threshold_mb")
+            raise ValueError(
+                "medium_threshold_mb must be > small_threshold_mb")
         if redis_ttl_seconds <= 0:
             raise ValueError("redis_ttl_seconds must be > 0")
         if manifest_ttl_seconds <= 0:
@@ -73,7 +74,8 @@ class ArrowDataBus:
         self._small_threshold_bytes = int(small_threshold_mb * 1024 * 1024)
         self._medium_threshold_bytes = int(medium_threshold_mb * 1024 * 1024)
         self._redis_ttl_seconds = redis_ttl_seconds
-        self._manifest_ttl_seconds = max(redis_ttl_seconds, manifest_ttl_seconds)
+        self._manifest_ttl_seconds = max(
+            redis_ttl_seconds, manifest_ttl_seconds)
         self._disk_prefix = disk_prefix.strip("/")
         self._locations: Dict[str, _ArrowLocation] = {}
         self._lock = threading.RLock()
@@ -147,7 +149,9 @@ class ArrowDataBus:
 
     def _spill_pointer(self, run_id: str, key: str) -> str:
         safe_key = self._safe_key(key)
-        filename = f"{self._disk_prefix}_{run_id}_{safe_key}_{uuid.uuid4().hex}.parquet"
+        filename = f"{
+            self._disk_prefix}_{run_id}_{safe_key}_{
+            uuid.uuid4().hex}.parquet"
         return f"{self._disk_prefix}/{run_id}/{filename}"
 
     @staticmethod
@@ -209,7 +213,8 @@ class ArrowDataBus:
         try:
             entries = redis_client.hgetall(self._manifest_key(run_id))
         except RedisError:
-            logger.warning("Failed to load Arrow bus manifest for run_id=%s", run_id)
+            logger.warning(
+                "Failed to load Arrow bus manifest for run_id=%s", run_id)
             return []
 
         locations: list[_ArrowLocation] = []
@@ -231,9 +236,7 @@ class ArrowDataBus:
                 )
             except (ValueError, TypeError, orjson.JSONDecodeError):
                 logger.warning(
-                    "Skipping malformed Arrow bus manifest entry for run_id=%s",
-                    run_id,
-                )
+                    "Skipping malformed Arrow bus manifest entry for run_id=%s", run_id, )
         return locations
 
     def _clear_manifest(self, run_id: str) -> None:
@@ -243,7 +246,8 @@ class ArrowDataBus:
         try:
             redis_client.delete(self._manifest_key(run_id))
         except RedisError:
-            logger.warning("Failed to clear Arrow bus manifest for run_id=%s", run_id)
+            logger.warning(
+                "Failed to clear Arrow bus manifest for run_id=%s", run_id)
 
     def _delete_location_payload(self, location: _ArrowLocation) -> None:
         if location.tier == "redis" and location.pointer:
@@ -253,15 +257,17 @@ class ArrowDataBus:
                     redis_client.delete(location.pointer)
                 except RedisError:
                     logger.warning(
-                        "Failed to delete Arrow bus redis key %s", location.pointer
-                    )
+                        "Failed to delete Arrow bus redis key %s",
+                        location.pointer)
             return
 
         if location.tier == "shm" and location.pointer:
             try:
                 Path(location.pointer).unlink(missing_ok=True)
             except OSError:
-                logger.warning("Failed to delete Arrow bus shm file %s", location.pointer)
+                logger.warning(
+                    "Failed to delete Arrow bus shm file %s",
+                    location.pointer)
             return
 
         if location.tier == "spill" and location.pointer:
@@ -280,7 +286,8 @@ class ArrowDataBus:
             try:
                 shm_file.unlink(missing_ok=True)
             except OSError:
-                logger.warning("Failed to delete orphaned shm file %s", shm_file)
+                logger.warning(
+                    "Failed to delete orphaned shm file %s", shm_file)
 
     def _cleanup_orphaned_local_spill_files(self, run_id: str) -> None:
         provider = getattr(storage_service, "provider", None)
@@ -293,7 +300,9 @@ class ArrowDataBus:
             try:
                 spill_file.unlink(missing_ok=True)
             except OSError:
-                logger.warning("Failed to delete orphaned spill file %s", spill_file)
+                logger.warning(
+                    "Failed to delete orphaned spill file %s",
+                    spill_file)
 
     def put(self, key: str, table: pa.Table, *, run_id: str) -> str:
         """Store a table and return the selected tier."""
@@ -310,8 +319,9 @@ class ArrowDataBus:
                 try:
                     redis_key = self._redis_key(run_id, key)
                     redis_client.setex(
-                        redis_key, self._redis_ttl_seconds, self._table_to_bytes(table)
-                    )
+                        redis_key,
+                        self._redis_ttl_seconds,
+                        self._table_to_bytes(table))
                     self._record_location(
                         _ArrowLocation(
                             key=key,
@@ -324,8 +334,7 @@ class ArrowDataBus:
                     return "redis"
                 except RedisError:
                     logger.warning(
-                        "Redis unavailable for key '%s', falling back to shm", key
-                    )
+                        "Redis unavailable for key '%s', falling back to shm", key)
 
         if size_bytes <= self._medium_threshold_bytes and self._shm_available:
             shm_path = self._shm_path(run_id, key)
@@ -374,16 +383,17 @@ class ArrowDataBus:
                     payload = redis_client.get(location.pointer)
                 except RedisError as exc:
                     raise KeyError(
-                        f"Arrow bus redis key '{key}' unavailable due to Redis error"
-                    ) from exc
+                        f"Arrow bus redis key '{key}' unavailable due to Redis error") from exc
                 if payload is None:
                     raise KeyError(f"Arrow bus redis key '{key}' expired")
-                payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else payload
+                payload_bytes = payload.encode(
+                    "utf-8") if isinstance(payload, str) else payload
                 return self._bytes_to_table(payload_bytes)
 
             if location.tier == "shm":
                 if not location.pointer:
-                    raise KeyError(f"Arrow bus shm key '{key}' missing pointer")
+                    raise KeyError(
+                        f"Arrow bus shm key '{key}' missing pointer")
                 shm_file = Path(location.pointer)
                 if not shm_file.exists():
                     raise KeyError(f"Arrow bus shm key '{key}' missing file")
@@ -405,12 +415,14 @@ class ArrowDataBus:
 
     def cleanup_run(self, run_id: str) -> None:
         with self._lock:
-            keys = [k for k, meta in self._locations.items() if meta.run_id == run_id]
+            keys = [k for k, meta in self._locations.items()
+                    if meta.run_id == run_id]
 
         for key in keys:
             self.delete(key)
 
-        # Recover and clean locations persisted by crashed/restarted worker processes.
+        # Recover and clean locations persisted by crashed/restarted worker
+        # processes.
         for location in self._load_manifest_locations(run_id):
             if location.key in keys:
                 continue

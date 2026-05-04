@@ -40,7 +40,10 @@ def deliver_notifications_task(
         )
         return {"run_id": run_id, "status": "delivered"}
     except Exception as exc:
-        logger.error("Notification delivery failed for run %s: %s", run_id, exc)
+        logger.error(
+            "Notification delivery failed for run %s: %s",
+            run_id,
+            exc)
         raise self.retry(exc=exc)
     finally:
         db.close()

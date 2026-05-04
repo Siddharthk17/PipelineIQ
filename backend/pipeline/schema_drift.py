@@ -6,7 +6,7 @@ Detects changes in CSV column structure between uploads:
 - Type changes (WARNING severity)
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 

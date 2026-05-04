@@ -70,7 +70,10 @@ def _create_and_queue_pipeline_run(
     db.add(pipeline_run)
     db.commit()
     db.refresh(pipeline_run)
-    _create_run_schema_snapshots(db=db, run_id=pipeline_run.id, parsed_config=config)
+    _create_run_schema_snapshots(
+        db=db,
+        run_id=pipeline_run.id,
+        parsed_config=config)
 
     result = execute_pipeline_task.delay(str(pipeline_run.id))
     pipeline_run.celery_task_id = result.id
@@ -86,19 +89,28 @@ def _create_and_queue_pipeline_run(
         request=request,
     )
 
-    logger.info("Pipeline run queued: id=%s, name=%s", pipeline_run.id, pipeline_name)
+    logger.info(
+        "Pipeline run queued: id=%s, name=%s",
+        pipeline_run.id,
+        pipeline_name)
     return RunPipelineResponse(
         run_id=str(pipeline_run.id), status=pipeline_run.status.value
     )
 
 
-def _create_run_schema_snapshots(*, db: Session, run_id, parsed_config) -> None:
+def _create_run_schema_snapshots(
+    *,
+    db: Session,
+    run_id,
+        parsed_config) -> None:
     """Capture the source file schema at run submission time for healing diffing."""
     referenced_file_ids = []
     seen_file_ids: set[str] = set()
     for step in getattr(parsed_config, "steps", []):
         file_id = getattr(step, "file_id", None)
-        if isinstance(file_id, str) and file_id and file_id not in seen_file_ids:
+        if isinstance(
+                file_id,
+                str) and file_id and file_id not in seen_file_ids:
             seen_file_ids.add(file_id)
             referenced_file_ids.append(_as_uuid(file_id))
 
@@ -256,23 +268,24 @@ def _check_pipeline_permission(
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User lacks required permissions ({', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
+            detail=f"User lacks required permissions ({
+                ', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
         )
 
     if permission.permission_level not in required_levels:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User lacks required permissions ({', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
+            detail=f"User lacks required permissions ({
+                ', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
         )
 
 
-@router.post(
-    "/run",
-    response_model=RunPipelineResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Start a pipeline run",
-    description="Queue a pipeline for asynchronous execution. Returns immediately.",
-)
+@router.post("/run",
+             response_model=RunPipelineResponse,
+             status_code=status.HTTP_202_ACCEPTED,
+             summary="Start a pipeline run",
+             description="Queue a pipeline for asynchronous execution. Returns immediately.",
+             )
 @limiter.limit(settings.RATE_LIMIT_PIPELINE_RUN)
 def run_pipeline(
     request: Request,
@@ -290,7 +303,8 @@ def run_pipeline(
         db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
     )
 
-    # Verify all referenced file IDs exist in the database and general config is valid
+    # Verify all referenced file IDs exist in the database and general config
+    # is valid
     registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
     validation_result = _pipeline_parser.validate(config, registered_ids)
 
@@ -400,7 +414,8 @@ def list_pipeline_runs(
     page = max(1, page)
     limit = max(1, min(limit, 100))
 
-    query = db.query(PipelineRun).filter(PipelineRun.user_id == current_user.id)
+    query = db.query(PipelineRun).filter(
+        PipelineRun.user_id == current_user.id)
     if status_filter:
         try:
             ps = PipelineStatus(status_filter.upper())
@@ -442,14 +457,15 @@ def get_pipeline_stats(
         or 0
     )
     completed = (
-        db.query(func.count(PipelineRun.id))
-        .filter(
-            PipelineRun.status.in_([PipelineStatus.COMPLETED, PipelineStatus.HEALED]),
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.status.in_(
+                [
+                    PipelineStatus.COMPLETED,
+                    PipelineStatus.HEALED]),
             PipelineRun.user_id == current_user.id,
-        )
-        .scalar()
-        or 0
-    )
+        ) .scalar() or 0)
     failed = (
         db.query(func.count(PipelineRun.id))
         .filter(
@@ -479,7 +495,9 @@ def get_pipeline_stats(
         "completed": completed,
         "failed": failed,
         "pending": pending,
-        "success_rate": round(completed / total_runs * 100, 1) if total_runs > 0 else 0,
+        "success_rate": round(
+            completed / total_runs * 100,
+            1) if total_runs > 0 else 0,
         "total_files": total_files,
     }
 
@@ -500,9 +518,8 @@ def get_pipeline_run(
     """Get full details of a specific pipeline run."""
     logger.info("DEBUG: User %s accessing run %s", current_user.id, run_id)
     _validate_uuid_format(run_id)
-    pipeline_run = (
-        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
-    )
+    pipeline_run = (db.query(PipelineRun).filter(
+        PipelineRun.id == _as_uuid(run_id)).first())
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -531,9 +548,8 @@ def list_healing_attempts(
 ) -> list[HealingAttemptResponse]:
     """Return all healing attempts for a pipeline run."""
     _validate_uuid_format(run_id)
-    pipeline_run = (
-        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
-    )
+    pipeline_run = (db.query(PipelineRun).filter(
+        PipelineRun.id == _as_uuid(run_id)).first())
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -575,9 +591,8 @@ def get_healing_attempt(
             detail="attempt_number must be >= 1",
         )
 
-    pipeline_run = (
-        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
-    )
+    pipeline_run = (db.query(PipelineRun).filter(
+        PipelineRun.id == _as_uuid(run_id)).first())
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -624,7 +639,8 @@ def get_healing_history(
         db=db,
         current_user=current_user,
     )
-    return {"run_id": run_id, "healing_attempts": [attempt.model_dump() for attempt in attempts]}
+    return {"run_id": run_id, "healing_attempts": [
+        attempt.model_dump() for attempt in attempts]}
 
 
 def _ensure_utc(dt):
@@ -673,10 +689,12 @@ def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
     )
 
 
-def _healing_attempt_to_response(attempt: HealingAttempt) -> HealingAttemptResponse:
+def _healing_attempt_to_response(
+        attempt: HealingAttempt) -> HealingAttemptResponse:
     """Convert a HealingAttempt ORM model to an API response."""
     return HealingAttemptResponse(
-        id=str(attempt.id),
+        id=str(
+            attempt.id),
         attempt_number=attempt.attempt_number,
         status=attempt.status.value,
         pipeline_name=attempt.pipeline_name,
@@ -691,8 +709,10 @@ def _healing_attempt_to_response(attempt: HealingAttempt) -> HealingAttemptRespo
         gemini_patch=attempt.gemini_patch,
         sandbox_result=attempt.sandbox_result,
         applied=attempt.applied,
-        confidence=float(attempt.confidence) if attempt.confidence is not None else None,
-        healed_at=_ensure_utc(attempt.healed_at),
+        confidence=float(
+            attempt.confidence) if attempt.confidence is not None else None,
+        healed_at=_ensure_utc(
+            attempt.healed_at),
         classification_reason=attempt.classification_reason,
         ai_valid=attempt.ai_valid,
         ai_error=attempt.ai_error,
@@ -701,8 +721,10 @@ def _healing_attempt_to_response(attempt: HealingAttempt) -> HealingAttemptRespo
         validation_errors=attempt.validation_errors,
         validation_warnings=attempt.validation_warnings,
         diff_lines=attempt.diff_lines,
-        created_at=_ensure_utc(attempt.created_at),
-        completed_at=_ensure_utc(attempt.completed_at),
+        created_at=_ensure_utc(
+            attempt.created_at),
+        completed_at=_ensure_utc(
+            attempt.completed_at),
     )
 
 
@@ -723,21 +745,25 @@ def cancel_pipeline_run(
 ) -> dict:
     """Cancel a pipeline run by setting status to CANCELLED and revoking the task."""
     _validate_uuid_format(run_id)
-    pipeline_run = (
-        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
-    )
+    pipeline_run = (db.query(PipelineRun).filter(
+        PipelineRun.id == _as_uuid(run_id)).first())
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-    _check_pipeline_permission(db, current_user, pipeline_run.name, ["owner", "runner"])
+    _check_pipeline_permission(
+        db, current_user, pipeline_run.name, [
+            "owner", "runner"])
 
-    if pipeline_run.status not in (PipelineStatus.PENDING, PipelineStatus.RUNNING):
+    if pipeline_run.status not in (
+            PipelineStatus.PENDING,
+            PipelineStatus.RUNNING):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot cancel pipeline with status '{pipeline_run.status.value}'",
+            detail=f"Cannot cancel pipeline with status '{
+                pipeline_run.status.value}'",
         )
 
     # Revoke the Celery task
@@ -776,7 +802,9 @@ def cancel_pipeline_run(
             _status_cache_key(run_id), 3600, orjson.dumps(cancel_payload)
         )
     except RedisError:
-        logger.warning("Failed to publish cancellation SSE event for run_id=%s", run_id)
+        logger.warning(
+            "Failed to publish cancellation SSE event for run_id=%s",
+            run_id)
 
     log_action(
         db,
@@ -830,7 +858,8 @@ def preview_pipeline_step(
     return {
         "pipeline_name": config.name,
         "step_index": step_index,
-        "total_steps": len(config.steps),
+        "total_steps": len(
+            config.steps),
         "step_preview": step_info,
         "note": "Full sample data preview requires pipeline execution. Use /plan for detailed estimates.",
     }
@@ -848,7 +877,7 @@ def export_pipeline_output(
     current_user: User = Depends(get_current_user),
 ) -> Response:
     """Export/download the output file from a completed pipeline run.
-    
+
     Supports both local filesystem and S3/MinIO storage backends.
     When STORAGE_TYPE=s3, returns a presigned S3 URL for direct download.
     """
@@ -856,26 +885,31 @@ def export_pipeline_output(
     from fastapi.responses import FileResponse, RedirectResponse
 
     _validate_uuid_format(run_id)
-    pipeline_run = (
-        db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
-    )
+    pipeline_run = (db.query(PipelineRun).filter(
+        PipelineRun.id == _as_uuid(run_id)).first())
     if pipeline_run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-    _check_pipeline_permission(db, current_user, pipeline_run.name, ["owner", "runner"])
+    _check_pipeline_permission(
+        db, current_user, pipeline_run.name, [
+            "owner", "runner"])
 
-    if pipeline_run.status not in (PipelineStatus.COMPLETED, PipelineStatus.HEALED):
+    if pipeline_run.status not in (
+            PipelineStatus.COMPLETED,
+            PipelineStatus.HEALED):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Pipeline run is not completed (status: {pipeline_run.status.value})",
+            detail=f"Pipeline run is not completed (status: {
+                pipeline_run.status.value})",
         )
 
     # Get all save step results to find stored paths (if available)
-    save_results = [sr for sr in pipeline_run.step_results if sr.step_type == "save"]
-    
+    save_results = [
+        sr for sr in pipeline_run.step_results if sr.step_type == "save"]
+
     # Parse YAML to get save step filenames for S3 key construction
     stored_paths: list[str] = []
     try:
@@ -896,46 +930,49 @@ def export_pipeline_output(
 
     # Handle based on storage type
     if settings.STORAGE_TYPE == "s3":
-            # S3/MinIO: Return presigned download URL
-            # Use the first stored_path pattern to construct the S3 key
-            if not stored_paths:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Could not determine output file path",
-                )
-            
-            # Convert pattern like "output_*.csv" to actual S3 key
-            # The save step uses: f"{filename}_{uuid}.{ext}"
-            # We need to find the actual file in S3
-            try:
-                from backend.services.storage_service import storage_service
-                
-                # Try to get presigned URL for each possible pattern
-                for pattern in stored_paths:
-                    # Pattern is like "output_*.csv" - remove wildcard for S3 lookup
-                    base_name = pattern.replace("*", "").rstrip("_.")
-                    # Build the S3 key path
-                    s3_key = f"{settings.UPLOAD_DIR}/{base_name}"
-                    
-                    # Try to get presigned download URL
-                    try:
-                        presigned_url = storage_service.get_presigned_download_url(s3_key)
-                        if presigned_url:
-                            return RedirectResponse(url=presigned_url)
-                    except Exception as e:
-                        logger.warning("Failed to get presigned URL for %s: %s", s3_key, e)
-                        continue
-                
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Output file not found in S3 storage",
-                )
-            except Exception as e:
-                logger.error("S3 export error for run_id=%s: %s", run_id, e)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to generate download URL: {str(e)}",
-                )
+        # S3/MinIO: Return presigned download URL
+        # Use the first stored_path pattern to construct the S3 key
+        if not stored_paths:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Could not determine output file path",
+            )
+
+        # Convert pattern like "output_*.csv" to actual S3 key
+        # The save step uses: f"{filename}_{uuid}.{ext}"
+        # We need to find the actual file in S3
+        try:
+            from backend.services.storage_service import storage_service
+
+            # Try to get presigned URL for each possible pattern
+            for pattern in stored_paths:
+                # Pattern is like "output_*.csv" - remove wildcard for S3
+                # lookup
+                base_name = pattern.replace("*", "").rstrip("_.")
+                # Build the S3 key path
+                s3_key = f"{settings.UPLOAD_DIR}/{base_name}"
+
+                # Try to get presigned download URL
+                try:
+                    presigned_url = storage_service.get_presigned_download_url(
+                        s3_key)
+                    if presigned_url:
+                        return RedirectResponse(url=presigned_url)
+                except Exception as e:
+                    logger.warning(
+                        "Failed to get presigned URL for %s: %s", s3_key, e)
+                    continue
+
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Output file not found in S3 storage",
+            )
+        except Exception as e:
+            logger.error("S3 export error for run_id=%s: %s", run_id, e)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to generate download URL: {str(e)}",
+            )
     else:
         # Local filesystem: Use glob to find output files
         output_dir = settings.UPLOAD_DIR
@@ -951,7 +988,11 @@ def export_pipeline_output(
                     output_files.append(match)
 
         # Older conventions may include run_id in output filenames.
-        for pattern in [output_dir / f"{run_id}*.csv", output_dir / f"{run_id}*.json"]:
+        for pattern in [
+                output_dir /
+                f"{run_id}*.csv",
+                output_dir /
+                f"{run_id}*.json"]:
             _add_matches(pattern)
 
         # Current save step writes: "{filename}_{uuid}.csv"
@@ -976,8 +1017,8 @@ def export_pipeline_output(
                         _add_matches(output_dir / f"{filename}{ext}")
         except Exception:
             logger.warning(
-                "Could not parse YAML while locating export file for run_id=%s", run_id
-            )
+                "Could not parse YAML while locating export file for run_id=%s",
+                run_id)
 
         if not output_files:
             raise HTTPException(

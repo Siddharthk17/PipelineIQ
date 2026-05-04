@@ -33,4 +33,3 @@ class TestGeminiBudgetConstants:
     def test_token_budget_constants(self):
         assert TOKEN_BUDGET_PER_MINUTE == 900_000
         assert TOKEN_BUDGET_WINDOW_SECONDS == 60
-
