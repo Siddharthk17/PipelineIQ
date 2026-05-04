@@ -17,7 +17,7 @@ slowapi==0.1.9
 python-multipart==0.0.22
 python-dotenv==1.0.0
 pytest==9.0.3
-pytest-asyncio==0.23.3
+pytest-asyncio==0.25.3
 pytest-cov==5.0.0
 httpx==0.26.0
 requests==2.33.0

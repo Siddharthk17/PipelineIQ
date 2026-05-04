@@ -4,6 +4,13 @@ Provides deterministic sample DataFrames, in-memory SQLite DB sessions,
 FastAPI test clients, and pre-configured LineageRecorder instances.
 """
 
+import pytest
+
+pytest_plugins = ["pytest_asyncio"]
+
+pytestmark = pytest.mark.asyncio(mode="auto")
+
+
 from typing import Generator
 from unittest.mock import MagicMock, patch
 
