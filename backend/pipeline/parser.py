@@ -1063,8 +1063,7 @@ class PipelineParser:
                         ValidationError(
                             step_name=step.name,
                             field="filename",
-                            message=f"Invalid filename '{
-                                step.filename}'. Path traversal characters are forbidden.",
+                            message=f"Invalid filename '{step.filename}'. Path traversal characters are forbidden.",
                         ))
 
     def _check_validate_rules(
