@@ -200,21 +200,13 @@ def build_filter_sql(step: Any) -> str:
     if operator in compare_ops:
         predicate = f"{column} {compare_ops[operator]} {sql_literal(value)}"
     elif operator == "contains":
-        predicate = f"CAST({column} AS VARCHAR) LIKE {
-            sql_literal(
-                f'%{value}%')}"
+        predicate = f"CAST({column} AS VARCHAR) LIKE {sql_literal(f'%{value}%')}"
     elif operator == "not_contains":
-        predicate = f"CAST({column} AS VARCHAR) NOT LIKE {
-            sql_literal(
-                f'%{value}%')}"
+        predicate = f"CAST({column} AS VARCHAR) NOT LIKE {sql_literal(f'%{value}%')}"
     elif operator == "starts_with":
-        predicate = f"CAST({column} AS VARCHAR) LIKE {
-            sql_literal(
-                f'{value}%')}"
+        predicate = f"CAST({column} AS VARCHAR) LIKE {sql_literal(f'{value}%')}"
     elif operator == "ends_with":
-        predicate = f"CAST({column} AS VARCHAR) LIKE {
-            sql_literal(
-                f'%{value}')}"
+        predicate = f"CAST({column} AS VARCHAR) LIKE {sql_literal(f'%{value}')}"
     elif operator == "is_null":
         predicate = f"{column} IS NULL"
     elif operator == "is_not_null":

@@ -63,9 +63,7 @@ def call_gemini_task(
     """
     # Step 1: Check response cache
     cache_input = f"{prompt}|temp={temperature}|max={max_output_tokens}"
-    cache_key = f"gemini:resp:{
-        hashlib.sha256(
-            cache_input.encode()).hexdigest()}"
+    cache_key = f"gemini:resp:{hashlib.sha256(cache_input.encode()).hexdigest()}"
 
     redis = get_cache_redis()
     cached = redis.get(cache_key)
