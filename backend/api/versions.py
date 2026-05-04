@@ -39,8 +39,7 @@ def _check_pipeline_permission(
     if not permission or permission.permission_level not in required_levels:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User lacks required permissions ({
-                ', '.join(required_levels)}) to access pipeline '{pipeline_name}'",
+            detail=f"User lacks required permissions ({', '.join(required_levels)}) to access pipeline '{pipeline_name}'",
         )
 
 

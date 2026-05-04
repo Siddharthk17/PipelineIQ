@@ -159,8 +159,7 @@ class TestApiLatency:
             latencies.append(time.perf_counter() - start)
 
         avg_latency = sum(latencies) / len(latencies)
-        assert avg_latency < 0.1, f"Average /stats latency too high: {
-            avg_latency:.4f}s"
+        assert avg_latency < 0.1, f"Average /stats latency too high: {avg_latency:.4f}s"
 
 
 class TestLineageRetrieval:

@@ -98,8 +98,7 @@ def grant_permission(
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid permission level '{
-                body.permission_level}'. Must be 'owner', 'runner', or 'viewer'.",
+            detail=f"Invalid permission level '{body.permission_level}'. Must be 'owner', 'runner', or 'viewer'.",
         )
 
     validate_uuid_format(body.user_id)

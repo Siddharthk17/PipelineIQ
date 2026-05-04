@@ -83,8 +83,7 @@ def create_notification_config(
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid notification type '{
-                body.type}'. Must be 'slack' or 'email'.",
+            detail=f"Invalid notification type '{body.type}'. Must be 'slack' or 'email'.",
         )
 
     if notif_type == NotificationType.SLACK:

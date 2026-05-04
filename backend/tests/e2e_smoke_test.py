@@ -29,8 +29,7 @@ class TestE2ESmoke:
             f"{AUTH_URL}/login",
             json={"email": self.user_email, "password": self.password},
         )
-        assert login_resp.status_code == 200, f"Login failed: {
-            login_resp.text}"
+        assert login_resp.status_code == 200, f"Login failed: {login_resp.text}"
         self.token = login_resp.json()["access_token"]
         headers = {"Authorization": f"Bearer {self.token}"}
 
@@ -41,8 +40,7 @@ class TestE2ESmoke:
                 headers=headers,
                 files={"file": (FILE_PATH, f, "text/csv")},
             )
-        assert upload_resp.status_code == 201, f"Upload failed: {
-            upload_resp.text}"
+        assert upload_resp.status_code == 201, f"Upload failed: {upload_resp.text}"
         file_id = upload_resp.json()["id"]
 
         # 3. Validate Pipeline

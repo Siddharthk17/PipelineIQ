@@ -75,8 +75,7 @@ def call_gemini_task(
     estimated_input_tokens = len(prompt) // 4
     estimated_total_tokens = estimated_input_tokens + max_output_tokens
 
-    budget_key = f"gemini:tokens:{int(time.time() //
-                                      TOKEN_BUDGET_WINDOW_SECONDS)}"
+    budget_key = f"gemini:tokens:{int(time.time() // TOKEN_BUDGET_WINDOW_SECONDS)}"
     current_usage = int(redis.get(budget_key) or 0)
 
     if current_usage + estimated_total_tokens > TOKEN_BUDGET_PER_MINUTE:

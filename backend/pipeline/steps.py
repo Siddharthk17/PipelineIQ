@@ -534,8 +534,7 @@ class StepExecutor:
                         step_name=config.name,
                         column=col,
                         function=func,
-                        reason=f"Aggregation function '{func}' requires numeric column, but '{col}' is {
-                            input_df[col].dtype}",
+                        reason=f"Aggregation function '{func}' requires numeric column, but '{col}' is {input_df[col].dtype}",
                     )
 
         try:

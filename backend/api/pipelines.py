@@ -268,15 +268,13 @@ def _check_pipeline_permission(
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User lacks required permissions ({
-                ', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
+            detail=f"User lacks required permissions ({', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
         )
 
     if permission.permission_level not in required_levels:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User lacks required permissions ({
-                ', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
+            detail=f"User lacks required permissions ({', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
         )
 
 
@@ -762,8 +760,7 @@ def cancel_pipeline_run(
             PipelineStatus.RUNNING):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cannot cancel pipeline with status '{
-                pipeline_run.status.value}'",
+            detail=f"Cannot cancel pipeline with status '{pipeline_run.status.value}'",
         )
 
     # Revoke the Celery task
@@ -902,8 +899,7 @@ def export_pipeline_output(
             PipelineStatus.HEALED):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Pipeline run is not completed (status: {
-                pipeline_run.status.value})",
+            detail=f"Pipeline run is not completed (status: {pipeline_run.status.value})",
         )
 
     # Get all save step results to find stored paths (if available)
