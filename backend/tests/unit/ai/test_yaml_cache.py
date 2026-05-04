@@ -1,7 +1,6 @@
 """Tests for YAML parse cache behavior."""
 
 import hashlib
-import pickle
 
 import pytest
 
@@ -72,9 +71,7 @@ class TestYamlCacheModule:
             f"{cache_module.YAML_CACHE_PREFIX}"
             f"{hashlib.sha256(yaml_text.encode('utf-8')).hexdigest()}"
         )
-        cached_pipeline = {"name": "from_cache"}
-        fake_redis._data[cache_key] = pickle.dumps(
-            cached_pipeline).decode("latin-1")
+        fake_redis._data[cache_key] = yaml_text
 
         monkeypatch.setattr(
             cache_module,
@@ -86,7 +83,7 @@ class TestYamlCacheModule:
                 AssertionError("parser should not run")), )
 
         result = cache_module.get_parsed_pipeline(yaml_text)
-        assert result == cached_pipeline
+        assert result.name == "cache_hit"
 
     def test_cache_miss_calls_parser_and_writes_cache(self, monkeypatch):
         fake_redis = _FakeRedis()

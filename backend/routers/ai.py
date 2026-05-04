@@ -151,8 +151,7 @@ async def repair_failed_run(
     # Actually the string in DB is "FAILED" for enum PipelineStatus
     if run.status.value != "FAILED":
         raise HTTPException(
-            400, f"Cannot repair a run with status '{
-                run.status.value}'. Only 'failed' runs can be repaired.")
+            400, f"Cannot repair a run with status '{run.status.value}'. Only 'failed' runs can be repaired.")
 
     # Extract error information from the run
     # PipelineRun error details are usually in `error_message` or
