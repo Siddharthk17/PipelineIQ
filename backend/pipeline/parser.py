@@ -698,8 +698,7 @@ class PipelineParser:
                     ValidationError(
                         step_name=step.name,
                         field="type",
-                        message=f"Invalid step type '{
-                            step.step_type}'. Valid types: {valid_types}",
+                        message=f"Invalid step type '{step.step_type}'. Valid types: {valid_types}",
                         suggestion=suggestion,
                     ))
 
