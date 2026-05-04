@@ -953,9 +953,7 @@ class PipelineParser:
                             step_name=step.name,
                             field="file_id",
                             message=(
-                                f"file_id '{
-                                    step.file_id}' is not registered. " f"Registered IDs: {
-                                    sorted(registered_file_ids)}"),
+                                f"file_id '{step.file_id}' is not registered. " f"Registered IDs: {sorted(registered_file_ids)}"),
                         ))
 
     def _check_filter_operators(
