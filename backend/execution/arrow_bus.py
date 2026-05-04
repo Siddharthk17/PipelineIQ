@@ -149,9 +149,7 @@ class ArrowDataBus:
 
     def _spill_pointer(self, run_id: str, key: str) -> str:
         safe_key = self._safe_key(key)
-        filename = f"{
-            self._disk_prefix}_{run_id}_{safe_key}_{
-            uuid.uuid4().hex}.parquet"
+        filename = f"{self._disk_prefix}_{run_id}_{safe_key}_{uuid.uuid4().hex}.parquet"
         return f"{self._disk_prefix}/{run_id}/{filename}"
 
     @staticmethod

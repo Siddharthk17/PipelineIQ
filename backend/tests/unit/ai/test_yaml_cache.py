@@ -45,8 +45,7 @@ class TestYamlCacheKeys:
     def test_cache_key_is_sha256_of_raw_yaml(self):
         yaml_text = "pipeline:\n  name: test\n  steps: []"
         yaml_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
-        assert f"{
-            cache_module.YAML_CACHE_PREFIX}{yaml_hash}" == f"yaml:parsed:{yaml_hash}"
+        assert f"{cache_module.YAML_CACHE_PREFIX}{yaml_hash}" == f"yaml:parsed:{yaml_hash}"
 
     def test_identical_yaml_produces_identical_hash(self):
         yaml_text = "pipeline:\n  name: test\n  steps: []"
