@@ -417,10 +417,7 @@ def build_fill_nulls_sql(step: Any) -> str:
             step, "constant_value", _step_value(
                 step, "value"))
         expressions = [
-            f"COALESCE({
-                quote_identifier(col)}, {
-                sql_literal(constant_value)}) AS {
-                quote_identifier(col)}" for col in columns]
+            f"COALESCE({quote_identifier(col)}, {sql_literal(constant_value)}) AS {quote_identifier(col)}" for col in columns]
         return f"SELECT * REPLACE ({', '.join(expressions)}) FROM __input__"
 
     if strategy in {"mean", "median", "mode"}:

@@ -86,8 +86,7 @@ def _patch_scalar_field(
         new_value: Any) -> None:
     if field_name not in step:
         raise ValueError(
-            f"Step '{
-                step.get('name')}' has no '{field_name}' field")
+            f"Step '{step.get('name')}' has no '{field_name}' field")
     current_value = step.get(field_name)
     if current_value != old_value:
         logger.warning(
@@ -109,8 +108,7 @@ def _patch_list_field(
     current_value = step.get(field_name)
     if not isinstance(current_value, list):
         raise ValueError(
-            f"Step '{
-                step.get('name')}' has no list field '{field_name}'")
+            f"Step '{step.get('name')}' has no list field '{field_name}'")
 
     step[field_name] = [new_value if item ==
                         old_value else item for item in current_value]
@@ -148,8 +146,7 @@ def _patch_mapping_field(
     current_value = step.get(field_name)
     if not isinstance(current_value, dict):
         raise ValueError(
-            f"Step '{
-                step.get('name')}' has no dict field '{field_name}'")
+            f"Step '{step.get('name')}' has no dict field '{field_name}'")
 
     updated_mapping: dict[Any, Any] = {}
     for key, value in current_value.items():
@@ -169,8 +166,7 @@ def _patch_aggregations_field(
     current_value = step.get(field_name)
     if not isinstance(current_value, list):
         raise ValueError(
-            f"Step '{
-                step.get('name')}' has no list field '{field_name}'")
+            f"Step '{step.get('name')}' has no list field '{field_name}'")
 
     for aggregation in current_value:
         if isinstance(aggregation, dict) and aggregation.get(

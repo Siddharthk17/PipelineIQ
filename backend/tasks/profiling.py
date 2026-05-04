@@ -54,8 +54,7 @@ def profile_file(self, file_id: str) -> dict:
             df = df.sample(n=settings.PROFILE_SAMPLE_ROWS, random_state=42)
             was_sampled = True
             logger.info(
-                f"Sampled to {
-                    settings.PROFILE_SAMPLE_ROWS} rows for file_id={file_id}")
+                f"Sampled to {settings.PROFILE_SAMPLE_ROWS} rows for file_id={file_id}")
 
         profile = profile_dataframe(df)
         completeness = compute_completeness(df)

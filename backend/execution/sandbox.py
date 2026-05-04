@@ -96,9 +96,7 @@ def _run_pipeline_in_sandbox(*,
             sample_table = sampled_tables.get(step.file_id)
             if sample_table is None:
                 raise ValueError(
-                    f"Load step '{
-                        step.name}' references file_id '{
-                        step.file_id}' with no sampled table")
+                    f"Load step '{step.name}' references file_id '{step.file_id}' with no sampled table")
             table_registry[step.name] = sample_table
             last_result = sample_table
             continue
@@ -116,8 +114,7 @@ def _run_pipeline_in_sandbox(*,
                 column for column in step.mapping.keys() if column not in input_df.columns]
             if missing_columns:
                 raise ValueError(
-                    f"Rename step '{
-                        step.name}' references missing columns: {missing_columns}")
+                    f"Rename step '{step.name}' references missing columns: {missing_columns}")
             renamed_table = pa.Table.from_pandas(
                 input_df.rename(columns=step.mapping),
                 preserve_index=False,
@@ -199,5 +196,4 @@ def _load_sample_frame(*, file_record: UploadedFile,
         if extension == ".json":
             return pd.read_json(handle).head(sample_rows)
     raise ValueError(
-        f"Sandbox only supports CSV and JSON inputs, got '{extension}' for '{
-            file_record.original_filename}'")
+        f"Sandbox only supports CSV and JSON inputs, got '{extension}' for '{file_record.original_filename}'")

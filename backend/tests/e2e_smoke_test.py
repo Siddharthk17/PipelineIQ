@@ -94,8 +94,7 @@ pipeline:
                 break
             elif status_resp.json()["status"] == "FAILED":
                 pytest.fail(
-                    f"Pipeline failed: {
-                        status_resp.json().get('error_message')}")
+                    f"Pipeline failed: {status_resp.json().get('error_message')}")
             time.sleep(2)
 
         assert completed, "Pipeline timed out"

@@ -696,8 +696,7 @@ class StepExecutor:
             )
         elif result.warning_count > 0:
             warnings.append(
-                f"Validation passed with {
-                    result.warning_count} warnings")
+                f"Validation passed with {result.warning_count} warnings")
 
         recorder.record_passthrough(
             step_name=config.name,
