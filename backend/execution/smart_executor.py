@@ -109,6 +109,31 @@ class SmartExecutor:
         if step_type in self._ALWAYS_PANDAS_STEPS:
             return self.pandas_executor.execute(table_registry, step, recorder)
 
+        if step_type == "sql":
+            input_step_name = getattr(step, "input", None)
+            input_table = table_registry.get(
+                input_step_name) if input_step_name else None
+            if input_table is None:
+                return self.pandas_executor.execute(table_registry, step, recorder)
+
+            logger.debug(
+                "Routing SQL step '%s' to DuckDB (rows=%d)",
+                step.name,
+                input_table.num_rows,
+            )
+            start = time.perf_counter()
+            output_table = self.duckdb_executor.execute_step(
+                step, input_table, extra_tables=extra_tables
+            )
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            return self._as_result(
+                step,
+                output_table,
+                rows_in=input_table.num_rows,
+                columns_in=input_table.column_names,
+                duration_ms=duration_ms,
+            )
+
         if step_type == "join":
             left_name = getattr(step, "left", None)
             right_name = getattr(step, "right", None)

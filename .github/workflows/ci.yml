@@ -159,6 +159,8 @@ jobs:
           POSTGRES_PASSWORD=ci_password
           POSTGRES_DB=pipelineiq
           MINIO_IMAGE_TAG=latest
+          MINIO_ROOT_USER=minioadmin
+          MINIO_ROOT_PASSWORD=minioadmin123
           REDIS_URL=redis://redis:6379/0
           SECRET_KEY=ci_secret_key_for_testing_only
           UPLOAD_DIR=/app/uploads
@@ -170,6 +172,10 @@ jobs:
           RATE_LIMIT_READ=1000/minute
           DRIFT_DETECTION_ENABLED=true
           MAX_VERSIONS_PER_PIPELINE=50
+          S3_ACCESS_KEY=minioadmin
+          S3_SECRET_KEY=minioadmin123
+          S3_BUCKET=pipelineiq-uploads
+          S3_ENDPOINT_URL=http://minio:9000
           FLOWER_USER=admin
           FLOWER_PASSWORD=ci_flower_password
           GRAFANA_USER=admin
