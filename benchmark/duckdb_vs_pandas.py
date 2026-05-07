@@ -23,6 +23,7 @@ import pyarrow as pa
 
 
 BENCHMARK_OPS = ("filter", "aggregate", "join", "sort", "sql_projection")
+LEGACY_OPERATION_NAME = {"aggregate": "aggregation"}
 
 
 def _build_dataframes(row_count: int) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -75,8 +76,14 @@ def _run_pandas(op: str, sales: pd.DataFrame, customers: pd.DataFrame) -> pd.Dat
         return sales[(sales["status"] == "delivered") & (sales["amount"] > 300)].copy()
     if op == "aggregate":
         return (
-            sales.groupby("region", as_index=False)
-            .agg(amount_sum=("amount", "sum"), order_count=("order_id", "count"))
+            sales.groupby(["customer_id", "region"], as_index=False)
+            .agg(
+                amount_sum=("amount", "sum"),
+                order_count=("order_id", "count"),
+                avg_amount=("amount", "mean"),
+                min_amount=("amount", "min"),
+                max_amount=("amount", "max"),
+            )
             .copy()
         )
     if op == "join":
@@ -107,9 +114,16 @@ def _run_duckdb(
             """
         elif op == "aggregate":
             query = """
-                SELECT region, SUM(amount) AS amount_sum, COUNT(order_id) AS order_count
+                SELECT
+                    customer_id,
+                    region,
+                    SUM(amount) AS amount_sum,
+                    COUNT(order_id) AS order_count,
+                    AVG(amount) AS avg_amount,
+                    MIN(amount) AS min_amount,
+                    MAX(amount) AS max_amount
                 FROM __sales__
-                GROUP BY region
+                GROUP BY customer_id, region
             """
         elif op == "join":
             query = """
@@ -178,11 +192,27 @@ def run_benchmarks(sizes: list[int], repeats: int) -> dict:
     large_ops = per_size[largest]
     speeds = [metrics["speedup"] for metrics in large_ops.values()]
     faster_ops = sum(1 for s in speeds if s > 1.0)
+    legacy_results = {
+        size: {
+            "operations": [
+                {
+                    "operation": LEGACY_OPERATION_NAME.get(operation_name, operation_name),
+                    **metrics,
+                }
+                for operation_name, metrics in operations.items()
+            ]
+        }
+        for size, operations in per_size.items()
+    }
 
-    return {
+    payload = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "benchmark": "duckdb_vs_pandas",
-        "parameters": {"sizes": sizes, "repeats": repeats, "operations": list(BENCHMARK_OPS)},
+        "parameters": {
+            "sizes": sizes,
+            "repeats": repeats,
+            "operation_names": list(BENCHMARK_OPS),
+        },
         "environment": {
             "python": platform.python_version(),
             "platform": platform.platform(),
@@ -200,6 +230,8 @@ def run_benchmarks(sizes: list[int], repeats: int) -> dict:
             "total_ops": len(BENCHMARK_OPS),
         },
     }
+    payload.update(legacy_results)
+    return payload
 
 
 def main() -> None:
@@ -207,8 +239,8 @@ def main() -> None:
     parser.add_argument(
         "--sizes",
         type=str,
-        default="10000,50000,100000",
-        help="Comma-separated row counts (default: 10000,50000,100000)",
+        default="100000,1000000,5000000",
+        help="Comma-separated row counts (default: 100000,1000000,5000000)",
     )
     parser.add_argument(
         "--repeats",
@@ -237,4 +269,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

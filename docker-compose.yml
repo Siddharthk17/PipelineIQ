@@ -145,7 +145,6 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -154,8 +153,8 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
       - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-524288000}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
@@ -222,7 +221,6 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -230,8 +228,8 @@ services:
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
@@ -289,7 +287,6 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -297,8 +294,8 @@ services:
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
@@ -356,7 +353,6 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -364,8 +360,8 @@ services:
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
@@ -422,7 +418,6 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -430,8 +425,8 @@ services:
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
@@ -488,7 +483,6 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -499,8 +493,8 @@ services:
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - GEMINI_FALLBACK_MODELS=${GEMINI_FALLBACK_MODELS:-gemini-2.0-flash,gemini-1.5-flash}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-pipelineiq}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-pipelineiq123}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
     depends_on:
@@ -554,7 +548,6 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_BACKEND_URL=redis://redis-broker:6379/1
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -677,8 +670,8 @@ services:
     container_name: pipelineiq-minio
     command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-pipelineiq}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-pipelineiq123}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -733,7 +726,6 @@ services:
     ports:
       - "5555:5555"
     environment:
-      - REDIS_URL=redis://redis-broker:6379/0
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
@@ -821,7 +813,7 @@ services:
       - GF_SERVER_ROOT_URL=http://localhost/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
     ports:
-      - "3001:3000"
+      - "3000:3000"
     depends_on:
       prometheus:
         condition: service_healthy

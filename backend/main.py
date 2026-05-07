@@ -297,6 +297,11 @@ if settings.ENVIRONMENT != "production":
     summary="Health check",
     description="Checks actual DB and Redis connectivity.",
 )
+@app.get(
+    "/api/health",
+    include_in_schema=False,
+    response_model=None,
+)
 def health_check() -> dict:
     """Health check endpoint that verifies DB and Redis connectivity."""
     db_status = _check_db_health()

@@ -89,6 +89,14 @@ _yjs_pool = ConnectionPool.from_url(
     ),
 )
 
+# Public aliases keep the singleton pools importable without exposing
+# callers to the module's internal underscore naming convention.
+broker_pool = _broker_pool
+pubsub_pool = _pubsub_pool
+cache_pool = _cache_pool
+cache_binary_pool = _cache_binary_pool
+yjs_pool = _yjs_pool
+
 
 def get_broker_redis() -> Redis:
     """Return sync Redis client for broker-style operations."""

@@ -156,7 +156,7 @@ The layers are:
        ▼                  ▼                  ▼
 ┌──────────────┐  ┌──────────────┐  ┌────────────────┐
 │ FastAPI API  │  │ Next.js      │  │ Grafana        │
-│ Port 8000    │  │ Port 3000    │  │ Port 3001      │
+│ Port 8000    │  │ Port 3000    │  │ Port 3000      │
 └──────┬───────┘  └──────────────┘  └───────┬────────┘
        │                                    │
        ├──── Celery (Redis broker) ───┐     │
@@ -4719,7 +4719,7 @@ services:
 
   grafana:
     image: grafana/grafana:10.2.0
-    ports: ["3001:3000"]  # Host port 3001, container port 3000
+    ports: ["3000:3000"]  # Host port 3000, container port 3000
     volumes: ["./grafana/provisioning:/etc/grafana/provisioning"]
 ```
 

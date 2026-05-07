@@ -4,13 +4,6 @@ Provides deterministic sample DataFrames, in-memory SQLite DB sessions,
 FastAPI test clients, and pre-configured LineageRecorder instances.
 """
 
-import pytest
-
-pytest_plugins = ["pytest_asyncio"]
-
-pytestmark = pytest.mark.asyncio(mode="auto")
-
-
 from typing import Generator
 from unittest.mock import MagicMock, patch
 
@@ -27,6 +20,10 @@ from backend.main import app
 import backend.models  # noqa: F401 — ensure ORM models are registered with Base.metadata
 from backend.pipeline.lineage import LineageRecorder
 from backend.utils.rate_limiter import limiter
+
+pytest_plugins = ["pytest_asyncio"]
+
+pytestmark = pytest.mark.asyncio(mode="auto")
 
 
 TEST_DATABASE_URL = "sqlite:///:memory:"

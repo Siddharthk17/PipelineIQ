@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 REDIS_THRESHOLD = 10 * 1024 * 1024  # 10MB
 SHM_THRESHOLD = 500 * 1024 * 1024  # 500MB
 SHM_PREFIX = "piq_"
-SHM_DIR = "/dev/shm"
+SHM_DIR = "/dev/shm"  # nosec B108 - intentional shared-memory mount for Arrow IPC
 
 _SAFE_KEY_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -131,6 +131,16 @@ class ArrowDataBus:
     def _bytes_to_table(payload: bytes) -> pa.Table:
         reader = ipc.open_stream(pa.py_buffer(payload))
         return reader.read_all()
+
+    @staticmethod
+    def to_ipc_bytes(table: pa.Table) -> bytes:
+        """Serialize a table to Arrow IPC bytes."""
+        return ArrowDataBus._table_to_bytes(table)
+
+    @staticmethod
+    def from_ipc_bytes(payload: bytes) -> pa.Table:
+        """Deserialize Arrow IPC bytes into a table."""
+        return ArrowDataBus._bytes_to_table(payload)
 
     def _redis_key(self, run_id: str, key: str) -> str:
         return f"arrow_bus:{run_id}:{key}"
@@ -367,6 +377,10 @@ class ArrowDataBus:
         )
         return "spill"
 
+    def store(self, key: str, table: pa.Table, *, run_id: str) -> str:
+        """Compatibility wrapper for storing a table on the Arrow bus."""
+        return self.put(key, table, run_id=run_id)
+
     def get(self, key: str) -> pa.Table:
         with self._lock:
             location = self._locations.get(key)
@@ -402,6 +416,10 @@ class ArrowDataBus:
                     return pq.read_table(handle)
 
         raise KeyError(f"Arrow bus key '{key}' has unknown tier")
+
+    def load(self, key: str) -> pa.Table:
+        """Compatibility wrapper for loading a table from the Arrow bus."""
+        return self.get(key)
 
     def delete(self, key: str) -> None:
         with self._lock:

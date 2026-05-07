@@ -196,6 +196,9 @@ class Settings(BaseSettings):
 # If configuration is invalid, the application crashes here with a clear error.
 settings = Settings()
 
+DATABASE_WRITE_URL = settings.DATABASE_WRITE_URL
+DATABASE_READ_URL = settings.DATABASE_READ_URL
+
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",

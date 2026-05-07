@@ -4,21 +4,20 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, cast
 
 import pyarrow as pa
 
 from backend.execution.duckdb_executor import DuckDBExecutor
+from backend.pipeline.lineage import LineageRecorder
+from backend.pipeline.parser import LoadStepConfig
 from backend.pipeline.steps import StepConfig, StepExecutionResult, StepExecutor
 
 logger = logging.getLogger(__name__)
 
-
-class SmartExecutor:
-    """Route compatible steps to DuckDB when inputs are large."""
-
-    DUCKDB_THRESHOLD = 50_000
-    _DUCKDB_COMPATIBLE_STEPS = {
+DUCKDB_THRESHOLD = 50_000
+DUCKDB_CAPABLE_STEPS = frozenset(
+    {
         "filter",
         "select",
         "sort",
@@ -29,16 +28,27 @@ class SmartExecutor:
         "sample",
         "pivot",
         "unpivot",
+        "sql",
     }
-    _ALWAYS_PANDAS_STEPS = {"load", "save", "validate", "rename"}
+)
+ALWAYS_PANDAS_STEPS = frozenset({"load", "save", "validate", "rename"})
+
+
+class SmartExecutor:
+    """Route compatible steps to DuckDB when inputs are large."""
+
+    DUCKDB_THRESHOLD = DUCKDB_THRESHOLD
+    DUCKDB_CAPABLE_STEPS = DUCKDB_CAPABLE_STEPS
+    _DUCKDB_COMPATIBLE_STEPS = DUCKDB_CAPABLE_STEPS
+    _ALWAYS_PANDAS_STEPS = ALWAYS_PANDAS_STEPS
 
     def __init__(
         self,
-        pandas_executor: StepExecutor,
-        duckdb_executor: DuckDBExecutor,
+        pandas_executor: Optional[StepExecutor] = None,
+        duckdb_executor: Optional[DuckDBExecutor] = None,
     ) -> None:
-        self.pandas_executor = pandas_executor
-        self.duckdb_executor = duckdb_executor
+        self.pandas_executor = pandas_executor or StepExecutor()
+        self.duckdb_executor = duckdb_executor or DuckDBExecutor()
 
     @staticmethod
     def _step_type(step: StepConfig) -> str:
@@ -78,7 +88,7 @@ class SmartExecutor:
         self,
         step: StepConfig,
         table_registry: dict[str, pa.Table],
-        recorder: object,
+        recorder: LineageRecorder,
         *,
         file_paths: Optional[dict[str, str]] = None,
         file_metadata: Optional[dict[str, dict[str, str]]] = None,
@@ -89,7 +99,12 @@ class SmartExecutor:
 
         if step_type == "load":
             return self.pandas_executor.execute_load(
-                table_registry, step, recorder, file_paths or {}, file_metadata or {})
+                table_registry,
+                cast(LoadStepConfig, step),
+                recorder,
+                file_paths or {},
+                file_metadata or {},
+            )
 
         if step_type in self._ALWAYS_PANDAS_STEPS:
             return self.pandas_executor.execute(table_registry, step, recorder)
@@ -142,8 +157,8 @@ class SmartExecutor:
         if input_table is None:
             return self.pandas_executor.execute(table_registry, step, recorder)
 
-        should_route_to_duckdb = step_type == "sql" or (
-            step_type in self._DUCKDB_COMPATIBLE_STEPS
+        should_route_to_duckdb = (
+            step_type in self.DUCKDB_CAPABLE_STEPS
             and input_table.num_rows > self.DUCKDB_THRESHOLD
         )
         if not should_route_to_duckdb:

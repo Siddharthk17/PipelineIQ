@@ -8,6 +8,8 @@ from typing import Callable, Optional
 
 import duckdb
 import pyarrow as pa
+from celery.signals import worker_process_init as worker_init
+from celery.signals import worker_process_shutdown as worker_shutdown
 
 from backend.config import settings
 from backend.execution.sql_builder import build_sql_for_step
@@ -15,7 +17,8 @@ from backend.execution.sql_builder import build_sql_for_step
 logger = logging.getLogger(__name__)
 
 _worker_lock = threading.Lock()
-_worker_connection: Optional[duckdb.DuckDBPyConnection] = None
+_worker_conn: Optional[duckdb.DuckDBPyConnection] = None
+_worker_connection = _worker_conn
 
 
 def _configure_connection(
@@ -23,44 +26,58 @@ def _configure_connection(
     *,
     threads: int = 4,
 ) -> None:
-    conn.execute(f"PRAGMA threads={max(1, int(threads))}")
-    conn.execute(f"SET memory_limit='{settings.WORKER_MEMORY_LIMIT_GB}GB'")
-    conn.execute("PRAGMA temp_directory='/tmp'")
-    conn.execute("PRAGMA enable_object_cache=true")
+    conn.sql(f"PRAGMA threads={max(1, int(threads))}")
+    conn.sql(f"PRAGMA memory_limit='{settings.WORKER_MEMORY_LIMIT_GB}GB'")
+    conn.sql("PRAGMA temp_directory='/tmp'")
+    conn.sql("PRAGMA enable_object_cache=true")
 
 
 def initialize_worker_duckdb(*, threads: int = 4) -> duckdb.DuckDBPyConnection:
     """Initialize one DuckDB connection per worker process."""
-    global _worker_connection
+    global _worker_conn, _worker_connection
     with _worker_lock:
-        if _worker_connection is None:
+        if _worker_conn is None:
             conn = duckdb.connect(database=":memory:")
             _configure_connection(conn, threads=threads)
+            _worker_conn = conn
             _worker_connection = conn
             logger.info("Initialized worker DuckDB connection")
-    return _worker_connection
+    return _worker_conn
 
 
 def get_worker_duckdb() -> duckdb.DuckDBPyConnection:
     """Return the worker DuckDB connection, or raise if not initialized."""
-    if _worker_connection is None:
+    if _worker_conn is None:
         raise RuntimeError(
             "DuckDB worker connection is not initialized. "
             "Call initialize_worker_duckdb() in worker startup hooks."
         )
-    return _worker_connection
+    return _worker_conn
 
 
 def close_worker_duckdb() -> None:
     """Close and clear the worker DuckDB connection."""
-    global _worker_connection
+    global _worker_conn, _worker_connection
     with _worker_lock:
-        if _worker_connection is not None:
+        if _worker_conn is not None:
             try:
-                _worker_connection.close()
+                _worker_conn.close()
             finally:
+                _worker_conn = None
                 _worker_connection = None
             logger.info("Closed worker DuckDB connection")
+
+
+@worker_init.connect
+def _initialize_worker_duckdb_signal(**kwargs) -> None:
+    """Create the DuckDB worker connection during Celery process startup."""
+    initialize_worker_duckdb()
+
+
+@worker_shutdown.connect
+def _close_worker_duckdb_signal(**kwargs) -> None:
+    """Close the DuckDB worker connection during Celery process shutdown."""
+    close_worker_duckdb()
 
 
 class DuckDBExecutor:

@@ -54,6 +54,13 @@ STEP_DEFINITIONS: dict[str, dict] = {
         "label": "Sort",
         "description": "Order rows by a column",
     },
+    "transform": {
+        "icon": "ƒ",
+        "color": "#A855F7",
+        "category": "transform",
+        "label": "Transform",
+        "description": "Expression transform placeholder used by the visual builder",
+    },
     "validate": {
         "icon": "✓",
         "color": "#14B8A6",

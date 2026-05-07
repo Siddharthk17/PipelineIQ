@@ -7,6 +7,7 @@ DB_NAME="${DATABASES_DBNAME:-pipelineiq}"
 DB_USER="${DATABASES_USER:-pipelineiq}"
 DB_PASSWORD="${DATABASES_PASSWORD:-}"
 DB_CLIENT_ALIAS_USER="${DATABASES_CLIENT_ALIAS_USER:-pipelineiq_user}"
+ADMIN_USERS="${DB_USER}"
 
 LISTEN_PORT="${PGBOUNCER_LISTEN_PORT:-5432}"
 POOL_MODE="${PGBOUNCER_POOL_MODE:-transaction}"
@@ -17,6 +18,10 @@ RESERVE_POOL_SIZE="${PGBOUNCER_RESERVE_POOL_SIZE:-5}"
 SERVER_IDLE_TIMEOUT="${PGBOUNCER_SERVER_IDLE_TIMEOUT:-600}"
 CLIENT_IDLE_TIMEOUT="${PGBOUNCER_CLIENT_IDLE_TIMEOUT:-0}"
 LOG_POOLER_ERRORS="${PGBOUNCER_LOG_POOLER_ERRORS:-1}"
+
+if [ "${DB_CLIENT_ALIAS_USER}" != "${DB_USER}" ]; then
+  ADMIN_USERS="${DB_USER},${DB_CLIENT_ALIAS_USER}"
+fi
 
 mkdir -p /etc/pgbouncer /var/run/pgbouncer
 chown -R postgres:postgres /etc/pgbouncer /var/run/pgbouncer
@@ -41,7 +46,7 @@ ignore_startup_parameters = extra_float_digits
 log_pooler_errors = ${LOG_POOLER_ERRORS}
 log_connections = 0
 log_disconnections = 0
-admin_users = ${DB_USER}
+admin_users = ${ADMIN_USERS}
 EOF
 
 cat > /etc/pgbouncer/userlist.txt <<EOF
