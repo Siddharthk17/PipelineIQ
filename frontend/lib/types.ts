@@ -294,3 +294,36 @@ export interface PipelineTemplate {
 export interface PipelineTemplateDetail extends PipelineTemplate {
   yaml_config: string;
 }
+
+// Week 8 Types - Wasm Modules
+export interface WasmModuleExport {
+  name: string;
+  params: string[];
+  result: string | null;
+}
+
+export interface WasmModule {
+  id: string;
+  name: string;
+  description: string | null;
+  file_size_bytes: number;
+  sha256_hash: string;
+  exports: WasmModuleExport[];
+  imports: string[];
+  fuel_budget: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface WasmModuleListResponse {
+  modules: WasmModule[];
+  total: number;
+}
+
+export interface WasmModuleValidateResponse {
+  is_valid: boolean;
+  exports: WasmModuleExport[];
+  imports: string[];
+  errors: string[];
+  warnings: string[];
+}

@@ -22,6 +22,9 @@ import type {
   AIYamlValidationResponse,
   PipelineTemplate,
   PipelineTemplateDetail,
+  WasmModule,
+  WasmModuleListResponse,
+  WasmModuleValidateResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -114,6 +117,8 @@ async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: Req
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
   return fetchWithAuth<T>(API_V1, endpoint, options);
 }
+
+export { fetchApi };
 
 async function fetchAuth<T>(endpoint: string, options?: RequestInit): Promise<T> {
   return fetchWithAuth<T>(API_BASE_URL, endpoint, options);
@@ -504,4 +509,48 @@ export async function logout(): Promise<void> {
   } finally {
     clearToken();
   }
+}
+
+// Wasm Module API functions
+
+export async function listWasmModules(): Promise<WasmModuleListResponse> {
+  return fetchApi<WasmModuleListResponse>("/wasm/");
+}
+
+export async function getWasmModule(id: string): Promise<WasmModule> {
+  return fetchApi<WasmModule>(`/wasm/${id}`);
+}
+
+export async function uploadWasmModule(
+  file: File,
+  name: string,
+  description?: string,
+  fuelBudget?: number
+): Promise<WasmModule> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("name", name);
+  if (description) formData.append("description", description);
+  if (fuelBudget) formData.append("fuel_budget", String(fuelBudget));
+
+  return fetchApi<WasmModule>("/wasm/upload", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function validateWasmModule(file: File): Promise<WasmModuleValidateResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  return fetchApi<WasmModuleValidateResponse>("/wasm/validate", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function deleteWasmModule(id: string): Promise<void> {
+  await fetchApi<void>(`/wasm/${id}`, {
+    method: "DELETE",
+  });
 }

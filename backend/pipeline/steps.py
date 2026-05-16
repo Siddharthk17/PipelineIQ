@@ -44,6 +44,7 @@ from backend.pipeline.parser import (
     StepType,
     UnpivotStepConfig,
     ValidateStepConfig,
+    WasmComputeStepConfig,
 )
 from backend.utils.time_utils import measure_ms
 
@@ -125,6 +126,7 @@ class StepExecutor:
             StepType.FILL_NULLS: self.execute_fill_nulls,
             StepType.SAMPLE: self.execute_sample,
             StepType.SQL: self.execute_sql,
+            StepType.WASM_COMPUTE: self.execute_wasm_compute,
         }
 
     def execute(
@@ -134,6 +136,7 @@ class StepExecutor:
         recorder: LineageRecorder,
         file_paths: Optional[Dict[str, str]] = None,
         file_metadata: Optional[Dict[str, Dict[str, str]]] = None,
+        wasm_modules: Optional[Dict[str, bytes]] = None,
     ) -> StepExecutionResult:
         """Dispatch step execution to the appropriate handler.
 
@@ -154,6 +157,12 @@ class StepExecutor:
                 recorder,
                 file_paths or {},
                 file_metadata or {})
+        if config.step_type == StepType.WASM_COMPUTE:
+            return executor(
+                table_registry,
+                config,
+                recorder,
+                wasm_modules or {})
         return executor(table_registry, config, recorder)
 
     def execute_load(
@@ -1053,4 +1062,63 @@ class StepExecutor:
         raise NotImplementedError(
             "SQL steps are only supported via DuckDBExecutor. "
             "The SmartExecutor should route these requests to DuckDB."
+        )
+
+    def execute_wasm_compute(
+        self,
+        table_registry: Dict[str, pa.Table],
+        config: WasmComputeStepConfig,
+        recorder: LineageRecorder,
+        wasm_modules: Optional[Dict[str, bytes]] = None,
+    ) -> StepExecutionResult:
+        """Execute a WebAssembly UDF against each row of the input DataFrame.
+
+        Args:
+            table_registry: Maps step names to Arrow Tables.
+            config: WasmComputeStepConfig with function, columns, and module reference.
+            recorder: LineageRecorder for column-level tracking.
+            wasm_modules: Dict mapping wasm_file_id to raw .wasm binary bytes.
+                Populated by the pipeline task before step execution.
+
+        Raises:
+            ValueError: If wasm_file_id is not found in wasm_modules dict.
+        """
+        from backend.execution.wasm_executor import get_wasm_executor
+
+        start = time.perf_counter()
+        input_table = table_registry[config.input]
+        input_df = input_table.to_pandas()
+        columns_in = list(input_df.columns)
+
+        wasm_modules = wasm_modules or {}
+        if config.wasm_file_id not in wasm_modules:
+            raise ValueError(
+                f"Wasm module '{config.wasm_file_id}' not loaded. "
+                f"Available modules: {list(wasm_modules.keys())}"
+            )
+
+        wasm_bytes = wasm_modules[config.wasm_file_id]
+
+        executor = get_wasm_executor()
+        result_table = executor.execute(input_table, config, wasm_bytes)
+        result_df = result_table.to_pandas()
+
+        recorder.record_wasm_compute(
+            step_name=config.name,
+            input_step=config.input,
+            function_name=config.function,
+            input_columns=config.input_columns,
+            output_column=config.output_column,
+            columns=list(result_df.columns),
+        )
+
+        return StepExecutionResult(
+            step_name=config.name,
+            step_type="wasm_compute",
+            output_table=result_table,
+            rows_in=input_table.num_rows,
+            rows_out=result_table.num_rows,
+            columns_in=columns_in,
+            columns_out=list(result_df.columns),
+            duration_ms=measure_ms(start),
         )

@@ -3,6 +3,32 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [9.1.0] — Week 15: WebAssembly UDF Sandbox
+
+*Note: This release adds the most technically sophisticated security boundary in the project. It introduces the `wasm_compute` step, allowing users to execute custom user-defined functions (UDFs) written in Rust (or any Wasm-compilable language) at near-native C speed. The execution is strictly isolated inside a WebAssembly virtual machine with zero access to the host filesystem or network, and strict CPU budgets to prevent infinite loops.*
+
+### Security & Isolation
+- **WebAssembly Sandbox** — Integrated the `wasmtime` runtime to execute user-provided `.wasm` binaries in a strictly isolated virtual machine, mirroring the architecture of serverless edge platforms.
+- **Zero Host Access** — Enforced an empty Linker (no WASI imports), guaranteeing that Wasm modules have absolutely zero access to the host filesystem, network, environment variables, or system calls.
+- **CPU Fuel Budget** — Implemented a deterministic CPU budget (10,000,000 fuel per step, 1,000 fuel per row) that automatically aborts infinite loops (`TrapError`) without hanging the Celery worker.
+- **Memory & Type Safety** — Enforced a strict 1MB stack size limit to prevent stack overflow attacks. The host↔Wasm boundary strictly allows only `f64` (float64) types to cross, preventing type confusion vulnerabilities.
+
+### Performance & Scalability
+- **WasmExecutor Engine** — Created a highly optimized execution engine (`backend/execution/wasm_executor.py`). It operates as a module-level singleton per Celery worker, caching compiled Wasm modules via SHA256 to eliminate the ~100ms compilation overhead on subsequent runs.
+- **Zero-Leakage State** — While the compiled module is cached, the executor provisions a completely fresh Store (memory and fuel budget) for every single execution, ensuring zero state leakage between pipeline runs.
+
+### Added
+- **New Step Type: `wasm_compute` (Total: 17)** — Added a new pipeline step that executes a custom Wasm function against every row of a DataFrame. Users map input columns to function arguments, and the return value is appended as a new output column.
+- **Wasm Module API & Storage** — Added full CRUD capabilities for Wasm modules (`/api/wasm`) backed by a new `wasm_modules` PostgreSQL table.
+  - Supports direct uploads for files < 10MB and presigned MinIO URLs for larger binaries.
+  - Stores `.wasm` files securely in a dedicated `pipelineiq-wasm` MinIO bucket.
+  - Automatically validates uploaded binaries to extract and verify exported functions.
+- **Wasm Module Manager UI** — Added a new frontend page (`/wasm-modules`) featuring a drag-and-drop upload zone, validation status indicators, a list of exported functions, and an expandable guide on how to compile Rust to WebAssembly.
+- **Visual Builder Integration** — Added a dynamic configuration panel for `wasm_compute` steps in the pipeline editor. It includes a dropdown of validated modules, auto-populates available functions, and provides a multi-select interface for mapping input columns to Wasm arguments.
+- **Security & Unit Test Suite** — Added a rigorous security test suite (`test_wasm_sandbox_security.py`) that actively attempts to breach the sandbox (e.g., filesystem access, infinite loops, type confusion) to guarantee isolation. Added 20+ unit tests using inline WAT (WebAssembly Text) fixtures to verify execution correctness.
+
+---
+
 ## [8.2.6] — Week 14: Scheduling, Templates & Real File Output
 
 *Note: This release transforms PipelineIQ from a manual tool into an automated platform. It introduces cron-based scheduling, pre-built pipeline templates, and real downloadable file outputs.*

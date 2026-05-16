@@ -451,3 +451,61 @@ class ErrorResponse(BaseModel):
     request_id: Optional[str] = Field(
         None, description="Request ID for log tracing"
     )
+
+
+class WasmModuleExport(BaseModel):
+    """A single exported function from a Wasm module."""
+
+    name: str = Field(..., description="Exported function name")
+    params: List[str] = Field(
+        default_factory=list, description="Parameter types (e.g., ['f64', 'f64'])"
+    )
+    result: Optional[str] = Field(
+        None, description="Return type (e.g., 'f64')")
+
+
+class WasmModuleUploadResponse(BaseModel):
+    """Response after uploading a Wasm module."""
+
+    id: str = Field(..., description="Module ID")
+    name: str = Field(..., description="Module name (unique)")
+    description: Optional[str] = Field(None, description="Module description")
+    file_size_bytes: int = Field(..., description="Module size in bytes")
+    sha256_hash: str = Field(..., description="SHA256 hash of the .wasm binary")
+    exports: List[WasmModuleExport] = Field(
+        ..., description="Exported functions with signatures"
+    )
+    imports: List[str] = Field(
+        default_factory=list,
+        description="Imported modules (must be empty for sandbox)",
+    )
+    fuel_budget: int = Field(..., description="CPU fuel budget per step")
+    is_active: bool = Field(..., description="Whether module is active")
+    created_at: datetime = Field(..., description="Upload timestamp")
+
+
+class WasmModuleListResponse(BaseModel):
+    """Response listing all registered Wasm modules."""
+
+    modules: List[WasmModuleUploadResponse] = Field(
+        ..., description="List of registered Wasm modules"
+    )
+    total: int = Field(..., description="Total number of modules")
+
+
+class WasmModuleValidateResponse(BaseModel):
+    """Response from Wasm module validation."""
+
+    is_valid: bool = Field(..., description="Whether the module is valid")
+    exports: List[WasmModuleExport] = Field(
+        default_factory=list, description="Exported functions"
+    )
+    imports: List[str] = Field(
+        default_factory=list, description="Imported modules"
+    )
+    errors: List[str] = Field(
+        default_factory=list, description="Validation errors"
+    )
+    warnings: List[str] = Field(
+        default_factory=list, description="Validation warnings"
+    )

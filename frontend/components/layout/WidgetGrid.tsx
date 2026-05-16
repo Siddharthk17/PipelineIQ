@@ -16,6 +16,7 @@ import { VersionHistoryWidget } from "../widgets/VersionHistoryWidget";
 import { ManageConnectionsWidget } from "../widgets/ManageConnectionsWidget";
 import { TemplatesWidget } from "../widgets/TemplatesWidget";
 import { SchedulesWidget } from "../widgets/SchedulesWidget";
+import { WasmModuleManagerWidget } from "../widgets/WasmModuleManagerWidget";
 
 // Widget components have heterogeneous props; Record<string, React.FC<any>> is the simplest safe mapping
 const WIDGET_COMPONENTS: Record<string, React.FC<any>> = {
@@ -30,6 +31,7 @@ const WIDGET_COMPONENTS: Record<string, React.FC<any>> = {
   "manage-connections": ManageConnectionsWidget,
   "templates": TemplatesWidget,
   "schedules": SchedulesWidget,
+  "wasm-modules": WasmModuleManagerWidget,
 };
 
 function DwindleNode({ node }: { node: LayoutNode }) {

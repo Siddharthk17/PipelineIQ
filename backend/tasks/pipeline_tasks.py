@@ -31,6 +31,7 @@ from backend.models import (
     StepResult,
     StepStatus,
     UploadedFile,
+    WasmModule,
 )
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.execution.healing_agent import attempt_heal
@@ -236,15 +237,83 @@ def _mark_failed(db, run_id: str, error_message: str) -> None:
         db.rollback()
 
 
+def _load_wasm_modules(
+    db, wasm_ids: set[str]
+) -> Dict[str, bytes]:
+    """Load Wasm module binaries from MinIO/S3 storage.
+
+    Returns a dict mapping wasm_file_id to raw .wasm binary bytes.
+    Only loads modules that are active and belong to the query set.
+    """
+    if not wasm_ids:
+        return {}
+
+    from backend.utils.uuid_utils import as_uuid
+
+    uuid_ids = []
+    for wid in wasm_ids:
+        try:
+            uuid_ids.append(as_uuid(wid))
+        except (ValueError, AttributeError):
+            pass
+
+    if not uuid_ids:
+        return {}
+
+    modules = db.query(WasmModule).filter(
+        WasmModule.id.in_(uuid_ids),
+        WasmModule.is_active.is_(True),
+    ).all()
+
+    if not modules:
+        return {}
+
+    from io import BytesIO
+
+    from backend.db.minio_client import get_minio_client
+    from backend.config import settings
+
+    minio_client = get_minio_client()
+    wasm_modules: Dict[str, bytes] = {}
+
+    for module in modules:
+        try:
+            response = minio_client.get_object(
+                settings.WASM_BUCKET, module.storage_key
+            )
+            wasm_bytes = response.read()
+            response.close()
+            response.release_conn()
+            wasm_modules[str(module.id)] = wasm_bytes
+            logger.info(
+                "Loaded Wasm module: name=%s, id=%s, size=%d",
+                module.name,
+                module.id,
+                len(wasm_bytes),
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to load Wasm module %s from storage: %s",
+                module.name,
+                exc,
+            )
+
+    return wasm_modules
+
+
 def _run_pipeline(db, pipeline_run: PipelineRun):
-    """Parse config, load file paths, and execute the pipeline."""
+    """Parse config, load file paths, load wasm modules, and execute the pipeline."""
     config = get_parsed_pipeline(pipeline_run.yaml_config)
 
     referenced_file_ids = set()
+    referenced_wasm_ids = set()
     for step in config.steps:
         file_id = getattr(step, "file_id", None)
         if file_id:
             referenced_file_ids.add(file_id)
+        wasm_file_id = getattr(step, "wasm_file_id", None)
+        if wasm_file_id:
+            referenced_wasm_ids.add(wasm_file_id)
 
     if referenced_file_ids:
         from backend.utils.uuid_utils import as_uuid
@@ -268,6 +337,8 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
         str(f.id): {"original_filename": f.original_filename} for f in uploaded_files
     }
 
+    wasm_modules = _load_wasm_modules(db, referenced_wasm_ids)
+
     runner = PipelineRunner()
     progress_callback = make_redis_progress_callback(str(pipeline_run.id))
 
@@ -277,6 +348,7 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
         file_metadata=file_metadata,
         run_id=str(pipeline_run.id),
         progress_callback=progress_callback,
+        wasm_modules=wasm_modules,
     )
 
 

@@ -43,6 +43,7 @@ class StepType(str, Enum):
     FILL_NULLS = "fill_nulls"
     SAMPLE = "sample"
     SQL = "sql"
+    WASM_COMPUTE = "wasm_compute"
 
 
 class FilterOperator(str, Enum):
@@ -242,6 +243,17 @@ class SqlStepConfig(StepConfig):
 
 
 @dataclass
+class WasmComputeStepConfig(StepConfig):
+    """Configuration for a WebAssembly UDF compute step."""
+
+    input: str = ""
+    wasm_file_id: str = ""
+    function: str = ""
+    input_columns: List[str] = field(default_factory=list)
+    output_column: str = ""
+
+
+@dataclass
 class PipelineConfig:
     """Fully typed pipeline configuration parsed from YAML."""
 
@@ -293,6 +305,7 @@ _STEP_CONFIG_MAP: Dict[StepType, type] = {
     StepType.FILL_NULLS: FillNullsStepConfig,
     StepType.SAMPLE: SampleStepConfig,
     StepType.SQL: SqlStepConfig,
+    StepType.WASM_COMPUTE: WasmComputeStepConfig,
 }
 
 
@@ -547,6 +560,16 @@ class PipelineParser:
                 step_type=step_type,
                 input=raw.get("input", ""),
                 query=raw.get("query", ""),
+            )
+        if step_type == StepType.WASM_COMPUTE:
+            return WasmComputeStepConfig(
+                name=name,
+                step_type=step_type,
+                input=raw.get("input", ""),
+                wasm_file_id=raw.get("wasm_file_id", ""),
+                function=raw.get("function", ""),
+                input_columns=raw.get("input_columns", []),
+                output_column=raw.get("output_column", ""),
             )
         # Unreachable, but satisfies type checkers
         return StepConfig(name=name, step_type=step_type)
@@ -896,6 +919,40 @@ class PipelineParser:
                         message="SQL step must provide a non-empty query",
                     )
                 )
+
+            if isinstance(step, WasmComputeStepConfig):
+                if not step.wasm_file_id or not step.wasm_file_id.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="wasm_file_id",
+                            message="wasm_compute step must specify a non-empty wasm_file_id",
+                        )
+                    )
+                if not step.function or not step.function.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="function",
+                            message="wasm_compute step must specify a non-empty function name",
+                        )
+                    )
+                if not step.input_columns:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="input_columns",
+                            message="wasm_compute step must specify at least one input_column",
+                        )
+                    )
+                if not step.output_column or not step.output_column.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="output_column",
+                            message="wasm_compute step must specify a non-empty output_column",
+                        )
+                    )
 
     def _check_step_references(
         self, config: PipelineConfig, errors: List[ValidationError]

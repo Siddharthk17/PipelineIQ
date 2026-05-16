@@ -473,6 +473,13 @@ function normalizeConfigForYaml(
       return {
         query: asString(config.query) || "SELECT *\nFROM {{input}}\nLIMIT 100",
       };
+    case "wasm_compute":
+      return {
+        wasm_file_id: asString(config.wasm_file_id),
+        function: asString(config.function),
+        input_columns: asStringArray(config.input_columns),
+        output_column: asString(config.output_column) || "result",
+      };
   }
 }
 

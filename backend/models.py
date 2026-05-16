@@ -636,3 +636,38 @@ class FileProfile(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending")
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class WasmModule(Base):
+    """Registered WebAssembly UDF module for wasm_compute pipeline steps.
+
+    Modules are stored in MinIO/S3 and referenced by pipeline YAML configs.
+    Each module is validated on upload (exports, fuel budget, no WASI imports).
+    """
+
+    __tablename__ = "wasm_modules"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid)
+    name: Mapped[str] = mapped_column(
+        String(255), unique=True, nullable=False, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    storage_key: Mapped[str] = mapped_column(
+        String(512), nullable=False, unique=True)
+    file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True)
+    exports: Mapped[list] = mapped_column(PgJSONB, nullable=False)
+    imports: Mapped[list] = mapped_column(PgJSONB, nullable=False)
+    fuel_budget: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10_000_000)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true")
+    user_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

@@ -111,10 +111,17 @@ STEP_DEFINITIONS: dict[str, dict] = {
         "description": "Take a random sample of rows",
     },
     "sql": {
-        "icon": "🧮",
+        "icon": "\U0001F9EE",
         "color": "#0EA5E9",
         "category": "transform",
         "label": "SQL",
         "description": "Run SELECT SQL against the input DataFrame",
+    },
+    "wasm_compute": {
+        "icon": "\u29C6",
+        "color": "#78350F",
+        "category": "advanced",
+        "label": "Wasm UDF",
+        "description": "Execute a custom WebAssembly function per row",
     },
 }

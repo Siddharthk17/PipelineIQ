@@ -6,6 +6,7 @@ entry point for the application.
 """
 
 from backend.routers.ai import router as ai_router
+from backend.routers.wasm import router as wasm_router
 import logging
 import time
 import uuid
@@ -284,6 +285,7 @@ app.include_router(webhooks_router)
 app.include_router(audit_router)
 
 app.include_router(ai_router)
+app.include_router(wasm_router)
 
 if settings.ENVIRONMENT != "production":
     from backend.api.debug import router as debug_router

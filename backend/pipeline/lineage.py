@@ -997,6 +997,60 @@ class LineageRecorder:
             len(output_columns),
         )
 
+    def record_wasm_compute(
+        self,
+        step_name: str,
+        input_step: str,
+        function_name: str,
+        input_columns: List[str],
+        output_column: str,
+        columns: List[str],
+    ) -> None:
+        """Record a WebAssembly UDF compute step.
+
+        Each input column flows into the step node. The step produces
+        all original columns (passthrough) plus one new output column
+        produced by the Wasm function.
+        """
+        step_node = _step_node_id(step_name)
+        self._add_node(
+            step_node,
+            {
+                "node_type": "step",
+                "label": f"Wasm UDF: {step_name}({function_name})",
+                "step_name": step_name,
+                "step_type": "wasm_compute",
+                "function": function_name,
+            },
+        )
+
+        for col in input_columns:
+            input_col = _col_node_id(input_step, col)
+            self.graph.add_edge(input_col, step_node)
+
+        for col in columns:
+            output_col = _col_node_id(step_name, col)
+            is_new = col == output_column
+            self._add_node(
+                output_col,
+                {
+                    "node_type": "output_column",
+                    "label": col,
+                    "step_name": step_name,
+                    "column_name": col,
+                    "is_wasm_output": is_new,
+                },
+            )
+            self.graph.add_edge(step_node, output_col)
+
+        logger.debug(
+            "Recorded wasm_compute: step=%s, function=%s, input_cols=%d, output=%s",
+            step_name,
+            function_name,
+            len(input_columns),
+            output_column,
+        )
+
     def serialize(self) -> Dict[str, Any]:
         """Serialize the lineage graph for database storage.
 

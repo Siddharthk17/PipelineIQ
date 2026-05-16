@@ -18,6 +18,7 @@ export const ALL_WIDGETS: WidgetConfig[] = [
   { id: "manage-connections", title: "Manage Connections", icon: "link", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
   { id: "templates", title: "Templates", icon: "file-code", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
   { id: "schedules", title: "Schedules", icon: "clock", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
+  { id: "wasm-modules", title: "Wasm Modules", icon: "cpu", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
 ];
 
 const DEFAULT_LAYOUT: LayoutNode = {

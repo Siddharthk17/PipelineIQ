@@ -16,7 +16,8 @@ export type VisualStepType =
   | "fill_nulls"
   | "rename"
   | "sample"
-  | "sql";
+  | "sql"
+  | "wasm_compute";
 
 export interface StepDefinition {
   type: VisualStepType;
@@ -190,6 +191,16 @@ export const STEP_DEFINITIONS: Record<VisualStepType, StepDefinition> = {
     backendSupported: true,
     description: "Run SQL against upstream data",
   },
+  wasm_compute: {
+    type: "wasm_compute",
+    label: "Wasm UDF",
+    icon: "\u29C6",
+    color: "#78350F",
+    category: "advanced",
+    maxInputs: 1,
+    backendSupported: true,
+    description: "Execute a custom WebAssembly function per row",
+  },
 };
 
 export const STEP_CATEGORY_LABELS: Record<StepCategory, string> = {
@@ -240,5 +251,7 @@ export function getDefaultStepConfig(stepType: VisualStepType): Record<string, u
       return { n: 1000, random_state: 42 };
     case "sql":
       return { query: "SELECT *\nFROM {{input}}\nLIMIT 100" };
+    case "wasm_compute":
+      return { wasm_file_id: "", function: "", input_columns: [], output_column: "" };
   }
 }

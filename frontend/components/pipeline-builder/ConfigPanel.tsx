@@ -682,6 +682,81 @@ export function ConfigPanel({
             />
           </label>
         )}
+
+        {node.data.type === "wasm_compute" && (
+          <>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Wasm module ID</span>
+              <input
+                id={getFieldId("wasm_file_id")}
+                name={getFieldName("wasm_file_id")}
+                value={asString(draft.wasm_file_id)}
+                onChange={(event) => update("wasm_file_id", event.target.value)}
+                className="w-full rounded border bg-background px-2 py-1.5 font-mono text-[11px]"
+                placeholder="uuid-of-uploaded-wasm-module"
+              />
+              <p className="text-[10px] text-[var(--text-secondary)]">
+                Upload a .wasm file via the Wasm Module Manager, then paste its ID here.
+              </p>
+            </label>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Function name</span>
+              <input
+                id={getFieldId("function")}
+                name={getFieldName("function")}
+                value={asString(draft.function)}
+                onChange={(event) => update("function", event.target.value)}
+                className="w-full rounded border bg-background px-2 py-1.5 font-mono text-[11px]"
+                placeholder="compute_risk"
+              />
+              <p className="text-[10px] text-[var(--text-secondary)]">
+                Exported function in the Wasm module (fn(x: f64, ...) -&gt; f64).
+              </p>
+            </label>
+            <div className="space-y-1.5">
+              <p className="text-muted-foreground">Input columns (passed as f64 arguments, in order)</p>
+              <div className="max-h-36 space-y-1 overflow-y-auto rounded border bg-background p-2">
+                {availableColumns.map((column) => {
+                  const checked = asArray(draft.input_columns).includes(column);
+                  return (
+                    <label key={column} className="flex items-center gap-2">
+                      <input
+                        id={`${getFieldId("input_columns")}-${column}`}
+                        name={getFieldName("input_columns")}
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) =>
+                          handleColumnToggle("input_columns", column, event.target.checked)
+                        }
+                      />
+                      <span>{column}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              {asArray(draft.input_columns).length > 0 && (
+                <p className="text-[10px] text-[var(--text-secondary)]">
+                  Function receives {asArray(draft.input_columns).length} argument(s):
+                  ({asArray(draft.input_columns).join(", ")}) → f64
+                </p>
+              )}
+            </div>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Output column name</span>
+              <input
+                id={getFieldId("output_column")}
+                name={getFieldName("output_column")}
+                value={asString(draft.output_column)}
+                onChange={(event) => update("output_column", event.target.value)}
+                className="w-full rounded border bg-background px-2 py-1.5"
+                placeholder="risk_score"
+              />
+              <p className="text-[10px] text-[var(--text-secondary)]">
+                New column added to the DataFrame with the function result.
+              </p>
+            </label>
+          </>
+        )}
       </div>
 
       <div

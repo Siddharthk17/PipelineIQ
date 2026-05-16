@@ -31,7 +31,7 @@ DUCKDB_CAPABLE_STEPS = frozenset(
         "sql",
     }
 )
-ALWAYS_PANDAS_STEPS = frozenset({"load", "save", "validate", "rename"})
+ALWAYS_PANDAS_STEPS = frozenset({"load", "save", "validate", "rename", "wasm_compute"})
 
 
 class SmartExecutor:
@@ -93,6 +93,7 @@ class SmartExecutor:
         file_paths: Optional[dict[str, str]] = None,
         file_metadata: Optional[dict[str, dict[str, str]]] = None,
         extra_tables: Optional[dict[str, pa.Table]] = None,
+        wasm_modules: Optional[dict[str, bytes]] = None,
     ) -> StepExecutionResult:
         """Execute a step using Pandas or DuckDB based on compatibility and size."""
         step_type = self._step_type(step)
@@ -107,7 +108,9 @@ class SmartExecutor:
             )
 
         if step_type in self._ALWAYS_PANDAS_STEPS:
-            return self.pandas_executor.execute(table_registry, step, recorder)
+            return self.pandas_executor.execute(
+                table_registry, step, recorder, wasm_modules=wasm_modules
+            )
 
         if step_type == "sql":
             input_step_name = getattr(step, "input", None)

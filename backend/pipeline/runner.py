@@ -116,6 +116,7 @@ class PipelineRunner:
         file_metadata: Dict[str, Dict[str, str]],
         run_id: Optional[str] = None,
         progress_callback: Optional[ProgressCallback] = None,
+        wasm_modules: Optional[Dict[str, bytes]] = None,
     ) -> PipelineExecutionSummary:
         """Execute a complete pipeline from a parsed configuration."""
         run_id = run_id or str(uuid.uuid4())
@@ -147,6 +148,7 @@ class PipelineRunner:
                     file_metadata=file_metadata,
                     callback=callback,
                     bus=bus,
+                    wasm_modules=wasm_modules,
                 )
                 step_results.append(result)
                 table_registry[step.name] = result.output_table
@@ -193,6 +195,7 @@ class PipelineRunner:
         file_metadata: Dict[str, Dict[str, str]],
         callback: ProgressCallback,
         bus: ArrowDataBus,
+        wasm_modules: Optional[Dict[str, bytes]] = None,
     ) -> StepExecutionResult:
         """Execute a single step with progress event emission."""
         callback(
@@ -220,6 +223,7 @@ class PipelineRunner:
                 recorder=recorder,
                 file_paths=file_paths,
                 file_metadata=file_metadata,
+                wasm_modules=wasm_modules,
             )
             # Persist result to Arrow data bus (tiered storage)
             bus.put(key=step.name, table=result.output_table, run_id=run_id)
