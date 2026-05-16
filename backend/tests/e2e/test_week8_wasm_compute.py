@@ -31,6 +31,9 @@ from wasmtime import wat2wasm, Config, Engine, Store, Module, Linker, Trap
 # Add backend to path (conftest.py already sets this, but keep for standalone runs)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+# Project root — works on any machine (local or CI)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+
 # ============================================================
 # FIXTURES: Wasm module binaries compiled from WAT
 # ============================================================
@@ -792,7 +795,7 @@ class TestWasmApiEndpoints:
         client = TestClient(app)
         response = client.post(
             "/api/v1/wasm/validate",
-            files={"file": ("test.wasm", simple_add_wasm, "application/wasm")},
+            files={"file": ("test.wasm", BytesIO(simple_add_wasm), "application/wasm")},
         )
         # Returns 200 with is_valid=true, or 400 if module has imports
         assert response.status_code in [200, 400]
@@ -811,7 +814,7 @@ class TestWasmApiEndpoints:
         client = TestClient(app)
         response = client.post(
             "/api/v1/wasm/validate",
-            files={"file": ("invalid.wasm", invalid_wasm_bytes, "application/wasm")},
+            files={"file": ("invalid.wasm", BytesIO(invalid_wasm_bytes), "application/wasm")},
         )
         assert response.status_code in [200, 400, 401, 403]
         if response.status_code == 200:
@@ -826,7 +829,7 @@ class TestWasmApiEndpoints:
         client = TestClient(app)
         response = client.post(
             "/api/v1/wasm/validate",
-            files={"file": ("wasi.wasm", wasi_import_wasm, "application/wasm")},
+            files={"file": ("wasi.wasm", BytesIO(wasi_import_wasm), "application/wasm")},
         )
         # Returns 200 with is_valid=false OR 400 for imports
         assert response.status_code in [200, 400]
@@ -842,7 +845,7 @@ class TestWasmApiEndpoints:
         client = TestClient(app)
         response = client.post(
             "/api/v1/wasm/upload",
-            files={"file": ("test.wasm", simple_add_wasm, "application/wasm")},
+            files={"file": ("test.wasm", BytesIO(simple_add_wasm), "application/wasm")},
             params={"name": ""},
         )
         assert response.status_code in [400, 401, 403, 422]
@@ -854,7 +857,7 @@ class TestWasmApiEndpoints:
         client = TestClient(app)
         response = client.post(
             "/api/v1/wasm/upload",
-            files={"file": ("test.wasm", simple_add_wasm, "application/wasm")},
+            files={"file": ("test.wasm", BytesIO(simple_add_wasm), "application/wasm")},
             params={"name": "a"},
         )
         assert response.status_code in [400, 401, 403]
@@ -1026,22 +1029,22 @@ class TestFrontendApiClient:
     """E2E: Frontend API client functions exist and have correct signatures."""
 
     def test_list_wasm_modules_function_exists(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/lib/api.ts").read_text()
+        content = (PROJECT_ROOT / "frontend" / "lib" / "api.ts").read_text()
         assert "export async function listWasmModules" in content
         assert '"/wasm/"' in content
 
     def test_upload_wasm_module_function_exists(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/lib/api.ts").read_text()
+        content = (PROJECT_ROOT / "frontend" / "lib" / "api.ts").read_text()
         assert "export async function uploadWasmModule" in content
         assert '"/wasm/upload"' in content
 
     def test_validate_wasm_module_function_exists(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/lib/api.ts").read_text()
+        content = (PROJECT_ROOT / "frontend" / "lib" / "api.ts").read_text()
         assert "export async function validateWasmModule" in content
         assert '"/wasm/validate"' in content
 
     def test_delete_wasm_module_function_exists(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/lib/api.ts").read_text()
+        content = (PROJECT_ROOT / "frontend" / "lib" / "api.ts").read_text()
         assert "export async function deleteWasmModule" in content
 
 
@@ -1053,14 +1056,14 @@ class TestFrontendTypes:
     """E2E: Frontend TypeScript types exist for Wasm modules."""
 
     def test_wasm_module_interface_exists(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/lib/types.ts").read_text()
+        content = (PROJECT_ROOT / "frontend" / "lib" / "types.ts").read_text()
         assert "export interface WasmModule" in content
         assert "sha256_hash: string" in content
         assert "fuel_budget: number" in content
         assert "exports: WasmModuleExport[]" in content
 
     def test_wasm_module_export_interface_exists(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/lib/types.ts").read_text()
+        content = (PROJECT_ROOT / "frontend" / "lib" / "types.ts").read_text()
         assert "export interface WasmModuleExport" in content
         assert "params: string[]" in content
         assert "result: string | null" in content
@@ -1074,30 +1077,30 @@ class TestFrontendWasmModulesPage:
     """E2E: /wasm-modules page exists and has required components."""
 
     def test_page_file_exists(self):
-        page_path = Path("/mnt/data2/PipelineIQ/frontend/app/wasm-modules/page.tsx")
+        page_path = PROJECT_ROOT / "frontend" / "app" / "wasm-modules" / "page.tsx"
         assert page_path.exists()
 
     def test_page_has_upload_zone(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/app/wasm-modules/page.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "app" / "wasm-modules" / "page.tsx").read_text()
         assert "data-testid=\"wasm-upload-zone\"" in content
         assert "Drop .wasm file here" in content
 
     def test_page_has_module_list(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/app/wasm-modules/page.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "app" / "wasm-modules" / "page.tsx").read_text()
         assert "data-testid=\"wasm-module-list\"" in content
 
     def test_page_has_delete_button(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/app/wasm-modules/page.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "app" / "wasm-modules" / "page.tsx").read_text()
         assert "delete-module-" in content
         assert "handleDelete" in content
 
     def test_page_has_compile_guide(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/app/wasm-modules/page.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "app" / "wasm-modules" / "page.tsx").read_text()
         assert "cargo new --lib my_functions" in content
         assert "wasm32-unknown-unknown" in content
 
     def test_page_has_validation_section(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/app/wasm-modules/page.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "app" / "wasm-modules" / "page.tsx").read_text()
         assert "Validate a .wasm file before uploading" in content
 
 
@@ -1109,32 +1112,32 @@ class TestFrontendConfigPanelIntegration:
     """E2E: ConfigPanel has wasm_compute integration."""
 
     def test_wasm_compute_config_component_exists(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/components/pipeline-builder/ConfigPanel.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "components" / "pipeline-builder" / "ConfigPanel.tsx").read_text()
         assert "function WasmComputeConfig" in content
 
     def test_config_panel_renders_wasm_compute(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/components/pipeline-builder/ConfigPanel.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "components" / "pipeline-builder" / "ConfigPanel.tsx").read_text()
         assert 'node.data.type === "wasm_compute"' in content
         assert "<WasmComputeConfig" in content
 
     def test_wasm_config_has_module_select(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/components/pipeline-builder/ConfigPanel.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "components" / "pipeline-builder" / "ConfigPanel.tsx").read_text()
         assert 'data-testid="wasm-module-select"' in content
 
     def test_wasm_config_has_function_select(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/components/pipeline-builder/ConfigPanel.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "components" / "pipeline-builder" / "ConfigPanel.tsx").read_text()
         assert 'data-testid="wasm-function-select"' in content
 
     def test_wasm_config_has_output_column_input(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/components/pipeline-builder/ConfigPanel.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "components" / "pipeline-builder" / "ConfigPanel.tsx").read_text()
         assert 'data-testid="wasm-output-column-input"' in content
 
     def test_wasm_config_has_validate_function_button(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/components/pipeline-builder/ConfigPanel.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "components" / "pipeline-builder" / "ConfigPanel.tsx").read_text()
         assert 'data-testid="validate-function-btn"' in content
 
     def test_wasm_config_links_to_wasm_modules_page(self):
-        content = Path("/mnt/data2/PipelineIQ/frontend/components/pipeline-builder/ConfigPanel.tsx").read_text()
+        content = (PROJECT_ROOT / "frontend" / "components" / "pipeline-builder" / "ConfigPanel.tsx").read_text()
         assert 'href="/wasm-modules"' in content
 
 
@@ -1266,22 +1269,22 @@ class TestMigration0010:
     """E2E: Migration 0010 creates wasm_modules table correctly."""
 
     def test_migration_file_exists(self):
-        migration_path = Path("/mnt/data2/PipelineIQ/backend/alembic/versions/0010_add_wasm_modules_table.py")
+        migration_path = PROJECT_ROOT / "backend" / "alembic" / "versions" / "0010_add_wasm_modules_table.py"
         assert migration_path.exists()
 
     def test_migration_has_upgrade_function(self):
-        content = Path("/mnt/data2/PipelineIQ/backend/alembic/versions/0010_add_wasm_modules_table.py").read_text()
+        content = (PROJECT_ROOT / "backend" / "alembic" / "versions" / "0010_add_wasm_modules_table.py").read_text()
         assert "def upgrade()" in content
         assert "op.create_table" in content
         assert '"wasm_modules"' in content
 
     def test_migration_has_downgrade_function(self):
-        content = Path("/mnt/data2/PipelineIQ/backend/alembic/versions/0010_add_wasm_modules_table.py").read_text()
+        content = (PROJECT_ROOT / "backend" / "alembic" / "versions" / "0010_add_wasm_modules_table.py").read_text()
         assert "def downgrade()" in content
         assert "op.drop_table" in content
 
     def test_migration_has_required_columns(self):
-        content = Path("/mnt/data2/PipelineIQ/backend/alembic/versions/0010_add_wasm_modules_table.py").read_text()
+        content = (PROJECT_ROOT / "backend" / "alembic" / "versions" / "0010_add_wasm_modules_table.py").read_text()
         required_columns = [
             "id", "name", "description", "storage_key",
             "file_size_bytes", "sha256_hash", "exports", "imports",
@@ -1318,11 +1321,11 @@ class TestWasmRouterRegistration:
     """E2E: Wasm router is registered in main.py."""
 
     def test_wasm_router_imported_in_main(self):
-        content = Path("/mnt/data2/PipelineIQ/backend/main.py").read_text()
+        content = (PROJECT_ROOT / "backend" / "main.py").read_text()
         assert "from backend.routers.wasm import router as wasm_router" in content
 
     def test_wasm_router_included_in_app(self):
-        content = Path("/mnt/data2/PipelineIQ/backend/main.py").read_text()
+        content = (PROJECT_ROOT / "backend" / "main.py").read_text()
         assert "app.include_router(wasm_router)" in content
 
     def test_wasm_router_prefix(self):
