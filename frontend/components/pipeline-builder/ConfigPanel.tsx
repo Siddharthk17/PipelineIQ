@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
-import type { UploadedFile } from "@/lib/types";
+import { useEffect, useMemo, useState } from "react";
+import type { UploadedFile, WasmModule } from "@/lib/types";
 import { STEP_DEFINITIONS } from "@/lib/stepDefinitions";
 import type { BuilderNode } from "@/lib/yamlGraphSync";
+import { listWasmModules } from "@/lib/api";
 
 interface ConfigPanelProps {
   node: BuilderNode | null;
@@ -52,6 +53,212 @@ function mappingToText(mapping: Record<string, unknown>): string {
   return Object.entries(mapping)
     .map(([from, to]) => `${from}:${String(to)}`)
     .join("\n");
+}
+
+interface WasmComputeConfigProps {
+  draft: Record<string, unknown>;
+  update: (key: string, value: unknown) => void;
+  availableColumns: string[];
+  getFieldId: (field: string) => string;
+  getFieldName: (field: string) => string;
+}
+
+function WasmComputeConfig({
+  draft,
+  update,
+  availableColumns,
+  getFieldId,
+  getFieldName,
+}: WasmComputeConfigProps) {
+  const [modules, setModules] = useState<WasmModule[]>([]);
+  const [modulesLoading, setModulesLoading] = useState(true);
+  const [validating, setValidating] = useState(false);
+  const [functionValid, setFunctionValid] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await listWasmModules();
+        if (!cancelled) {
+          setModules(data.modules.filter((m: WasmModule) => m.is_active));
+        }
+      } catch {
+        if (!cancelled) setModules([]);
+      } finally {
+        if (!cancelled) setModulesLoading(false);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selectedModule = modules.find((m) => m.id === asString(draft.wasm_file_id));
+  const selectedCols = asArray(draft.input_columns);
+
+  const handleColumnToggle = (column: string, checked: boolean) => {
+    const current = asArray(draft.input_columns);
+    const next = checked
+      ? [...new Set([...current, column])]
+      : current.filter((item) => item !== column);
+    update("input_columns", next);
+  };
+
+  const handleModuleSelect = (moduleId: string) => {
+    update("wasm_file_id", moduleId);
+    update("function", "");
+    setFunctionValid(null);
+    const mod = modules.find((m) => m.id === moduleId);
+    if (mod?.exports?.length === 1) {
+      update("function", mod.exports[0].name);
+    }
+  };
+
+  const validateFunction = async () => {
+    if (!draft.wasm_file_id || !draft.function) return;
+    setValidating(true);
+    setFunctionValid(null);
+    try {
+      const mod = modules.find((m) => m.id === draft.wasm_file_id);
+      const fn = asString(draft.function);
+      const found = mod?.exports?.some((e) => e.name === fn) ?? false;
+      setFunctionValid(found);
+    } catch {
+      setFunctionValid(false);
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  return (
+    <>
+      <label className="block space-y-1">
+        <span className="text-muted-foreground">Wasm module</span>
+        <select
+          id={getFieldId("wasm_file_id")}
+          name={getFieldName("wasm_file_id")}
+          value={asString(draft.wasm_file_id)}
+          onChange={(event) => handleModuleSelect(event.target.value)}
+          className="w-full rounded border bg-background px-2 py-1.5 text-[11px]"
+          data-testid="wasm-module-select"
+        >
+          <option value="">Select a validated Wasm module</option>
+          {modules.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name} ({m.exports.length} function{m.exports.length !== 1 ? "s" : ""})
+            </option>
+          ))}
+        </select>
+        {modulesLoading && (
+          <p className="text-[10px] text-[var(--text-secondary)]">Loading modules…</p>
+        )}
+        {!modulesLoading && modules.length === 0 && (
+          <p className="text-[10px] text-[var(--text-secondary)]">
+            No validated modules found.{" "}
+            <a href="/wasm-modules" target="_blank" className="text-[var(--accent-primary)] underline">
+              Upload one here
+            </a>
+            .
+          </p>
+        )}
+      </label>
+
+      {selectedModule && (
+        <label className="block space-y-1">
+          <span className="text-muted-foreground">Function to call</span>
+          <div className="flex gap-2">
+            <select
+              id={getFieldId("function")}
+              name={getFieldName("function")}
+              value={asString(draft.function)}
+              onChange={(event) => {
+                update("function", event.target.value);
+                setFunctionValid(null);
+              }}
+              className="flex-1 rounded border bg-background px-2 py-1.5 text-[11px]"
+              data-testid="wasm-function-select"
+            >
+              <option value="">Select function</option>
+              {selectedModule.exports.map((exp) => (
+                <option key={exp.name} value={exp.name}>
+                  {exp.name}
+                </option>
+              ))}
+            </select>
+            {asString(draft.function) && (
+              <button
+                type="button"
+                onClick={validateFunction}
+                disabled={validating}
+                className="rounded border px-2 py-1 text-[10px] transition-colors hover:bg-[var(--interactive-hover)] disabled:opacity-50"
+                style={{ borderColor: "var(--widget-border)" }}
+                data-testid="validate-function-btn"
+              >
+                {validating ? "…" : "Check"}
+              </button>
+            )}
+          </div>
+          {functionValid === true && (
+            <p className="text-[10px] text-[var(--accent-success)]" data-testid="function-valid">
+              Function found in module
+            </p>
+          )}
+          {functionValid === false && (
+            <p className="text-[10px] text-[var(--accent-error)]" data-testid="function-invalid">
+              Function not found in module
+            </p>
+          )}
+        </label>
+      )}
+
+      <div className="space-y-1.5">
+        <p className="text-muted-foreground">Input columns (passed as f64 arguments, in order)</p>
+        <div className="max-h-36 space-y-1 overflow-y-auto rounded border bg-background p-2">
+          {availableColumns.map((column) => {
+            const checked = selectedCols.includes(column);
+            return (
+              <label key={column} className="flex items-center gap-2">
+                <input
+                  id={`${getFieldId("input_columns")}-${column}`}
+                  name={getFieldName("input_columns")}
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) =>
+                    handleColumnToggle(column, event.target.checked)
+                  }
+                />
+                <span>{column}</span>
+              </label>
+            );
+          })}
+        </div>
+        {selectedCols.length > 0 && (
+          <p className="text-[10px] text-[var(--text-secondary)]">
+            Function receives {selectedCols.length} argument(s):
+            ({selectedCols.join(", ")}) → f64
+          </p>
+        )}
+      </div>
+
+      <label className="block space-y-1">
+        <span className="text-muted-foreground">Output column name</span>
+        <input
+          id={getFieldId("output_column")}
+          name={getFieldName("output_column")}
+          value={asString(draft.output_column)}
+          onChange={(event) => update("output_column", event.target.value)}
+          className="w-full rounded border bg-background px-2 py-1.5"
+          placeholder="risk_score"
+          data-testid="wasm-output-column-input"
+        />
+        <p className="text-[10px] text-[var(--text-secondary)]">
+          New column added to the DataFrame with the function result.
+        </p>
+      </label>
+    </>
+  );
 }
 
 export function ConfigPanel({
@@ -684,78 +891,13 @@ export function ConfigPanel({
         )}
 
         {node.data.type === "wasm_compute" && (
-          <>
-            <label className="block space-y-1">
-              <span className="text-muted-foreground">Wasm module ID</span>
-              <input
-                id={getFieldId("wasm_file_id")}
-                name={getFieldName("wasm_file_id")}
-                value={asString(draft.wasm_file_id)}
-                onChange={(event) => update("wasm_file_id", event.target.value)}
-                className="w-full rounded border bg-background px-2 py-1.5 font-mono text-[11px]"
-                placeholder="uuid-of-uploaded-wasm-module"
-              />
-              <p className="text-[10px] text-[var(--text-secondary)]">
-                Upload a .wasm file via the Wasm Module Manager, then paste its ID here.
-              </p>
-            </label>
-            <label className="block space-y-1">
-              <span className="text-muted-foreground">Function name</span>
-              <input
-                id={getFieldId("function")}
-                name={getFieldName("function")}
-                value={asString(draft.function)}
-                onChange={(event) => update("function", event.target.value)}
-                className="w-full rounded border bg-background px-2 py-1.5 font-mono text-[11px]"
-                placeholder="compute_risk"
-              />
-              <p className="text-[10px] text-[var(--text-secondary)]">
-                Exported function in the Wasm module (fn(x: f64, ...) -&gt; f64).
-              </p>
-            </label>
-            <div className="space-y-1.5">
-              <p className="text-muted-foreground">Input columns (passed as f64 arguments, in order)</p>
-              <div className="max-h-36 space-y-1 overflow-y-auto rounded border bg-background p-2">
-                {availableColumns.map((column) => {
-                  const checked = asArray(draft.input_columns).includes(column);
-                  return (
-                    <label key={column} className="flex items-center gap-2">
-                      <input
-                        id={`${getFieldId("input_columns")}-${column}`}
-                        name={getFieldName("input_columns")}
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) =>
-                          handleColumnToggle("input_columns", column, event.target.checked)
-                        }
-                      />
-                      <span>{column}</span>
-                    </label>
-                  );
-                })}
-              </div>
-              {asArray(draft.input_columns).length > 0 && (
-                <p className="text-[10px] text-[var(--text-secondary)]">
-                  Function receives {asArray(draft.input_columns).length} argument(s):
-                  ({asArray(draft.input_columns).join(", ")}) → f64
-                </p>
-              )}
-            </div>
-            <label className="block space-y-1">
-              <span className="text-muted-foreground">Output column name</span>
-              <input
-                id={getFieldId("output_column")}
-                name={getFieldName("output_column")}
-                value={asString(draft.output_column)}
-                onChange={(event) => update("output_column", event.target.value)}
-                className="w-full rounded border bg-background px-2 py-1.5"
-                placeholder="risk_score"
-              />
-              <p className="text-[10px] text-[var(--text-secondary)]">
-                New column added to the DataFrame with the function result.
-              </p>
-            </label>
-          </>
+          <WasmComputeConfig
+            draft={draft}
+            update={update}
+            availableColumns={availableColumns}
+            getFieldId={getFieldId}
+            getFieldName={getFieldName}
+          />
         )}
       </div>
 
