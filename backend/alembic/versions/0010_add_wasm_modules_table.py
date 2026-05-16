@@ -1,7 +1,7 @@
 """add_wasm_modules_table
 
 Revision ID: 0010
-Revises: 0009
+Revises: b315b6809272
 Create Date: 2026-05-16
 
 Creates the wasm_modules table for storing registered WebAssembly UDF modules.
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0010"
-down_revision = "0009"
+down_revision = "b315b6809272"
 branch_labels = None
 depends_on = None
 
