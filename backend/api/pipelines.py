@@ -472,20 +472,27 @@ def run_pipeline(
                     detail=f"Referenced file not found: {error.message}",
                 )
 
+        # Log all validation errors to Docker logs for debugging
+        error_details = [
+            {
+                "step_name": e.step_name,
+                "field": e.field,
+                "message": e.message,
+                "suggestion": e.suggestion,
+            }
+            for e in validation_result.errors
+        ]
+        logger.error(
+            "❌ 400 BAD REQUEST on POST /api/v1/pipelines/run — YAML validation failed"
+        )
+        logger.error("❌ VALIDATION ERRORS: %s", error_details)
+
         # Otherwise, return all validation errors as 400
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "message": "Pipeline configuration is invalid",
-                "errors": [
-                    {
-                        "step_name": e.step_name,
-                        "field": e.field,
-                        "message": e.message,
-                        "suggestion": e.suggestion,
-                    }
-                    for e in validation_result.errors
-                ],
+                "errors": error_details,
             },
         )
 

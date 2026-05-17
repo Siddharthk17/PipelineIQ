@@ -9,7 +9,7 @@ import { GitMerge, Activity } from "lucide-react";
 
 export function LineageGraphWidget() {
   const { activeRunId, setActiveRunId } = usePipelineStore();
-  const { data: runs } = useQuery({ queryKey: ["pipelineRuns"], queryFn: () => getPipelineRuns(1, 50), staleTime: 0 });
+  const { data: runs } = useQuery({ queryKey: ["pipelineRuns"], queryFn: () => getPipelineRuns(1, 50), staleTime: 15000 });
   const [mode, setMode] = useState<"ancestry" | "impact">("ancestry");
 
   return (

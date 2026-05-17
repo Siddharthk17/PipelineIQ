@@ -219,11 +219,19 @@ async def validation_error_handler(
             safe_err["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
         safe_errors.append(safe_err)
     logger = structlog.get_logger()
-    logger.warning(
+    logger.error(
         "validation_error",
         method=request.method,
         url=str(request.url),
         errors=safe_errors,
+    )
+    # Also log to standard logger for Docker log visibility
+    import json as _json
+    logging.getLogger("pipelineiq").error(
+        "❌ 400 BAD REQUEST on %s %s", request.method, request.url
+    )
+    logging.getLogger("pipelineiq").error(
+        "❌ MISSING/INVALID FIELDS: %s", _json.dumps(safe_errors, indent=2)
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
