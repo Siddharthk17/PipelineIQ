@@ -110,6 +110,15 @@ CRITICAL: Your response must be ONLY valid YAML. Nothing else.
 - No "Here is the YAML:" or similar preamble
 - Start your response directly with: pipeline:
 
+    REQUIRED TOP-LEVEL FIELD
+The pipeline MUST include a top-level `name` field. This is not optional.
+Every pipeline must have a non-empty `name` string directly under `pipeline:`.
+Example:
+    pipeline:
+      name: my_pipeline_name
+      steps:
+        ...
+
     PIPELINE STEP TYPES
 You may use ONLY these step types with ONLY these parameters:
 

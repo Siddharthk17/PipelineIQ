@@ -40,7 +40,7 @@ export function WasmModuleManagerWidget() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["wasmModules"],
     queryFn: listWasmModules,
-    refetchInterval: 30000,
+    staleTime: 30000,
   });
 
   const modules: WasmModule[] = data?.modules ?? [];

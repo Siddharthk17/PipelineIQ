@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import sentry_sdk
+import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +37,15 @@ from backend.pipeline.exceptions import PipelineIQError
 from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
+
+# Silence health check and metrics access log noise
+class _HealthCheckFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "/health" not in msg and "/metrics" not in msg
+
+logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
+logging.getLogger("gunicorn.access").addFilter(_HealthCheckFilter())
 
 if settings.SENTRY_DSN:
     sentry_sdk.init(
@@ -178,7 +188,12 @@ async def pipelineiq_error_handler(
 ) -> JSONResponse:
     """Handle PipelineIQ domain errors with structured error bodies."""
     request_id = getattr(request.state, "request_id", "unknown")
-    logger.warning("Domain error (request_id=%s): %s", request_id, exc.message)
+    logger = structlog.get_logger()
+    logger.warning(
+        "domain_error",
+        error_type=exc.__class__.__name__,
+        message=exc.message,
+    )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
@@ -203,6 +218,13 @@ async def validation_error_handler(
         if "ctx" in err:
             safe_err["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
         safe_errors.append(safe_err)
+    logger = structlog.get_logger()
+    logger.warning(
+        "validation_error",
+        method=request.method,
+        url=str(request.url),
+        errors=safe_errors,
+    )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
@@ -224,11 +246,13 @@ async def generic_error_handler(
     can be used to find the full traceback in the server logs.
     """
     request_id = getattr(request.state, "request_id", "unknown")
+    logger = structlog.get_logger()
     logger.error(
-        "Unhandled error (request_id=%s): %s",
-        request_id,
-        exc,
-        exc_info=True,
+        "unhandled_exception",
+        url=str(request.url),
+        method=request.method,
+        error_type=type(exc).__name__,
+        error=str(exc),
     )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -260,9 +284,19 @@ async def api_version_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
-    """Add a unique X-Request-ID header to every request and response."""
-    request_id = str(uuid.uuid4())
+    """Use Nginx-provided X-Request-ID or generate a new one.
+
+    Propagates the ID into structlog context so every log line
+    emitted during this request carries the correlation ID.
+    """
+    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
     request.state.request_id = request_id
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+    )
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     return response

@@ -33,8 +33,16 @@ function AnimatedNumber({ value }: { value: number }) {
 }
 
 export function QuickStatsWidget() {
-  const { data: files } = useQuery({ queryKey: ["files"], queryFn: getFiles, refetchInterval: 30000 });
-  const { data: runs } = useQuery({ queryKey: ["pipelineRuns", 1, 100], queryFn: () => getPipelineRuns(1, 100), refetchInterval: 30000 });
+  const { data: files } = useQuery({
+    queryKey: ["files"],
+    queryFn: getFiles,
+    staleTime: 30000,
+  });
+  const { data: runs } = useQuery({
+    queryKey: ["pipelineRuns", 1, 100],
+    queryFn: () => getPipelineRuns(1, 100),
+    staleTime: 30000,
+  });
 
   const runsArray = Array.isArray(runs) ? runs : [];
   const filesArray = Array.isArray(files) ? files : [];

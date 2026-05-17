@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { PipelineEditorWidget } from "@/components/widgets/PipelineEditorWidget";
+import { runPipeline } from "@/lib/api";
 import { usePipelineStore } from "@/store/pipelineStore";
 
 vi.mock("@uiw/react-codemirror", () => ({
@@ -107,4 +108,40 @@ describe("PipelineEditorWidget YAML sync", () => {
       );
     });
   });
+
+  it(
+    "shows run errors and temporarily disables reruns on client errors",
+    async () => {
+      vi.mocked(runPipeline).mockRejectedValueOnce({
+        status: 400,
+        message: "Bad Request",
+        detail: {
+          error_type: "ValidationError",
+          details: [{ loc: ["body", "yaml_config"], msg: "Field required" }],
+        },
+      });
+
+      render(<PipelineEditorWidget initialMode="yaml" />, { wrapper });
+
+      const runButton = await screen.findByTestId("run-pipeline-btn");
+      await waitFor(() => {
+        expect(runButton).toBeEnabled();
+      });
+
+      fireEvent.click(runButton);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("run-pipeline-error")).toBeInTheDocument();
+      });
+      expect(runButton).toBeDisabled();
+
+      await waitFor(
+        () => {
+          expect(runButton).toBeEnabled();
+        },
+        { timeout: 7000 },
+      );
+    },
+    12000,
+  );
 });

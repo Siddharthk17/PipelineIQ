@@ -884,7 +884,8 @@ class StepExecutor:
 
         def _pandas_deduplicate() -> pa.Table:
             keep = False if config.keep == "none" else config.keep
-            deduped = input_df.drop_duplicates(subset=config.subset, keep=keep)
+            subset = config.subset if config.subset else None
+            deduped = input_df.drop_duplicates(subset=subset, keep=keep)
             return pa.Table.from_pandas(
                 deduped.reset_index(drop=True), preserve_index=False
             )

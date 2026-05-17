@@ -244,7 +244,7 @@ def _check_pipeline_permission(
     )
 
     if not permission:
-        logger.info(
+        logger.debug(
             "No permission found for user %s on pipeline %s. grant_owner=%s",
             user.id,
             pipeline_name,
@@ -276,6 +276,160 @@ def _check_pipeline_permission(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"User lacks required permissions ({', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
         )
+
+
+def _preflight_schema_check(config, db: Session) -> list[str]:
+    """Simulate schema transformations to catch column mismatches before execution.
+
+    Walks through pipeline steps tracking the available columns at each step.
+    Returns a list of error messages if any step references a column that
+    does not exist in the output schema of the previous step.
+    """
+    from backend.utils.uuid_utils import as_uuid
+
+    errors: list[str] = []
+    schema: dict[str, list[str]] = {}
+
+    for step in config.steps:
+        step_type = getattr(step, "step_type", None)
+        step_name = getattr(step, "name", "unknown")
+
+        if step_type == "load":
+            file_id = getattr(step, "file_id", None)
+            if file_id:
+                try:
+                    file_record = db.query(UploadedFile).filter(
+                        UploadedFile.id == as_uuid(file_id)).first()
+                    if file_record:
+                        schema[step_name] = list(file_record.columns)
+                    else:
+                        errors.append(f"Step '{step_name}': file_id '{file_id}' not found")
+                except Exception:
+                    errors.append(f"Step '{step_name}': invalid file_id '{file_id}'")
+            else:
+                schema[step_name] = []
+            continue
+
+        if step_type == "join":
+            left = getattr(step, "left", "")
+            right = getattr(step, "right", "")
+            on = getattr(step, "on", "")
+            left_cols = schema.get(left, [])
+            right_cols = schema.get(right, [])
+            if on not in left_cols:
+                errors.append(f"Step '{step_name}': join key '{on}' not in left step '{left}' (columns: {left_cols})")
+            if on not in right_cols:
+                errors.append(f"Step '{step_name}': join key '{on}' not in right step '{right}' (columns: {right_cols})")
+            merged = list(left_cols)
+            for c in right_cols:
+                if c not in left_cols and c != on:
+                    merged.append(c)
+            schema[step_name] = merged
+            continue
+
+        input_step = getattr(step, "input", None)
+        available = schema.get(input_step, []) if input_step else []
+
+        if step_type == "filter":
+            col = getattr(step, "column", "")
+            if col and col not in available:
+                errors.append(f"Step '{step_name}': column '{col}' not found. Available columns: {available}")
+            schema[step_name] = available
+        elif step_type == "select":
+            cols = getattr(step, "columns", [])
+            for c in cols:
+                if c not in available:
+                    errors.append(f"Step '{step_name}': column '{c}' not found. Available columns: {available}")
+            schema[step_name] = [c for c in cols if c in available]
+        elif step_type == "rename":
+            mapping = getattr(step, "mapping", {})
+            for old_name in mapping:
+                if old_name not in available:
+                    errors.append(f"Step '{step_name}': column '{old_name}' not found. Available columns: {available}")
+            new_cols = list(available)
+            for old_name, new_name in mapping.items():
+                if old_name in new_cols:
+                    new_cols[new_cols.index(old_name)] = new_name
+            schema[step_name] = new_cols
+        elif step_type == "aggregate":
+            group_by = getattr(step, "group_by", [])
+            aggregations = getattr(step, "aggregations", [])
+            for c in group_by:
+                if c not in available:
+                    errors.append(f"Step '{step_name}': group_by column '{c}' not found. Available columns: {available}")
+            for agg in aggregations:
+                agg_col = agg.get("column", "") if isinstance(agg, dict) else ""
+                if agg_col and agg_col not in available:
+                    errors.append(f"Step '{step_name}': aggregation column '{agg_col}' not found. Available columns: {available}")
+            agg_cols = list(group_by)
+            for agg in aggregations:
+                if isinstance(agg, dict):
+                    agg_col = agg.get("column", "")
+                    func = agg.get("function", "")
+                    agg_cols.append(f"{agg_col}_{func}")
+            schema[step_name] = agg_cols
+        elif step_type == "sort":
+            by = getattr(step, "by", "")
+            if by and by not in available:
+                errors.append(f"Step '{step_name}': sort column '{by}' not found. Available columns: {available}")
+            schema[step_name] = available
+        elif step_type == "validate":
+            rules = getattr(step, "rules", [])
+            for rule in rules:
+                if isinstance(rule, dict):
+                    col = rule.get("column", "")
+                    if col and col not in available:
+                        errors.append(f"Step '{step_name}': validation column '{col}' not found. Available columns: {available}")
+            schema[step_name] = available
+        elif step_type == "save":
+            schema[step_name] = available
+        elif step_type == "pivot":
+            index = getattr(step, "index", [])
+            columns_col = getattr(step, "columns", "")
+            values_col = getattr(step, "values", "")
+            for c in (index if isinstance(index, list) else [index]):
+                if c not in available:
+                    errors.append(f"Step '{step_name}': pivot index column '{c}' not found. Available columns: {available}")
+            if columns_col and columns_col not in available:
+                errors.append(f"Step '{step_name}': pivot columns column '{columns_col}' not found. Available columns: {available}")
+            if values_col and values_col not in available:
+                errors.append(f"Step '{step_name}': pivot values column '{values_col}' not found. Available columns: {available}")
+            schema[step_name] = list(index) + [f"{values_col}_pivoted"]
+        elif step_type == "unpivot":
+            id_vars = getattr(step, "id_vars", [])
+            value_vars = getattr(step, "value_vars", [])
+            for c in id_vars + value_vars:
+                if c not in available:
+                    errors.append(f"Step '{step_name}': column '{c}' not found. Available columns: {available}")
+            schema[step_name] = list(id_vars) + [getattr(step, "var_name", "variable"), getattr(step, "value_name", "value")]
+        elif step_type == "deduplicate":
+            subset = getattr(step, "subset", [])
+            for c in (subset or []):
+                if c not in available:
+                    errors.append(f"Step '{step_name}': column '{c}' not found. Available columns: {available}")
+            schema[step_name] = available
+        elif step_type == "fill_nulls":
+            columns = getattr(step, "columns", [])
+            for c in columns:
+                if c not in available:
+                    errors.append(f"Step '{step_name}': column '{c}' not found. Available columns: {available}")
+            schema[step_name] = available
+        elif step_type == "sample":
+            stratify = getattr(step, "stratify_by", None)
+            if stratify and stratify not in available:
+                errors.append(f"Step '{step_name}': stratify column '{stratify}' not found. Available columns: {available}")
+            schema[step_name] = available
+        elif step_type == "wasm_compute":
+            input_cols = getattr(step, "input_columns", [])
+            for c in input_cols:
+                if c not in available:
+                    errors.append(f"Step '{step_name}': wasm input column '{c}' not found. Available columns: {available}")
+            output_col = getattr(step, "output_column", "")
+            schema[step_name] = available + ([output_col] if output_col else [])
+        else:
+            schema[step_name] = available
+
+    return errors
 
 
 @router.post("/run",
@@ -332,6 +486,17 @@ def run_pipeline(
                     }
                     for e in validation_result.errors
                 ],
+            },
+        )
+
+    # Pre-flight schema check: simulate column flow to catch mismatches early
+    schema_errors = _preflight_schema_check(config, db)
+    if schema_errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "Schema mismatch detected before execution",
+                "schema_errors": schema_errors,
             },
         )
 
@@ -514,7 +679,7 @@ def get_pipeline_run(
     current_user: User = Depends(get_current_user),
 ) -> PipelineRunResponse:
     """Get full details of a specific pipeline run."""
-    logger.info("DEBUG: User %s accessing run %s", current_user.id, run_id)
+    logger.debug("User %s accessing run %s", current_user.id, run_id)
     _validate_uuid_format(run_id)
     pipeline_run = (db.query(PipelineRun).filter(
         PipelineRun.id == _as_uuid(run_id)).first())

@@ -6,9 +6,11 @@ setting is missing or invalid, preventing runtime configuration errors.
 """
 
 import logging
+import sys
 from pathlib import Path
 from typing import List, Optional
 
+import structlog
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -200,8 +202,42 @@ settings = Settings()
 DATABASE_WRITE_URL = settings.DATABASE_WRITE_URL
 DATABASE_READ_URL = settings.DATABASE_READ_URL
 
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+
+def _configure_logging() -> None:
+    """Configure structured JSON logging for production, readable for development."""
+    log_level = getattr(logging, settings.LOG_LEVEL)
+
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+    ]
+
+    if settings.ENVIRONMENT == "production":
+        # JSON output for production — parseable by Grafana Loki, Datadog, etc.
+        processors = shared_processors + [
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.JSONRenderer(),
+        ]
+    else:
+        # Human-readable console output for development
+        processors = shared_processors + [
+            structlog.dev.ConsoleRenderer(colors=True),
+        ]
+
+    structlog.configure(
+        processors=processors,
+        wrapper_class=structlog.make_filtering_bound_logger(log_level),
+        cache_logger_on_first_use=True,
+    )
+
+    # Bridge standard logging into structlog
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=log_level,
+    )
+
+
+_configure_logging()

@@ -66,6 +66,40 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   const [isAIGenerating, setIsAIGenerating] = useState(false);
   const [aiGenerateError, setAIGenerateError] = useState<string | null>(null);
   const [aiColumnSuggestions, setAiColumnSuggestions] = useState<Record<string, string>>({});
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runCooldownUntil, setRunCooldownUntil] = useState<number>(0);
+
+  const formatRunError = useCallback((error: unknown): string => {
+    if (error && typeof error === "object") {
+      const apiError = error as {
+        status?: number;
+        message?: string;
+        detail?: {
+          message?: string;
+          details?: Array<{ loc?: Array<string | number>; msg?: string }>;
+          detail?: Array<{ loc?: Array<string | number>; msg?: string }>;
+        };
+      };
+      const validationDetails =
+        apiError.detail?.details ?? apiError.detail?.detail ?? [];
+      if (validationDetails.length > 0) {
+        const first = validationDetails[0];
+        const location =
+          first.loc && first.loc.length > 0
+            ? first.loc.map(String).join(".")
+            : "request";
+        const message = first.msg ?? "Invalid request payload";
+        return `${location}: ${message}`;
+      }
+      if (apiError.detail?.message) {
+        return apiError.detail.message;
+      }
+      if (apiError.message) {
+        return apiError.message;
+      }
+    }
+    return "Failed to start pipeline run.";
+  }, []);
 
   const { data: files } = useQuery({ queryKey: ["files"], queryFn: getFiles });
 
@@ -121,6 +155,8 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     mutationFn: (args: { yamlConfig: string; pipelineName?: string }) =>
       runPipeline(args.yamlConfig, args.pipelineName),
     onSuccess: (data, variables) => {
+      setRunError(null);
+      setRunCooldownUntil(0);
       const runName =
         variables.pipelineName ||
         extractPipelineName(variables.yamlConfig) ||
@@ -144,7 +180,16 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
       // Immediately refresh run history so the new run appears
       queryClient.invalidateQueries({ queryKey: ["pipelineRuns"] });
     },
+    onError: (error: unknown) => {
+      setRunError(formatRunError(error));
+      const status = (error as { status?: number })?.status;
+      if (typeof status === "number" && status >= 400 && status < 500) {
+        setRunCooldownUntil(Date.now() + 5000);
+      }
+    },
   });
+
+  const isRunCoolingDown = runCooldownUntil > Date.now();
 
   const latestFileId = files?.[0]?.id ?? null;
 
@@ -176,6 +221,25 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
+
+  useEffect(() => {
+    setRunError(null);
+  }, [code]);
+
+  useEffect(() => {
+    if (!runCooldownUntil) {
+      return;
+    }
+    const remainingMs = runCooldownUntil - Date.now();
+    if (remainingMs <= 0) {
+      setRunCooldownUntil(0);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setRunCooldownUntil(0);
+    }, remainingMs);
+    return () => window.clearTimeout(timer);
+  }, [runCooldownUntil]);
 
   useEffect(() => {
     let cancelled = false;
@@ -231,7 +295,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   // Handle Ctrl+Enter to trigger pipeline:run event
   useEffect(() => {
     const handleRun = () => {
-      if (validation?.is_valid) {
+      if (validation?.is_valid && !runMutation.isPending && !isRunCoolingDown) {
         const pipelineNameValue =
           (editorMode === "visual" ? pipelineName : extractPipelineName(code)) ||
           extractPipelineName(code) ||
@@ -242,7 +306,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     window.addEventListener("pipeline:run", handleRun);
     return () => window.removeEventListener("pipeline:run", handleRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, editorMode, pipelineName, validation]);
+  }, [code, editorMode, isRunCoolingDown, pipelineName, runMutation, validation]);
 
   const insertFileId = useCallback((id: string) => {
     setCode((prev) => upsertFileIdInFirstLoadStep(prev, id));
@@ -510,7 +574,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                   undefined;
                 runMutation.mutate({ yamlConfig: code, pipelineName: pipelineNameValue });
               }}
-              disabled={!validation?.is_valid || runMutation.isPending}
+              disabled={!validation?.is_valid || runMutation.isPending || isRunCoolingDown}
               data-testid="run-pipeline-btn"
               className="min-h-10 shrink-0 rounded border px-3 py-1.5 text-xs font-medium text-[var(--bg-base)] transition-[filter] hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               style={{
@@ -681,6 +745,15 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                 </div>
               )}
             </div>
+          </div>
+        )}
+        {runError && (
+          <div
+            className="p-2 border-t bg-[var(--bg-surface)] text-xs text-[var(--accent-error)]"
+            style={{ borderColor: "var(--widget-border)" }}
+            data-testid="run-pipeline-error"
+          >
+            Run error: {runError}
           </div>
         )}
       </div>

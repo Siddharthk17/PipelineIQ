@@ -24,5 +24,11 @@ if [ $retries -eq $MAX_RETRIES ]; then
     echo "WARNING: API did not become healthy after $MAX_RETRIES attempts. Starting nginx anyway..."
 fi
 
+# Pre-flight config validation — fail fast with clear error instead of crash loop
+if ! nginx -t 2>&1; then
+    echo "FATAL: Nginx configuration test failed. Exiting to prevent crash loop."
+    exit 1
+fi
+
 # Execute the original nginx entrypoint
 exec nginx -g 'daemon off;'

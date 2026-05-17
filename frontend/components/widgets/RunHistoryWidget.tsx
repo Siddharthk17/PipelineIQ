@@ -14,9 +14,7 @@ export function RunHistoryWidget() {
   const { data: runs, isLoading, dataUpdatedAt } = useQuery({
     queryKey: ["pipelineRuns"],
     queryFn: () => getPipelineRuns(1, 50),
-    refetchInterval: 5000,
-    refetchIntervalInBackground: true,
-    staleTime: 0,
+    staleTime: 15000,
   });
   const { setActiveRunId, setLastYamlConfig } = usePipelineStore();
   const [repairResult, setRepairResult] = React.useState<AIRepairPipelineResponse | null>(null);

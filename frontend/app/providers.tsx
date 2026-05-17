@@ -6,11 +6,25 @@ import { useThemeStore } from "@/store/themeStore";
 import { AuthProvider } from "@/lib/auth-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
+export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
+  const status =
+    typeof error === "object" && error !== null && "status" in error
+      ? (error as { status?: number }).status
+      : undefined;
+  if (typeof status === "number" && status >= 400 && status < 500) {
+    return false;
+  }
+  return failureCount < 3;
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
+      retry: shouldRetryQuery,
+    },
+    mutations: {
+      retry: false,
     },
   },
 });

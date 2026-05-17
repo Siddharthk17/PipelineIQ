@@ -432,6 +432,7 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
         db=db,
     )
     if not healing_result.success or not healing_result.patched_yaml:
+        error_reason = _classify_healing_failure(healing_result)
         _publish_progress_payload(
             run_id,
             {
@@ -441,6 +442,7 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
                 "attempts": healing_result.attempts,
                 "failed_step": failed_step_name,
                 "error_message": healing_result.error,
+                "error_reason": error_reason,
             },
         )
         return summary
@@ -507,6 +509,7 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
                 failed_step_name),
             "error_message": str(
                 retry_summary.error) if retry_summary.error else None,
+            "error_reason": "retry_after_heal_failed",
         },
     )
     _publish_progress_payload(
@@ -534,6 +537,23 @@ def _next_healing_attempt_number(db, pipeline_run_id) -> int:
         .count()
         + 1
     )
+
+
+def _classify_healing_failure(healing_result) -> str:
+    """Classify why a healing attempt failed for structured logging."""
+    if not healing_result.success:
+        if getattr(healing_result, "error", ""):
+            err = str(healing_result.error).lower()
+            if "timeout" in err or "timed out" in err:
+                return "llm_timeout"
+            if "quota" in err or "rate limit" in err:
+                return "llm_quota_exceeded"
+            if "invalid" in err or "syntax" in err:
+                return "llm_invalid_output"
+        return "llm_unable_to_fix"
+    if not getattr(healing_result, "patched_yaml", None):
+        return "no_patch_generated"
+    return "unknown"
 
 
 def _collect_file_ids_from_config(yaml_config: str) -> list[str]:
