@@ -254,6 +254,36 @@ class TestPipelineValidation:
         assert response.json()["is_valid"] is False
         assert len(response.json()["errors"]) > 0
 
+    def test_validate_reports_schema_mismatches_before_run(
+            self, client, sales_csv_bytes):
+        """Validation catches missing-column failures before the run endpoint."""
+        file_id = upload_file(client, sales_csv_bytes)
+        yaml_config = f"""pipeline:
+  name: invalid_schema_pipeline
+  steps:
+    - name: load_sales
+      type: load
+      file_id: "{file_id}"
+    - name: rename_columns
+      type: rename
+      input: load_sales
+      mapping:
+        old_name: new_name
+    - name: save_output
+      type: save
+      input: rename_columns
+      filename: output.csv
+"""
+        response = client.post(
+            "/api/v1/pipelines/validate",
+            json={"yaml_config": yaml_config},
+        )
+        payload = response.json()
+
+        assert response.status_code == 200
+        assert payload["is_valid"] is False
+        assert any(error["field"] == "mapping" for error in payload["errors"])
+
     def test_validate_malformed_yaml_returns_422(self, client):
         """Malformed YAML returns 422 (Pydantic validator catches it)."""
         response = client.post(
@@ -329,6 +359,38 @@ class TestPipelineExecution:
         ).json()["run_id"]
         run = client.get(f"/api/v1/pipelines/{run_id}").json()
         assert run["status"] in ["PENDING", "RUNNING"]
+
+    def test_run_returns_structured_schema_errors_for_missing_columns(
+            self, client, sales_csv_bytes):
+        """Run endpoint returns detailed schema errors instead of opaque 400s."""
+        file_id = upload_file(client, sales_csv_bytes)
+        yaml_config = f"""pipeline:
+  name: invalid_run_pipeline
+  steps:
+    - name: load_sales
+      type: load
+      file_id: "{file_id}"
+    - name: filter_rows
+      type: filter
+      input: load_sales
+      column: missing_column
+      operator: equals
+      value: "x"
+    - name: save_output
+      type: save
+      input: filter_rows
+      filename: output.csv
+"""
+        response = client.post(
+            "/api/v1/pipelines/run",
+            json={"yaml_config": yaml_config},
+        )
+        payload = response.json()["detail"]
+
+        assert response.status_code == 400
+        assert payload["message"] == "Schema mismatch detected before execution"
+        assert payload["errors"][0]["field"] == "column"
+        assert "missing_column" in payload["errors"][0]["message"]
 
     def test_get_nonexistent_pipeline_returns_404(self, client):
         """GET /pipelines/{id} with nonexistent UUID returns 404."""

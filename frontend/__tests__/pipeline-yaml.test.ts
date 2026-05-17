@@ -22,6 +22,11 @@ describe("pipeline-yaml helpers", () => {
     );
     expect(
       hasNonEmptyFileId(
+        'pipeline:\n  steps:\n    - name: load\n      file_id: <YOUR_FILE_ID>',
+      ),
+    ).toBe(false);
+    expect(
+      hasNonEmptyFileId(
         'pipeline:\n  steps:\n    - name: load\n      file_id: "00000000-0000-0000-0000-000000000001"',
       ),
     ).toBe(true);
@@ -52,6 +57,29 @@ describe("pipeline-yaml helpers", () => {
     );
     expect(updated).toContain('file_id: "00000000-0000-0000-0000-000000000002"');
     expect(updated).not.toContain('file_id: "old-id"');
+  });
+
+  it("deduplicates repeated file_id lines in the first load step", () => {
+    const yamlWithDuplicateFileIds = `pipeline:
+  name: p1
+  steps:
+    - name: load_file
+      type: load
+      file_id: "old-id"
+      file_id: "old-id"
+      file_id: "old-id"
+    - name: save_file
+      type: save
+      input: load_file
+      filename: output`;
+
+    const updated = upsertFileIdInFirstLoadStep(
+      yamlWithDuplicateFileIds,
+      "00000000-0000-0000-0000-000000000003",
+    );
+
+    expect(updated.match(/^\s*file_id:/gm)).toHaveLength(1);
+    expect(updated).toContain('file_id: "00000000-0000-0000-0000-000000000003"');
   });
 
   it("removes all file_id lines", () => {

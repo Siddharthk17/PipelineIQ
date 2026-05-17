@@ -121,6 +121,30 @@ describe("fetchApi (via public functions)", () => {
     });
   });
 
+  it("extracts schema validation messages from API error payloads", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      json: () =>
+        Promise.resolve({
+          message: "Schema mismatch detected before execution",
+          errors: [
+            {
+              step_name: "rename_columns",
+              field: "mapping",
+              message: "Column 'old_name' was not found in input 'load_data'.",
+            },
+          ],
+        }),
+    } as unknown as Response);
+
+    await expect(runPipeline("pipeline:\n  name: test\n", "test")).rejects.toMatchObject({
+      status: 400,
+      message: "rename_columns.mapping: Column 'old_name' was not found in input 'load_data'.",
+    });
+  });
+
   it("redirects to /login on 401 when token exists", async () => {
     setToken("expired-token");
     const originalHref = window.location.href;

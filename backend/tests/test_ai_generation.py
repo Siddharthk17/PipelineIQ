@@ -1,6 +1,10 @@
 import pytest
 
-from backend.ai.generation import repair_pipeline_from_error
+from backend.ai.generation import (
+    generate_pipeline_from_description,
+    repair_pipeline_from_error,
+)
+from backend.tests.conftest import upload_file
 
 
 @pytest.mark.asyncio
@@ -52,3 +56,49 @@ CRITICAL: Output ONLY the corrected YAML. Nothing else.
     assert result.diff_lines == []
     assert result.error is not None
     assert "quota" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_pipeline_rejects_schema_invalid_yaml(
+        monkeypatch,
+        client,
+        test_db,
+        sales_csv_bytes):
+    file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+
+    generated_yaml = f"""
+pipeline:
+  name: invalid_ai_pipeline
+  steps:
+    - name: load_data
+      type: load
+      file_id: "{file_id}"
+    - name: rename_columns
+      type: rename
+      input: load_data
+      mapping:
+        old_name: new_name
+    - name: save_output
+      type: save
+      input: rename_columns
+      filename: output.csv
+""".strip()
+
+    async def _fake_call_gemini_async(*_args, **_kwargs):
+        return generated_yaml
+
+    monkeypatch.setattr(
+        "backend.ai.generation._call_gemini_async",
+        _fake_call_gemini_async,
+    )
+
+    result = await generate_pipeline_from_description(
+        description="Rename a missing column and save the output",
+        file_ids=[file_id],
+        db=test_db,
+    )
+
+    assert result.valid is False
+    assert result.attempts == 2
+    assert result.error is not None
+    assert "old_name" in result.error

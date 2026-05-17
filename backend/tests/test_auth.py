@@ -3,7 +3,7 @@
 
 from jose import jwt
 
-from backend.auth import ALGORITHM
+from backend.auth import ALGORITHM, get_password_hash, verify_password
 
 
 # Helpers
@@ -99,6 +99,18 @@ def test_login_wrong_password_returns_401(auth_client):
 def test_login_nonexistent_user_returns_401(auth_client):
     r = login_user(auth_client, "noone@test.com", "whatever123")
     assert r.status_code == 401
+
+
+def test_password_hash_round_trip_uses_bcrypt():
+    password = "Str0ngP@ss!"
+    hashed_password = get_password_hash(password)
+
+    assert hashed_password.startswith("$2")
+    assert verify_password(password, hashed_password)
+
+
+def test_verify_password_rejects_invalid_hash_string():
+    assert not verify_password("Str0ngP@ss!", "not-a-bcrypt-hash")
 
 
 # Token / Profile

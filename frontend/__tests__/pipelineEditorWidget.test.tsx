@@ -144,4 +144,38 @@ describe("PipelineEditorWidget YAML sync", () => {
     },
     12000,
   );
+
+  it("shows structured schema mismatch errors from the run endpoint", async () => {
+    vi.mocked(runPipeline).mockRejectedValueOnce({
+      status: 400,
+      message:
+        "rename_columns.mapping: Column 'old_name' was not found in input 'load_sales'. Available columns: ['status']",
+      detail: {
+        message: "Schema mismatch detected before execution",
+        errors: [
+          {
+            step_name: "rename_columns",
+            field: "mapping",
+            message:
+              "Column 'old_name' was not found in input 'load_sales'. Available columns: ['status']",
+          },
+        ],
+      },
+    });
+
+    render(<PipelineEditorWidget initialMode="yaml" />, { wrapper });
+
+    const runButton = await screen.findByTestId("run-pipeline-btn");
+    await waitFor(() => {
+      expect(runButton).toBeEnabled();
+    });
+
+    fireEvent.click(runButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("run-pipeline-error")).toHaveTextContent(
+        "rename_columns.mapping: Column 'old_name' was not found",
+      );
+    });
+  });
 });

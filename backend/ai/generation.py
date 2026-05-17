@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from backend.models import FileProfile, UploadedFile
 from backend.pipeline.cache import get_parsed_pipeline
+from backend.pipeline.parser import PipelineParser
+from backend.services.pipeline_validation import collect_schema_validation_errors
 from backend.tasks.gemini_tasks import call_gemini_task
 from backend.ai.prompts import (
     GENERATION_SYSTEM_PROMPT,
@@ -20,6 +22,7 @@ from backend.ai.prompts import (
 )
 
 logger = logging.getLogger(__name__)
+_pipeline_parser = PipelineParser()
 
 _GEMINI_QUOTA_MARKERS = (
     "quota exhausted",
@@ -163,11 +166,12 @@ async def generate_pipeline_from_description(
 
     # Validate Attempt 1
     try:
-        get_parsed_pipeline(raw_yaml)
-        return GenerationResult(yaml=raw_yaml, valid=True, attempts=1)
+        validation_error = _validate_generated_yaml(raw_yaml, file_ids, db)
+        if validation_error is None:
+            return GenerationResult(yaml=raw_yaml, valid=True, attempts=1)
     except Exception as e:
         validation_error = str(e)
-        logger.warning(f"Attempt 1 validation failed: {validation_error}")
+    logger.warning(f"Attempt 1 validation failed: {validation_error}")
 
     # Attempt 2: Self-fix
     fix_prompt = SELF_FIX_PROMPT.format(
@@ -188,8 +192,15 @@ async def generate_pipeline_from_description(
 
     # Validate Attempt 2
     try:
-        get_parsed_pipeline(corrected_yaml)
-        return GenerationResult(yaml=corrected_yaml, valid=True, attempts=2)
+        validation_error = _validate_generated_yaml(corrected_yaml, file_ids, db)
+        if validation_error is None:
+            return GenerationResult(yaml=corrected_yaml, valid=True, attempts=2)
+        return GenerationResult(
+            yaml=corrected_yaml,
+            valid=False,
+            attempts=2,
+            error=validation_error,
+        )
     except Exception as e2:
         return GenerationResult(
             yaml=corrected_yaml,
@@ -254,7 +265,8 @@ async def repair_pipeline_from_error(
     valid = True
     validation_error = None
     try:
-        get_parsed_pipeline(corrected_yaml)
+        validation_error = _validate_generated_yaml(corrected_yaml, file_ids, db)
+        valid = validation_error is None
     except Exception as e:
         valid = False
         validation_error = str(e)
@@ -380,3 +392,21 @@ def _clean_yaml_response(raw: str) -> str:
         text = text[pipeline_start:]
 
     return text.strip()
+
+
+def _validate_generated_yaml(
+    yaml_text: str,
+    file_ids: list[str],
+    db: Session,
+) -> str | None:
+    """Return the first semantic validation error, or None if the YAML is runnable."""
+    config = get_parsed_pipeline(yaml_text)
+    result = _pipeline_parser.validate(config, set(file_ids))
+    if result.errors:
+        return result.errors[0].message
+
+    schema_errors = collect_schema_validation_errors(config, db)
+    if schema_errors:
+        return schema_errors[0].message
+
+    return None

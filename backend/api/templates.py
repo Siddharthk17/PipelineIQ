@@ -14,7 +14,7 @@ router = APIRouter(prefix="/templates", tags=["templates"])
 
 PIPELINE_TEMPLATES = [{"id": "etl-basic",
                        "name": "Basic ETL Pipeline",
-                       "description": "Extract data from a CSV file, apply transformations (rename, filter), and save the result.",
+                       "description": "Extract data from a CSV file, take a deterministic sample, and save the result.",
                        "category": "ETL",
                        "yaml_config": ("pipeline:\n"
                                        "  name: basic_etl\n"
@@ -22,25 +22,19 @@ PIPELINE_TEMPLATES = [{"id": "etl-basic",
                                        "    - name: load_data\n"
                                        "      type: load\n"
                                        "      file_id: <YOUR_FILE_ID>\n"
-                                       "    - name: rename_columns\n"
-                                       "      type: rename\n"
+                                       "    - name: sample_rows\n"
+                                       "      type: sample\n"
                                        "      input: load_data\n"
-                                       "      mapping:\n"
-                                       "        old_name: new_name\n"
-                                       "    - name: filter_rows\n"
-                                       "      type: filter\n"
-                                       "      input: rename_columns\n"
-                                       "      column: new_name\n"
-                                       "      operator: not_equals\n"
-                                       "      value: ''\n"
+                                       "      fraction: 0.5\n"
+                                       "      random_state: 42\n"
                                        "    - name: save_output\n"
                                        "      type: save\n"
-                                       "      input: filter_rows\n"
+                                       "      input: sample_rows\n"
                                        "      filename: etl_output.csv\n"),
                        },
                       {"id": "data-cleaning",
                        "name": "Data Cleaning Pipeline",
-                       "description": "Load a dataset, drop duplicates, fill missing values, and save the cleaned data.",
+                       "description": "Load a dataset, drop duplicate rows, and save the cleaned data.",
                        "category": "Data Cleaning",
                        "yaml_config": ("pipeline:\n"
                                        "  name: data_cleaning\n"
@@ -51,16 +45,9 @@ PIPELINE_TEMPLATES = [{"id": "etl-basic",
                                        "    - name: deduplicate\n"
                                        "      type: deduplicate\n"
                                        "      input: load_data\n"
-                                       "    - name: fill_missing\n"
-                                       "      type: fill_nulls\n"
-                                       "      input: deduplicate\n"
-                                       "      method: constant\n"
-                                       "      value: 0\n"
-                                       "      columns:\n"
-                                       "        - amount\n"
                                        "    - name: save_clean\n"
                                        "      type: save\n"
-                                       "      input: fill_missing\n"
+                                       "      input: deduplicate\n"
                                        "      filename: cleaned_data.csv\n"),
                        },
                       {"id": "data-validation",
@@ -77,11 +64,8 @@ PIPELINE_TEMPLATES = [{"id": "etl-basic",
                                        "      type: validate\n"
                                        "      input: load_data\n"
                                        "      rules:\n"
-                                       "        - check: not_null\n"
-                                       "          column: amount\n"
-                                       "          severity: error\n"
-                                       "        - check: positive\n"
-                                       "          column: amount\n"
+                                       "        - check: min_rows\n"
+                                       "          value: 1\n"
                                        "          severity: error\n"
                                        "    - name: save_valid\n"
                                        "      type: save\n"

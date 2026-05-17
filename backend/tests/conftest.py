@@ -4,8 +4,16 @@ Provides deterministic sample DataFrames, in-memory SQLite DB sessions,
 FastAPI test clients, and pre-configured LineageRecorder instances.
 """
 
+import warnings
 from typing import Generator
 from unittest.mock import MagicMock, patch
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Please use `import python_multipart` instead\.",
+    category=PendingDeprecationWarning,
+    module=r"starlette\.formparsers",
+)
 
 import pandas as pd
 import pyarrow as pa

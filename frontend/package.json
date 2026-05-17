@@ -8,10 +8,10 @@
     "start": "next start",
     "lint": "eslint .",
     "clean": "next clean",
-    "test": "vitest run",
+    "test": "NODE_NO_WARNINGS=1 vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e": "NODE_NO_WARNINGS=1 playwright test",
+    "test:e2e:headed": "NODE_NO_WARNINGS=1 playwright test --headed"
   },
   "dependencies": {
     "@codemirror/lang-yaml": "^6.1.2",

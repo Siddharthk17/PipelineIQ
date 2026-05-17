@@ -91,11 +91,11 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
         const message = first.msg ?? "Invalid request payload";
         return `${location}: ${message}`;
       }
-      if (apiError.detail?.message) {
-        return apiError.detail.message;
-      }
       if (apiError.message) {
         return apiError.message;
+      }
+      if (apiError.detail?.message) {
+        return apiError.detail.message;
       }
     }
     return "Failed to start pipeline run.";

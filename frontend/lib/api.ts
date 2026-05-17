@@ -47,18 +47,10 @@ function extractApiErrorMessage(detail: unknown, fallback: string): string {
       message?: unknown;
       detail?: unknown;
       details?: unknown;
+      errors?: unknown;
+      schema_errors?: unknown;
       error?: unknown;
     };
-
-    if (typeof payload.message === "string" && payload.message.trim()) {
-      return payload.message;
-    }
-    if (typeof payload.error === "string" && payload.error.trim()) {
-      return payload.error;
-    }
-    if (typeof payload.detail === "string" && payload.detail.trim()) {
-      return payload.detail;
-    }
 
     const detailLists = [payload.details, payload.detail];
     for (const candidate of detailLists) {
@@ -82,6 +74,44 @@ function extractApiErrorMessage(detail: unknown, fallback: string): string {
       }
       const location = Array.isArray(first?.loc) ? first.loc.join(".") : first?.field;
       return location ? `${location}: ${message}` : message;
+    }
+
+    if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+      const first = payload.errors[0] as {
+        field?: unknown;
+        message?: unknown;
+        step_name?: unknown;
+      };
+      const message =
+        typeof first?.message === "string" ? first.message : "";
+      if (message) {
+        const stepName =
+          typeof first?.step_name === "string" && first.step_name.trim()
+            ? `${first.step_name}.`
+            : "";
+        const field =
+          typeof first?.field === "string" && first.field.trim()
+            ? `${first.field}: `
+            : "";
+        return `${stepName}${field}${message}`;
+      }
+    }
+
+    if (Array.isArray(payload.schema_errors) && payload.schema_errors.length > 0) {
+      const first = payload.schema_errors[0];
+      if (typeof first === "string" && first.trim()) {
+        return first;
+      }
+    }
+
+    if (typeof payload.message === "string" && payload.message.trim()) {
+      return payload.message;
+    }
+    if (typeof payload.error === "string" && payload.error.trim()) {
+      return payload.error;
+    }
+    if (typeof payload.detail === "string" && payload.detail.trim()) {
+      return payload.detail;
     }
   }
 

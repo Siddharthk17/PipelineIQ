@@ -136,6 +136,8 @@ Rule 6: The LAST step in the pipeline MUST be type: save
 Rule 7: load steps use file_id (the UUID shown below), NOT the filename
 Rule 8: join.on column must exist in BOTH the left and right input schemas
 Rule 9: Do NOT use the same column name for aggregate.group_by and as an aggregation target
+Rule 10: Never invent placeholder column names such as old_name, new_name, category, amount, or id unless they are explicitly present in the file schemas below
+Rule 11: If the request implies a column that does not exist, choose a valid alternative from the listed schemas or omit that transformation
 
     AVAILABLE FILES
 {file_schemas_section}
@@ -172,6 +174,7 @@ Fix the pipeline so it runs successfully.
 Make the MINIMUM change required — do not restructure the pipeline.
 If a column was renamed, update all references to it.
 If a type mismatch exists, add a fill_nulls or rename step to fix it.
+Never introduce placeholder column names or file IDs that are not present in the schemas above.
 Return the complete corrected YAML, not just the changed section.
 Your response must start with: pipeline:
 """
