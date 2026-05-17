@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import logging
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -156,7 +157,7 @@ def trigger_webhooks_for_run(
     steps_count: int = 0,
     rows_processed: int = 0,
     user_id: str = "",
-) -> None:
+) -> dict[str, Any]:
     """Fire webhooks for the pipeline owner that registered for this event type."""
     event_type = f"pipeline_{status.lower()}"
     payload = {
@@ -178,11 +179,34 @@ def trigger_webhooks_for_run(
         if user_id:
             query = query.filter(Webhook.user_id == user_id)
         webhooks = query.all()
+        matched_webhooks = 0
+        delivered = 0
+        failed = 0
         for wh in webhooks:
             if event_type in (wh.events or []):
+                matched_webhooks += 1
                 try:
-                    deliver_webhook(wh, event_type, payload, db=db)
+                    delivery = deliver_webhook(wh, event_type, payload, db=db)
+                    if delivery.delivered_at is not None:
+                        delivered += 1
+                    else:
+                        failed += 1
                 except Exception as e:
+                    failed += 1
                     logger.error("Failed to deliver webhook %s: %s", wh.id, e)
+        if delivered > 0 and failed == 0:
+            status_label = "delivered"
+        elif delivered > 0 and failed > 0:
+            status_label = "partial"
+        elif matched_webhooks == 0:
+            status_label = "skipped"
+        else:
+            status_label = "failed"
+        return {
+            "status": status_label,
+            "matched_webhooks": matched_webhooks,
+            "delivered": delivered,
+            "failed": failed,
+        }
     finally:
         db.close()

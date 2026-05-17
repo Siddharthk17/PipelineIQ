@@ -19,6 +19,7 @@ from fastapi import (
     APIRouter,
     Body,
     Depends,
+    File,
     HTTPException,
     Query,
     Request,
@@ -161,20 +162,6 @@ async def request_upload_url(
             },
         )
 
-        presigned_url = storage_service.get_presigned_upload_url(
-            str(stored_path))
-        if presigned_url:
-            return UploadUrlResponse(
-                method="direct",
-                file_id=file_id,
-                upload_url=presigned_url,
-                confirm_endpoint=(
-                    f"{absolute_api_prefix}/{file_id}/confirm"
-                    if is_legacy_api
-                    else f"{api_prefix}/{file_id}/confirm"
-                ),
-            )
-
         return UploadUrlResponse(
             method="direct",
             file_id=file_id,
@@ -294,8 +281,8 @@ async def confirm_direct_upload(
 @limiter.limit(settings.RATE_LIMIT_FILE_UPLOAD)
 async def upload_file(
     request: Request,
-    file: UploadFile,
     response: Response,
+    file: UploadFile = File(...),
     db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> FileUploadResponse:

@@ -9,19 +9,46 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.dependencies import get_read_db_dependency
 from backend.auth import get_current_user
+from backend.dependencies import get_read_db_dependency
 from backend.models import User, PipelineRun, UploadedFile
-from backend.ai.generation import (
-    generate_pipeline_from_description,
-    repair_pipeline_from_error,
-)
-from backend.ai.autocomplete import suggest_column, suggest_columns_batch
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.utils.uuid_utils import as_uuid
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
 logger = logging.getLogger(__name__)
+
+
+async def generate_pipeline_from_description(**kwargs):
+    from backend.ai.generation import (
+        generate_pipeline_from_description as _generate_pipeline_from_description,
+    )
+
+    return await _generate_pipeline_from_description(**kwargs)
+
+
+async def repair_pipeline_from_error(**kwargs):
+    from backend.ai.generation import (
+        repair_pipeline_from_error as _repair_pipeline_from_error,
+    )
+
+    return await _repair_pipeline_from_error(**kwargs)
+
+
+def suggest_column(typed: str, available_columns: list[str]) -> str | None:
+    from backend.ai.autocomplete import suggest_column as _suggest_column
+
+    return _suggest_column(typed, available_columns)
+
+
+def suggest_columns_batch(
+    typed_columns: list[str], available_columns: list[str]
+) -> dict[str, str | None]:
+    from backend.ai.autocomplete import (
+        suggest_columns_batch as _suggest_columns_batch,
+    )
+
+    return _suggest_columns_batch(typed_columns, available_columns)
 
 
 # Request/Response Models
@@ -35,7 +62,7 @@ class GeneratePipelineRequest(BaseModel):
     )
     file_ids: list[str] = Field(
         ...,
-        min_items=1,
+        min_length=1,
         description="UUIDs of uploaded files the pipeline can reference"
     )
 

@@ -18,8 +18,8 @@ def test_worker_gemini_joins_pipelineiq_network():
     assert "pipelineiq-network" in worker_gemini.get("networks", [])
 
 
-def test_worker_default_consumes_critical_and_default():
+def test_worker_default_consumes_default_only():
     compose = _load_compose()
     worker_default = compose["services"]["worker-default"]
 
-    assert "--queues=critical,default" in worker_default["command"]
+    assert "--queues=default" in worker_default["command"]

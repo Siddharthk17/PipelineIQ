@@ -10,7 +10,7 @@ import uuid
 from io import BytesIO
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from minio import Minio
 from sqlalchemy.orm import Session
 
@@ -73,7 +73,7 @@ def _inspect_wasm(wasm_bytes: bytes) -> tuple[list[dict], list[str]]:
 
 
 @router.post("/validate", response_model=WasmModuleValidateResponse)
-async def validate_wasm_module(file: UploadFile):
+async def validate_wasm_module(file: UploadFile = File(...)):
     """Validate a Wasm module without registering it.
 
     Checks: valid binary, no imports (sandbox), at least one export,
@@ -131,8 +131,8 @@ async def validate_wasm_module(file: UploadFile):
 
 @router.post("/upload", response_model=WasmModuleUploadResponse)
 async def upload_wasm_module(
-    file: UploadFile,
     name: str,
+    file: UploadFile = File(...),
     description: Optional[str] = None,
     fuel_budget: int = 10_000_000,
     db: Session = Depends(get_write_db_dependency),

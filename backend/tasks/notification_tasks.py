@@ -1,7 +1,7 @@
 """Celery task for asynchronous notification delivery."""
 
 import logging
-from typing import Dict
+from typing import Any, Dict
 
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
@@ -25,11 +25,11 @@ def deliver_notifications_task(
     status: str = "",
     error_message: str = "",
     user_id: str = "",
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Deliver Slack/email notifications for a pipeline event."""
     db = SessionLocal()
     try:
-        notify_pipeline_event(
+        report = notify_pipeline_event(
             db=db,
             event_type=event_type,
             pipeline_name=pipeline_name,
@@ -38,7 +38,7 @@ def deliver_notifications_task(
             error_message=error_message,
             user_id=user_id,
         )
-        return {"run_id": run_id, "status": "delivered"}
+        return {"run_id": run_id, **report}
     except Exception as exc:
         logger.error(
             "Notification delivery failed for run %s: %s",

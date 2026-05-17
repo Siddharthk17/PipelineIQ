@@ -6,6 +6,7 @@ __pycache__/
 .env
 .env.local
 .env*.local
+/*.csv
 uploads/
 backend/uploads/
 .pytest_cache/

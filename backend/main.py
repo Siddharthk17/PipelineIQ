@@ -8,9 +8,11 @@ entry point for the application.
 from backend.routers.ai import router as ai_router
 from backend.routers.wasm import router as wasm_router
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 import sentry_sdk
@@ -32,8 +34,14 @@ from backend.api.webhooks import router as webhooks_router
 from backend.api.audit import router as audit_router
 from backend.config import settings
 from backend.database import create_all_tables, write_engine, read_engine
-from backend.db.redis_pools import get_cache_redis
+from backend.db.redis_pools import (
+    get_broker_redis,
+    get_cache_redis,
+    get_pubsub_redis,
+    get_yjs_redis,
+)
 from backend.pipeline.exceptions import PipelineIQError
+from backend.services.storage_service import S3StorageProvider, storage_service
 from backend.utils.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
@@ -42,10 +50,18 @@ logger = logging.getLogger(__name__)
 class _HealthCheckFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
-        return "/health" not in msg and "/metrics" not in msg
+        return (
+            "/health" not in msg
+            and "/livez" not in msg
+            and "/readyz" not in msg
+            and "/metrics" not in msg
+        )
 
 logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
 logging.getLogger("gunicorn.access").addFilter(_HealthCheckFilter())
+
+_STARTUP_LOCK_PATH = Path("/tmp/pipelineiq_api_startup.lock")
+_STARTUP_MARKER_PATH = Path("/tmp/pipelineiq_api_startup.done")
 
 if settings.SENTRY_DSN:
     sentry_sdk.init(
@@ -72,10 +88,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.DEBUG,
         settings.LOG_LEVEL,
     )
-    if settings.ENVIRONMENT == "development":
+    if settings.AUTO_CREATE_TABLES:
         create_all_tables()
-    _validate_upload_dir()
-    _init_storage_bucket()
+    _run_startup_initialization_once()
     logger.info("Application startup complete")
 
     yield
@@ -105,6 +120,28 @@ def _validate_upload_dir() -> None:
             upload_dir,
             exc)
         raise
+
+
+def _run_startup_initialization_once() -> None:
+    """Run expensive startup initialization once per container lifecycle."""
+    if _STARTUP_MARKER_PATH.exists():
+        return
+
+    _STARTUP_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STARTUP_LOCK_PATH, "a+", encoding="utf-8") as lock_file:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            pass
+
+        if _STARTUP_MARKER_PATH.exists():
+            return
+
+        _validate_upload_dir()
+        _init_storage_bucket()
+        _STARTUP_MARKER_PATH.write_text("initialized\n", encoding="utf-8")
 
 
 def _init_storage_bucket() -> None:
@@ -147,7 +184,7 @@ app = FastAPI(
     - Real-time execution via Server-Sent Events
     - Data quality validation rules engine
     """,
-    version="3.6.2",
+    version=settings.APP_VERSION,
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
     contact={
@@ -227,8 +264,8 @@ async def validation_error_handler(
     )
     # Also log to standard logger for Docker log visibility
     import json as _json
-    logging.getLogger("pipelineiq").error(
-        "❌ 400 BAD REQUEST on %s %s", request.method, request.url
+    logging.getLogger("pipelineiq").warning(
+        "❌ 422 UNPROCESSABLE ENTITY on %s %s", request.method, request.url
     )
     logging.getLogger("pipelineiq").error(
         "❌ MISSING/INVALID FIELDS: %s", _json.dumps(safe_errors, indent=2)
@@ -255,7 +292,7 @@ async def generic_error_handler(
     """
     request_id = getattr(request.state, "request_id", "unknown")
     logger = structlog.get_logger()
-    logger.error(
+    logger.exception(
         "unhandled_exception",
         url=str(request.url),
         method=request.method,
@@ -336,10 +373,56 @@ if settings.ENVIRONMENT != "production":
 
 
 @app.get(
+    "/livez",
+    include_in_schema=False,
+    response_model=None,
+)
+def live_check() -> dict:
+    """Lightweight liveness endpoint."""
+    return {"status": "ok", "version": settings.APP_VERSION}
+
+
+@app.get(
+    "/readyz",
+    include_in_schema=False,
+    response_model=None,
+)
+def readiness_check() -> dict:
+    """Readiness probe for all critical runtime dependencies."""
+    checks = _collect_health_checks()
+    overall = "ok" if all(value == "ok" for value in checks.values()) else "degraded"
+    redis_summary = (
+        "ok"
+        if all(
+            checks[name] == "ok"
+            for name in (
+                "redis_broker",
+                "redis_pubsub",
+                "redis_cache",
+                "redis_yjs",
+            )
+        )
+        else "error"
+    )
+    db_summary = (
+        "ok"
+        if checks["db_write"] == "ok" and checks["db_read"] == "ok"
+        else "error"
+    )
+    return {
+        "status": overall,
+        "version": settings.APP_VERSION,
+        "db": db_summary,
+        "redis": redis_summary,
+        "checks": checks,
+    }
+
+
+@app.get(
     "/health",
     response_model=None,
     summary="Health check",
-    description="Checks actual DB and Redis connectivity.",
+    description="Checks actual runtime readiness across critical dependencies.",
 )
 @app.get(
     "/api/health",
@@ -347,36 +430,58 @@ if settings.ENVIRONMENT != "production":
     response_model=None,
 )
 def health_check() -> dict:
-    """Health check endpoint that verifies DB and Redis connectivity."""
-    db_status = _check_db_health()
-    redis_status = _check_redis_health()
-    overall = "ok" if db_status == "ok" and redis_status == "ok" else "degraded"
+    """Backward-compatible alias for readiness checks."""
+    return readiness_check()
 
+
+def _collect_health_checks() -> dict[str, str]:
+    """Collect readiness checks for runtime-critical dependencies."""
     return {
-        "status": overall,
-        "version": settings.APP_VERSION,
-        "db": db_status,
-        "redis": redis_status,
+        "db_write": _check_db_health(write_engine, "write"),
+        "db_read": _check_db_health(read_engine, "read"),
+        "redis_broker": _check_redis_health(get_broker_redis, "broker"),
+        "redis_pubsub": _check_redis_health(get_pubsub_redis, "pubsub"),
+        "redis_cache": _check_redis_health(get_cache_redis, "cache"),
+        "redis_yjs": _check_redis_health(get_yjs_redis, "yjs"),
+        "storage": _check_storage_health(),
     }
 
 
-def _check_db_health() -> str:
+def _check_db_health(engine, role: str) -> str:
     """Check database connectivity by executing a simple query."""
     try:
-        with write_engine.connect() as conn:
+        with engine.connect() as conn:
             conn.exec_driver_sql("SELECT 1")
         return "ok"
     except Exception as exc:
-        logger.error("Database health check failed: %s", exc)
+        logger.error("Database %s health check failed: %s", role, exc)
         return "error"
 
 
-def _check_redis_health() -> str:
+def _check_redis_health(factory, role: str) -> str:
     """Check Redis connectivity by sending a PING command."""
     try:
-        client = get_cache_redis()
+        client = factory()
         client.ping()
         return "ok"
     except Exception as exc:
-        logger.warning("Redis health check failed: %s", exc)
+        logger.warning("Redis %s health check failed: %s", role, exc)
+        return "error"
+
+
+def _check_storage_health() -> str:
+    """Check local or S3-compatible storage readiness."""
+    try:
+        provider = storage_service.provider
+        if isinstance(provider, S3StorageProvider):
+            provider.s3.head_bucket(Bucket=provider.bucket)
+        else:
+            upload_dir = Path(settings.UPLOAD_DIR)
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            probe_path = upload_dir / f".healthcheck_{os.getpid()}"
+            probe_path.touch(exist_ok=True)
+            probe_path.unlink(missing_ok=True)
+        return "ok"
+    except Exception as exc:
+        logger.warning("Storage health check failed: %s", exc)
         return "error"

@@ -1,8 +1,20 @@
 """Dedicated FastAPI app for Server-Sent Events streaming endpoints."""
 
+import logging
+
 from fastapi import FastAPI
 
 from backend.api.sse import router as sse_router, legacy_router as sse_legacy_router
+
+
+class _SSEHealthCheckFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "/health" not in msg and "/livez" not in msg and "/readyz" not in msg
+
+
+logging.getLogger("uvicorn.access").addFilter(_SSEHealthCheckFilter())
+logging.getLogger("gunicorn.access").addFilter(_SSEHealthCheckFilter())
 
 
 sse_app = FastAPI(

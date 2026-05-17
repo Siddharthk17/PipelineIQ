@@ -341,7 +341,7 @@ services:
     container_name: pipelineiq-worker-default
     command: >
       celery -A backend.celery_app:celery_app worker
-      --queues=critical,default
+      --queues=default
       --concurrency=${CELERY_WORKERS_DEFAULT:-3}
       --prefetch-multiplier=1
       --hostname=default@%h
@@ -692,9 +692,11 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: "/api/v1"
+        NEXT_PUBLIC_APP_VERSION: "${APP_VERSION:-12.7.3}"
     container_name: pipelineiq-frontend
     environment:
       - NEXT_PUBLIC_API_URL=/api/v1
+      - NEXT_PUBLIC_APP_VERSION=${APP_VERSION:-12.7.3}
     depends_on:
       api:
         condition: service_healthy

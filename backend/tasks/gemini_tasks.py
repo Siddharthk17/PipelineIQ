@@ -9,7 +9,6 @@ import time
 from celery.utils.log import get_task_logger
 
 from backend.celery_app import celery_app
-from backend.clients.gemini_client import get_gemini_model
 from backend.db.redis_pools import get_cache_redis
 
 logger = get_task_logger(__name__)
@@ -91,6 +90,8 @@ def call_gemini_task(
 
     # Step 3: Call Gemini
     try:
+        from backend.clients.gemini_client import get_gemini_model
+
         model = get_gemini_model()
         response = model.generate_content(
             prompt,

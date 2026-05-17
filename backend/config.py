@@ -35,9 +35,10 @@ class Settings(BaseSettings):
     )
 
     APP_NAME: str = "PipelineIQ"
-    APP_VERSION: str = "3.6.2"
+    APP_VERSION: str = "12.7.3"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
+    AUTO_CREATE_TABLES: bool = False
 
     DATABASE_URL: str = (
         "postgresql://postgres:pipelineiq_dev_password@localhost:5432/pipelineiq"

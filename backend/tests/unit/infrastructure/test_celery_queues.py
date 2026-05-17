@@ -93,13 +93,13 @@ class TestQueueConfiguration:
 class TestQueuePriorityModel:
     def test_worker_queue_assignment_model(self):
         critical_worker_queues = {"critical"}
-        default_worker_queues = {"critical", "default"}
+        default_worker_queues = {"default"}
         bulk_worker_queues = {"bulk"}
         gemini_worker_queues = {"gemini"}
 
         assert "default" not in critical_worker_queues
         assert "bulk" not in critical_worker_queues
-        assert "critical" in default_worker_queues
+        assert "critical" not in default_worker_queues
         assert "critical" not in bulk_worker_queues
         assert "default" not in bulk_worker_queues
         assert "gemini" not in critical_worker_queues

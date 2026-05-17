@@ -482,10 +482,10 @@ def run_pipeline(
             }
             for e in validation_result.errors
         ]
-        logger.error(
+        logger.warning(
             "❌ 400 BAD REQUEST on POST /api/v1/pipelines/run — YAML validation failed"
         )
-        logger.error("❌ VALIDATION ERRORS: %s", error_details)
+        logger.warning("❌ VALIDATION ERRORS: %s", error_details)
 
         # Otherwise, return all validation errors as 400
         raise HTTPException(
@@ -1096,31 +1096,76 @@ def export_pipeline_output(
     except Exception:
         logger.warning("Could not parse YAML for export, run_id=%s", run_id)
 
-    # Handle based on storage type
+    # Prefer concrete local artifacts when present, even if S3 storage is enabled.
+    output_dir = settings.UPLOAD_DIR
+    import glob as glob_module
+
+    output_files: list[str] = []
+    seen: set[str] = set()
+
+    def _add_matches(pattern: Path) -> None:
+        for match in glob_module.glob(str(pattern)):
+            if match not in seen:
+                seen.add(match)
+                output_files.append(match)
+
+    # Older conventions may include run_id in output filenames.
+    for pattern in [
+            output_dir /
+            f"{run_id}*.csv",
+            output_dir /
+            f"{run_id}*.json"]:
+        _add_matches(pattern)
+
+    # Current save step writes: "{filename}_{uuid}.csv"
+    for sr in save_results:
+        for ext in [".csv", ".json"]:
+            _add_matches(output_dir / f"{sr.step_name}_*{ext}")
+            _add_matches(output_dir / f"{sr.step_name}{ext}")
+
+    # Parse YAML and look for save.filename values.
+    try:
+        parsed_pipeline = get_parsed_pipeline(pipeline_run.yaml_config)
+        for step in parsed_pipeline.steps:
+            if getattr(step, "step_type", None) != "save":
+                continue
+            filename = str(getattr(step, "filename", "")).strip()
+            if not filename:
+                continue
+            for ext in [".csv", ".json"]:
+                _add_matches(output_dir / filename)
+                _add_matches(output_dir / f"{filename}_*{ext}")
+                if not filename.endswith(ext):
+                    _add_matches(output_dir / f"{filename}{ext}")
+    except Exception:
+        logger.warning(
+            "Could not parse YAML while locating export file for run_id=%s",
+            run_id)
+
+    if output_files:
+        output_path = Path(output_files[0])
+        media_type = "text/csv" if output_path.suffix == ".csv" else "application/json"
+
+        return FileResponse(
+            path=str(output_path),
+            media_type=media_type,
+            filename=output_path.name,
+        )
+
     if settings.STORAGE_TYPE == "s3":
-        # S3/MinIO: Return presigned download URL
-        # Use the first stored_path pattern to construct the S3 key
         if not stored_paths:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Could not determine output file path",
             )
 
-        # Convert pattern like "output_*.csv" to actual S3 key
-        # The save step uses: f"{filename}_{uuid}.{ext}"
-        # We need to find the actual file in S3
         try:
             from backend.services.storage_service import storage_service
 
-            # Try to get presigned URL for each possible pattern
             for pattern in stored_paths:
-                # Pattern is like "output_*.csv" - remove wildcard for S3
-                # lookup
                 base_name = pattern.replace("*", "").rstrip("_.")
-                # Build the S3 key path
                 s3_key = f"{settings.UPLOAD_DIR}/{base_name}"
 
-                # Try to get presigned download URL
                 try:
                     presigned_url = storage_service.get_presigned_download_url(
                         s3_key)
@@ -1141,64 +1186,8 @@ def export_pipeline_output(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to generate download URL: {str(e)}",
             )
-    else:
-        # Local filesystem: Use glob to find output files
-        output_dir = settings.UPLOAD_DIR
-        import glob as glob_module
 
-        output_files: list[str] = []
-        seen: set[str] = set()
-
-        def _add_matches(pattern: Path) -> None:
-            for match in glob_module.glob(str(pattern)):
-                if match not in seen:
-                    seen.add(match)
-                    output_files.append(match)
-
-        # Older conventions may include run_id in output filenames.
-        for pattern in [
-                output_dir /
-                f"{run_id}*.csv",
-                output_dir /
-                f"{run_id}*.json"]:
-            _add_matches(pattern)
-
-        # Current save step writes: "{filename}_{uuid}.csv"
-        for sr in save_results:
-            for ext in [".csv", ".json"]:
-                _add_matches(output_dir / f"{sr.step_name}_*{ext}")
-                _add_matches(output_dir / f"{sr.step_name}{ext}")
-
-        # Parse YAML and look for save.filename values.
-        try:
-            parsed_pipeline = get_parsed_pipeline(pipeline_run.yaml_config)
-            for step in parsed_pipeline.steps:
-                if getattr(step, "step_type", None) != "save":
-                    continue
-                filename = str(getattr(step, "filename", "")).strip()
-                if not filename:
-                    continue
-                for ext in [".csv", ".json"]:
-                    _add_matches(output_dir / filename)
-                    _add_matches(output_dir / f"{filename}_*{ext}")
-                    if not filename.endswith(ext):
-                        _add_matches(output_dir / f"{filename}{ext}")
-        except Exception:
-            logger.warning(
-                "Could not parse YAML while locating export file for run_id=%s",
-                run_id)
-
-        if not output_files:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No output file found for this pipeline run",
-            )
-
-        output_path = Path(output_files[0])
-        media_type = "text/csv" if output_path.suffix == ".csv" else "application/json"
-
-        return FileResponse(
-            path=str(output_path),
-            media_type=media_type,
-            filename=output_path.name,
-        )
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="No output file found for this pipeline run",
+    )

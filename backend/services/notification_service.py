@@ -7,7 +7,7 @@ matching notification configs for pipeline events.
 import logging
 import smtplib
 import ssl
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 from email.message import EmailMessage
@@ -111,6 +111,25 @@ def _normalize_email_recipients(config: dict) -> list[str]:
     return []
 
 
+def _delivery_status(
+    *,
+    matched_configs: int,
+    attempted: int,
+    sent: int,
+    failures: int,
+    skipped: int,
+) -> str:
+    if sent > 0 and failures == 0 and skipped == 0:
+        return "delivered"
+    if sent > 0 and (failures > 0 or skipped > 0):
+        return "partial"
+    if matched_configs == 0 or attempted == 0:
+        return "skipped"
+    if failures > 0:
+        return "failed"
+    return "skipped"
+
+
 def notify_pipeline_event(
     db: Session,
     event_type: str,
@@ -119,7 +138,7 @@ def notify_pipeline_event(
     status: Optional[str] = None,
     error_message: Optional[str] = None,
     user_id: str = "",
-) -> int:
+) -> dict[str, Any]:
     """Find matching notification configs and send notifications.
 
     Returns the number of notifications successfully sent.
@@ -129,28 +148,58 @@ def notify_pipeline_event(
         query = query.filter(NotificationConfig.user_id == user_id)
     configs = query.all()
 
+    matched_configs = 0
+    attempted = 0
     sent = 0
+    failures = 0
+    skipped = 0
     for config in configs:
         events_list = config.events or []
         if event_type not in events_list:
             continue
+        matched_configs += 1
 
         message = _build_message(
             event_type, pipeline_name, run_id, status, error_message
         )
 
         if config.type == NotificationType.SLACK:
+            attempted += 1
             webhook_url = (config.config or {}).get("slack_webhook_url")
-            if webhook_url and send_slack_notification(webhook_url, message):
+            if not webhook_url:
+                skipped += 1
+                logger.info("Slack notification skipped: webhook URL not configured")
+            elif send_slack_notification(webhook_url, message):
                 sent += 1
+            else:
+                failures += 1
         elif config.type == NotificationType.EMAIL:
+            attempted += 1
             recipients = _normalize_email_recipients(config.config or {})
-            if recipients:
+            if not recipients:
+                skipped += 1
+                logger.info("Email notification skipped: no recipients provided")
+            else:
                 subject = f"PipelineIQ: {event_type.replace('_', ' ').title()}"
                 if send_email_notification(recipients, subject, message):
                     sent += 1
+                else:
+                    failures += 1
 
-    return sent
+    return {
+        "status": _delivery_status(
+            matched_configs=matched_configs,
+            attempted=attempted,
+            sent=sent,
+            failures=failures,
+            skipped=skipped,
+        ),
+        "matched_configs": matched_configs,
+        "attempted": attempted,
+        "sent": sent,
+        "failed": failures,
+        "skipped": skipped,
+    }
 
 
 def _build_message(

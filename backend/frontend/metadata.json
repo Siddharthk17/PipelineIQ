@@ -1,0 +1,5 @@
+{
+  "name": "PipelineIQ",
+  "description": "A data pipeline orchestration tool with a Hyprland-inspired tiling window manager dashboard.",
+  "requestFramePermissions": []
+}
