@@ -12,7 +12,9 @@ from confluent_kafka.admin import AdminClient, NewTopic
 
 logger = logging.getLogger(__name__)
 
-REDPANDA_BROKERS    = os.environ.get("REDPANDA_BROKERS", "redpanda:9092")
+def _get_brokers() -> str:
+    return os.environ.get("REDPANDA_BROKERS", "redpanda:9092")
+
 DEFAULT_PARTITIONS  = 8         # 8 partitions = 8 parallel consumers — fixes Bottleneck #15
 DEFAULT_RETENTION_MS = "86400000"  # 24 hours
 DEFAULT_SEGMENT_BYTES = "104857600"  # 100MB
@@ -21,10 +23,10 @@ DEFAULT_SEGMENT_BYTES = "104857600"  # 100MB
 class RedpandaAdminClient:
     """Manages Redpanda topics — create, list, delete."""
 
-    def __init__(self, brokers: str = REDPANDA_BROKERS):
-        self._brokers = brokers
+    def __init__(self, brokers: str | None = None):
+        self._brokers = brokers or _get_brokers()
         self._client  = AdminClient({
-            "bootstrap.servers": brokers,
+            "bootstrap.servers": self._brokers,
             "socket.timeout.ms": 10_000,
             "request.timeout.ms": 15_000,
         })
@@ -114,7 +116,7 @@ def make_consumer(consumer_group: str, auto_offset_reset: str = "latest") -> Con
     'earliest' = replay all messages from start (backfill mode).
     """
     return Consumer({
-        "bootstrap.servers":        REDPANDA_BROKERS,
+        "bootstrap.servers":        _get_brokers(),
         "group.id":                 consumer_group,
         "auto.offset.reset":        auto_offset_reset,
         "enable.auto.commit":       True,
@@ -129,7 +131,7 @@ def make_consumer(consumer_group: str, auto_offset_reset: str = "latest") -> Con
 
 def make_producer() -> Producer:
     return Producer({
-        "bootstrap.servers":  REDPANDA_BROKERS,
+        "bootstrap.servers":  _get_brokers(),
         "acks":               1,
         "linger.ms":          5,
         "batch.size":         16_384,
@@ -142,7 +144,7 @@ def make_producer() -> Producer:
 def make_dlq_producer() -> Producer:
     """DLQ producer uses strong delivery guarantees (acks='all')."""
     return Producer({
-        "bootstrap.servers":  REDPANDA_BROKERS,
+        "bootstrap.servers":  _get_brokers(),
         "acks":               "all",  # all replicas must acknowledge
         "retries":            10,
         "linger.ms":          0,      # immediate send, no batching

@@ -7,5 +7,8 @@ os.environ["STORAGE_TYPE"] = "local"
 os.environ["UPLOAD_DIR"] = "/tmp/pipelineiq-test-uploads"
 os.makedirs("/tmp/pipelineiq-test-uploads", exist_ok=True)
 
+# CRITICAL: Set Redpanda broker to localhost for host-side tests
+os.environ["REDPANDA_BROKERS"] = "localhost:9092"
+
 # Ensure backend is on path
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), "..", "..")))

@@ -150,6 +150,7 @@ services:
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - REDPANDA_BROKERS=redpanda:9093
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
       - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-524288000}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
@@ -839,8 +840,8 @@ services:
       - --memory 1G
       - --reserve-memory 100M
       - --overprovisioned
-      - --kafka-addr PLAINTEXT://0.0.0.0:9092
-      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:9093
+      - --advertise-kafka-addr PLAINTEXT://localhost:9092,INTERNAL://redpanda:9093
       - --pandaproxy-addr 0.0.0.0:8082
       - --schema-registry-addr 0.0.0.0:8081
       - --rpc-addr redpanda:33145
@@ -852,6 +853,10 @@ services:
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     mem_limit: 1200m
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
       interval: 15s
@@ -893,7 +898,7 @@ services:
       - .env
     environment:
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDPANDA_BROKERS=redpanda:9092
+      - REDPANDA_BROKERS=redpanda:9093
       - CELERY_CONCURRENCY=8
     depends_on:
       redis-broker:
