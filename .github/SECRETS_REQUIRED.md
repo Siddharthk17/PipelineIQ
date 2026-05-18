@@ -16,7 +16,7 @@ The following secrets must be configured in your GitHub repository settings
 
 | Secret | Description | Required |
 |--------|-------------|----------|
-| `RAILWAY_TOKEN` | Railway deployment token | Only for main branch deploys |
+| `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL for backend service | Required for main branch deploys |
 
 ## How to Generate
 
