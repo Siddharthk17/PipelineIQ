@@ -480,7 +480,7 @@ pipeline:
   name: test
   steps:
     - name: bad_step
-      type: transform
+      type: bogus_type
 """
         config = parser.parse(yaml_str)
         result = parser.validate(config, set())

@@ -16,6 +16,7 @@ Requires: Redpanda running on localhost:9092, PostgreSQL, Redis, Celery worker-s
 
 import json
 import os
+import socket
 import subprocess
 import time
 import uuid
@@ -28,6 +29,24 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 
 # Redpanda connection for host-side tests
 RP_BROKERS = "localhost:9092"
+
+
+def _redpanda_available():
+    """Check if Redpanda broker is reachable."""
+    try:
+        host, port = RP_BROKERS.split(":")
+        sock = socket.create_connection((host, int(port)), timeout=2)
+        sock.close()
+        return True
+    except (ConnectionRefusedError, OSError, ValueError):
+        return False
+
+
+@pytest.fixture(scope="session", autouse=True)
+def skip_if_no_redpanda():
+    """Skip all streaming E2E tests if Redpanda is not running."""
+    if not _redpanda_available():
+        pytest.skip("Redpanda broker not available at localhost:9092")
 
 
 def _rp_producer(extra=None):
@@ -84,17 +103,6 @@ def _docker_rpk_delete_topic(topic):
 # ---------------------------------------------------------------------------
 
 BASE_URL = "http://localhost"
-
-
-@pytest.fixture(scope="session", autouse=True)
-def cleanup_old_topics():
-    """Clean up old test topics to prevent resource exhaustion."""
-    subprocess.run(
-        ["docker", "exec", "pipelineiq-redpanda", "sh", "-c",
-         "rpk topic list | grep 'test-' | awk '{print $1}' | xargs -I {} rpk topic delete {} 2>/dev/null"],
-        capture_output=True, text=True, timeout=30
-    )
-    time.sleep(2)
 
 
 @pytest.fixture(scope="session")
@@ -446,8 +454,14 @@ class TestFrontendStepDefinitions:
 class TestStreamingStatsModel:
 
     def _db_available(self):
-        from backend.config import settings
-        return "localhost" in settings.DATABASE_URL or "127.0.0.1" in settings.DATABASE_URL
+        """Check if database is reachable (not just URL pattern)."""
+        try:
+            from backend.database import engine
+            from sqlalchemy import inspect
+            inspect(engine).get_table_names()
+            return True
+        except Exception:
+            return False
 
     def test_streaming_stats_model_importable(self):
         from backend.models import StreamingStats
@@ -455,14 +469,14 @@ class TestStreamingStatsModel:
 
     def test_streaming_stats_table_exists(self):
         if not self._db_available():
-            pytest.skip("DB not on localhost")
+            pytest.skip("Database not reachable")
         from backend.database import engine
         from sqlalchemy import inspect
         assert "streaming_stats" in inspect(engine).get_table_names()
 
     def test_streaming_stats_columns(self):
         if not self._db_available():
-            pytest.skip("DB not on localhost")
+            pytest.skip("Database not reachable")
         from backend.database import engine
         from sqlalchemy import inspect
         cols = {c["name"] for c in inspect(engine).get_columns("streaming_stats")}
@@ -474,7 +488,7 @@ class TestStreamingStatsModel:
 
     def test_streaming_stats_run_id_is_pk(self):
         if not self._db_available():
-            pytest.skip("DB not on localhost")
+            pytest.skip("Database not reachable")
         from backend.database import engine
         from sqlalchemy import inspect
         pk = inspect(engine).get_pk_constraint("streaming_stats")
@@ -482,7 +496,7 @@ class TestStreamingStatsModel:
 
     def test_streaming_stats_foreign_key(self):
         if not self._db_available():
-            pytest.skip("DB not on localhost")
+            pytest.skip("Database not reachable")
         from backend.database import engine
         from sqlalchemy import inspect
         fks = inspect(engine).get_foreign_keys("streaming_stats")
