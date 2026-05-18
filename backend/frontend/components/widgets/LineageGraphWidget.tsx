@@ -5,17 +5,23 @@ import { usePipelineStore } from "@/store/pipelineStore";
 import { useQuery } from "@tanstack/react-query";
 import { getPipelineRuns } from "@/lib/api";
 import { PIPELINE_RUNS_PAGE_LIMIT, PIPELINE_RUNS_QUERY_KEY } from "@/lib/constants";
+import type { PipelineRun } from "@/lib/types";
 import { LineageGraph } from "../lineage/LineageGraph";
 import { GitMerge, Activity } from "lucide-react";
 
 export function LineageGraphWidget() {
-  const { activeRunId, setActiveRunId } = usePipelineStore();
+  const { activeRunId, activeRun, setActiveRunId } = usePipelineStore();
   const { data: runs } = useQuery({
     queryKey: PIPELINE_RUNS_QUERY_KEY,
     queryFn: () => getPipelineRuns(1, PIPELINE_RUNS_PAGE_LIMIT),
     staleTime: 15000,
   });
   const [mode, setMode] = useState<"ancestry" | "impact">("ancestry");
+  const selectedRun =
+    runs?.find((run) => run.id === activeRunId)
+    ?? (activeRun?.id === activeRunId ? activeRun : null);
+  const lineageReadyStatuses = new Set<PipelineRun["status"]>(["COMPLETED", "HEALED"]);
+  const canLoadLineage = selectedRun ? lineageReadyStatuses.has(selectedRun.status) : false;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -62,7 +68,13 @@ export function LineageGraphWidget() {
       </div>
 
       <div className="flex-1 relative">
-        <LineageGraph key={`${mode}:${activeRunId ?? "none"}`} runId={activeRunId} mode={mode} />
+        <LineageGraph
+          key={`${mode}:${activeRunId ?? "none"}`}
+          runId={activeRunId}
+          mode={mode}
+          canLoad={canLoadLineage}
+          runStatus={selectedRun?.status ?? null}
+        />
       </div>
     </div>
   );

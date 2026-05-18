@@ -12,7 +12,14 @@ from backend.execution.duckdb_executor import (
     get_worker_duckdb,
     initialize_worker_duckdb,
 )
-from backend.pipeline.parser import FilterOperator, FilterStepConfig, JoinHow, JoinStepConfig
+from backend.pipeline.parser import (
+    FilterOperator,
+    FilterStepConfig,
+    JoinHow,
+    JoinStepConfig,
+    SampleStepConfig,
+    StepType,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -97,3 +104,47 @@ def test_execute_sql_step_template_query() -> None:
     out_df = output.to_pandas()
     assert list(out_df.columns) == ["customer_id", "amount_x2"]
     assert out_df["amount_x2"].tolist() == [20, 40]
+
+
+def test_execute_sample_fraction_step_with_random_state() -> None:
+    initialize_worker_duckdb()
+    executor = DuckDBExecutor(local_fallback=False)
+    step = SampleStepConfig(
+        name="sample_fraction",
+        step_type=StepType.SAMPLE,
+        input="load",
+        fraction=0.5,
+        random_state=42,
+    )
+    input_table = pa.Table.from_pandas(
+        pd.DataFrame({"id": list(range(100)), "amount": list(range(100))}),
+        preserve_index=False,
+    )
+
+    output = executor.execute_step(step, input_table)
+    out_df = output.to_pandas()
+
+    assert 0 < len(out_df) < 100
+    assert set(out_df.columns) == {"id", "amount"}
+
+
+def test_execute_sample_n_step_with_random_state() -> None:
+    initialize_worker_duckdb()
+    executor = DuckDBExecutor(local_fallback=False)
+    step = SampleStepConfig(
+        name="sample_rows",
+        step_type=StepType.SAMPLE,
+        input="load",
+        n=5,
+        random_state=42,
+    )
+    input_table = pa.Table.from_pandas(
+        pd.DataFrame({"id": list(range(20)), "amount": list(range(20))}),
+        preserve_index=False,
+    )
+
+    output = executor.execute_step(step, input_table)
+    out_df = output.to_pandas()
+
+    assert len(out_df) == 5
+    assert set(out_df.columns) == {"id", "amount"}

@@ -4,7 +4,7 @@ import type { Node as ReactFlowNode, Edge as ReactFlowEdge } from "@xyflow/react
 import "@xyflow/react/dist/style.css";
 import { useLineageGraph } from "@/hooks/useLineage";
 import { getImpactAnalysis } from "@/lib/api";
-import { ImpactAnalysis } from "@/lib/types";
+import { ImpactAnalysis, PipelineRun } from "@/lib/types";
 import { ImpactProvider, ImpactState } from "./ImpactContext";
 import { SourceFileNode } from "./nodes/SourceFileNode";
 import { StepNode } from "./nodes/StepNode";
@@ -22,10 +22,12 @@ const nodeTypes = {
 interface LineageGraphProps {
   runId: string | null;
   mode: "ancestry" | "impact";
+  canLoad?: boolean;
+  runStatus?: PipelineRun["status"] | null;
 }
 
-export function LineageGraph({ runId, mode }: LineageGraphProps) {
-  const { data: graphData, isLoading } = useLineageGraph(runId);
+export function LineageGraph({ runId, mode, canLoad = true, runStatus = null }: LineageGraphProps) {
+  const { data: graphData, isLoading } = useLineageGraph(runId, canLoad);
   const [nodes, setNodes, onNodesChange] = useNodesState<ReactFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<ReactFlowEdge>([]);
 
@@ -163,6 +165,18 @@ export function LineageGraph({ runId, mode }: LineageGraphProps) {
     return (
       <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
         Select a pipeline run to view its lineage graph.
+      </div>
+    );
+  }
+
+  if (!canLoad) {
+    const message =
+      runStatus === "FAILED" || runStatus === "CANCELLED" || runStatus === "TIMEOUT"
+        ? "Lineage is only available for completed or healed runs."
+        : "Lineage will be available after this run finishes.";
+    return (
+      <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
+        {message}
       </div>
     );
   }

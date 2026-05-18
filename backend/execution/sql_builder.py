@@ -375,15 +375,14 @@ def build_sample_sql(step: Any) -> str:
     if n is not None and fraction is not None:
         raise ValueError("Sample step cannot define both 'n' and 'fraction'")
 
-    repeat_clause = (
-        f" REPEATABLE ({int(random_state)})" if random_state is not None else ""
-    )
     if n is not None:
         rows = max(0, int(n))
-        return (
-            f"SELECT * FROM __input__ USING SAMPLE {rows} ROWS (reservoir)"
-            f"{repeat_clause}"
-        )
+        sample_spec = "reservoir"
+        if random_state is not None:
+            # DuckDB 1.5.x accepts the seed inside the sampling method clause
+            # for the compact "USING SAMPLE ... ROWS (...)" syntax.
+            sample_spec = f"reservoir, {int(random_state)}"
+        return f"SELECT * FROM __input__ USING SAMPLE {rows} ROWS ({sample_spec})"
 
     frac = float(fraction)
     if frac < 0:
@@ -391,10 +390,10 @@ def build_sample_sql(step: Any) -> str:
     if frac > 1:
         frac = 1.0
     percent = frac * 100.0
-    return (
-        f"SELECT * FROM __input__ USING SAMPLE {percent:.6f}% (bernoulli)"
-        f"{repeat_clause}"
-    )
+    sample_spec = "bernoulli"
+    if random_state is not None:
+        sample_spec = f"bernoulli, {int(random_state)}"
+    return f"SELECT * FROM __input__ USING SAMPLE {percent:.6f}% ({sample_spec})"
 
 
 def build_fill_nulls_sql(step: Any) -> str:

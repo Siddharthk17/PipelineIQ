@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { getLineageGraph, getColumnLineage, getImpactAnalysis } from "@/lib/api";
 
-export function useLineageGraph(runId: string | null) {
+export function useLineageGraph(runId: string | null, enabled = true) {
   return useQuery({
     queryKey: ["lineage", runId],
     queryFn: () => getLineageGraph(runId!),
-    enabled: !!runId,
+    enabled: !!runId && enabled,
+    retry: false,
   });
 }
 
