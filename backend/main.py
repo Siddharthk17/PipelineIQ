@@ -7,6 +7,7 @@ entry point for the application.
 
 from backend.routers.ai import router as ai_router
 from backend.routers.wasm import router as wasm_router
+from backend.routers.streaming import router as streaming_router
 import logging
 import os
 import time
@@ -365,6 +366,7 @@ app.include_router(audit_router)
 
 app.include_router(ai_router)
 app.include_router(wasm_router)
+app.include_router(streaming_router)
 
 if settings.ENVIRONMENT != "production":
     from backend.api.debug import router as debug_router

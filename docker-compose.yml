@@ -829,6 +829,86 @@ services:
     networks:
       - pipelineiq-network
 
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: pipelineiq-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 100M
+      - --overprovisioned
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --schema-registry-addr 0.0.0.0:8081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+    ports:
+      - "9092:9092"
+      - "8082:8082"
+      - "8081:8081"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    mem_limit: 1200m
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:latest
+    container_name: pipelineiq-redpanda-console
+    restart: unless-stopped
+    entrypoint: /bin/sh
+    command: -c "echo \"kafka:\\n  brokers:\\n    - redpanda:9092\" > /tmp/config.yml && /app/console --config.filepath=/tmp/config.yml"
+    ports:
+      - "8090:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    mem_limit: 100m
+    networks:
+      - pipelineiq-network
+
+  worker-streaming:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pipelineiq-worker-streaming
+    command: >
+      celery -A backend.celery_app:celery_app worker
+      --queues=streaming
+      --concurrency=8
+      --prefetch-multiplier=1
+      --hostname=streaming@%%h
+      --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDPANDA_BROKERS=redpanda:9092
+      - CELERY_CONCURRENCY=8
+    depends_on:
+      redis-broker:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+    shm_size: '2gb'
+    volumes:
+      - uploads:/app/uploads
+      - ./backend:/app/backend
+    networks:
+      - pipelineiq-network
+
+
 volumes:
   uploads:
   db_data:
@@ -839,6 +919,7 @@ volumes:
   minio_data:
   prometheus_data:
   grafana_data:
+  redpanda_data: {}
 
 networks:
   pipelineiq-network:

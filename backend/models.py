@@ -14,6 +14,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum as SQLEnum,
+    Float,
     ForeignKey,
     Integer,
     Numeric,
@@ -49,6 +50,9 @@ class PipelineStatus(str, PyEnum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     TIMEOUT = "TIMEOUT"
+    STREAMING_ACTIVE = "STREAMING_ACTIVE"
+    STREAMING_PAUSED = "STREAMING_PAUSED"
+    STREAMING_STOPPED = "STREAMING_STOPPED"
 
 
 class StepStatus(str, PyEnum):
@@ -671,3 +675,34 @@ class WasmModule(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class StreamingStats(Base):
+    """Tracks execution statistics for a streaming pipeline run."""
+
+    __tablename__ = "streaming_stats"
+
+    run_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    batches_processed: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0")
+    messages_processed: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0")
+    messages_failed: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0")
+    messages_dlq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0")
+    throughput_per_sec: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True)
+    consumer_lag: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True)
+    last_batch_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False)
+    topic: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    consumer_group: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    avg_batch_latency_ms: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True)
+

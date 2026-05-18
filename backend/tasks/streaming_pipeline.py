@@ -1,0 +1,337 @@
+"""Long-running streaming pipeline Celery daemon.
+
+Architectural differences from batch pipeline task:
+  - NO time_limit / soft_time_limit — runs indefinitely until revoked
+  - acks_late=True — acknowledge only after processing completes
+  - Main loop polls Redpanda until self.is_aborted() returns True
+  - consumer.close() ALWAYS called in finally block
+  - Failed batches route to DLQ, pipeline continues (does NOT stop)
+"""
+
+import json
+import logging
+import time
+from datetime import datetime, timezone
+
+import pandas as pd
+import pyarrow as pa
+from celery.utils.log import get_task_logger
+from confluent_kafka import KafkaError
+
+from backend.celery_app import celery_app
+from backend.database import SessionLocal
+from backend.db.redis_pools import get_pubsub_redis
+from backend.execution.smart_executor import SmartExecutor
+from backend.models import PipelineRun, PipelineStatus, StreamingStats
+from backend.pipeline.cache import get_parsed_pipeline
+from backend.pipeline.lineage import LineageRecorder
+from backend.streaming.redpanda_client import (
+    get_admin_client,
+    make_consumer,
+    make_dlq_producer,
+    make_producer,
+)
+from backend.utils.time_utils import utcnow
+
+logger = get_task_logger(__name__)
+
+STATS_UPDATE_INTERVAL = 5
+
+
+@celery_app.task(
+    name="tasks.run_streaming_pipeline",
+    queue="streaming",
+    bind=True,
+    acks_late=True,
+)
+def run_streaming_pipeline(self, run_id: str) -> dict:
+    """Long-running streaming pipeline daemon.
+
+    Loops forever polling a Redpanda topic until self.is_aborted() returns True.
+    """
+    logger.info("Streaming pipeline daemon started: run_id=%s", run_id)
+
+    db = SessionLocal()
+    consumer = None
+    producer = None
+    dlq_producer = None
+
+    try:
+        pipeline_run = db.query(PipelineRun).filter(
+            PipelineRun.id == run_id).first()
+        if not pipeline_run:
+            logger.error("Run not found: %s", run_id)
+            return {"error": "Run not found"}
+
+        config = get_parsed_pipeline(pipeline_run.yaml_config)
+        steps = config.steps
+
+        consume_step = next(
+            (s for s in steps if _step_type(s) == "stream_consume"), None)
+        publish_step = next(
+            (s for s in steps if _step_type(s) == "stream_publish"), None)
+        middle_steps = [
+            s for s in steps
+            if _step_type(s) not in ("stream_consume", "stream_publish", "load", "save")
+        ]
+
+        if not consume_step:
+            _set_status(db, run_id, PipelineStatus.FAILED)
+            return {"error": "No stream_consume step found"}
+
+        topic = _step_field(consume_step, "topic")
+        consumer_group = _step_field(
+            consume_step, "consumer_group") or f"piq-{run_id[:8]}"
+        batch_size = int(_step_field(consume_step, "batch_size") or 1000)
+        timeout_ms = int(_step_field(consume_step, "batch_timeout_ms") or 5000)
+        timeout_s = timeout_ms / 1000.0
+        deserialize_fmt = _step_field(consume_step, "deserialize") or "json"
+
+        admin = get_admin_client()
+        admin.ensure_topic(topic)
+
+        _set_status(db, run_id, PipelineStatus.STREAMING_ACTIVE)
+        _init_stats(db, run_id, topic, consumer_group)
+        db.commit()
+
+        consumer = make_consumer(consumer_group)
+        consumer.subscribe([topic])
+
+        producer = make_producer() if publish_step else None
+        dlq_producer = make_dlq_producer()
+
+        executor = SmartExecutor()
+        recorder = LineageRecorder()
+
+        stats = {
+            "batches": 0,
+            "messages": 0,
+            "failed": 0,
+            "dlq": 0,
+            "start": time.monotonic(),
+        }
+
+        logger.info(
+            "Subscribed to '%s' (group=%s, batch=%d, timeout=%.1fs)",
+            topic, consumer_group, batch_size, timeout_s,
+        )
+
+        while not self.is_aborted():
+            if stats["batches"] % 10 == 0 and stats["batches"] > 0:
+                if _handle_pause(db, run_id, self):
+                    break
+
+            messages = consumer.consume(
+                num_messages=batch_size, timeout=timeout_s)
+            if not messages:
+                continue
+
+            valid = [m for m in messages if not m.error()]
+            errors = [
+                m for m in messages
+                if m.error() and m.error().code() != KafkaError._PARTITION_EOF
+            ]
+
+            if errors:
+                logger.warning("Kafka partition errors: %d", len(errors))
+            if not valid:
+                continue
+
+            t0 = time.monotonic()
+
+            try:
+                df = _deserialize(valid, deserialize_fmt)
+            except Exception as exc:
+                logger.error("Deserialization error: %s", exc)
+                _send_dlq(dlq_producer, valid, topic, str(exc))
+                stats["dlq"] += len(valid)
+                continue
+
+            if df.empty:
+                continue
+
+            try:
+                table = pa.Table.from_pandas(df, preserve_index=False)
+                table_registry: dict[str, pa.Table] = {"_stream_input": table}
+                output_name = "_stream_input"
+
+                for step in middle_steps:
+                    result = executor.execute_step(
+                        step,
+                        table_registry,
+                        recorder,
+                    )
+                    output_name = step.name if hasattr(step, "name") else output_name
+                    table_registry[output_name] = result.output_table
+
+                df = table_registry[output_name].to_pandas()
+            except Exception as exc:
+                logger.error("Batch processing error: %s", exc)
+                _send_dlq(dlq_producer, valid, topic, str(exc))
+                stats["failed"] += len(valid)
+                stats["dlq"] += len(valid)
+                continue
+
+            if publish_step and producer and not df.empty:
+                try:
+                    _publish(producer, df, publish_step)
+                except Exception as exc:
+                    logger.error("Publish error (non-fatal): %s", exc)
+
+            batch_ms = (time.monotonic() - t0) * 1000
+            stats["batches"] += 1
+            stats["messages"] += len(valid)
+            elapsed = time.monotonic() - stats["start"]
+            throughput = stats["messages"] / elapsed if elapsed > 0 else 0
+
+            if stats["batches"] % STATS_UPDATE_INTERVAL == 0:
+                _update_stats(db, run_id, stats, throughput, batch_ms)
+                _sse_progress(run_id, stats, throughput)
+
+        _set_status(db, run_id, PipelineStatus.STREAMING_STOPPED)
+        logger.info(
+            "Streaming stopped: batches=%d, messages=%d",
+            stats["batches"], stats["messages"],
+        )
+        return stats
+
+    except Exception as exc:
+        logger.exception("Streaming error: %s", exc)
+        try:
+            _set_status(db, run_id, PipelineStatus.FAILED)
+            db.commit()
+        except Exception:
+            pass
+        raise
+    finally:
+        if consumer:
+            consumer.close()
+        if producer:
+            producer.flush(timeout=5)
+        if dlq_producer:
+            dlq_producer.flush(timeout=5)
+        db.close()
+        logger.info("Consumer closed for run_id=%s", run_id)
+
+
+def _step_type(step) -> str:
+    return getattr(step, "type", "") or ""
+
+
+def _step_field(step, field: str):
+    return getattr(step, field, None)
+
+
+def _deserialize(messages, fmt: str) -> pd.DataFrame:
+    records = []
+    for msg in messages:
+        v = msg.value()
+        if v is None:
+            continue
+        try:
+            if fmt == "json":
+                records.append(json.loads(v))
+            else:
+                records.append({"raw": v.decode("utf-8", errors="replace")})
+        except Exception:
+            continue
+    return pd.DataFrame(records) if records else pd.DataFrame()
+
+
+def _publish(producer, df: pd.DataFrame, publish_step) -> None:
+    topic = _step_field(publish_step, "topic")
+    key_col = _step_field(publish_step, "key_column")
+    for record in df.to_dict(orient="records"):
+        key = (
+            str(record[key_col]).encode()
+            if key_col and key_col in record
+            else None
+        )
+        value = json.dumps(record, default=str).encode()
+        producer.produce(topic=topic, key=key, value=value)
+    producer.poll(0)
+
+
+def _send_dlq(dlq_producer, messages, original_topic: str, error: str) -> None:
+    dlq_topic = f"{original_topic}.dlq"
+    failed_at = datetime.now(timezone.utc).isoformat()
+    for msg in messages:
+        dlq_producer.produce(
+            topic=dlq_topic,
+            value=msg.value(),
+            key=msg.key(),
+            headers=[
+                ("x-error", error[:500].encode()),
+                ("x-original-topic", original_topic.encode()),
+                ("x-failed-at", failed_at.encode()),
+                ("x-original-offset", str(msg.offset()).encode()),
+            ],
+        )
+    dlq_producer.flush(timeout=5)
+
+
+def _handle_pause(db, run_id: str, task) -> bool:
+    db.expire_all()
+    run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    if not run:
+        return True
+    if run.status == PipelineStatus.STREAMING_PAUSED:
+        logger.info("Paused — waiting for resume signal")
+        while not task.is_aborted():
+            time.sleep(2)
+            db.expire_all()
+            run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+            if not run or run.status != PipelineStatus.STREAMING_PAUSED:
+                break
+        if task.is_aborted():
+            return True
+        logger.info("Resumed")
+    return False
+
+
+def _set_status(db, run_id: str, status: PipelineStatus) -> None:
+    db.query(PipelineRun).filter(PipelineRun.id == run_id).update(
+        {"status": status}
+    )
+    db.commit()
+
+
+def _init_stats(db, run_id: str, topic: str, consumer_group: str) -> None:
+    db.add(StreamingStats(
+        run_id=run_id,
+        topic=topic,
+        consumer_group=consumer_group,
+    ))
+
+
+def _update_stats(
+    db, run_id: str, stats: dict, throughput: float, batch_ms: float
+) -> None:
+    db.query(StreamingStats).filter(
+        StreamingStats.run_id == run_id
+    ).update({
+        "batches_processed": stats["batches"],
+        "messages_processed": stats["messages"],
+        "messages_failed": stats["failed"],
+        "messages_dlq": stats["dlq"],
+        "throughput_per_sec": round(throughput, 2),
+        "avg_batch_latency_ms": round(batch_ms, 1),
+        "last_batch_at": utcnow(),
+    })
+    db.commit()
+
+
+def _sse_progress(run_id: str, stats: dict, throughput: float) -> None:
+    try:
+        redis = get_pubsub_redis()
+        channel = f"pipeline_progress:{run_id}"
+        redis.publish(channel, json.dumps({
+            "event": "streaming_stats",
+            "run_id": str(run_id),
+            "batches": stats["batches"],
+            "messages": stats["messages"],
+            "dlq": stats["dlq"],
+            "throughput": round(throughput, 2),
+        }))
+    except Exception:
+        pass

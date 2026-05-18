@@ -12,6 +12,7 @@ task_queues = (
     Queue("default"),
     Queue("bulk"),
     Queue("gemini"),
+    Queue("streaming"),
 )
 
 task_routes = {
@@ -25,6 +26,7 @@ task_routes = {
     "tasks.repair_pipeline_ai": {"queue": "gemini"},
     "tasks.execute_scheduled_pipeline": {"queue": "bulk"},
     "tasks.schedule_run_completion_callback": {"queue": "bulk"},
+    "tasks.run_streaming_pipeline": {"queue": "streaming"},
 }
 
 task_serializer = "json"

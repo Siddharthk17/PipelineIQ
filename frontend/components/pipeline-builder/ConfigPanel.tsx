@@ -890,6 +890,126 @@ export function ConfigPanel({
           </label>
         )}
 
+        {node.data.type === "stream_consume" && (
+          <>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Topic name</span>
+              <input
+                id={getFieldId("topic")}
+                name={getFieldName("topic")}
+                value={asString(draft.topic)}
+                onChange={(event) => update("topic", event.target.value)}
+                className="w-full rounded border bg-background px-2 py-1.5"
+                placeholder="user_activity_events"
+                data-testid="stream-topic-input"
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Consumer group</span>
+              <input
+                id={getFieldId("consumer_group")}
+                name={getFieldName("consumer_group")}
+                value={asString(draft.consumer_group)}
+                onChange={(event) => update("consumer_group", event.target.value)}
+                className="w-full rounded border bg-background px-2 py-1.5"
+                placeholder="pipelineiq-analytics"
+              />
+              <p className="text-[10px] text-[var(--text-secondary)]">
+                Same group = shared partition assignment (8 workers per 8 partitions).
+              </p>
+            </label>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Batch size</span>
+              <input
+                id={getFieldId("batch_size")}
+                name={getFieldName("batch_size")}
+                type="number"
+                min={1}
+                max={10000}
+                value={asNumber(draft.batch_size, 1000)}
+                onChange={(event) => update("batch_size", Number(event.target.value))}
+                className="w-full rounded border bg-background px-2 py-1.5"
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Batch timeout (ms)</span>
+              <input
+                id={getFieldId("batch_timeout_ms")}
+                name={getFieldName("batch_timeout_ms")}
+                type="number"
+                min={100}
+                max={60000}
+                value={asNumber(draft.batch_timeout_ms, 5000)}
+                onChange={(event) => update("batch_timeout_ms", Number(event.target.value))}
+                className="w-full rounded border bg-background px-2 py-1.5"
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Deserialization</span>
+              <select
+                id={getFieldId("deserialize")}
+                name={getFieldName("deserialize")}
+                value={asString(draft.deserialize) || "json"}
+                onChange={(event) => update("deserialize", event.target.value)}
+                className="w-full rounded border bg-background px-2 py-1.5"
+              >
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+              </select>
+            </label>
+          </>
+        )}
+
+        {node.data.type === "stream_publish" && (
+          <>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Output topic</span>
+              <input
+                id={getFieldId("topic")}
+                name={getFieldName("topic")}
+                value={asString(draft.topic)}
+                onChange={(event) => update("topic", event.target.value)}
+                className="w-full rounded border bg-background px-2 py-1.5"
+                placeholder="enriched_events"
+                data-testid="publish-topic-input"
+              />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Serialization</span>
+              <select
+                id={getFieldId("serialize")}
+                name={getFieldName("serialize")}
+                value={asString(draft.serialize) || "json"}
+                onChange={(event) => update("serialize", event.target.value)}
+                className="w-full rounded border bg-background px-2 py-1.5"
+              >
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+              </select>
+            </label>
+            <label className="block space-y-1">
+              <span className="text-muted-foreground">Message key column (optional)</span>
+              <select
+                id={getFieldId("key_column")}
+                name={getFieldName("key_column")}
+                value={asString(draft.key_column)}
+                onChange={(event) => update("key_column", event.target.value || null)}
+                className="w-full rounded border bg-background px-2 py-1.5"
+              >
+                <option value="">No key (random partition)</option>
+                {availableColumns.map((column) => (
+                  <option key={column} value={column}>
+                    {column}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-[var(--text-secondary)]">
+                Same key always routes to same partition (ordering guarantee).
+              </p>
+            </label>
+          </>
+        )}
+
         {node.data.type === "wasm_compute" && (
           <WasmComputeConfig
             draft={draft}

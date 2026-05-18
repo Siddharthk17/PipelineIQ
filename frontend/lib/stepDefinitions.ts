@@ -1,4 +1,4 @@
-export type StepCategory = "io" | "transform" | "quality" | "reshape" | "advanced";
+export type StepCategory = "io" | "transform" | "quality" | "reshape" | "advanced" | "streaming";
 
 export type VisualStepType =
   | "load"
@@ -17,7 +17,9 @@ export type VisualStepType =
   | "rename"
   | "sample"
   | "sql"
-  | "wasm_compute";
+  | "wasm_compute"
+  | "stream_consume"
+  | "stream_publish";
 
 export interface StepDefinition {
   type: VisualStepType;
@@ -201,6 +203,26 @@ export const STEP_DEFINITIONS: Record<VisualStepType, StepDefinition> = {
     backendSupported: true,
     description: "Execute a custom WebAssembly function per row",
   },
+  stream_consume: {
+    type: "stream_consume",
+    label: "Stream Consume",
+    icon: "\u21AF",
+    color: "#0EA5E9",
+    category: "streaming",
+    maxInputs: 0,
+    backendSupported: true,
+    description: "Read micro-batches from a Redpanda topic",
+  },
+  stream_publish: {
+    type: "stream_publish",
+    label: "Stream Publish",
+    icon: "\u21AA",
+    color: "#7C3AED",
+    category: "streaming",
+    maxInputs: 1,
+    backendSupported: true,
+    description: "Publish processed rows to a Redpanda topic",
+  },
 };
 
 export const STEP_CATEGORY_LABELS: Record<StepCategory, string> = {
@@ -209,6 +231,7 @@ export const STEP_CATEGORY_LABELS: Record<StepCategory, string> = {
   quality: "Quality",
   reshape: "Reshape",
   advanced: "Advanced",
+  streaming: "Streaming",
 };
 
 export const STEP_TYPES = Object.keys(STEP_DEFINITIONS) as VisualStepType[];
@@ -253,5 +276,9 @@ export function getDefaultStepConfig(stepType: VisualStepType): Record<string, u
       return { query: "SELECT *\nFROM {{input}}\nLIMIT 100" };
     case "wasm_compute":
       return { wasm_file_id: "", function: "", input_columns: [], output_column: "" };
+    case "stream_consume":
+      return { topic: "", consumer_group: "pipelineiq-analytics", batch_size: 1000, batch_timeout_ms: 5000, deserialize: "json" };
+    case "stream_publish":
+      return { topic: "", serialize: "json", key_column: null };
   }
 }

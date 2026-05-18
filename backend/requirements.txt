@@ -37,3 +37,4 @@ google-genai==1.2.0
 jellyfish==1.2.1
 wasmtime>=18.0.0
 structlog==24.1.0
+confluent-kafka>=2.4.0

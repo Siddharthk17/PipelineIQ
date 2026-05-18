@@ -16,9 +16,9 @@ from backend.celery_config import (
 
 
 class TestQueueConfiguration:
-    def test_four_queues_defined(self):
+    def test_five_queues_defined(self):
         queue_names = {q.name for q in task_queues}
-        assert queue_names == {"critical", "default", "bulk", "gemini"}
+        assert queue_names == {"critical", "default", "bulk", "gemini", "streaming"}
 
     def test_prefetch_multiplier_is_one(self):
         assert worker_prefetch_multiplier == 1

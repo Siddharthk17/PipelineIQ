@@ -480,6 +480,20 @@ function normalizeConfigForYaml(
         input_columns: asStringArray(config.input_columns),
         output_column: asString(config.output_column) || "result",
       };
+    case "stream_consume":
+      return {
+        topic: asString(config.topic),
+        consumer_group: asString(config.consumer_group) || "pipelineiq-analytics",
+        batch_size: typeof config.batch_size === "number" ? config.batch_size : 1000,
+        batch_timeout_ms: typeof config.batch_timeout_ms === "number" ? config.batch_timeout_ms : 5000,
+        deserialize: asString(config.deserialize) || "json",
+      };
+    case "stream_publish":
+      return {
+        topic: asString(config.topic),
+        serialize: asString(config.serialize) || "json",
+        key_column: config.key_column ? asString(config.key_column) : null,
+      };
   }
 }
 
