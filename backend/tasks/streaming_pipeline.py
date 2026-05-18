@@ -116,9 +116,9 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             topic, consumer_group, batch_size, timeout_s,
         )
 
-        while not self.is_aborted():
+        while not _is_aborted(db, run_id):
             if stats["batches"] % 10 == 0 and stats["batches"] > 0:
-                if _handle_pause(db, run_id, self):
+                if _handle_pause(db, run_id):
                     break
 
             messages = consumer.consume(
@@ -215,7 +215,10 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
 
 
 def _step_type(step) -> str:
-    return getattr(step, "type", "") or ""
+    val = getattr(step, "type", None) or getattr(step, "step_type", None)
+    if hasattr(val, "value"):
+        return val.value
+    return str(val) if val else ""
 
 
 def _step_field(step, field: str):
@@ -270,20 +273,35 @@ def _send_dlq(dlq_producer, messages, original_topic: str, error: str) -> None:
     dlq_producer.flush(timeout=5)
 
 
-def _handle_pause(db, run_id: str, task) -> bool:
+def _is_aborted(db, run_id: str) -> bool:
+    """Check if the streaming pipeline should stop (replaces deprecated self.is_aborted())."""
+    try:
+        db.expire_all()
+        run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+        if not run:
+            return True
+        return run.status not in (
+            PipelineStatus.STREAMING_ACTIVE,
+            PipelineStatus.STREAMING_PAUSED,
+        )
+    except Exception:
+        return True
+
+
+def _handle_pause(db, run_id: str) -> bool:
     db.expire_all()
     run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
     if not run:
         return True
     if run.status == PipelineStatus.STREAMING_PAUSED:
         logger.info("Paused — waiting for resume signal")
-        while not task.is_aborted():
+        while not _is_aborted(db, run_id):
             time.sleep(2)
             db.expire_all()
             run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
             if not run or run.status != PipelineStatus.STREAMING_PAUSED:
                 break
-        if task.is_aborted():
+        if _is_aborted(db, run_id):
             return True
         logger.info("Resumed")
     return False

@@ -44,6 +44,9 @@ class StepType(str, Enum):
     SAMPLE = "sample"
     SQL = "sql"
     WASM_COMPUTE = "wasm_compute"
+    TRANSFORM = "transform"
+    STREAM_CONSUME = "stream_consume"
+    STREAM_PUBLISH = "stream_publish"
 
 
 class FilterOperator(str, Enum):
@@ -254,6 +257,35 @@ class WasmComputeStepConfig(StepConfig):
 
 
 @dataclass
+class TransformStepConfig(StepConfig):
+    """Configuration for a row-level transform step."""
+
+    input: str = ""
+    expression: str = ""
+
+
+@dataclass
+class StreamConsumeStepConfig(StepConfig):
+    """Configuration for a streaming consume step (Redpanda/Kafka source)."""
+
+    topic: str = ""
+    consumer_group: str = ""
+    batch_size: int = 1000
+    batch_timeout_ms: int = 5000
+    deserialize: str = "json"
+
+
+@dataclass
+class StreamPublishStepConfig(StepConfig):
+    """Configuration for a streaming publish step (Redpanda/Kafka sink)."""
+
+    input: str = ""
+    topic: str = ""
+    serialize: str = "json"
+    key_column: Optional[str] = None
+
+
+@dataclass
 class PipelineConfig:
     """Fully typed pipeline configuration parsed from YAML."""
 
@@ -306,6 +338,9 @@ _STEP_CONFIG_MAP: Dict[StepType, type] = {
     StepType.SAMPLE: SampleStepConfig,
     StepType.SQL: SqlStepConfig,
     StepType.WASM_COMPUTE: WasmComputeStepConfig,
+    StepType.TRANSFORM: TransformStepConfig,
+    StepType.STREAM_CONSUME: StreamConsumeStepConfig,
+    StepType.STREAM_PUBLISH: StreamPublishStepConfig,
 }
 
 
@@ -571,6 +606,32 @@ class PipelineParser:
                 input_columns=raw.get("input_columns", []),
                 output_column=raw.get("output_column", ""),
             )
+        if step_type == StepType.TRANSFORM:
+            return TransformStepConfig(
+                name=name,
+                step_type=step_type,
+                input=raw.get("input", ""),
+                expression=raw.get("expression", ""),
+            )
+        if step_type == StepType.STREAM_CONSUME:
+            return StreamConsumeStepConfig(
+                name=name,
+                step_type=step_type,
+                topic=raw.get("topic", ""),
+                consumer_group=raw.get("consumer_group", ""),
+                batch_size=int(raw.get("batch_size", 1000)),
+                batch_timeout_ms=int(raw.get("batch_timeout_ms", 5000)),
+                deserialize=raw.get("deserialize", "json"),
+            )
+        if step_type == StepType.STREAM_PUBLISH:
+            return StreamPublishStepConfig(
+                name=name,
+                step_type=step_type,
+                input=raw.get("input", ""),
+                topic=raw.get("topic", ""),
+                serialize=raw.get("serialize", "json"),
+                key_column=raw.get("key_column"),
+            )
         # Unreachable, but satisfies type checkers
         return StepConfig(name=name, step_type=step_type)
 
@@ -770,7 +831,7 @@ class PipelineParser:
                             field="right",
                             message="Join step must specify a non-empty right input",
                         ))
-            else:
+            elif not isinstance(step, StreamConsumeStepConfig):
                 input_ref = getattr(step, "input", None)
                 if isinstance(input_ref, str) and not input_ref.strip():
                     errors.append(
@@ -954,6 +1015,36 @@ class PipelineParser:
                         )
                     )
 
+            if isinstance(step, TransformStepConfig):
+                if not step.expression or not step.expression.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="expression",
+                            message="Transform step must specify a non-empty expression",
+                        )
+                    )
+
+            if isinstance(step, StreamConsumeStepConfig):
+                if not step.topic or not step.topic.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="topic",
+                            message="Stream consume step must specify a non-empty topic",
+                        )
+                    )
+
+            if isinstance(step, StreamPublishStepConfig):
+                if not step.topic or not step.topic.strip():
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="topic",
+                            message="Stream publish step must specify a non-empty topic",
+                        )
+                    )
+
     def _check_step_references(
         self, config: PipelineConfig, errors: List[ValidationError]
     ) -> None:
@@ -1091,14 +1182,17 @@ class PipelineParser:
         errors: List[ValidationError],
         warnings: List[ValidationWarning],
     ) -> None:
-        """Check 11: At least one save step exists."""
+        """Check 11: At least one save step or stream_publish step exists."""
         has_save = any(isinstance(step, SaveStepConfig)
                        for step in config.steps)
-        if not has_save:
+        has_stream_publish = any(
+            isinstance(step, StreamPublishStepConfig)
+            for step in config.steps)
+        if not has_save and not has_stream_publish:
             warnings.append(
                 ValidationWarning(
                     step_name=None, message=(
-                        "Pipeline has no 'save' step. Results will be computed "
+                        "Pipeline has no 'save' or 'stream_publish' step. Results will be computed "
                         "but not persisted to an output file."), ))
 
     def _check_save_filenames(

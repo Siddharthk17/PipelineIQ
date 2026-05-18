@@ -37,6 +37,7 @@ from backend.schemas import (
     ValidationWarningDetail,
 )
 from backend.tasks.pipeline_tasks import execute_pipeline_task
+from backend.tasks.streaming_pipeline import run_streaming_pipeline
 from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.utils.rate_limiter import limiter
 from backend.services.audit_service import log_action
@@ -79,8 +80,19 @@ def _create_and_queue_pipeline_run(
         run_id=pipeline_run.id,
         parsed_config=config)
 
-    result = execute_pipeline_task.delay(str(pipeline_run.id))
-    pipeline_run.celery_task_id = result.id
+    has_stream = any(
+        getattr(s, "step_type", None) in ("stream_consume", "stream_publish")
+        or (hasattr(s, "type") and getattr(s, "type", "") in ("stream_consume", "stream_publish"))
+        for s in config.steps
+    )
+
+    if has_stream:
+        result = run_streaming_pipeline.delay(str(pipeline_run.id))
+        pipeline_run.celery_task_id = result.id
+        pipeline_run.status = PipelineStatus.STREAMING_ACTIVE
+    else:
+        result = execute_pipeline_task.delay(str(pipeline_run.id))
+        pipeline_run.celery_task_id = result.id
     db.commit()
 
     log_action(
