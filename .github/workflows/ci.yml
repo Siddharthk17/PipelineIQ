@@ -154,14 +154,24 @@ jobs:
       - name: Create .env for CI
         run: |
           cat > .env << EOF
-          DATABASE_URL=postgresql://pipelineiq:ci_password@db:5432/pipelineiq
+          DATABASE_URL=postgresql://pipelineiq:ci_password@pgbouncer:5432/pipelineiq
+          DATABASE_WRITE_URL=postgresql://pipelineiq:ci_password@pgbouncer:5432/pipelineiq
+          DATABASE_READ_URL=postgresql://pipelineiq:ci_password@pgbouncer-replica:5432/pipelineiq
           POSTGRES_USER=pipelineiq
           POSTGRES_PASSWORD=ci_password
           POSTGRES_DB=pipelineiq
+          REPLICATION_USER=replicator
+          REPLICATION_PASSWORD=ci_password
           MINIO_IMAGE_TAG=latest
           MINIO_ROOT_USER=minioadmin
           MINIO_ROOT_PASSWORD=minioadmin123
-          REDIS_URL=redis://redis:6379/0
+          REDIS_BROKER_URL=redis://redis-broker:6379/0
+          REDIS_BACKEND_URL=redis://redis-broker:6379/1
+          REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+          REDIS_CACHE_URL=redis://redis-cache:6381/0
+          REDIS_YJS_URL=redis://redis-yjs:6382/0
+          REDPANDA_BROKERS=redpanda:9093
+          CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
           SECRET_KEY=ci_secret_key_for_testing_only
           UPLOAD_DIR=/app/uploads
           MAX_UPLOAD_SIZE=52428800
@@ -176,10 +186,18 @@ jobs:
           S3_SECRET_KEY=minioadmin123
           S3_BUCKET=pipelineiq-uploads
           S3_ENDPOINT_URL=http://minio:9000
+          STORAGE_TYPE=s3
+          GEMINI_API_KEY=ci_fake_gemini_key_for_testing
+          GEMINI_MODEL=gemini-2.5-flash
+          GEMINI_FALLBACK_MODELS=gemini-2.0-flash,gemini-1.5-flash
           FLOWER_USER=admin
           FLOWER_PASSWORD=ci_flower_password
           GRAFANA_USER=admin
           GRAFANA_PASSWORD=ci_grafana_password
+          APP_VERSION=12.7.3
+          CELERY_WORKERS_CRITICAL=1
+          CELERY_WORKERS_DEFAULT=1
+          CELERY_WORKERS_BULK=1
           EOF
 
       - name: Build and start all services
@@ -273,6 +291,140 @@ jobs:
       - name: Show logs on failure
         if: failure()
         run: docker compose logs --tail=50
+
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes
+
+  # JOB 4: Week 9 Streaming E2E Tests
+  week9-streaming-e2e:
+    name: Week 9 Streaming E2E
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-check]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install confluent-kafka
+
+      - name: Create .env for E2E
+        run: |
+          cat > .env << EOF
+          DATABASE_URL=postgresql://pipelineiq:ci_password@pgbouncer:5432/pipelineiq
+          DATABASE_WRITE_URL=postgresql://pipelineiq:ci_password@pgbouncer:5432/pipelineiq
+          DATABASE_READ_URL=postgresql://pipelineiq:ci_password@pgbouncer-replica:5432/pipelineiq
+          POSTGRES_USER=pipelineiq
+          POSTGRES_PASSWORD=ci_password
+          POSTGRES_DB=pipelineiq
+          REPLICATION_USER=replicator
+          REPLICATION_PASSWORD=ci_password
+          MINIO_IMAGE_TAG=latest
+          MINIO_ROOT_USER=minioadmin
+          MINIO_ROOT_PASSWORD=minioadmin123
+          REDIS_BROKER_URL=redis://redis-broker:6379/0
+          REDIS_BACKEND_URL=redis://redis-broker:6379/1
+          REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+          REDIS_CACHE_URL=redis://redis-cache:6381/0
+          REDIS_YJS_URL=redis://redis-yjs:6382/0
+          REDPANDA_BROKERS=redpanda:9093
+          CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+          SECRET_KEY=ci_secret_key_for_testing_only
+          UPLOAD_DIR=/app/uploads
+          MAX_UPLOAD_SIZE=52428800
+          CACHE_TTL_STATS=30
+          RATE_LIMIT_PIPELINE_RUN=100/minute
+          RATE_LIMIT_FILE_UPLOAD=100/minute
+          RATE_LIMIT_VALIDATION=100/minute
+          RATE_LIMIT_READ=1000/minute
+          DRIFT_DETECTION_ENABLED=true
+          MAX_VERSIONS_PER_PIPELINE=50
+          S3_ACCESS_KEY=minioadmin
+          S3_SECRET_KEY=minioadmin123
+          S3_BUCKET=pipelineiq-uploads
+          S3_ENDPOINT_URL=http://minio:9000
+          STORAGE_TYPE=s3
+          GEMINI_API_KEY=ci_fake_gemini_key_for_testing
+          GEMINI_MODEL=gemini-2.5-flash
+          GEMINI_FALLBACK_MODELS=gemini-2.0-flash,gemini-1.5-flash
+          FLOWER_USER=admin
+          FLOWER_PASSWORD=ci_flower_password
+          GRAFANA_USER=admin
+          GRAFANA_PASSWORD=ci_grafana_password
+          APP_VERSION=12.7.3
+          CELERY_WORKERS_CRITICAL=1
+          CELERY_WORKERS_DEFAULT=1
+          CELERY_WORKERS_BULK=1
+          EOF
+
+      - name: Build and start all services
+        run: |
+          docker compose build
+          docker compose up -d
+          echo "Waiting for all services to be healthy..."
+          sleep 60
+
+      - name: Verify all services healthy
+        run: |
+          docker compose ps
+          echo "--- Checking API ---"
+          curl --retry 5 --retry-delay 5 -f http://localhost/health || {
+            echo "API not healthy, showing logs:"
+            docker compose logs api --tail=30
+            exit 1
+          }
+          echo "✓ API healthy through Nginx"
+          echo "--- Checking Redpanda ---"
+          docker exec pipelineiq-redpanda rpk cluster health || {
+            echo "Redpanda not healthy, showing logs:"
+            docker compose logs redpanda --tail=30
+            exit 1
+          }
+          echo "✓ Redpanda healthy"
+          echo "--- Checking worker-streaming ---"
+          docker compose ps worker-streaming | grep -q "Up" || {
+            echo "worker-streaming not running, showing logs:"
+            docker compose logs worker-streaming --tail=30
+            exit 1
+          }
+          echo "✓ worker-streaming running"
+
+      - name: Run Week 9 streaming E2E tests
+        run: |
+          cd backend
+          python -m pytest tests/e2e/test_week9_streaming_e2e.py -v --tb=short --junitxml=e2e-streaming-results.xml
+        env:
+          DATABASE_URL=postgresql://pipelineiq:ci_password@localhost:5432/pipelineiq
+          POSTGRES_USER=pipelineiq
+          POSTGRES_PASSWORD=ci_password
+          S3_ACCESS_KEY=minioadmin
+          S3_SECRET_KEY=minioadmin123
+          GEMINI_API_KEY=ci_fake_gemini_key_for_testing
+
+      - name: Upload E2E test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-streaming-test-results
+          path: backend/e2e-streaming-results.xml
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          docker compose logs --tail=100 api
+          docker compose logs --tail=100 redpanda
+          docker compose logs --tail=100 worker-streaming
 
       - name: Tear down
         if: always()
