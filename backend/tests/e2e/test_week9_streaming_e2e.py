@@ -30,6 +30,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 # Redpanda connection for host-side tests
 RP_BROKERS = "localhost:9092"
 
+# Track all topics created during test session for guaranteed cleanup
+_CREATED_TOPICS: list[str] = []
+
 
 def _redpanda_available():
     """Check if Redpanda broker is reachable."""
@@ -86,6 +89,9 @@ def _docker_rpk_create_topic(topic, partitions=8):
          "-p", "1"],
         capture_output=True, text=True, timeout=10
     )
+    # Track for cleanup
+    if topic not in _CREATED_TOPICS:
+        _CREATED_TOPICS.append(topic)
     return result.returncode == 0
 
 
@@ -96,6 +102,25 @@ def _docker_rpk_delete_topic(topic):
             ["docker", "exec", "pipelineiq-redpanda", "rpk", "topic", "delete", t],
             capture_output=True, text=True, timeout=10
         )
+    if topic in _CREATED_TOPICS:
+        _CREATED_TOPICS.remove(topic)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_all_test_topics():
+    """GUARANTEED cleanup: deletes ALL test topics after session ends.
+
+    Prevents disk-full outages caused by orphaned test topics.
+    """
+    yield
+    # Session finished — delete every topic we created
+    if not _CREATED_TOPICS:
+        return
+    print(f"\n[CLEANUP] Deleting {_CREATED_TOPICS} test topics...")
+    for topic in list(_CREATED_TOPICS):
+        _docker_rpk_delete_topic(topic)
+    _CREATED_TOPICS.clear()
+    print("[CLEANUP] All test topics deleted.")
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +152,14 @@ def admin_client():
 
 @pytest.fixture
 def unique_topic():
-    return f"test-week9-{uuid.uuid4().hex[:8]}"
+    """Create a unique topic name. Test MUST delete it or session cleanup will."""
+    topic = f"test-week9-{uuid.uuid4().hex[:8]}"
+    yield topic
+    # Per-test teardown: delete topic even if test fails
+    try:
+        _docker_rpk_delete_topic(topic)
+    except Exception:
+        pass  # Session-level cleanup will catch it
 
 
 @pytest.fixture

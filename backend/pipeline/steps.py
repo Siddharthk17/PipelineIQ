@@ -6,6 +6,7 @@ signature pattern, returning a StepExecutionResult with timing,
 row counts, and column metadata.
 """
 
+import json
 import logging
 import time
 import pandas as pd
@@ -42,6 +43,7 @@ from backend.pipeline.parser import (
     SortStepConfig,
     StepConfig,
     StepType,
+    StreamPublishStepConfig,
     UnpivotStepConfig,
     ValidateStepConfig,
     WasmComputeStepConfig,
@@ -127,6 +129,7 @@ class StepExecutor:
             StepType.SAMPLE: self.execute_sample,
             StepType.SQL: self.execute_sql,
             StepType.WASM_COMPUTE: self.execute_wasm_compute,
+            StepType.STREAM_PUBLISH: self.execute_stream_publish,
         }
 
     def execute(
@@ -1121,5 +1124,65 @@ class StepExecutor:
             rows_out=result_table.num_rows,
             columns_in=columns_in,
             columns_out=list(result_df.columns),
+            duration_ms=measure_ms(start),
+        )
+
+    def execute_stream_publish(
+        self,
+        table_registry: Dict[str, pa.Table],
+        config: StreamPublishStepConfig,
+        recorder: LineageRecorder,
+    ) -> StepExecutionResult:
+        """Publish data to a Redpanda/Kafka topic.
+
+        In batch mode, publishes all rows to the topic and passes
+        data through unchanged.
+        """
+        start = time.monotonic()
+
+        input_table = table_registry[config.input]
+        input_df = input_table.to_pandas()
+        columns_in = list(input_df.columns)
+
+        try:
+            from backend.streaming.redpanda_client import make_producer
+            producer = make_producer()
+            key_col = config.key_column
+            for record in input_df.to_dict(orient="records"):
+                key = (
+                    str(record[key_col]).encode()
+                    if key_col and key_col in record
+                    else None
+                )
+                value = json.dumps(record, default=str).encode()
+                producer.produce(topic=config.topic, key=key, value=value)
+            pending = producer.flush(timeout=10)
+            if pending > 0:
+                raise RuntimeError(
+                    f"{pending} message(s) still in queue after flush — "
+                    f"broker unreachable or backpressured"
+                )
+            logger.info(
+                "Published %d rows to topic '%s'", len(input_df), config.topic
+            )
+        except Exception as exc:
+            logger.error("stream_publish failed: %s", exc)
+            raise
+
+        recorder.record_passthrough(
+            step_name=config.name,
+            input_step=config.input,
+            step_type="stream_publish",
+            columns=columns_in,
+        )
+
+        return StepExecutionResult(
+            step_name=config.name,
+            step_type="stream_publish",
+            output_table=input_table,
+            rows_in=input_table.num_rows,
+            rows_out=input_table.num_rows,
+            columns_in=columns_in,
+            columns_out=columns_in,
             duration_ms=measure_ms(start),
         )

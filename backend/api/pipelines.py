@@ -5,6 +5,7 @@ result retrieval, cancellation, and export.
 """
 
 import logging
+import os
 import orjson
 from typing import Optional
 from kombu.exceptions import OperationalError as KombuOperationalError
@@ -17,7 +18,7 @@ from backend.config import settings
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import HealingAttempt, PipelineRun, PipelineStatus, SchemaSnapshot, UploadedFile, User
 from datetime import timezone
-from backend.pipeline.parser import PipelineParser
+from backend.pipeline.parser import PipelineParser, StepType
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.planner import generate_execution_plan
 from backend.services.pipeline_validation import (
@@ -80,13 +81,13 @@ def _create_and_queue_pipeline_run(
         run_id=pipeline_run.id,
         parsed_config=config)
 
-    has_stream = any(
-        getattr(s, "step_type", None) in ("stream_consume", "stream_publish")
-        or (hasattr(s, "type") and getattr(s, "type", "") in ("stream_consume", "stream_publish"))
+    has_stream_consume = any(
+        getattr(s, "step_type", None) in ("stream_consume", StepType.STREAM_CONSUME)
+        or (hasattr(s, "type") and getattr(s, "type", "") in ("stream_consume", "stream_consume"))
         for s in config.steps
     )
 
-    if has_stream:
+    if has_stream_consume:
         result = run_streaming_pipeline.delay(str(pipeline_run.id))
         pipeline_run.celery_task_id = result.id
         pipeline_run.status = PipelineStatus.STREAMING_ACTIVE
@@ -794,7 +795,9 @@ def cancel_pipeline_run(
 
     if pipeline_run.status not in (
             PipelineStatus.PENDING,
-            PipelineStatus.RUNNING):
+            PipelineStatus.RUNNING,
+            PipelineStatus.STREAMING_ACTIVE,
+            PipelineStatus.STREAMING_PAUSED):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot cancel pipeline with status '{pipeline_run.status.value}'",
@@ -916,7 +919,7 @@ def export_pipeline_output(
     When STORAGE_TYPE=s3, returns a presigned S3 URL for direct download.
     """
     from pathlib import Path
-    from fastapi.responses import FileResponse, RedirectResponse
+    from fastapi.responses import FileResponse
 
     _validate_uuid_format(run_id)
     pipeline_run = (db.query(PipelineRun).filter(
@@ -1026,30 +1029,43 @@ def export_pipeline_output(
 
         try:
             from backend.services.storage_service import storage_service
+            from fastapi.responses import StreamingResponse
 
             for pattern in stored_paths:
                 base_name = pattern.replace("*", "").rstrip("_.")
                 s3_key = f"{settings.UPLOAD_DIR}/{base_name}"
 
                 try:
-                    presigned_url = storage_service.get_presigned_download_url(
-                        s3_key)
-                    if presigned_url:
-                        return RedirectResponse(url=presigned_url)
+                    if storage_service.exists(s3_key):
+                        file_obj = storage_service.download(s3_key)
+                        media_type = (
+                            "text/csv"
+                            if base_name.endswith(".csv")
+                            else "application/json"
+                        )
+                        return StreamingResponse(
+                            iter(lambda: file_obj.read(8192), b""),
+                            media_type=media_type,
+                            headers={
+                                "Content-Disposition": f'attachment; filename="{os.path.basename(s3_key)}"'
+                            },
+                        )
                 except Exception as e:
                     logger.warning(
-                        "Failed to get presigned URL for %s: %s", s3_key, e)
+                        "Failed to download %s from S3: %s", s3_key, e)
                     continue
 
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Output file not found in S3 storage",
             )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error("S3 export error for run_id=%s: %s", run_id, e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to generate download URL: {str(e)}",
+                detail=f"Failed to download file from S3 storage: {str(e)}",
             )
 
     raise HTTPException(

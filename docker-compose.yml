@@ -424,6 +424,7 @@ services:
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - REDPANDA_BROKERS=redpanda:9093
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
@@ -461,12 +462,6 @@ services:
         ]
       interval: 10s
       timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - pipelineiq-network
-
-  worker-gemini:
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -489,6 +484,7 @@ services:
       - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - REDPANDA_BROKERS=redpanda:9093
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
@@ -836,9 +832,9 @@ services:
     command:
       - redpanda
       - start
-      - --smp 1
-      - --memory 1G
-      - --reserve-memory 100M
+      - --smp 2
+      - --memory 2G
+      - --reserve-memory 200M
       - --overprovisioned
       - --kafka-addr PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:9093
       - --advertise-kafka-addr PLAINTEXT://localhost:9092,INTERNAL://redpanda:9093
@@ -846,13 +842,16 @@ services:
       - --schema-registry-addr 0.0.0.0:8081
       - --rpc-addr redpanda:33145
       - --advertise-rpc-addr redpanda:33145
+      # Retention policies to prevent disk-full outages
+      - --set redpanda.log_retention_ms=3600000
+      - --set redpanda.retention_local_target_bytes=5368709120
     ports:
       - "9092:9092"
       - "8082:8082"
       - "8081:8081"
     volumes:
       - redpanda_data:/var/lib/redpanda/data
-    mem_limit: 1200m
+    mem_limit: 2400m
     ulimits:
       nofile:
         soft: 65536
@@ -872,7 +871,7 @@ services:
     container_name: pipelineiq-redpanda-console
     restart: unless-stopped
     entrypoint: /bin/sh
-    command: -c "printf 'kafka:\\n  brokers:\\n    - redpanda:9092\\n' > /tmp/config.yml && /app/console --config.filepath=/tmp/config.yml"
+    command: -c "printf 'kafka:\\n  brokers:\\n    - redpanda:9093\\n' > /tmp/config.yml && /app/console --config.filepath=/tmp/config.yml"
     ports:
       - "8090:8080"
     depends_on:

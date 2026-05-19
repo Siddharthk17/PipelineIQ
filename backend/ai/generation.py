@@ -4,9 +4,11 @@ Builds prompts, calls Gemini via Celery task, validates responses,
 retries once on validation failure.
 """
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 
+import yaml
 from sqlalchemy.orm import Session
 
 from backend.models import FileProfile, UploadedFile
@@ -23,6 +25,54 @@ from backend.ai.prompts import (
 
 logger = logging.getLogger(__name__)
 _pipeline_parser = PipelineParser()
+
+_PIPELINE_STEP_TYPES = [
+    "load",
+    "filter",
+    "select",
+    "rename",
+    "join",
+    "aggregate",
+    "sort",
+    "save",
+    "validate",
+    "pivot",
+    "unpivot",
+    "deduplicate",
+    "fill_nulls",
+    "sample",
+    "sql",
+    "wasm_compute",
+    "transform",
+    "stream_consume",
+    "stream_publish",
+]
+
+_STRUCTURED_PIPELINE_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "pipeline": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "type": {"type": "string", "enum": _PIPELINE_STEP_TYPES},
+                        },
+                        "required": ["name", "type"],
+                    },
+                },
+            },
+            "required": ["name", "steps"],
+        },
+    },
+    "required": ["pipeline"],
+}
 
 _GEMINI_QUOTA_MARKERS = (
     "quota exhausted",
@@ -55,6 +105,13 @@ class RepairResult:
     diff_lines: list[dict]
     valid: bool
     error: str | None = None
+
+
+def _structured_output_config() -> dict:
+    return {
+        "response_mime_type": "application/json",
+        "response_schema": _STRUCTURED_PIPELINE_RESPONSE_SCHEMA,
+    }
 
 
 def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
@@ -136,6 +193,7 @@ async def generate_pipeline_from_description(
     description: str,
     file_ids: list[str],
     db: Session,
+    request_id: str | None = None,
 ) -> GenerationResult:
     """
     Generate a PipelineIQ pipeline YAML from a natural language description.
@@ -152,8 +210,14 @@ async def generate_pipeline_from_description(
 
     # Attempt 1: Generate
     try:
-        raw_yaml = await _call_gemini_async(prompt, temperature=0.1, max_tokens=2000)
-        raw_yaml = _clean_yaml_response(raw_yaml)
+        raw_response = await _call_gemini_async(
+            prompt,
+            temperature=0.1,
+            max_tokens=2000,
+            generation_config_overrides=_structured_output_config(),
+            request_id=request_id,
+        )
+        raw_yaml = _structured_pipeline_to_yaml(raw_response)
     except Exception as e:
         return GenerationResult(
             yaml="",
@@ -180,8 +244,14 @@ async def generate_pipeline_from_description(
     )
 
     try:
-        corrected_yaml = await _call_gemini_async(fix_prompt, temperature=0.0, max_tokens=2000)
-        corrected_yaml = _clean_yaml_response(corrected_yaml)
+        corrected_response = await _call_gemini_async(
+            fix_prompt,
+            temperature=0.0,
+            max_tokens=2000,
+            generation_config_overrides=_structured_output_config(),
+            request_id=request_id,
+        )
+        corrected_yaml = _structured_pipeline_to_yaml(corrected_response)
     except Exception as e:
         return GenerationResult(
             yaml=raw_yaml,
@@ -217,6 +287,7 @@ async def repair_pipeline_from_error(
     error_message: str,
     file_ids: list[str],
     db: Session,
+    request_id: str | None = None,
 ) -> RepairResult:
     """
     Generate a corrected YAML for a failed pipeline run.
@@ -232,7 +303,12 @@ async def repair_pipeline_from_error(
     )
 
     try:
-        raw_response = await _call_gemini_async(prompt, temperature=0.0, max_tokens=3000)
+        raw_response = await _call_gemini_async(
+            prompt,
+            temperature=0.0,
+            max_tokens=3000,
+            request_id=request_id,
+        )
         service_error = _detect_ai_service_error(raw_response)
         if service_error:
             return RepairResult(
@@ -332,7 +408,9 @@ def _detect_ai_service_error(text: str) -> str | None:
 async def _call_gemini_async(
         prompt: str,
         temperature: float,
-        max_tokens: int) -> str:
+        max_tokens: int,
+        generation_config_overrides: dict | None = None,
+        request_id: str | None = None) -> str:
     """
     Submit a Gemini task and await the result.
     Uses Celery task async to respect the gemini queue's rate limits.
@@ -340,7 +418,12 @@ async def _call_gemini_async(
     """
     task = call_gemini_task.apply_async(
         args=[prompt],
-        kwargs={"temperature": temperature, "max_output_tokens": max_tokens},
+        kwargs={
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+            "generation_config_overrides": generation_config_overrides,
+            "request_id": request_id,
+        },
         queue="gemini",
     )
     # Wait for result with timeout (Celery task, not coroutine)
@@ -392,6 +475,51 @@ def _clean_yaml_response(raw: str) -> str:
         text = text[pipeline_start:]
 
     return text.strip()
+
+
+def _structured_pipeline_to_yaml(raw_response: str) -> str:
+    """Convert Gemini structured JSON output into canonical PipelineIQ YAML."""
+    try:
+        payload = json.loads(raw_response)
+    except json.JSONDecodeError as exc:
+        cleaned = _clean_yaml_response(raw_response)
+        if cleaned.startswith("pipeline:"):
+            return cleaned
+        raise ValueError("Gemini returned invalid structured pipeline JSON") from exc
+
+    pipeline = payload.get("pipeline")
+    if not isinstance(pipeline, dict):
+        raise ValueError("Gemini structured response did not include a pipeline object")
+
+    rendered_pipeline: dict = {"name": pipeline.get("name", "")}
+    description = pipeline.get("description")
+    if description:
+        rendered_pipeline["description"] = description
+
+    raw_steps = pipeline.get("steps")
+    if not isinstance(raw_steps, list):
+        raise ValueError("Gemini structured response did not include a steps array")
+
+    rendered_steps: list[dict] = []
+    for raw_step in raw_steps:
+        if not isinstance(raw_step, dict):
+            raise ValueError("Gemini structured response contained a non-object step")
+        step = {
+            "name": raw_step.get("name", ""),
+            "type": raw_step.get("type", ""),
+        }
+        for key, value in raw_step.items():
+            if key not in {"name", "type"}:
+                step[key] = value
+        rendered_steps.append(step)
+
+    rendered_pipeline["steps"] = rendered_steps
+
+    return yaml.safe_dump(
+        {"pipeline": rendered_pipeline},
+        sort_keys=False,
+        allow_unicode=False,
+    ).strip()
 
 
 def _validate_generated_yaml(

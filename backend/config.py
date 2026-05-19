@@ -240,5 +240,10 @@ def _configure_logging() -> None:
         level=log_level,
     )
 
+    # Celery overrides the root logger level to WARNING on worker startup.
+    # Force it back to the configured level so structlog INFO/DEBUG messages
+    # are not silently dropped.
+    logging.getLogger().setLevel(log_level)
+
 
 _configure_logging()

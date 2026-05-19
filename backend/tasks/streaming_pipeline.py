@@ -27,15 +27,22 @@ from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.lineage import LineageRecorder
 from backend.streaming.redpanda_client import (
     get_admin_client,
+    get_producer_circuit_breaker,
     make_consumer,
     make_dlq_producer,
     make_producer,
+    produce_with_fallback,
+    try_drain_fallback,
+    validate_topic_name,
 )
 from backend.utils.time_utils import utcnow
 
 logger = get_task_logger(__name__)
 
 STATS_UPDATE_INTERVAL = 5
+BACKPRESSURE_LAG_THRESHOLD = 50_000  # Pause consumer if lag exceeds 50K messages
+BACKPRESSURE_COOLDOWN_SEC = 10       # Wait 10s before resuming after backpressure
+IDEMPOTENT_CACHE_TTL = 10_000        # Keep last 10K processed offsets in memory
 
 
 @celery_app.task(
@@ -111,6 +118,9 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             "start": time.monotonic(),
         }
 
+        # Idempotent processing: track processed offsets to avoid duplicates
+        processed_offsets: set = set()
+
         logger.info(
             "Subscribed to '%s' (group=%s, batch=%d, timeout=%.1fs)",
             topic, consumer_group, batch_size, timeout_s,
@@ -120,6 +130,20 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             if stats["batches"] % 10 == 0 and stats["batches"] > 0:
                 if _handle_pause(db, run_id):
                     break
+
+            # Backpressure detection: pause if consumer lag is too high
+            lag = _compute_consumer_lag(consumer)
+            if lag > BACKPRESSURE_LAG_THRESHOLD:
+                logger.warning(
+                    "BACKPRESSURE: consumer_lag=%d (threshold=%d), "
+                    "cooling down %ds",
+                    lag, BACKPRESSURE_LAG_THRESHOLD, BACKPRESSURE_COOLDOWN_SEC,
+                )
+                time.sleep(BACKPRESSURE_COOLDOWN_SEC)
+                continue
+
+            # Drain fallback queue if broker recovered
+            try_drain_fallback(producer)
 
             messages = consumer.consume(
                 num_messages=batch_size, timeout=timeout_s)
@@ -137,14 +161,31 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             if not valid:
                 continue
 
+            # Idempotent processing: skip already-processed messages
+            deduped = []
+            for msg in valid:
+                offset_key = (msg.topic(), msg.partition(), msg.offset())
+                if offset_key not in processed_offsets:
+                    deduped.append(msg)
+                    processed_offsets.add(offset_key)
+            # Trim cache to prevent unbounded growth
+            if len(processed_offsets) > IDEMPOTENT_CACHE_TTL:
+                # Remove oldest 50%
+                to_remove = list(processed_offsets)[:len(processed_offsets)//2]
+                for key in to_remove:
+                    processed_offsets.discard(key)
+
+            if not deduped:
+                continue
+
             t0 = time.monotonic()
 
             try:
-                df = _deserialize(valid, deserialize_fmt)
+                df = _deserialize(deduped, deserialize_fmt)
             except Exception as exc:
                 logger.error("Deserialization error: %s", exc)
-                _send_dlq(dlq_producer, valid, topic, str(exc))
-                stats["dlq"] += len(valid)
+                _send_dlq(dlq_producer, deduped, topic, str(exc))
+                stats["dlq"] += len(deduped)
                 continue
 
             if df.empty:
@@ -167,9 +208,9 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
                 df = table_registry[output_name].to_pandas()
             except Exception as exc:
                 logger.error("Batch processing error: %s", exc)
-                _send_dlq(dlq_producer, valid, topic, str(exc))
-                stats["failed"] += len(valid)
-                stats["dlq"] += len(valid)
+                _send_dlq(dlq_producer, deduped, topic, str(exc))
+                stats["failed"] += len(deduped)
+                stats["dlq"] += len(deduped)
                 continue
 
             if publish_step and producer and not df.empty:
@@ -180,12 +221,12 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
 
             batch_ms = (time.monotonic() - t0) * 1000
             stats["batches"] += 1
-            stats["messages"] += len(valid)
+            stats["messages"] += len(deduped)
             elapsed = time.monotonic() - stats["start"]
             throughput = stats["messages"] / elapsed if elapsed > 0 else 0
 
             if stats["batches"] % STATS_UPDATE_INTERVAL == 0:
-                _update_stats(db, run_id, stats, throughput, batch_ms)
+                _update_stats(db, run_id, stats, throughput, batch_ms, consumer)
                 _sse_progress(run_id, stats, throughput)
 
         _set_status(db, run_id, PipelineStatus.STREAMING_STOPPED)
@@ -323,8 +364,10 @@ def _init_stats(db, run_id: str, topic: str, consumer_group: str) -> None:
 
 
 def _update_stats(
-    db, run_id: str, stats: dict, throughput: float, batch_ms: float
+    db, run_id: str, stats: dict, throughput: float, batch_ms: float,
+    consumer=None,
 ) -> None:
+    consumer_lag = _compute_consumer_lag(consumer) if consumer else 0
     db.query(StreamingStats).filter(
         StreamingStats.run_id == run_id
     ).update({
@@ -334,9 +377,38 @@ def _update_stats(
         "messages_dlq": stats["dlq"],
         "throughput_per_sec": round(throughput, 2),
         "avg_batch_latency_ms": round(batch_ms, 1),
+        "consumer_lag": consumer_lag,
         "last_batch_at": utcnow(),
     })
     db.commit()
+
+
+def _compute_consumer_lag(consumer) -> int:
+    """Compute total consumer lag across all assigned partitions.
+
+    Lag = sum(high_watermark - committed_offset) for each partition.
+    Returns 0 if consumer not assigned or error occurs.
+    """
+    if consumer is None:
+        return 0
+    try:
+        total_lag = 0
+        assignments = consumer.assignment()
+        if not assignments:
+            return 0
+        for tp in assignments:
+            try:
+                low, high = consumer.get_watermark_offsets(tp, timeout=1.0)
+                committed = consumer.committed([tp], timeout=1.0)
+                if committed and committed[0].offset >= 0:
+                    lag = high - committed[0].offset
+                    if lag > 0:
+                        total_lag += lag
+            except Exception:
+                continue
+        return total_lag
+    except Exception:
+        return 0
 
 
 def _sse_progress(run_id: str, stats: dict, throughput: float) -> None:

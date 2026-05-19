@@ -19,12 +19,25 @@ _MODEL_NOT_FOUND_MARKERS = (
     "not supported for generatecontent",
 )
 
+_TRANSIENT_SERVER_ERROR_MARKERS = (
+    "500",
+    "503",
+    "internal",
+    "unavailable",
+)
+
 
 def _model_not_found_error(exc: Exception) -> bool:
     message = str(exc)
     lower = message.lower()
     return "404" in message and any(
         marker in lower for marker in _MODEL_NOT_FOUND_MARKERS)
+
+
+def _transient_server_error(exc: Exception) -> bool:
+    message = str(exc)
+    lower = message.lower()
+    return any(marker in lower for marker in _TRANSIENT_SERVER_ERROR_MARKERS)
 
 
 def _configured_model_candidates() -> list[str]:
@@ -83,7 +96,8 @@ class GeminiModelAdapter:
         )
         last_error: Exception | None = None
 
-        for model_name in self._model_names:
+        for index, model_name in enumerate(self._model_names):
+            has_fallback = index < len(self._model_names) - 1
             try:
                 return self._client.models.generate_content(
                     model=model_name,
@@ -94,7 +108,15 @@ class GeminiModelAdapter:
                 if _model_not_found_error(exc):
                     last_error = exc
                     logger.warning(
-                        "Gemini model '%s' unavailable; trying next fallback model.", model_name, )
+                        "Gemini model '%s' unavailable; trying next fallback model.", model_name,
+                    )
+                    continue
+                if _transient_server_error(exc) and has_fallback:
+                    last_error = exc
+                    logger.warning(
+                        "Gemini model '%s' returned a transient server error; trying next fallback model.",
+                        model_name,
+                    )
                     continue
                 raise
 

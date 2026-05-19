@@ -33,7 +33,7 @@ export function StreamingRunCard({ runId, status, pipelineName }: Props) {
     return () => clearInterval(id);
   }, [runId, status]);
 
-  const action = async (a: "pause" | "resume" | "stop") => {
+  const action = async (a: "pause" | "resume" | "stop" | "restart") => {
     const token = localStorage.getItem("pipelineiq_token") || "";
     await fetch(`/api/streaming/runs/${runId}/${a}`, {
       method: "POST",
@@ -44,6 +44,7 @@ export function StreamingRunCard({ runId, status, pipelineName }: Props) {
 
   const isActive = status === "STREAMING_ACTIVE";
   const isPaused = status === "STREAMING_PAUSED";
+  const isStopped = status === "STREAMING_STOPPED";
 
   return (
     <div
@@ -85,6 +86,14 @@ export function StreamingRunCard({ runId, status, pipelineName }: Props) {
               data-testid="stop-streaming-btn"
             >
               Stop
+            </button>
+          )}
+          {isStopped && (
+            <button
+              onClick={() => action("restart")}
+              data-testid="restart-streaming-btn"
+            >
+              Restart
             </button>
           )}
         </div>

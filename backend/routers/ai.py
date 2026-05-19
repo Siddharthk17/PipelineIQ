@@ -5,7 +5,7 @@ The client polls for completion using the task_id.
 """
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -118,6 +118,7 @@ class ValidateYamlResponse(BaseModel):
 
 @router.post("/generate", response_model=GeneratePipelineResponse)
 async def generate_pipeline(
+    request_context: Request,
     request: GeneratePipelineRequest,
     current_user: User = Depends(get_current_user),
     db: Session = get_read_db_dependency(),
@@ -141,6 +142,7 @@ async def generate_pipeline(
         description=request.description,
         file_ids=request.file_ids,
         db=db,
+        request_id=getattr(request_context.state, "request_id", None),
     )
 
     return GeneratePipelineResponse(
@@ -153,6 +155,7 @@ async def generate_pipeline(
 
 @router.post("/runs/{run_id}/repair", response_model=RepairPipelineResponse)
 async def repair_failed_run(
+    request: Request,
     run_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = get_read_db_dependency(),
@@ -213,6 +216,7 @@ async def repair_failed_run(
         error_message=error_message,
         file_ids=file_ids,
         db=db,
+        request_id=getattr(request.state, "request_id", None),
     )
 
     return RepairPipelineResponse(

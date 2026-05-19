@@ -3,7 +3,7 @@ import { ReactFlow, MiniMap, Controls, Background, useNodesState, useEdgesState,
 import type { Node as ReactFlowNode, Edge as ReactFlowEdge } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useLineageGraph } from "@/hooks/useLineage";
-import { getImpactAnalysis } from "@/lib/api";
+import { ApiError, getImpactAnalysis } from "@/lib/api";
 import { ImpactAnalysis } from "@/lib/types";
 import { ImpactProvider, ImpactState } from "./ImpactContext";
 import { SourceFileNode } from "./nodes/SourceFileNode";
@@ -25,7 +25,7 @@ interface LineageGraphProps {
 }
 
 export function LineageGraph({ runId, mode }: LineageGraphProps) {
-  const { data: graphData, isLoading } = useLineageGraph(runId);
+  const { data: graphData, isLoading, error } = useLineageGraph(runId);
   const [nodes, setNodes, onNodesChange] = useNodesState<ReactFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<ReactFlowEdge>([]);
 
@@ -171,6 +171,22 @@ export function LineageGraph({ runId, mode }: LineageGraphProps) {
     return (
       <div className="flex items-center justify-center h-full text-[var(--text-secondary)]">
         Loading graph...
+      </div>
+    );
+  }
+
+  if (error instanceof ApiError && error.status === 404) {
+    return (
+      <div className="flex items-center justify-center h-full px-6 text-center text-[var(--text-secondary)]">
+        Lineage is not available yet for this run. If the pipeline just finished, the graph may still be persisting.
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-full px-6 text-center text-[var(--text-secondary)]">
+        Could not load the lineage graph for this run.
       </div>
     );
   }

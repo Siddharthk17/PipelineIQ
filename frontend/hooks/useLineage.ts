@@ -1,11 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
-import { getLineageGraph, getColumnLineage, getImpactAnalysis } from "@/lib/api";
+import { ApiError, getLineageGraph, getColumnLineage, getImpactAnalysis } from "@/lib/api";
+
+export function shouldRetryLineageGraphQuery(failureCount: number, error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404 && failureCount < 2;
+}
 
 export function useLineageGraph(runId: string | null) {
   return useQuery({
     queryKey: ["lineage", runId],
     queryFn: () => getLineageGraph(runId!),
     enabled: !!runId,
+    retry: shouldRetryLineageGraphQuery,
+    retryDelay: (attemptIndex) => Math.min(1000 * Math.pow(2, attemptIndex), 4000),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 
@@ -14,6 +22,8 @@ export function useColumnLineage(runId: string | null, step: string | null, colu
     queryKey: ["lineage", runId, "column", step, column],
     queryFn: () => getColumnLineage(runId!, step!, column!),
     enabled: !!runId && !!step && !!column,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 
@@ -22,5 +32,7 @@ export function useImpactAnalysis(runId: string | null, step: string | null, col
     queryKey: ["lineage", runId, "impact", step, column],
     queryFn: () => getImpactAnalysis(runId!, step!, column!),
     enabled: !!runId && !!step && !!column,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }

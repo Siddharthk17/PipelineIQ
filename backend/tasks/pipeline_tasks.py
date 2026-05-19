@@ -636,23 +636,12 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             status="healed" if pipeline_run.status == PipelineStatus.HEALED else "success"
         ).inc()
         event_type = "pipeline_completed"
-        _publish_terminal_event(
-            str(pipeline_run.id),
-            event_type,
-            pipeline_run.status.value,
-        )
     else:
         pipeline_run.status = PipelineStatus.FAILED
         pipeline_run.error_message = str(
             summary.error) if summary.error else None
         PIPELINE_RUNS_TOTAL.labels(status="failed").inc()
         event_type = "pipeline_failed"
-        _publish_terminal_event(
-            str(pipeline_run.id),
-            event_type,
-            pipeline_run.status.value,
-            str(summary.error) if summary.error else "",
-        )
 
     pipeline_run.completed_at = utcnow()
     duration = 0.0
@@ -731,6 +720,13 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     db.add(lineage_record)
 
     db.commit()
+
+    _publish_terminal_event(
+        str(pipeline_run.id),
+        event_type,
+        pipeline_run.status.value,
+        str(summary.error) if summary.error else "",
+    )
 
     # Update schedule stats if this was a scheduled run
     if pipeline_run.schedule_id:

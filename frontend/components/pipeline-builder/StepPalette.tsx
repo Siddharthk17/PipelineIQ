@@ -6,7 +6,7 @@ interface StepPaletteProps {
   onAddStep?: (stepType: VisualStepType) => void;
 }
 
-const CATEGORY_ORDER: StepCategory[] = ["io", "transform", "quality", "reshape", "advanced"];
+const CATEGORY_ORDER: StepCategory[] = ["io", "transform", "quality", "reshape", "advanced", "streaming"];
 
 export function StepPalette({ onDragStart, onAddStep }: StepPaletteProps) {
   const suppressClickRef = useRef(false);

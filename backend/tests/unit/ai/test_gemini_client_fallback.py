@@ -57,3 +57,25 @@ class TestGeminiModelFallback:
             adapter.generate_content("Generate pipeline")
 
         assert quota_client.models.calls == ["gemini-2.5-flash"]
+
+    def test_falls_back_to_next_model_on_transient_server_error(self):
+        class _TransientModels:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def generate_content(self, model, contents, config):
+                self.calls.append(model)
+                if model == "gemini-2.5-flash":
+                    raise Exception("503 UNAVAILABLE")
+                return SimpleNamespace(text=f"ok from {model}")
+
+        transient_client = SimpleNamespace(models=_TransientModels())
+        adapter = GeminiModelAdapter(
+            client=transient_client,
+            model_names=["gemini-2.5-flash", "gemini-2.0-flash"],
+        )
+
+        response = adapter.generate_content("Generate pipeline")
+
+        assert response.text == "ok from gemini-2.0-flash"
+        assert transient_client.models.calls == ["gemini-2.5-flash", "gemini-2.0-flash"]

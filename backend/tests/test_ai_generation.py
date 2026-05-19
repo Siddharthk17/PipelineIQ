@@ -102,3 +102,50 @@ pipeline:
     assert result.attempts == 2
     assert result.error is not None
     assert "old_name" in result.error
+
+
+@pytest.mark.asyncio
+async def test_generate_pipeline_accepts_structured_json_and_renders_yaml(
+        monkeypatch,
+        client,
+        test_db,
+        sales_csv_bytes):
+    file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+
+    structured_response = f"""{{
+  "pipeline": {{
+    "name": "structured_ai_pipeline",
+    "steps": [
+      {{
+        "name": "load_data",
+        "type": "load",
+        "file_id": "{file_id}"
+      }},
+      {{
+        "name": "save_output",
+        "type": "save",
+        "input": "load_data",
+        "filename": "output.csv"
+      }}
+    ]
+  }}
+}}"""
+
+    async def _fake_call_gemini_async(*_args, **_kwargs):
+        return structured_response
+
+    monkeypatch.setattr(
+        "backend.ai.generation._call_gemini_async",
+        _fake_call_gemini_async,
+    )
+
+    result = await generate_pipeline_from_description(
+        description="Load the uploaded file and save it as CSV",
+        file_ids=[file_id],
+        db=test_db,
+    )
+
+    assert result.valid is True
+    assert result.attempts == 1
+    assert "type: load" in result.yaml
+    assert "type: save" in result.yaml

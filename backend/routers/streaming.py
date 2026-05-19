@@ -17,6 +17,7 @@ from backend.streaming.redpanda_client import (
     get_admin_client,
     make_consumer,
     make_producer,
+    validate_topic_name,
 )
 
 router = APIRouter(prefix="/api/streaming", tags=["Streaming"])
@@ -83,6 +84,27 @@ async def stop_streaming(
     return {"status": "STREAMING_STOPPED", "run_id": run_id}
 
 
+@router.post("/runs/{run_id}/restart")
+async def restart_streaming(
+    run_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_write_db_dependency),
+):
+    run = await _get_run_or_404(run_id, current_user.id, db)
+    if run.status.value != "STREAMING_STOPPED":
+        raise HTTPException(
+            400, f"Run not stopped (status: {run.status.value})")
+    from backend.tasks.streaming_pipeline import run_streaming_pipeline
+    result = run_streaming_pipeline.delay(run_id)
+    db.execute(
+        update(PipelineRun)
+        .where(PipelineRun.id == run_id)
+        .values(status="STREAMING_ACTIVE", celery_task_id=result.id)
+    )
+    db.commit()
+    return {"status": "STREAMING_ACTIVE", "run_id": run_id, "celery_task_id": result.id}
+
+
 @router.get("/runs/{run_id}/stats")
 async def get_streaming_stats(
     run_id: str,
@@ -123,6 +145,10 @@ async def create_topic(
     partitions: int = 8,
     current_user: User = Depends(get_current_user),
 ):
+    try:
+        topic = validate_topic_name(topic)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     created = get_admin_client().create_topic(topic, partitions=partitions)
     return {"topic": topic, "partitions": partitions, "created": created}
 
@@ -132,6 +158,10 @@ async def delete_topic(
     topic: str,
     current_user: User = Depends(get_current_user),
 ):
+    try:
+        topic = validate_topic_name(topic)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     get_admin_client().delete_topic(topic)
     return {"deleted": topic}
 
