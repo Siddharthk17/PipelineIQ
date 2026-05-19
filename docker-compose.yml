@@ -872,7 +872,7 @@ services:
     container_name: pipelineiq-redpanda-console
     restart: unless-stopped
     entrypoint: /bin/sh
-    command: -c "echo \"kafka:\\n  brokers:\\n    - redpanda:9092\" > /tmp/config.yml && /app/console --config.filepath=/tmp/config.yml"
+    command: -c "printf 'kafka:\\n  brokers:\\n    - redpanda:9092\\n' > /tmp/config.yml && /app/console --config.filepath=/tmp/config.yml"
     ports:
       - "8090:8080"
     depends_on:
