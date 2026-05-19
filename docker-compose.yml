@@ -462,6 +462,12 @@ services:
         ]
       interval: 10s
       timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  worker-gemini:
     build:
       context: ./backend
       dockerfile: Dockerfile
