@@ -1,0 +1,450 @@
+"""Data asset catalog repository.
+
+All database operations for the global data mesh catalog.
+
+Design principles:
+1. Global graph queries use PostgreSQL recursive CTEs -- never NetworkX
+2. Per-run lineage uses NetworkX (bounded small graphs) cached in Redis
+3. Upsert semantics: assets registered multiple times update last_seen_at
+4. Bulk upsert: register_run_assets() uses INSERT ... ON CONFLICT
+"""
+import json
+import logging
+import pickle
+from datetime import datetime, timezone
+from typing import Optional
+
+import networkx as nx
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+from backend.db.redis_pools import get_cache_redis_binary
+from backend.models import DataAsset, AssetRelationship
+
+logger = logging.getLogger(__name__)
+
+NS_MINIO_UPLOADS = "minio://pipelineiq-uploads"
+NS_MINIO_OUTPUTS = "minio://pipelineiq-outputs"
+NS_PIPELINE = "pipeline://"
+NS_REDPANDA = "redpanda://localhost:9092"
+
+MAX_CTE_DEPTH = 10
+MAX_LINEAGE_NODES = 10_000
+MAX_LINEAGE_EDGES = 50_000
+LINEAGE_CACHE_TTL = 3600
+
+
+def upsert_data_asset(
+    db: Session,
+    asset_type: str,
+    name: str,
+    namespace: str,
+    owner_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> str:
+    """Insert or update a data asset. Returns the asset UUID."""
+    stmt = pg_insert(DataAsset).values(
+        asset_type=asset_type,
+        name=name,
+        namespace=namespace,
+        owner_id=owner_id,
+        metadata=metadata or {},
+        created_at=datetime.now(timezone.utc),
+        last_seen_at=datetime.now(timezone.utc),
+    ).on_conflict_do_update(
+        constraint="uq_data_assets_type_ns_name",
+        set_={
+            "last_seen_at": datetime.now(timezone.utc),
+            "metadata": metadata or {},
+        },
+    ).returning(DataAsset.id)
+
+    result = db.execute(stmt)
+    return str(result.scalar_one())
+
+
+def upsert_asset_relationship(
+    db: Session,
+    source_id: str,
+    target_id: str,
+    relation: str,
+    pipeline_name: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> None:
+    """Insert an asset relationship edge. Duplicates allowed (different runs)."""
+    stmt = pg_insert(AssetRelationship).values(
+        source_id=source_id,
+        target_id=target_id,
+        relation=relation,
+        pipeline_name=pipeline_name,
+        run_id=run_id,
+        created_at=datetime.now(timezone.utc),
+    ).on_conflict_do_nothing()
+
+    db.execute(stmt)
+
+
+def register_run_assets(
+    db: Session,
+    run_id: str,
+    pipeline_name: str,
+    pipeline_yaml: str,
+    lineage_graph: nx.DiGraph,
+    owner_id: Optional[str] = None,
+) -> int:
+    """Register all data assets and relationships from a completed pipeline run."""
+    if lineage_graph is None or lineage_graph.number_of_nodes() == 0:
+        logger.debug("No lineage graph for run %s -- skipping asset registration", run_id)
+        return 0
+
+    registered = 0
+
+    pipeline_asset_id = upsert_data_asset(
+        db=db,
+        asset_type="pipeline",
+        name=pipeline_name,
+        namespace=NS_PIPELINE,
+        owner_id=owner_id,
+        metadata={"run_id": run_id, "yaml_length": len(pipeline_yaml)},
+    )
+    registered += 1
+
+    node_id_to_asset_id: dict[str, str] = {}
+
+    for node_id, node_data in lineage_graph.nodes(data=True):
+        asset_type, namespace, name = _classify_node(node_id, node_data)
+
+        asset_id = upsert_data_asset(
+            db=db,
+            asset_type=asset_type,
+            name=name,
+            namespace=namespace,
+            owner_id=owner_id,
+            metadata={
+                "pipeline": pipeline_name,
+                "run_id": run_id,
+                **{k: v for k, v in (node_data or {}).items()
+                   if isinstance(v, (str, int, float, bool))},
+            },
+        )
+        node_id_to_asset_id[node_id] = asset_id
+        registered += 1
+
+    for src_node, tgt_node, edge_data in lineage_graph.edges(data=True):
+        src_id = node_id_to_asset_id.get(src_node)
+        tgt_id = node_id_to_asset_id.get(tgt_node)
+
+        if not src_id or not tgt_id:
+            continue
+
+        relation = _classify_edge(edge_data)
+
+        upsert_asset_relationship(
+            db=db,
+            source_id=src_id,
+            target_id=tgt_id,
+            relation=relation,
+            pipeline_name=pipeline_name,
+            run_id=run_id,
+        )
+
+    output_file_nodes = [
+        n for n, d in lineage_graph.nodes(data=True)
+        if _classify_node(n, d)[0] == "file" and lineage_graph.in_degree(n) > 0
+    ]
+    for output_node in output_file_nodes:
+        output_id = node_id_to_asset_id.get(output_node)
+        if output_id:
+            upsert_asset_relationship(
+                db=db,
+                source_id=pipeline_asset_id,
+                target_id=output_id,
+                relation="writes_to",
+                pipeline_name=pipeline_name,
+                run_id=run_id,
+            )
+
+    db.commit()
+
+    logger.info(
+        "Registered %d assets for run %s (pipeline: %s)",
+        registered, run_id, pipeline_name,
+    )
+    return registered
+
+
+def _classify_node(node_id: str, node_data: dict) -> tuple[str, str, str]:
+    """Classify a lineage graph node into (asset_type, namespace, name)."""
+    if node_data and node_data.get("asset_type"):
+        return (node_data["asset_type"],
+                node_data.get("namespace", NS_PIPELINE),
+                node_id)
+
+    if node_id.endswith((".csv", ".json", ".parquet", ".xlsx")):
+        return ("file", NS_MINIO_UPLOADS, node_id)
+
+    if node_id.startswith(("minio://", "s3://")):
+        return ("file", NS_MINIO_OUTPUTS, node_id.split("/")[-1])
+
+    if node_id.startswith("redpanda://") or node_id.endswith(("-topic", ".topic")):
+        return ("topic", NS_REDPANDA, node_id)
+
+    return ("column", NS_PIPELINE, node_id)
+
+
+def _classify_edge(edge_data: dict) -> str:
+    """Classify a lineage graph edge into a relation type."""
+    if not edge_data:
+        return "transforms"
+
+    relation = edge_data.get("relation") or edge_data.get("type")
+    if relation in ("reads_from", "writes_to", "transforms", "joins"):
+        return relation
+
+    step_type = edge_data.get("step_type", "")
+    if step_type == "load":
+        return "reads_from"
+    if step_type == "save":
+        return "writes_to"
+    if step_type == "join":
+        return "joins"
+    return "transforms"
+
+
+def get_blast_radius(
+    db: Session,
+    asset_name: str,
+    asset_type: Optional[str] = None,
+    max_depth: int = MAX_CTE_DEPTH,
+) -> list[dict]:
+    """Find all downstream assets that depend on the given asset.
+
+    Uses a PostgreSQL recursive CTE -- NOT NetworkX.
+    """
+    where_clause = "WHERE da.name = :name"
+    params: dict = {"name": asset_name, "max_depth": max_depth}
+
+    if asset_type:
+        where_clause += " AND da.asset_type = :asset_type"
+        params["asset_type"] = asset_type
+
+    sql = text(f"""
+        WITH RECURSIVE downstream AS (
+            SELECT da.id, da.name, da.namespace, da.asset_type, 0 AS depth
+            FROM data_assets da
+            {where_clause}
+
+            UNION ALL
+
+            SELECT target.id, target.name, target.namespace, target.asset_type, d.depth + 1
+            FROM data_assets target
+            JOIN asset_relationships ar ON ar.target_id = target.id
+            JOIN downstream d ON d.id = ar.source_id
+            WHERE d.depth < :max_depth
+              AND target.id != d.id
+        )
+        SELECT DISTINCT
+            d.name,
+            d.namespace,
+            d.asset_type,
+            d.depth,
+            ar.pipeline_name,
+            COUNT(DISTINCT ar.run_id) AS times_used
+        FROM downstream d
+        LEFT JOIN asset_relationships ar ON ar.target_id = d.id
+        GROUP BY d.name, d.namespace, d.asset_type, d.depth, ar.pipeline_name
+        ORDER BY d.depth ASC, d.name ASC
+    """)
+
+    result = db.execute(sql, params)
+    rows = result.fetchall()
+
+    return [
+        {
+            "name": row.name,
+            "namespace": row.namespace,
+            "asset_type": row.asset_type,
+            "depth": row.depth,
+            "pipeline_name": row.pipeline_name,
+            "times_used": row.times_used,
+        }
+        for row in rows
+    ]
+
+
+def get_upstream_lineage(
+    db: Session,
+    asset_name: str,
+    max_depth: int = MAX_CTE_DEPTH,
+) -> list[dict]:
+    """Find all upstream assets that the given asset depends on."""
+    sql = text("""
+        WITH RECURSIVE upstream AS (
+            SELECT da.id, da.name, da.namespace, da.asset_type, 0 AS depth
+            FROM data_assets da
+            WHERE da.name = :name
+
+            UNION ALL
+
+            SELECT parent.id, parent.name, parent.namespace, parent.asset_type, u.depth + 1
+            FROM data_assets parent
+            JOIN asset_relationships ar ON ar.source_id = parent.id
+            JOIN upstream u ON u.id = ar.target_id
+            WHERE u.depth < :max_depth
+              AND parent.id != u.id
+        )
+        SELECT DISTINCT name, namespace, asset_type, depth
+        FROM upstream
+        ORDER BY depth ASC, name ASC
+    """)
+
+    result = db.execute(sql, {"name": asset_name, "max_depth": max_depth})
+    return [dict(row._mapping) for row in result.fetchall()]
+
+
+def search_assets(
+    db: Session,
+    query: str,
+    asset_type: Optional[str] = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Full-text search over asset names using PostgreSQL trigram similarity."""
+    if not query or len(query.strip()) < 2:
+        return []
+
+    params: dict = {"query": query.strip(), "limit": limit}
+    type_filter = ""
+    if asset_type:
+        type_filter = "AND asset_type = :asset_type"
+        params["asset_type"] = asset_type
+
+    sql = text(f"""
+        SELECT id, name, namespace, asset_type, metadata, last_seen_at,
+               similarity(name, :query) AS sim_score
+        FROM data_assets
+        WHERE name ILIKE '%' || :query || '%'
+          {type_filter}
+        ORDER BY sim_score DESC, name ASC
+        LIMIT :limit
+    """)
+
+    result = db.execute(sql, params)
+    return [
+        {
+            "id": str(row.id),
+            "name": row.name,
+            "namespace": row.namespace,
+            "asset_type": row.asset_type,
+            "metadata": row.metadata,
+            "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+            "similarity": round(float(row.sim_score or 0), 4),
+        }
+        for row in result.fetchall()
+    ]
+
+
+def list_orphan_assets(
+    db: Session,
+    days_inactive: int = 90,
+) -> list[dict]:
+    """Find assets not seen in any pipeline run in the last N days."""
+    sql = text("""
+        SELECT id, name, namespace, asset_type, last_seen_at
+        FROM data_assets
+        WHERE last_seen_at < NOW() - INTERVAL :days || ' days'
+          AND asset_type IN ('file', 'column')
+        ORDER BY last_seen_at ASC
+        LIMIT 100
+    """)
+
+    result = db.execute(sql, {"days": days_inactive})
+    return [
+        {
+            "id": str(row.id),
+            "name": row.name,
+            "namespace": row.namespace,
+            "asset_type": row.asset_type,
+            "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+        }
+        for row in result.fetchall()
+    ]
+
+
+def get_cached_run_lineage(run_id: str, db: Session) -> nx.DiGraph:
+    """Get per-run lineage graph from Redis cache or rebuild from DB."""
+    cache_key = f"lineage:graph:{run_id}"
+    redis = get_cache_redis_binary()
+
+    try:
+        cached = redis.get(cache_key)
+        if cached:
+            G = pickle.loads(cached)
+            logger.debug("Lineage cache HIT: %s", run_id)
+            return G
+    except Exception as e:
+        logger.warning("Lineage cache read failed: %s", e)
+
+    G = _build_lineage_from_db(run_id, db)
+
+    try:
+        redis.setex(cache_key, LINEAGE_CACHE_TTL, pickle.dumps(G))
+        logger.debug("Lineage cache MISS, stored: %s", run_id)
+    except Exception as e:
+        logger.warning("Lineage cache write failed: %s", e)
+
+    return G
+
+
+def _build_lineage_from_db(run_id: str, db: Session) -> nx.DiGraph:
+    """Build per-run NetworkX graph from the stored lineage_graphs record."""
+    result = db.execute(
+        text("SELECT graph_data FROM lineage_graphs WHERE pipeline_run_id = :run_id"),
+        {"run_id": run_id},
+    )
+    row = result.fetchone()
+    if not row or not row.graph_data:
+        return nx.DiGraph()
+
+    graph_data = row.graph_data
+    if isinstance(graph_data, dict):
+        return nx.node_link_graph(graph_data)
+    if isinstance(graph_data, str):
+        return nx.node_link_graph(json.loads(graph_data))
+
+    return nx.DiGraph()
+
+
+def build_bounded_lineage_graph(step_results: list) -> nx.DiGraph:
+    """Build per-run lineage graph from step results, with size limits."""
+    G = nx.DiGraph()
+
+    for step in step_results:
+        step_name = getattr(step, "step_name", None) or step.get("step_name", "unknown")
+        columns_in = getattr(step, "columns_in", []) or step.get("columns_in", [])
+        columns_out = getattr(step, "columns_out", []) or step.get("columns_out", [])
+
+        for src_col in (columns_in or []):
+            for tgt_col in (columns_out or []):
+                if G.number_of_nodes() > MAX_LINEAGE_NODES:
+                    if "__truncated__" not in G.nodes:
+                        G.add_node("__truncated__", truncated=True)
+                        logger.warning(
+                            "Lineage graph truncated at %d nodes (step: %s)",
+                            MAX_LINEAGE_NODES, step_name,
+                        )
+                    break
+
+                if G.number_of_edges() > MAX_LINEAGE_EDGES:
+                    logger.warning(
+                        "Lineage edge limit reached at %d (step: %s)",
+                        MAX_LINEAGE_EDGES, step_name,
+                    )
+                    break
+
+                G.add_edge(src_col, tgt_col, step=step_name, relation="transforms")
+
+            if G.number_of_nodes() > MAX_LINEAGE_NODES:
+                break
+
+    return G

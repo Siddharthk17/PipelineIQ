@@ -368,6 +368,12 @@ app.include_router(ai_router)
 app.include_router(wasm_router)
 app.include_router(streaming_router)
 
+from backend.routers.catalog import router as catalog_router
+from backend.routers.lineage_export import router as lineage_export_router
+
+app.include_router(catalog_router)
+app.include_router(lineage_export_router)
+
 if settings.ENVIRONMENT != "production":
     from backend.api.debug import router as debug_router
 

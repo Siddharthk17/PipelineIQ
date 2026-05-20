@@ -728,6 +728,20 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         str(summary.error) if summary.error else "",
     )
 
+    try:
+        from backend.repositories.catalog import register_run_assets
+
+        register_run_assets(
+            db=db,
+            run_id=str(pipeline_run.id),
+            pipeline_name=pipeline_run.name or "unknown",
+            pipeline_yaml=pipeline_run.yaml_config or "",
+            lineage_graph=summary.lineage.graph,
+            owner_id=str(pipeline_run.user_id) if pipeline_run.user_id else None,
+        )
+    except Exception as exc:
+        logger.error("Catalog registration failed for run %s: %s", pipeline_run.id, exc)
+
     # Update schedule stats if this was a scheduled run
     if pipeline_run.schedule_id:
         _update_schedule_stats(db, pipeline_run)

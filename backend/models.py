@@ -12,6 +12,7 @@ from typing import List, Optional
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum as SQLEnum,
     Float,
@@ -705,4 +706,58 @@ class StreamingStats(Base):
     consumer_group: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     avg_batch_latency_ms: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True)
+
+
+class DataAsset(Base):
+    """A data asset in the global catalog: file, column, pipeline, or topic."""
+
+    __tablename__ = "data_assets"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=func.gen_random_uuid())
+    asset_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str] = mapped_column(String(500), nullable=False)
+    namespace: Mapped[str] = mapped_column(String(500), nullable=False)
+    metadata_: Mapped[Optional[dict]] = mapped_column(
+        "metadata", PgJSONB, nullable=True, server_default="{}")
+    owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("asset_type", "namespace", "name",
+                         name="uq_data_assets_type_ns_name"),
+        CheckConstraint(
+            "asset_type IN ('file', 'column', 'pipeline', 'topic')",
+            name="ck_data_assets_type",
+        ),
+    )
+
+
+class AssetRelationship(Base):
+    """Directed edge between two data assets in the global catalog."""
+
+    __tablename__ = "asset_relationships"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=func.gen_random_uuid())
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("data_assets.id", ondelete="CASCADE"), nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("data_assets.id", ondelete="CASCADE"), nullable=False)
+    relation: Mapped[str] = mapped_column(String(20), nullable=False)
+    pipeline_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "relation IN ('reads_from', 'writes_to', 'transforms', 'joins')",
+            name="ck_asset_rel_relation",
+        ),
+    )
 
