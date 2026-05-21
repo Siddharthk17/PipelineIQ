@@ -249,12 +249,13 @@ def _load_wasm_modules(
         return {}
 
     from backend.utils.uuid_utils import as_uuid
+    from fastapi import HTTPException
 
     uuid_ids = []
     for wid in wasm_ids:
         try:
             uuid_ids.append(as_uuid(wid))
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, HTTPException):
             pass
 
     if not uuid_ids:
