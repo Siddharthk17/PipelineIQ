@@ -5,18 +5,19 @@ Search, blast radius, upstream lineage, orphan detection.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, text
+from fastapi import APIRouter, Depends, Query, Request, Response
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from backend.database import get_read_db
 from backend.auth import get_current_user
+from backend.config import settings
+from backend.dependencies import get_read_db_dependency
 from backend.models import User
 from backend.repositories.catalog import (
     search_assets,
     get_blast_radius,
     get_upstream_lineage,
-    list_orphan_assets,
+    list_orphan_assets as list_orphan_assets_repo,
 )
 from backend.utils.rate_limiter import limiter
 
@@ -25,17 +26,18 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/search")
-@limiter.limit("120/minute")
-async def search_catalog(
-    request,
+@limiter.limit(settings.RATE_LIMIT_READ)
+def search_catalog(
+    request: Request,
+    response: Response,
     q: str = Query(..., min_length=2, description="Search query for asset names"),
     asset_type: Optional[str] = Query(None, description="Filter: file|column|pipeline|topic"),
     limit: int = Query(default=20, le=100),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_read_db),
+    db: Session = get_read_db_dependency(),
 ):
     """Full-text search over the global data asset catalog using trigram similarity."""
-    results = await search_assets(db, query=q, asset_type=asset_type, limit=limit)
+    results = search_assets(db, query=q, asset_type=asset_type, limit=limit)
     return {
         "query": q,
         "results": results,
@@ -44,14 +46,15 @@ async def search_catalog(
 
 
 @router.get("/assets/{asset_name}/impact")
-@limiter.limit("120/minute")
-async def get_impact_analysis(
-    request,
+@limiter.limit(settings.RATE_LIMIT_READ)
+def get_impact_analysis(
+    request: Request,
+    response: Response,
     asset_name: str,
     asset_type: Optional[str] = Query(None),
     max_depth: int = Query(default=10, le=15),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_read_db),
+    db: Session = get_read_db_dependency(),
 ):
     """Forward blast radius: what downstream assets break if this asset changes.
 
@@ -84,13 +87,14 @@ async def get_impact_analysis(
 
 
 @router.get("/assets/{asset_name}/lineage")
-@limiter.limit("120/minute")
-async def get_asset_lineage(
-    request,
+@limiter.limit(settings.RATE_LIMIT_READ)
+def get_asset_lineage(
+    request: Request,
+    response: Response,
     asset_name: str,
     max_depth: int = Query(default=10, le=15),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_read_db),
+    db: Session = get_read_db_dependency(),
 ):
     """Backward lineage: where does this asset come from."""
     results = get_upstream_lineage(db, asset_name=asset_name, max_depth=max_depth)
@@ -103,14 +107,15 @@ async def get_asset_lineage(
 
 @router.get("/orphans")
 @limiter.limit("60/minute")
-async def list_orphan_data_assets(
-    request,
+def list_orphan_data_assets(
+    request: Request,
+    response: Response,
     days_inactive: int = Query(default=90, description="Assets not seen in N days"),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_read_db),
+    db: Session = get_read_db_dependency(),
 ):
     """Find assets no pipeline has used in the last N days."""
-    orphans = list_orphan_assets(db, days_inactive=days_inactive)
+    orphans = list_orphan_assets_repo(db, days_inactive=days_inactive)
     return {
         "days_inactive": days_inactive,
         "orphans": orphans,
@@ -119,11 +124,12 @@ async def list_orphan_data_assets(
 
 
 @router.get("/stats")
-@limiter.limit("120/minute")
-async def get_catalog_stats(
-    request,
+@limiter.limit(settings.RATE_LIMIT_READ)
+def get_catalog_stats(
+    request: Request,
+    response: Response,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_read_db),
+    db: Session = get_read_db_dependency(),
 ):
     """Overall catalog statistics."""
     asset_counts = db.execute(

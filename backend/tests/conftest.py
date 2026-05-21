@@ -92,8 +92,11 @@ def client(test_db: Session, tmp_path) -> TestClient:
     from backend.models import User
     import uuid as _uuid
 
+    # Fixed UUID so tests can reference the mock user for FK relationships
+    MOCK_USER_ID = _uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
     mock_user = User(
-        id=_uuid.uuid4(),
+        id=MOCK_USER_ID,
         email="testadmin@test.com",
         username="testadmin",
         hashed_password="hashed",

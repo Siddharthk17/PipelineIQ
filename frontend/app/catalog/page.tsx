@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+import { ArrowLeft, Database } from "lucide-react";
 
 type AssetType = "file" | "column" | "pipeline" | "topic" | null;
 
@@ -101,7 +102,19 @@ export default function CatalogPage() {
   return (
     <main className="h-screen w-screen bg-[var(--bg-base)] p-3" data-testid="catalog-page">
       <div className="mb-4">
-        <h1 className="text-2xl font-bold text-[var(--text-primary)]">Data Catalog</h1>
+        <div className="flex items-center gap-3 mb-2">
+          <button
+            onClick={() => router.push("/")}
+            className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--interactive-hover)] transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Dashboard
+          </button>
+        </div>
+        <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
+          <Database className="w-6 h-6 text-[var(--accent-primary)]" />
+          Data Catalog
+        </h1>
         <p className="text-sm text-[var(--text-secondary)] mt-1">
           Search every file, column, pipeline, and topic. Click any asset to see its blast radius.
         </p>

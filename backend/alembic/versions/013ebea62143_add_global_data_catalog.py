@@ -3,10 +3,18 @@
 Revision ID: 013ebea62143
 Revises: 9f1445650ed1
 Create Date: 2026-05-20
+
 """
+from typing import Sequence, Union
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMP
+
+revision: str = "013ebea62143"
+down_revision: Union[str, None] = "9f1445650ed1"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:

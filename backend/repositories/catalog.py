@@ -11,11 +11,12 @@ Design principles:
 import json
 import logging
 import pickle
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 import networkx as nx
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -35,6 +36,12 @@ MAX_LINEAGE_EDGES = 50_000
 LINEAGE_CACHE_TTL = 3600
 
 
+def _is_postgres(db: Session) -> bool:
+    """Check if the database backend is PostgreSQL."""
+    dialect = db.get_bind().dialect.name
+    return dialect == "postgresql"
+
+
 def upsert_data_asset(
     db: Session,
     asset_type: str,
@@ -44,24 +51,52 @@ def upsert_data_asset(
     metadata: Optional[dict] = None,
 ) -> str:
     """Insert or update a data asset. Returns the asset UUID."""
-    stmt = pg_insert(DataAsset).values(
-        asset_type=asset_type,
-        name=name,
-        namespace=namespace,
-        owner_id=owner_id,
-        metadata=metadata or {},
-        created_at=datetime.now(timezone.utc),
-        last_seen_at=datetime.now(timezone.utc),
-    ).on_conflict_do_update(
-        constraint="uq_data_assets_type_ns_name",
-        set_={
-            "last_seen_at": datetime.now(timezone.utc),
-            "metadata": metadata or {},
-        },
-    ).returning(DataAsset.id)
+    now = datetime.now(timezone.utc)
 
-    result = db.execute(stmt)
-    return str(result.scalar_one())
+    if _is_postgres(db):
+        stmt = pg_insert(DataAsset).values(
+            asset_type=asset_type,
+            name=name,
+            namespace=namespace,
+            owner_id=owner_id,
+            metadata=metadata or {},
+            created_at=now,
+            last_seen_at=now,
+        ).on_conflict_do_update(
+            constraint="uq_data_assets_type_ns_name",
+            set_={
+                "last_seen_at": now,
+                "metadata": metadata or {},
+            },
+        ).returning(DataAsset.id)
+
+        result = db.execute(stmt)
+        return str(result.scalar_one())
+    else:
+        existing = db.query(DataAsset).filter(
+            DataAsset.asset_type == asset_type,
+            DataAsset.name == name,
+            DataAsset.namespace == namespace,
+        ).first()
+
+        if existing:
+            existing.last_seen_at = now
+            existing.metadata = metadata or {}
+            db.flush()
+            return str(existing.id)
+        else:
+            asset = DataAsset(
+                asset_type=asset_type,
+                name=name,
+                namespace=namespace,
+                owner_id=owner_id,
+                metadata=metadata or {},
+                created_at=now,
+                last_seen_at=now,
+            )
+            db.add(asset)
+            db.flush()
+            return str(asset.id)
 
 
 def upsert_asset_relationship(
@@ -73,16 +108,36 @@ def upsert_asset_relationship(
     run_id: Optional[str] = None,
 ) -> None:
     """Insert an asset relationship edge. Duplicates allowed (different runs)."""
-    stmt = pg_insert(AssetRelationship).values(
-        source_id=source_id,
-        target_id=target_id,
-        relation=relation,
-        pipeline_name=pipeline_name,
-        run_id=run_id,
-        created_at=datetime.now(timezone.utc),
-    ).on_conflict_do_nothing()
+    if _is_postgres(db):
+        stmt = pg_insert(AssetRelationship).values(
+            source_id=source_id,
+            target_id=target_id,
+            relation=relation,
+            pipeline_name=pipeline_name,
+            run_id=run_id,
+            created_at=datetime.now(timezone.utc),
+        ).on_conflict_do_nothing()
+        db.execute(stmt)
+    else:
+        src_uuid = uuid.UUID(source_id) if isinstance(source_id, str) else source_id
+        tgt_uuid = uuid.UUID(target_id) if isinstance(target_id, str) else target_id
+        run_uuid = uuid.UUID(run_id) if isinstance(run_id, str) else run_id
 
-    db.execute(stmt)
+        existing = db.query(AssetRelationship).filter(
+            AssetRelationship.source_id == src_uuid,
+            AssetRelationship.target_id == tgt_uuid,
+            AssetRelationship.relation == relation,
+        ).first()
+        if not existing:
+            rel = AssetRelationship(
+                source_id=src_uuid,
+                target_id=tgt_uuid,
+                relation=relation,
+                pipeline_name=pipeline_name,
+                run_id=run_uuid,
+                created_at=datetime.now(timezone.utc),
+            )
+            db.add(rel)
 
 
 def register_run_assets(
@@ -221,7 +276,11 @@ def get_blast_radius(
     """Find all downstream assets that depend on the given asset.
 
     Uses a PostgreSQL recursive CTE -- NOT NetworkX.
+    Falls back to Python BFS on SQLite for tests.
     """
+    if not _is_postgres(db):
+        return _blast_radius_sqlite(db, asset_name, asset_type, max_depth)
+
     where_clause = "WHERE da.name = :name"
     params: dict = {"name": asset_name, "max_depth": max_depth}
 
@@ -273,12 +332,65 @@ def get_blast_radius(
     ]
 
 
+def _blast_radius_sqlite(
+    db: Session,
+    asset_name: str,
+    asset_type: Optional[str],
+    max_depth: int,
+) -> list[dict]:
+    """SQLite-compatible BFS blast radius implementation."""
+    base_query = db.query(DataAsset).filter(DataAsset.name == asset_name)
+    if asset_type:
+        base_query = base_query.filter(DataAsset.asset_type == asset_type)
+
+    start_assets = base_query.all()
+    if not start_assets:
+        return []
+
+    results = []
+    visited = set()
+    queue = [(a, 0) for a in start_assets]
+
+    while queue:
+        asset, depth = queue.pop(0)
+        if asset.id in visited:
+            continue
+        visited.add(asset.id)
+
+        rels = db.query(AssetRelationship).filter(
+            AssetRelationship.source_id == asset.id
+        ).all()
+
+        results.append({
+            "name": asset.name,
+            "namespace": asset.namespace,
+            "asset_type": asset.asset_type,
+            "depth": depth,
+            "pipeline_name": rels[0].pipeline_name if rels else None,
+            "times_used": len(set(r.run_id for r in rels if r.run_id)),
+        })
+
+        if depth < max_depth:
+            for rel in rels:
+                target = db.query(DataAsset).filter(
+                    DataAsset.id == rel.target_id
+                ).first()
+                if target and target.id not in visited:
+                    queue.append((target, depth + 1))
+
+    results.sort(key=lambda r: (r["depth"], r["name"]))
+    return results
+
+
 def get_upstream_lineage(
     db: Session,
     asset_name: str,
     max_depth: int = MAX_CTE_DEPTH,
 ) -> list[dict]:
     """Find all upstream assets that the given asset depends on."""
+    if not _is_postgres(db):
+        return _upstream_lineage_sqlite(db, asset_name, max_depth)
+
     sql = text("""
         WITH RECURSIVE upstream AS (
             SELECT da.id, da.name, da.namespace, da.asset_type, 0 AS depth
@@ -303,16 +415,74 @@ def get_upstream_lineage(
     return [dict(row._mapping) for row in result.fetchall()]
 
 
+def _upstream_lineage_sqlite(
+    db: Session,
+    asset_name: str,
+    max_depth: int,
+) -> list[dict]:
+    """SQLite-compatible BFS upstream lineage implementation."""
+    start = db.query(DataAsset).filter(DataAsset.name == asset_name).first()
+    if not start:
+        return []
+
+    results = []
+    visited = set()
+    queue = [(start, 0)]
+
+    while queue:
+        asset, depth = queue.pop(0)
+        if asset.id in visited:
+            continue
+        visited.add(asset.id)
+
+        rels = db.query(AssetRelationship).filter(
+            AssetRelationship.target_id == asset.id
+        ).all()
+
+        results.append({
+            "name": asset.name,
+            "namespace": asset.namespace,
+            "asset_type": asset.asset_type,
+            "depth": depth,
+        })
+
+        if depth < max_depth:
+            for rel in rels:
+                source = db.query(DataAsset).filter(
+                    DataAsset.id == rel.source_id
+                ).first()
+                if source and source.id not in visited:
+                    queue.append((source, depth + 1))
+
+    results.sort(key=lambda r: (r["depth"], r["name"]))
+    return results
+
+
 def search_assets(
     db: Session,
     query: str,
     asset_type: Optional[str] = None,
     limit: int = 20,
 ) -> list[dict]:
-    """Full-text search over asset names using PostgreSQL trigram similarity."""
+    """Full-text search over asset names using PostgreSQL trigram similarity.
+    Falls back to LIKE on SQLite for tests.
+    """
     if not query or len(query.strip()) < 2:
         return []
 
+    if _is_postgres(db):
+        return _search_assets_postgres(db, query, asset_type, limit)
+    else:
+        return _search_assets_sqlite(db, query, asset_type, limit)
+
+
+def _search_assets_postgres(
+    db: Session,
+    query: str,
+    asset_type: Optional[str],
+    limit: int,
+) -> list[dict]:
+    """PostgreSQL search with trigram similarity."""
     params: dict = {"query": query.strip(), "limit": limit}
     type_filter = ""
     if asset_type:
@@ -344,15 +514,54 @@ def search_assets(
     ]
 
 
+def _search_assets_sqlite(
+    db: Session,
+    query: str,
+    asset_type: Optional[str],
+    limit: int,
+) -> list[dict]:
+    """SQLite search using LIKE."""
+    q = db.query(DataAsset).filter(
+        DataAsset.name.contains(query.strip())
+    )
+    if asset_type:
+        q = q.filter(DataAsset.asset_type == asset_type)
+
+    results = q.limit(limit).all()
+    return [
+        {
+            "id": str(r.id),
+            "name": r.name,
+            "namespace": r.namespace,
+            "asset_type": r.asset_type,
+            "metadata": getattr(r, "metadata_", {}),
+            "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None,
+            "similarity": 0.0,
+        }
+        for r in results
+    ]
+
+
 def list_orphan_assets(
     db: Session,
     days_inactive: int = 90,
 ) -> list[dict]:
     """Find assets not seen in any pipeline run in the last N days."""
+    if _is_postgres(db):
+        return _list_orphans_postgres(db, days_inactive)
+    else:
+        return _list_orphans_sqlite(db, days_inactive)
+
+
+def _list_orphans_postgres(
+    db: Session,
+    days_inactive: int,
+) -> list[dict]:
+    """PostgreSQL orphan listing with INTERVAL syntax."""
     sql = text("""
         SELECT id, name, namespace, asset_type, last_seen_at
         FROM data_assets
-        WHERE last_seen_at < NOW() - INTERVAL :days || ' days'
+        WHERE last_seen_at < NOW() - (:days || ' days')::INTERVAL
           AND asset_type IN ('file', 'column')
         ORDER BY last_seen_at ASC
         LIMIT 100
@@ -368,6 +577,32 @@ def list_orphan_assets(
             "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
         }
         for row in result.fetchall()
+    ]
+
+
+def _list_orphans_sqlite(
+    db: Session,
+    days_inactive: int,
+) -> list[dict]:
+    """SQLite orphan listing using datetime comparison."""
+    from datetime import timedelta
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_inactive)
+
+    results = db.query(DataAsset).filter(
+        DataAsset.last_seen_at < cutoff,
+        DataAsset.asset_type.in_(["file", "column"]),
+    ).order_by(DataAsset.last_seen_at.asc()).limit(100).all()
+
+    return [
+        {
+            "id": str(r.id),
+            "name": r.name,
+            "namespace": r.namespace,
+            "asset_type": r.asset_type,
+            "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None,
+        }
+        for r in results
     ]
 
 
@@ -398,9 +633,10 @@ def get_cached_run_lineage(run_id: str, db: Session) -> nx.DiGraph:
 
 def _build_lineage_from_db(run_id: str, db: Session) -> nx.DiGraph:
     """Build per-run NetworkX graph from the stored lineage_graphs record."""
+    run_id_hex = uuid.UUID(run_id).hex if isinstance(run_id, str) else run_id.hex
     result = db.execute(
         text("SELECT graph_data FROM lineage_graphs WHERE pipeline_run_id = :run_id"),
-        {"run_id": run_id},
+        {"run_id": run_id_hex},
     )
     row = result.fetchone()
     if not row or not row.graph_data:

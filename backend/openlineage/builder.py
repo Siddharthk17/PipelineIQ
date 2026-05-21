@@ -75,7 +75,7 @@ def _map_status_to_event_type(status: str) -> str:
         "running": "RUNNING",
         "pending": "START",
     }
-    return mapping.get(status, "COMPLETE")
+    return mapping.get(status.lower(), "COMPLETE")
 
 
 def _build_inputs(lineage_graph: nx.DiGraph, file_ids: list[str]) -> list[dict]:

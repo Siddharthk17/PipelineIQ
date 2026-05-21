@@ -7,7 +7,7 @@ import { useWidgetStore, getAllWidgets } from "@/store/widgetStore";
 import { useKeybindingStore } from "@/store/keybindingStore";
 import { checkHealth } from "@/lib/api";
 import { APP_VERSION } from "@/lib/constants";
-import { Activity, Clock, Command, LayoutDashboard, Palette, RefreshCw, Keyboard, LogOut, User } from "lucide-react";
+import { Activity, Clock, Command, Database, LayoutDashboard, Palette, RefreshCw, Keyboard, LogOut, User } from "lucide-react";
 import { AuthUser } from "@/lib/auth-context";
 import { PresenceIndicator } from "./PresenceIndicator";
 
@@ -49,6 +49,23 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, on
   return (
     <div className="relative flex items-center justify-between px-4" style={{ height: "var(--topbar-height)", backgroundColor: "var(--topbar-bg)", borderBottom: "1px solid var(--topbar-border)" }}>
       <div className="flex items-center gap-4">
+        <button
+          onClick={() => router.push("/catalog")}
+          className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--interactive-hover)] transition-colors"
+          title="Data Catalog"
+        >
+          <Database className="w-3.5 h-3.5" />
+          Catalog
+        </button>
+        <button
+          onClick={() => router.push("/runs")}
+          className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--interactive-hover)] transition-colors"
+          title="Run History"
+        >
+          <Activity className="w-3.5 h-3.5" />
+          Runs
+        </button>
+        <div className="w-px h-4 bg-[var(--topbar-border)]" />
         <div className="flex items-center gap-2">
           {[1, 2, 3, 4, 5].map(id => {
             const hasWindows = getAllWidgets(workspaces[id]).length > 0;

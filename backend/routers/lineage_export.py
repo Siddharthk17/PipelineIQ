@@ -6,30 +6,40 @@ GET /api/lineage/export -- all runs as NDJSON bulk export
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.database import get_read_db
 from backend.auth import get_current_user
+from backend.config import settings
+from backend.dependencies import get_read_db_dependency
 from backend.models import User, PipelineRun
-from backend.repositories.catalog import get_cached_run_lineage
 from backend.openlineage.builder import build_openlineage_event
+from backend.repositories.catalog import get_cached_run_lineage
+from backend.utils.rate_limiter import limiter
+from backend.utils.uuid_utils import as_uuid
 
 router = APIRouter(prefix="/api", tags=["Lineage"])
 logger = logging.getLogger(__name__)
 
 
 @router.get("/runs/{run_id}/openlineage")
-async def get_run_openlineage_event(
+@limiter.limit(settings.RATE_LIMIT_READ)
+def get_run_openlineage_event(
+    request: Request,
+    response: Response,
     run_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_read_db),
+    db: Session = get_read_db_dependency(),
 ):
-    """Export a pipeline run as an OpenLineage 1.0 RunEvent."""
+    """Export a pipeline run as an OpenLineage 1.0 RunEvent.
+
+    Compatible with DataHub, Marquez, OpenMetadata, and any OpenLineage consumer.
+    """
+    run_uuid = as_uuid(run_id)
     result = db.execute(
         select(PipelineRun)
-        .where(PipelineRun.id == run_id)
+        .where(PipelineRun.id == run_uuid)
         .where(PipelineRun.user_id == current_user.id)
     )
     run = result.scalar_one_or_none()
@@ -63,10 +73,13 @@ async def get_run_openlineage_event(
 
 
 @router.get("/lineage/export")
-async def export_all_openlineage(
+@limiter.limit("30/minute")
+def export_all_openlineage(
+    request: Request,
+    response: Response,
     limit: int = Query(default=1000, le=10000),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_read_db),
+    db: Session = get_read_db_dependency(),
 ):
     """Bulk export all successful pipeline runs as NDJSON.
 
@@ -87,8 +100,7 @@ async def export_all_openlineage(
     events = []
     for run in runs:
         try:
-            import networkx as nx
-            lineage_graph = nx.DiGraph()
+            lineage_graph = get_cached_run_lineage(str(run.id), db)
 
             duration_ms = None
             if run.started_at and run.completed_at:

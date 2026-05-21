@@ -24,10 +24,12 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    event,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
+from sqlalchemy.engine import Engine
 
 from backend.database import Base
 
@@ -36,8 +38,18 @@ PgJSONB = JSONB().with_variant(JSON(), "sqlite")
 
 
 def _enum_values(enum_class: type[PyEnum]) -> list[str]:
-    """Persist Python Enum values (not names) in database enum columns."""
+    """Persist Python Enum values (not names) in database columns."""
     return [member.value for member in enum_class]
+
+
+@event.listens_for(Engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    """Register gen_random_uuid() function for SQLite test databases."""
+    import sqlite3
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        dbapi_connection.create_function(
+            "gen_random_uuid", 0, lambda: uuid.uuid4().hex
+        )
 
 
 class PipelineStatus(str, PyEnum):
