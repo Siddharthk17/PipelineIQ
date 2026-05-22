@@ -301,8 +301,34 @@ export async function runPipeline(yamlConfig: string, name?: string): Promise<{ 
   });
 }
 
+const _pendingRun = new Map<string, Promise<PipelineRun>>();
+
 export async function getPipelineRun(runId: string): Promise<PipelineRun> {
-  return fetchApi<PipelineRun>(`/pipelines/${runId}`);
+  const pending = _pendingRun.get(runId);
+  if (pending) return pending;
+  const promise = fetchApi<PipelineRun>(`/pipelines/${runId}`).finally(() => _pendingRun.delete(runId));
+  _pendingRun.set(runId, promise);
+  return promise;
+}
+
+export async function getPipelineStats(): Promise<{
+  total_runs: number;
+  completed: number;
+  failed: number;
+  pending: number;
+  success_rate: number;
+  total_files: number;
+  avg_duration_ms: number;
+}> {
+  return fetchApi<{
+    total_runs: number;
+    completed: number;
+    failed: number;
+    pending: number;
+    success_rate: number;
+    total_files: number;
+    avg_duration_ms: number;
+  }>("/pipelines/stats");
 }
 
 export async function getHealingAttempts(runId: string): Promise<HealingAttempt[]> {
@@ -595,8 +621,17 @@ export async function register(email: string, username: string, password: string
   });
 }
 
+const _pendingMe = new Map<string, Promise<AuthUser>>();
+
 export async function getMe(): Promise<AuthUser> {
-  return fetchAuth<AuthUser>("/auth/me");
+  const token = getToken();
+  if (!token) throw new ApiError(401, "No token available");
+  const key = `me:${token}`;
+  const pending = _pendingMe.get(key);
+  if (pending) return pending;
+  const promise = fetchAuth<AuthUser>("/auth/me").finally(() => _pendingMe.delete(key));
+  _pendingMe.set(key, promise);
+  return promise;
 }
 
 export async function logout(): Promise<void> {

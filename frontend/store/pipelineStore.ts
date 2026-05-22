@@ -26,6 +26,9 @@ export const usePipelineStore = create<PipelineState>()(
     {
       name: "pipelineiq-pipeline",
       storage: persistentJsonStorage,
+      partialize: (state) => ({
+        lastYamlConfig: state.lastYamlConfig,
+      }),
     }
   )
 );

@@ -2,19 +2,13 @@
 
 import React, { useState } from "react";
 import { usePipelineStore } from "@/store/pipelineStore";
-import { useQuery } from "@tanstack/react-query";
-import { getPipelineRuns } from "@/lib/api";
-import { PIPELINE_RUNS_PAGE_LIMIT, PIPELINE_RUNS_QUERY_KEY } from "@/lib/constants";
+import { usePipelineRuns } from "@/hooks/usePipelineRuns";
 import { LineageGraph } from "../lineage/LineageGraph";
 import { GitMerge, Activity } from "lucide-react";
 
 export function LineageGraphWidget() {
   const { activeRunId, setActiveRunId } = usePipelineStore();
-  const { data: runs } = useQuery({
-    queryKey: PIPELINE_RUNS_QUERY_KEY,
-    queryFn: () => getPipelineRuns(1, PIPELINE_RUNS_PAGE_LIMIT),
-    staleTime: 15000,
-  });
+  const { data: runs } = usePipelineRuns();
   const [mode, setMode] = useState<"ancestry" | "impact">("ancestry");
 
   return (

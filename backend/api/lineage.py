@@ -200,12 +200,24 @@ def _get_lineage_record(
         .first()
     )
     if lineage_graph is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
+        run = (
+            db.query(PipelineRun.status)
+            .filter(PipelineRun.id == _as_uuid(run_id))
+            .first()
+        )
+        if run and run.status in ("PENDING", "RUNNING", "QUEUED"):
+            detail = (
+                f"Lineage graph not yet available for run '{run_id}'. "
+                f"The pipeline is still {run.status}."
+            )
+        else:
+            detail = (
                 f"Lineage graph not found for run '{run_id}'. "
                 f"The pipeline may not have completed successfully."
-            ),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=detail,
         )
     return lineage_graph
 

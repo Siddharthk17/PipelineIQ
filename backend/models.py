@@ -138,6 +138,10 @@ class PipelineRun(Base):
     schedule_id: Mapped[Optional[str]] = mapped_column(Uuid, ForeignKey(
         "pipeline_schedules.id", ondelete="SET NULL"), nullable=True)
 
+    __table_args__ = (
+        Index("ix_pipeline_runs_user_created", "user_id", "created_at"),
+    )
+
     step_results: Mapped[List["StepResult"]] = relationship(
         "StepResult",
         back_populates="pipeline_run",

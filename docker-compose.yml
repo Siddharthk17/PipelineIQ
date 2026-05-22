@@ -587,6 +587,8 @@ services:
       --save ""
       --appendonly no
       --loglevel notice
+    sysctls:
+      - vm.overcommit_memory=1
     ports:
       - "6379:6379"
     volumes:
@@ -610,6 +612,8 @@ services:
       --save ""
       --appendonly no
       --loglevel notice
+    sysctls:
+      - vm.overcommit_memory=1
     ports:
       - "6380:6380"
     healthcheck:
@@ -631,7 +635,12 @@ services:
       --maxmemory-policy allkeys-lru
       --save 60 1000
       --appendonly yes
+      --auto-aof-rewrite-percentage 200
+      --auto-aof-rewrite-min-size 64mb
+      --aof-rewrite-incremental-fsync yes
       --loglevel notice
+    sysctls:
+      - vm.overcommit_memory=1
     ports:
       - "6381:6381"
     volumes:
@@ -654,6 +663,8 @@ services:
       --maxmemory 128mb
       --appendonly yes
       --loglevel notice
+    sysctls:
+      - vm.overcommit_memory=1
     ports:
       - "6382:6382"
     volumes:
@@ -777,6 +788,11 @@ services:
         condition: service_started
       grafana:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
     networks:
       - pipelineiq-network
@@ -916,7 +932,7 @@ services:
       dockerfile: Dockerfile
     container_name: pipelineiq-worker-streaming
     command: >
-      celery -A backend.celery_app:celery_app worker
+      celery -A backend.celery_app:celery_app worker -E
       --queues=streaming
       --concurrency=8
       --prefetch-multiplier=1

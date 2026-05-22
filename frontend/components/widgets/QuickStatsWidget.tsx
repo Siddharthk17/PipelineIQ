@@ -3,8 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { getFiles, getPipelineRuns } from "@/lib/api";
-import { PIPELINE_RUNS_PAGE_LIMIT, PIPELINE_RUNS_QUERY_KEY } from "@/lib/constants";
+import { getFiles, getPipelineStats } from "@/lib/api";
 
 function AnimatedNumber({ value }: { value: number }) {
   const [displayValue, setDisplayValue] = useState(0);
@@ -39,22 +38,20 @@ export function QuickStatsWidget() {
     queryFn: getFiles,
     staleTime: 30000,
   });
-  const { data: runs } = useQuery({
-    queryKey: PIPELINE_RUNS_QUERY_KEY,
-    queryFn: () => getPipelineRuns(1, PIPELINE_RUNS_PAGE_LIMIT),
-    staleTime: 30000,
+  const { data: stats } = useQuery({
+    queryKey: ["pipelineStats"],
+    queryFn: getPipelineStats,
+    staleTime: 15000,
   });
 
-  const runsArray = Array.isArray(runs) ? runs : [];
   const filesArray = Array.isArray(files) ? files : [];
 
-  const totalRuns = runsArray.length;
-  const successfulRuns = runsArray.filter(r => r.status === "COMPLETED" || r.status === "HEALED").length;
+  const totalRuns = stats?.total_runs ?? 0;
+  const successfulRuns = stats?.completed ?? 0;
   const filesUploaded = filesArray.length;
-  const runsWithDuration = runsArray.filter(r => r.duration_ms != null && r.duration_ms > 0);
-  const avgDuration = runsWithDuration.length ? Math.round(runsWithDuration.reduce((acc, r) => acc + (r.duration_ms || 0), 0) / runsWithDuration.length) : 0;
+  const avgDuration = stats?.avg_duration_ms ?? 0;
 
-  const stats = [
+  const statItems = [
     { label: "Total Pipeline Runs", value: totalRuns, trend: "+12% this week" },
     { label: "Successful Runs", value: successfulRuns, trend: "+5% this week" },
     { label: "Files Uploaded", value: filesUploaded, trend: "+2 this week" },
@@ -63,7 +60,7 @@ export function QuickStatsWidget() {
 
   return (
     <div className="grid grid-cols-2 grid-rows-2 gap-2 sm:gap-4 h-full w-full">
-      {stats.map((stat, i) => (
+      {statItems.map((stat, i) => (
         <motion.div
           key={stat.label}
           initial={{ opacity: 0, scale: 0.9 }}

@@ -53,37 +53,39 @@ export function usePipelineRun(runId: string | null) {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let currentEventSource: EventSource | null = null;
 
-    getPipelineRun(runId)
-      .then((run) => {
-        if (!cancelled) {
-          usePipelineStore.setState({ activeRun: run });
-          connectSSE();
+    queryClient.fetchQuery({
+      queryKey: ["pipelineRun", runId],
+      queryFn: () => getPipelineRun(runId),
+      staleTime: 30000,
+    }).then((run) => {
+      if (!cancelled) {
+        usePipelineStore.setState({ activeRun: run });
+        connectSSE();
+      }
+    }).catch((err) => {
+      if (!cancelled) {
+        usePipelineStore.setState({
+          activeRun: {
+            id: runId,
+            name: "Pipeline Run",
+            status: "PENDING",
+            created_at: new Date().toISOString(),
+            started_at: null,
+            completed_at: null,
+            total_rows_in: null,
+            total_rows_out: null,
+            error_message: null,
+            duration_ms: null,
+            step_results: [],
+            healing_attempts: [],
+          },
+        });
+        if (err instanceof ApiError && err.status === 404) {
+          return;
         }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          usePipelineStore.setState({
-            activeRun: {
-              id: runId,
-              name: "Pipeline Run",
-              status: "PENDING",
-              created_at: new Date().toISOString(),
-              started_at: null,
-              completed_at: null,
-              total_rows_in: null,
-              total_rows_out: null,
-              error_message: null,
-              duration_ms: null,
-              step_results: [],
-              healing_attempts: [],
-            },
-          });
-          if (err instanceof ApiError && err.status === 404) {
-            return;
-          }
-          connectSSE();
-        }
-      });
+        connectSSE();
+      }
+    });
 
     function connectSSE() {
       if (cancelled) return;
@@ -112,13 +114,15 @@ export function usePipelineRun(runId: string | null) {
       eventSource.addEventListener("step_failed", handleStepEvent);
 
       const refreshRun = () => {
-        getPipelineRun(runId!)
-          .then((run) => {
-            if (!cancelled) usePipelineStore.setState({ activeRun: run });
-          })
-          .catch(() => {
-            // Keep local optimistic state if refresh fails transiently.
-          });
+        queryClient.fetchQuery({
+          queryKey: ["pipelineRun", runId!],
+          queryFn: () => getPipelineRun(runId!),
+          staleTime: 30000,
+        }).then((run) => {
+          if (!cancelled) usePipelineStore.setState({ activeRun: run });
+        }).catch(() => {
+          // Keep local optimistic state if refresh fails transiently.
+        });
       };
 
       const handleHealingState = (status: PipelineRun["status"]) => (e: MessageEvent) => {
@@ -150,7 +154,11 @@ export function usePipelineRun(runId: string | null) {
       const handleTerminal = (fallbackStatus: PipelineRun["status"]) => (e: MessageEvent) => {
         const data = JSON.parse(e.data);
         const terminalStatus = (data.status as PipelineRun["status"]) || fallbackStatus;
-        getPipelineRun(runId!).then((run) => {
+        queryClient.fetchQuery({
+          queryKey: ["pipelineRun", runId!],
+          queryFn: () => getPipelineRun(runId!),
+          staleTime: 30000,
+        }).then((run) => {
           if (!cancelled) usePipelineStore.setState({ activeRun: run });
         }).catch(() => {
           usePipelineStore.setState((state) => {
@@ -223,7 +231,11 @@ export function usePipelineRun(runId: string | null) {
           }, delay);
         } else {
           // After max retries, fetch final state
-          getPipelineRun(runId!).then((run) => {
+          queryClient.fetchQuery({
+            queryKey: ["pipelineRun", runId!],
+            queryFn: () => getPipelineRun(runId!),
+            staleTime: 30000,
+          }).then((run) => {
             if (!cancelled) usePipelineStore.setState({ activeRun: run });
           }).catch(() => {
             usePipelineStore.setState((state) => {

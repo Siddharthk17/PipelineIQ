@@ -1,11 +1,11 @@
 "use client";
 
 import React from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { CheckCircle, XCircle, Clock, RefreshCw, Sparkles, Zap, Pause, StopCircle } from "lucide-react";
-import { getPipelineRuns, repairPipelineRunWithAI } from "@/lib/api";
-import { PIPELINE_RUNS_PAGE_LIMIT, PIPELINE_RUNS_QUERY_KEY } from "@/lib/constants";
+import { CheckCircle, XCircle, Clock, RefreshCw, Sparkles } from "lucide-react";
+import { repairPipelineRunWithAI } from "@/lib/api";
+import { usePipelineRuns, useInvalidatePipelineRuns } from "@/hooks/usePipelineRuns";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { AIRepairDiffModal } from "@/components/widgets/AIPipelineModals";
 import { StreamingRunCard } from "@/components/runs/StreamingRunCard";
@@ -14,12 +14,8 @@ import type { AIRepairPipelineResponse } from "@/lib/types";
 const STREAMING_STATUSES = ["STREAMING_ACTIVE", "STREAMING_PAUSED", "STREAMING_STOPPED"];
 
 export function RunHistoryWidget() {
-  const queryClient = useQueryClient();
-  const { data: runs, isLoading } = useQuery({
-    queryKey: PIPELINE_RUNS_QUERY_KEY,
-    queryFn: () => getPipelineRuns(1, PIPELINE_RUNS_PAGE_LIMIT),
-    staleTime: 15000,
-  });
+  const { data: runs, isLoading } = usePipelineRuns();
+  const invalidatePipelineRuns = useInvalidatePipelineRuns();
   const { setActiveRunId, setLastYamlConfig } = usePipelineStore();
   const [repairResult, setRepairResult] = React.useState<AIRepairPipelineResponse | null>(null);
   const [repairOpen, setRepairOpen] = React.useState(false);
@@ -42,9 +38,9 @@ export function RunHistoryWidget() {
       || activeRunStatus === "TIMEOUT"
       || STREAMING_STATUSES.includes(activeRunStatus || "")
     ) {
-      queryClient.invalidateQueries({ queryKey: PIPELINE_RUNS_QUERY_KEY });
+      invalidatePipelineRuns();
     }
-  }, [activeRunStatus, queryClient]);
+  }, [activeRunStatus, invalidatePipelineRuns]);
 
   if (isLoading) return <div className="p-4 text-[var(--text-secondary)]">Loading history...</div>;
 
@@ -60,7 +56,7 @@ export function RunHistoryWidget() {
       <div className="flex items-center justify-between px-3 py-2 border-b" style={{ borderColor: "var(--widget-border)" }}>
         <span className="text-xs text-[var(--text-secondary)]">{runs.length} runs</span>
         <button
-          onClick={() => queryClient.invalidateQueries({ queryKey: PIPELINE_RUNS_QUERY_KEY })}
+          onClick={() => invalidatePipelineRuns()}
           className="p-1 rounded hover:bg-[var(--interactive-hover)] text-[var(--text-secondary)]"
           title="Refresh"
         >

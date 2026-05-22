@@ -11,7 +11,7 @@ from typing import Optional
 from kombu.exceptions import OperationalError as KombuOperationalError
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from redis.exceptions import RedisError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from backend.auth import get_current_user
 from backend.config import settings
@@ -461,7 +461,11 @@ def list_pipeline_runs(
 
     total = query.count()
     runs = (
-        query.order_by(PipelineRun.created_at.desc())
+        query.options(
+            selectinload(PipelineRun.step_results),
+            selectinload(PipelineRun.healing_attempts),
+        )
+        .order_by(PipelineRun.created_at.desc())
         .offset((page - 1) * limit)
         .limit(limit)
         .all()
@@ -526,6 +530,20 @@ def get_pipeline_stats(
         .scalar()
         or 0
     )
+    avg_duration = (
+        db.query(
+            func.avg(
+                func.extract("epoch", PipelineRun.completed_at - PipelineRun.started_at) * 1000
+            )
+        )
+        .filter(
+            PipelineRun.user_id == current_user.id,
+            PipelineRun.started_at.isnot(None),
+            PipelineRun.completed_at.isnot(None),
+        )
+        .scalar()
+        or 0
+    )
     return {
         "total_runs": total_runs,
         "completed": completed,
@@ -535,6 +553,7 @@ def get_pipeline_stats(
             completed / total_runs * 100,
             1) if total_runs > 0 else 0,
         "total_files": total_files,
+        "avg_duration_ms": round(float(avg_duration)) if avg_duration else 0,
     }
 
 
