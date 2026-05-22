@@ -2,8 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError, getLineageGraph, getColumnLineage, getImpactAnalysis } from "@/lib/api";
 
 export function shouldRetryLineageGraphQuery(failureCount: number, error: unknown): boolean {
-  if (error instanceof ApiError && error.status === 404) return false;
-  return failureCount < 2;
+  if (error instanceof ApiError && error.status === 404) return failureCount < 2;
+  return false;
 }
 
 export function useLineageGraph(runId: string | null) {

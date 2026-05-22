@@ -29,6 +29,7 @@ vi.mock("motion/react", () => {
 vi.mock("@/lib/api", () => ({
   getFiles: vi.fn(),
   getPipelineRuns: vi.fn(),
+  getPipelineStats: vi.fn(),
   repairPipelineRunWithAI: vi.fn(),
   uploadFile: vi.fn(),
   deleteFile: vi.fn(),
@@ -40,7 +41,7 @@ vi.mock("@/hooks/usePipelineRun", () => ({
   usePipelineRun: vi.fn(),
 }));
 
-import { getFiles, getPipelineRuns, repairPipelineRunWithAI, uploadFile, deleteFile } from "@/lib/api";
+import { getFiles, getPipelineRuns, getPipelineStats, repairPipelineRunWithAI, uploadFile, deleteFile } from "@/lib/api";
 import { QuickStatsWidget } from "@/components/widgets/QuickStatsWidget";
 import { FileUploadWidget } from "@/components/widgets/FileUploadWidget";
 import { RunHistoryWidget } from "@/components/widgets/RunHistoryWidget";
@@ -63,6 +64,15 @@ describe("QuickStatsWidget", () => {
       { id: "1", original_filename: "a.csv", row_count: 10, column_count: 3, columns: [], dtypes: {}, file_size_bytes: 1024, schema_drift: null },
       { id: "2", original_filename: "b.csv", row_count: 20, column_count: 5, columns: [], dtypes: {}, file_size_bytes: 2048, schema_drift: null },
     ]);
+    vi.mocked(getPipelineStats).mockResolvedValue({
+      total_runs: 3,
+      completed: 2,
+      failed: 1,
+      pending: 0,
+      success_rate: 66.7,
+      total_files: 2,
+      avg_duration_ms: 150,
+    });
     vi.mocked(getPipelineRuns).mockResolvedValue([
       { id: "r1", name: "run1", status: "COMPLETED", created_at: "", started_at: null, completed_at: null, total_rows_in: 10, total_rows_out: 5, error_message: null, duration_ms: 100, step_results: [], healing_attempts: [] },
       { id: "r2", name: "run2", status: "FAILED", created_at: "", started_at: null, completed_at: null, total_rows_in: null, total_rows_out: null, error_message: "err", duration_ms: null, step_results: [], healing_attempts: [] },

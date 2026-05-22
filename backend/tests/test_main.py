@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 def test_request_validation_errors_are_logged(client, monkeypatch):
     mock_logger = MagicMock()
-    monkeypatch.setattr("backend.main.structlog.get_logger", lambda: mock_logger)
+    monkeypatch.setattr("backend.main.structlog.get_logger", lambda *args, **kwargs: mock_logger)
 
     response = client.post("/api/v1/pipelines/run", json={})
 
