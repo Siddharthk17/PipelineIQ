@@ -129,7 +129,7 @@ class RunPipelineRequest(BaseModel):
     def validate_yaml_parseable(cls, value: str) -> str:
         """Ensure the YAML string is syntactically valid."""
         try:
-            yaml.safe_load(value)
+            yaml.safe_load(value.strip())
         except yaml.YAMLError as exc:
             raise ValueError(f"Invalid YAML syntax: {exc}") from exc
         return value
@@ -182,7 +182,7 @@ class ValidatePipelineRequest(BaseModel):
     def validate_yaml_parseable(cls, value: str) -> str:
         """Ensure the YAML string is syntactically valid."""
         try:
-            yaml.safe_load(value)
+            yaml.safe_load(value.strip())
         except yaml.YAMLError as exc:
             raise ValueError(f"Invalid YAML syntax: {exc}") from exc
         return value

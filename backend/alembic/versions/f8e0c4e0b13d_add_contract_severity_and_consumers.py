@@ -24,13 +24,13 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     dialect = op.get_context().dialect.name
     if dialect == "postgresql":
-        op.execute("CREATE TYPE contractseverity AS ENUM ('warn', 'block')")
+        op.execute("DO $$ BEGIN CREATE TYPE contractseverity AS ENUM ('warn', 'block'); EXCEPTION WHEN duplicate_object THEN null; END $$;")
 
     op.add_column(
         "pipeline_contracts",
         sa.Column(
             "severity",
-            sa.String(10),
+            sa.Enum('warn', 'block', name='contractseverity'),
             nullable=False,
             server_default="warn",
         ),

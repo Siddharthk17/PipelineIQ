@@ -410,7 +410,10 @@ class PipelineParser:
     def _parse_yaml(self, yaml_string: str) -> dict:
         """Parse raw YAML string into a dictionary."""
         try:
-            raw = yaml.safe_load(yaml_string)
+            # Strip potential diff markers before parsing
+            from backend.pipeline.diff_utils import strip_diff_markers
+            cleaned_yaml = strip_diff_markers(yaml_string)
+            raw = yaml.safe_load(cleaned_yaml.strip())
         except yaml.YAMLError as exc:
             line = getattr(exc, "problem_mark", None)
             line_num = line.line + 1 if line else None
@@ -420,6 +423,26 @@ class PipelineParser:
             raise InvalidYAMLError(
                 "YAML root must be a mapping, not a scalar or list")
         return raw
+
+    def _strip_diff_markers(self, text: str) -> str:
+        """Strip unified diff markers from text to recover the 'after' state."""
+        lines = text.splitlines()
+        if not any(line.startswith(('+', '-', '@@')) for line in lines):
+            return text
+
+        result = []
+        for line in lines:
+            if line.startswith(('---', '+++', '@@')):
+                continue
+            if line.startswith('-'):
+                continue
+            if line.startswith('+'):
+                result.append(line[1:])
+            elif line.startswith(' '):
+                result.append(line[1:])
+            else:
+                result.append(line)
+        return "\n".join(result)
 
     def _build_pipeline_config(self, raw: dict) -> PipelineConfig:
         """Build a PipelineConfig from parsed YAML dictionary."""

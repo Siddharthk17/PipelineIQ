@@ -1,10 +1,9 @@
 import { useEffect } from "react";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { useQueryClient } from "@tanstack/react-query";
-import { getPipelineRun } from "@/lib/api";
+import { getPipelineRun, getToken, ApiError } from "@/lib/api";
 import { API_V1 } from "@/lib/constants";
 import type { PipelineRun, StepResult, ContractViolation } from "@/lib/types";
-import { getToken } from "@/lib/api";
 
 /**
  * SSE step events have this shape (not a PipelineRun):
@@ -54,12 +53,14 @@ export function usePipelineRun(runId: string | null) {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let currentEventSource: EventSource | null = null;
 
-    // Immediately fetch full run data so RunMonitor has something to show
     getPipelineRun(runId)
       .then((run) => {
-        if (!cancelled) usePipelineStore.setState({ activeRun: run });
+        if (!cancelled) {
+          usePipelineStore.setState({ activeRun: run });
+          connectSSE();
+        }
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
           usePipelineStore.setState({
             activeRun: {
@@ -77,6 +78,10 @@ export function usePipelineRun(runId: string | null) {
               healing_attempts: [],
             },
           });
+          if (err instanceof ApiError && err.status === 404) {
+            return;
+          }
+          connectSSE();
         }
       });
 
@@ -230,7 +235,7 @@ export function usePipelineRun(runId: string | null) {
       };
     }
 
-    connectSSE();
+    // connectSSE() is called inside getPipelineRun.then()
 
     return () => {
       cancelled = true;

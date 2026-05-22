@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import networkx as nx
-from sqlalchemy import text, inspect
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -54,23 +54,23 @@ def upsert_data_asset(
     now = datetime.now(timezone.utc)
 
     if _is_postgres(db):
-        stmt = pg_insert(DataAsset).values(
-            asset_type=asset_type,
-            name=name,
-            namespace=namespace,
-            owner_id=owner_id,
-            metadata=metadata or {},
-            created_at=now,
-            last_seen_at=now,
-        ).on_conflict_do_update(
-            constraint="uq_data_assets_type_ns_name",
-            set_={
-                "last_seen_at": now,
-                "metadata": metadata or {},
-            },
-        ).returning(DataAsset.id)
-
-        result = db.execute(stmt)
+        stmt = text("""
+            INSERT INTO data_assets (asset_type, name, namespace, owner_id, metadata, created_at, last_seen_at)
+            VALUES (:asset_type, :name, :namespace, :owner_id, :metadata, :created_at, :last_seen_at)
+            ON CONFLICT ON CONSTRAINT uq_data_assets_type_ns_name
+            DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at, metadata = EXCLUDED.metadata
+            RETURNING id
+        """)
+        import json
+        result = db.execute(stmt, {
+            "asset_type": asset_type,
+            "name": name,
+            "namespace": namespace,
+            "owner_id": owner_id,
+            "metadata": json.dumps(metadata or {}),
+            "created_at": now,
+            "last_seen_at": now,
+        })
         return str(result.scalar_one())
     else:
         existing = db.query(DataAsset).filter(
@@ -109,15 +109,20 @@ def upsert_asset_relationship(
 ) -> None:
     """Insert an asset relationship edge. Duplicates allowed (different runs)."""
     if _is_postgres(db):
-        stmt = pg_insert(AssetRelationship).values(
-            source_id=source_id,
-            target_id=target_id,
-            relation=relation,
-            pipeline_name=pipeline_name,
-            run_id=run_id,
-            created_at=datetime.now(timezone.utc),
-        ).on_conflict_do_nothing()
-        db.execute(stmt)
+        now_ts = datetime.now(timezone.utc)
+        stmt = text("""
+            INSERT INTO asset_relationships (source_id, target_id, relation, pipeline_name, run_id, created_at)
+            VALUES (:source_id, :target_id, :relation, :pipeline_name, :run_id, :created_at)
+            ON CONFLICT DO NOTHING
+        """)
+        db.execute(stmt, {
+            "source_id": source_id,
+            "target_id": target_id,
+            "relation": relation,
+            "pipeline_name": pipeline_name,
+            "run_id": run_id,
+            "created_at": now_ts,
+        })
     else:
         src_uuid = uuid.UUID(source_id) if isinstance(source_id, str) else source_id
         tgt_uuid = uuid.UUID(target_id) if isinstance(target_id, str) else target_id

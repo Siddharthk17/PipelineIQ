@@ -22,7 +22,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html
-from fastapi.responses import HTMLResponse, JSONResponse, ORJSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, ORJSONResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
@@ -62,8 +62,8 @@ class _HealthCheckFilter(logging.Filter):
             and "/metrics" not in msg
         )
 
-logging.getLogger("uvicorn.access").addFilter(_HealthCheckFilter())
-logging.getLogger("gunicorn.access").addFilter(_HealthCheckFilter())
+logging.getLogger("uvicorn.access").disabled = True
+logging.getLogger("gunicorn.access").disabled = True
 
 _STARTUP_LOCK_PATH = Path("/tmp/pipelineiq_api_startup.lock")
 _STARTUP_MARKER_PATH = Path("/tmp/pipelineiq_api_startup.done")
@@ -295,6 +295,9 @@ async def generic_error_handler(
     Never exposes internal details to the client. The request_id
     can be used to find the full traceback in the server logs.
     """
+    if isinstance(exc, RuntimeError) and str(exc) == "No response returned.":
+        return Response(status_code=499)
+    
     request_id = getattr(request.state, "request_id", "unknown")
     logger = structlog.get_logger()
     logger.exception(
@@ -330,10 +333,15 @@ app.add_middleware(
 @app.middleware("http")
 async def api_version_middleware(request: Request, call_next):
     """Add API-Version header to all responses for version awareness."""
-    response = await call_next(request)
-    response.headers["X-API-Version"] = "v1"
-    response.headers["X-App-Version"] = settings.APP_VERSION
-    return response
+    try:
+        response = await call_next(request)
+        response.headers["X-API-Version"] = "v1"
+        response.headers["X-App-Version"] = settings.APP_VERSION
+        return response
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            return Response(status_code=499)
+        raise
 
 
 @app.middleware("http")
@@ -351,18 +359,63 @@ async def request_id_middleware(request: Request, call_next):
         method=request.method,
         path=request.url.path,
     )
-    response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    return response
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            return Response(status_code=499)
+        raise
 
 
 @app.middleware("http")
 async def timing_middleware(request: Request, call_next):
     """Add X-Process-Time header with request processing duration."""
     start = time.perf_counter()
-    response = await call_next(request)
-    duration_ms = (time.perf_counter() - start) * 1000
-    response.headers["X-Process-Time"] = f"{duration_ms:.2f}ms"
+    try:
+        response = await call_next(request)
+        duration_ms = (time.perf_counter() - start) * 1000
+        response.headers["X-Process-Time"] = f"{duration_ms:.2f}ms"
+        return response
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            return Response(status_code=499)
+        raise
+
+@app.middleware("http")
+async def structlog_access_middleware(request: Request, call_next):
+    """Log requests in JSON using structlog, avoiding uvicorn access log."""
+    start_time = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except RuntimeError as exc:
+        if str(exc) == "No response returned.":
+            # Client disconnected prematurely (e.g., Docker healthcheck timeout)
+            path = request.url.path
+            if path not in ["/health", "/livez", "/readyz", "/metrics"]:
+                logger_access = structlog.get_logger("access")
+                logger_access.info(
+                    "client_disconnected",
+                    method=request.method,
+                    path=path,
+                )
+            return Response(status_code=499)
+        raise
+
+    process_time = time.perf_counter() - start_time
+    
+    path = request.url.path
+    if path not in ["/health", "/livez", "/readyz", "/metrics"] and not path.startswith("/api/v1/pipelines/?page="):
+        logger_access = structlog.get_logger("access")
+        logger_access.info(
+            "request_completed",
+            method=request.method,
+            path=path,
+            status_code=response.status_code,
+            process_time=f"{process_time:.3f}s",
+            client_host=request.client.host if request.client else None,
+        )
     return response
 
 

@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 _TRACER_PROVIDER: Optional[TracerProvider] = None
 _TRACER: Optional[trace.Tracer] = None
+_fastapi_instrumented: bool = False
+_sqlalchemy_instrumented: bool = False
+_redis_instrumented: bool = False
 
 
 def _get_otel_sample_rate() -> float:
@@ -90,6 +93,9 @@ def setup_telemetry() -> None:
 
 
 def instrument_fastapi(app):
+    global _fastapi_instrumented
+    if _fastapi_instrumented:
+        return
     if _TRACER_PROVIDER is None:
         setup_telemetry()
     FastAPIInstrumentor.instrument_app(
@@ -98,9 +104,13 @@ def instrument_fastapi(app):
         excluded_urls="health,livez,readyz,metrics",
         server_request_hook=_enrich_span_with_request_context,
     )
+    _fastapi_instrumented = True
 
 
 def instrument_sqlalchemy(engine) -> None:
+    global _sqlalchemy_instrumented
+    if _sqlalchemy_instrumented:
+        return
     if _TRACER_PROVIDER is None:
         setup_telemetry()
     try:
@@ -111,9 +121,13 @@ def instrument_sqlalchemy(engine) -> None:
         logger.info("OTel: SQLAlchemy instrumented")
     except Exception as exc:
         logger.warning("OTel: SQLAlchemy instrumentation failed: %s", exc)
+    _sqlalchemy_instrumented = True
 
 
 def instrument_redis() -> None:
+    global _redis_instrumented
+    if _redis_instrumented:
+        return
     if _TRACER_PROVIDER is None:
         setup_telemetry()
     try:
@@ -123,6 +137,7 @@ def instrument_redis() -> None:
         logger.info("OTel: Redis instrumented")
     except Exception as exc:
         logger.warning("OTel: Redis instrumentation failed: %s", exc)
+    _redis_instrumented = True
 
 
 def instrument_all(

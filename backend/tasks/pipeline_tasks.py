@@ -187,7 +187,7 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
             PipelineStatus.FAILED.value,
             str(exc),
         )
-        return {"run_id": run_id, "status": "FAILED"}
+        raise
     finally:
         try:
             from backend.execution.arrow_bus import get_arrow_bus
@@ -627,7 +627,11 @@ def _record_healing_audit(
 
 
 def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
-    """Persist pipeline execution results to the database."""
+    """Persist pipeline execution results to the database.
+    Raises RuntimeError if critical persistence steps fail, so the
+    Celery task machinery marks the run as FAILED and triggers retry /
+    error webhooks. Non-critical steps (version save) log and continue.
+    """
     from backend.metrics import PIPELINE_RUNS_TOTAL, PIPELINE_DURATION_SECONDS
 
     healed_run = (
@@ -685,46 +689,6 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         summary.step_results[-1].rows_out if summary.step_results else 0
     )
 
-    try:
-        from backend.tasks.notification_tasks import deliver_notifications_task
-
-        deliver_notifications_task.delay(
-            run_id=str(pipeline_run.id),
-            event_type=event_type,
-            pipeline_name=pipeline_run.name or "",
-            status=pipeline_run.status.value,
-            error_message=pipeline_run.error_message or "",
-            user_id=str(pipeline_run.user_id) if pipeline_run.user_id else "",
-        )
-    except Exception as exc:
-        logger.error(
-            "Failed to queue notification task for run %s: %s",
-            pipeline_run.id,
-            exc)
-
-    try:
-        from backend.tasks.webhook_tasks import deliver_webhooks_task
-
-        status_str = (
-            "completed"
-            if summary.status == RunnerPipelineStatus.COMPLETED
-            else "failed"
-        )
-        duration_ms = int(duration * 1000)
-        deliver_webhooks_task.delay(
-            run_id=str(pipeline_run.id),
-            status=status_str,
-            pipeline_name=pipeline_run.name or "",
-            duration_ms=duration_ms,
-            steps_count=len(summary.step_results),
-            rows_processed=summary.total_rows_processed or 0,
-            user_id=str(pipeline_run.user_id) if pipeline_run.user_id else "",
-        )
-    except Exception as exc:
-        logger.error(
-            "Failed to queue webhook task for run %s: %s", pipeline_run.id, exc
-        )
-
     for idx, result in enumerate(summary.step_results):
         step_record = StepResult(
             pipeline_run_id=pipeline_run.id,
@@ -779,30 +743,11 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     )
     db.add(lineage_record)
 
-    db.commit()
-
-    _publish_terminal_event(
-        str(pipeline_run.id),
-        event_type,
-        pipeline_run.status.value,
-        str(summary.error) if summary.error else "",
-    )
-
-    try:
-        from backend.repositories.catalog import register_run_assets
-
-        register_run_assets(
-            db=db,
-            run_id=str(pipeline_run.id),
-            pipeline_name=pipeline_run.name or "unknown",
-            pipeline_yaml=pipeline_run.yaml_config or "",
-            lineage_graph=summary.lineage.graph,
-            owner_id=str(pipeline_run.user_id) if pipeline_run.user_id else None,
-        )
-    except Exception as exc:
-        logger.error("Catalog registration failed for run %s: %s", pipeline_run.id, exc)
-
     # Post-run data contract validation against active PipelineContract
+    #
+    # NOTE: This block assumes the `severity` column exists on
+    # pipeline_contracts.  If you see "UndefinedColumn" here, run:
+    #   alembic upgrade head
     try:
         from backend.contracts import validate_against_contract
         from backend.models import ContractSeverity, PipelineContract
@@ -817,9 +762,7 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             .first()
         )
         post_run_violations = []
-        contract_severity = None
         if active_contract and summary.step_results:
-            contract_severity = active_contract.severity
             final_result = summary.step_results[-1]
             output_table = getattr(final_result, "output_table", None)
             validation = validate_against_contract(
@@ -854,14 +797,15 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
                             "actual": v.actual,
                             "expected": v.expected,
                         },
-                        severity=contract_severity.value if contract_severity else "warn",
+                        severity=active_contract.severity or "warn",
                     )
 
                 if post_run_violations and pipeline_run.status not in (
                     PipelineStatus.CONTRACT_VIOLATION,
                     PipelineStatus.FAILED,
                 ):
-                    if contract_severity == ContractSeverity.BLOCK:
+                    is_block = active_contract.severity == ContractSeverity.BLOCK
+                    if is_block:
                         pipeline_run.status = PipelineStatus.CONTRACT_VIOLATION
                         db.add(pipeline_run)
                         _block_downstream_schedules(
@@ -882,6 +826,85 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
                         )
     except Exception as exc:
         logger.error("Contract validation failed for run %s: %s", pipeline_run.id, exc)
+        db.rollback()
+        raise RuntimeError(f"Contract validation failed: {exc}") from exc
+
+    try:
+        from backend.repositories.catalog import register_run_assets
+
+        register_run_assets(
+            db=db,
+            run_id=str(pipeline_run.id),
+            pipeline_name=pipeline_run.name or "unknown",
+            pipeline_yaml=pipeline_run.yaml_config or "",
+            lineage_graph=summary.lineage.graph,
+            owner_id=str(pipeline_run.user_id) if pipeline_run.user_id else None,
+        )
+    except Exception as exc:
+        logger.error("Catalog registration failed for run %s: %s", pipeline_run.id, exc)
+        db.rollback()
+        pipeline_run.status = PipelineStatus.FAILED
+        pipeline_run.error_message = f"Failed to register pipeline run assets: {exc}"
+        db.commit()
+        _publish_terminal_event(
+            str(pipeline_run.id),
+            "pipeline_failed",
+            PipelineStatus.FAILED.value,
+            pipeline_run.error_message,
+        )
+        raise RuntimeError(
+            f"Failed to register pipeline run assets for {pipeline_run.id}: {exc}"
+        ) from exc
+
+    db.commit()
+
+    _publish_terminal_event(
+        str(pipeline_run.id),
+        event_type,
+        pipeline_run.status.value,
+        str(summary.error) if summary.error else "",
+    )
+
+    try:
+        from backend.tasks.notification_tasks import deliver_notifications_task
+
+        deliver_notifications_task.delay(
+            run_id=str(pipeline_run.id),
+            event_type=event_type,
+            pipeline_name=pipeline_run.name or "",
+            status=pipeline_run.status.value,
+            error_message=pipeline_run.error_message or "",
+            user_id=str(pipeline_run.user_id) if pipeline_run.user_id else "",
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed to queue notification task for run %s: %s",
+            pipeline_run.id,
+            exc)
+
+    try:
+        from backend.tasks.webhook_tasks import deliver_webhooks_task
+
+        status_str = (
+            "completed"
+            if summary.status == RunnerPipelineStatus.COMPLETED
+            else "failed"
+        )
+        duration_ms = int(duration * 1000)
+        deliver_webhooks_task.delay(
+            run_id=str(pipeline_run.id),
+            status=status_str,
+            pipeline_name=pipeline_run.name or "",
+            duration_ms=duration_ms,
+            steps_count=len(summary.step_results),
+            rows_processed=summary.total_rows_processed or 0,
+            user_id=str(pipeline_run.user_id) if pipeline_run.user_id else "",
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed to queue webhook task for run %s: %s", pipeline_run.id, exc
+        )
+
 
     # Update schedule stats if this was a scheduled run
     if pipeline_run.schedule_id:
@@ -890,8 +913,6 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     try:
         _save_version_if_needed(db=db, pipeline_run=pipeline_run)
     except Exception as exc:
-        # Keep session usable even if version write fails after persistence
-        # commit.
         db.rollback()
         logger.warning("Failed to save pipeline version: %s", exc)
 

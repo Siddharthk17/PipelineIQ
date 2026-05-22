@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
+
 import { ArrowLeft, Database } from "lucide-react";
 
 type AssetType = "file" | "column" | "pipeline" | "topic" | null;
@@ -52,28 +53,34 @@ export default function CatalogPage() {
   const [selectedAsset, setSelected] = useState<CatalogAsset | null>(null);
   const [blastRadius, setBlastRadius] = useState<BlastRadiusResult[] | null>(null);
   const [loadingImpact, setLoadingImpact] = useState(false);
-
-  const handleSearch = useCallback(
-    async (q: string) => {
-      if (q.length < 2) {
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (query.length < 2) {
         setResults([]);
         return;
       }
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
       setSearching(true);
       try {
-        const params = new URLSearchParams({ q, limit: "20" });
+        const params = new URLSearchParams({ q: query, limit: "20" });
         if (typeFilter) params.append("asset_type", typeFilter);
         const resp = await fetch(`/api/catalog/search?${params}`, {
+          signal: controller.signal,
           headers: { Authorization: `Bearer ${getAuthToken()}` },
         });
         const data = await resp.json();
         setResults(data.results || []);
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
       } finally {
         setSearching(false);
       }
-    },
-    [typeFilter],
-  );
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [query, typeFilter]);
 
   const handleAssetClick = useCallback(async (asset: CatalogAsset) => {
     setSelected(asset);
@@ -127,7 +134,6 @@ export default function CatalogPage() {
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
-            handleSearch(e.target.value);
           }}
           placeholder="Search: customer_id, orders.csv, revenue_pipeline..."
           data-testid="catalog-search-input"
