@@ -290,7 +290,7 @@ async def upload_file(
     # Handle empty or missing filename - this causes 422 errors
     if not file.filename or file.filename.strip() == "":
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="No file provided or filename is empty. Please select a valid CSV or JSON file.",
         )
 
@@ -573,12 +573,12 @@ def _extract_csv_metadata(
                 columns = [str(column) for column in header]
         except Exception as exc:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Failed to parse file '{stored_path}': {exc}",
             ) from exc
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{stored_path}': {exc}",
         ) from exc
 
@@ -638,7 +638,7 @@ def _extract_json_metadata(
             return len(df), columns, dtypes
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
 
@@ -833,7 +833,7 @@ def _parse_file_preview(
         raise
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
 

@@ -237,7 +237,7 @@ async def pipelineiq_error_handler(
         message=exc.message,
     )
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "error_type": exc.__class__.__name__,
             "message": exc.message,
@@ -276,7 +276,7 @@ async def validation_error_handler(
         "❌ MISSING/INVALID FIELDS: %s", _json.dumps(safe_errors, indent=2)
     )
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={
             "error_type": "ValidationError",
             "message": "Request validation failed",
