@@ -20,7 +20,6 @@ COPY alembic.ini /app/alembic.ini
 # Create upload/data directories and expose tests at /app/tests for compose exec parity
 RUN mkdir -p /tmp/uploads /app/data /app/uploads && \
     ln -sfn /app/backend/benchmark /app/benchmark && \
-    ln -sfn /app/backend/frontend /app/frontend && \
     ln -sfn /app/backend/tests /app/tests && \
     ln -sfn /app/backend/scripts /app/scripts && \
     ln -sfn /app/backend/celery_app.py /app/celery_app.py && \
