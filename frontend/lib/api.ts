@@ -25,6 +25,11 @@ import type {
   WasmModule,
   WasmModuleListResponse,
   WasmModuleValidateResponse,
+  ContractDef,
+  ContractListResponse,
+  ContractStatusResponse,
+  ContractViolation,
+  ContractViolationResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -650,4 +655,77 @@ export async function deleteWasmModule(id: string): Promise<void> {
   await fetchApi<void>(`/wasm/${id}`, {
     method: "DELETE",
   });
+}
+
+// Data Contract API functions
+
+export async function getAllContracts(pipelineName: string): Promise<ContractDef[]> {
+  const data = await fetchApi<ContractListResponse>(
+    `/contracts/pipelines/${pipelineName}`,
+  );
+  return data.contracts;
+}
+
+export async function getContract(pipelineName: string, contractId: string): Promise<ContractDef> {
+  return fetchApi<ContractDef>(`/contracts/pipelines/${pipelineName}/${contractId}`);
+}
+
+export async function createContract(
+  pipelineName: string,
+  yamlContent: string,
+  severity: string = "warn",
+  consumers: string[] = [],
+): Promise<ContractDef> {
+  return fetchApi<ContractDef>(`/contracts/pipelines/${pipelineName}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ yaml_content: yamlContent, severity, consumers }),
+  });
+}
+
+export async function updateContract(
+  pipelineName: string,
+  contractId: string,
+  yamlContent: string,
+  severity: string = "warn",
+  consumers: string[] = [],
+): Promise<ContractDef> {
+  return fetchApi<ContractDef>(`/contracts/pipelines/${pipelineName}/${contractId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ yaml_content: yamlContent, severity, consumers }),
+  });
+}
+
+export async function deleteContract(pipelineName: string, contractId: string): Promise<void> {
+  await fetchApi<void>(`/contracts/pipelines/${pipelineName}/${contractId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getContractStatus(pipelineName: string): Promise<ContractStatusResponse> {
+  return fetchApi<ContractStatusResponse>(`/contracts/pipelines/${pipelineName}/status`);
+}
+
+export async function getContractViolations(
+  pipelineName: string,
+): Promise<ContractViolation[]> {
+  const data = await fetchApi<ContractViolationResponse>(
+    `/contracts/pipelines/${pipelineName}/breaches`,
+  );
+  return data.violations;
+}
+
+export async function getStepContractViolations(
+  runId: string,
+  stepName: string,
+): Promise<ContractViolation[]> {
+  const data = await fetchApi<ContractViolationResponse>(
+    `/contracts/runs/${runId}/steps/${encodeURIComponent(stepName)}`,
+  );
+  return data.violations;
+}
+
+export async function getRunTiming(runId: string): Promise<RunTimingResponse> {
+  return fetchApi<RunTimingResponse>(`/pipelines/${runId}/timing`);
 }

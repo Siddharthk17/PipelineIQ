@@ -104,6 +104,7 @@ class StepConfig:
 
     name: str
     step_type: StepType
+    contract: Optional[dict] = None  # data contract constraints, validated post-execution
 
 
 @dataclass
@@ -473,7 +474,11 @@ class PipelineParser:
                 name=step_name,
                 step_type=step_type_str)  # type: ignore[arg-type]
 
-        return self._build_typed_step(step_name, step_type, step_raw)
+        config = self._build_typed_step(step_name, step_type, step_raw)
+        raw_contract = step_raw.get("contract")
+        if raw_contract is not None:
+            config.contract = raw_contract
+        return config
 
     def _build_typed_step(
         self, name: str, step_type: StepType, raw: dict

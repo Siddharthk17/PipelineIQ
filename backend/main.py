@@ -45,7 +45,11 @@ from backend.pipeline.exceptions import PipelineIQError
 from backend.services.storage_service import S3StorageProvider, storage_service
 from backend.utils.rate_limiter import limiter
 
+from backend.telemetry import instrument_all, instrument_fastapi, setup_telemetry, force_flush
+
 logger = logging.getLogger(__name__)
+
+setup_telemetry()
 
 # Silence health check and metrics access log noise
 class _HealthCheckFilter(logging.Filter):
@@ -309,6 +313,10 @@ async def generic_error_handler(
         },
     )
 
+
+from backend.telemetry import instrument_all as _instrument_all
+from backend.database import engine as _db_engine
+_instrument_all(app, db_engine=_db_engine)
 
 app.add_middleware(
     CORSMiddleware,

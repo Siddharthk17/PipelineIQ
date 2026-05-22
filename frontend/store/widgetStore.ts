@@ -13,6 +13,7 @@ export const ALL_WIDGETS: WidgetConfig[] = [
   { id: "file-registry", title: "File Registry", icon: "database", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
   { id: "pipeline-editor", title: "Pipeline Editor", icon: "code", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
   { id: "lineage-graph", title: "Lineage Graph", icon: "git-merge", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
+  { id: "execution-timeline", title: "Execution Timeline", icon: "bar-chart-3", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
   { id: "file-upload", title: "File Upload", icon: "upload-cloud", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
   { id: "run-history", title: "Run History", icon: "history", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },
   { id: "version-history", title: "Pipeline Versions", icon: "history", visible: true, gridColumn: "", gridRow: "", minWidth: 1, minHeight: 1, locked: false },

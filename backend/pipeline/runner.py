@@ -20,6 +20,7 @@ from backend.execution.arrow_bus import get_arrow_bus, ArrowDataBus
 from backend.execution.duckdb_executor import DuckDBExecutor
 from backend.execution.smart_executor import SmartExecutor
 from backend.pipeline.exceptions import StepExecutionError
+from backend.pipeline.contracts import validate_step_contract
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import (
     PipelineConfig,
@@ -64,6 +65,7 @@ class StepProgressEvent:
     rows_out: Optional[int] = None
     duration_ms: Optional[int] = None
     error_message: Optional[str] = None
+    contract_violations: Optional[list] = None
 
 
 # Callback type for progress reporting — dependency inversion
@@ -240,6 +242,27 @@ class PipelineRunner:
             )
             raise
 
+        contract_violations: list = []
+        try:
+            df = result.output_table.to_pandas()
+            contract_violations = validate_step_contract(
+                getattr(step, "contract", None),
+                df,
+                step.name,
+            )
+        except Exception as exc:
+            logger.warning("Contract validation error for step '%s': %s", step.name, exc)
+
+        if contract_violations:
+            logger.warning(
+                "Step '%s' has %d contract violation(s)",
+                step.name,
+                len(contract_violations),
+            )
+
+        violations_dict = [v.to_dict() for v in contract_violations]
+        result.contract_violations = violations_dict
+
         callback(
             StepProgressEvent(
                 run_id=run_id,
@@ -250,15 +273,17 @@ class PipelineRunner:
                 rows_in=result.rows_in,
                 rows_out=result.rows_out,
                 duration_ms=result.duration_ms,
+                contract_violations=violations_dict,
             )
         )
 
         logger.info(
-            "Step '%s' completed: %d → %d rows in %dms",
+            "Step '%s' completed: %d → %d rows in %dms%s",
             step.name,
             result.rows_in,
             result.rows_out,
             result.duration_ms,
+            f" ({len(contract_violations)} contract violations)" if contract_violations else "",
         )
 
         return result

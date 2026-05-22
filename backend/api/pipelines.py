@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from backend.auth import get_current_user
 from backend.config import settings
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import HealingAttempt, PipelineRun, PipelineStatus, SchemaSnapshot, UploadedFile, User
+from backend.models import ContractViolationRecord, HealingAttempt, PipelineRun, PipelineStatus, SchemaSnapshot, StepResult, UploadedFile, User
 from datetime import timezone
 from backend.pipeline.parser import PipelineParser, StepType
 from backend.pipeline.cache import get_parsed_pipeline
@@ -712,6 +712,11 @@ def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
                 duration_ms=sr.duration_ms,
                 warnings=sr.warnings,
                 error_message=sr.error_message,
+                trace_id=sr.trace_id,
+                span_id=sr.span_id,
+                started_at=sr.started_at.isoformat() if sr.started_at else None,
+                completed_at=sr.completed_at.isoformat() if sr.completed_at else None,
+                engine=sr.engine,
             )
             for sr in pipeline_run.step_results
         ],
@@ -1072,3 +1077,51 @@ def export_pipeline_output(
         status_code=status.HTTP_404_NOT_FOUND,
         detail="No output file found for this pipeline run",
     )
+
+
+@router.get(
+    "/{run_id}/timing",
+    summary="Get step execution timing data",
+    description="Returns per-step start/end/duration and trace IDs for Gantt chart rendering.",
+)
+def get_run_timing(
+    run_id: str,
+    request: Request,
+    db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    _validate_uuid_format(run_id)
+
+    run = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Pipeline run not found")
+
+    steps = (
+        db.query(StepResult)
+        .filter(StepResult.pipeline_run_id == run.id)
+        .order_by(StepResult.step_index)
+        .all()
+    )
+
+    return {
+        "run_id": str(run.id),
+        "status": run.status.value,
+        "steps": [
+            {
+                "step_index": s.step_index,
+                "step_name": s.step_name,
+                "step_type": s.step_type,
+                "status": s.status.value,
+                "rows_in": s.rows_in,
+                "rows_out": s.rows_out,
+                "duration_ms": s.duration_ms,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                "trace_id": s.trace_id,
+                "span_id": s.span_id,
+                "engine": s.engine,
+            }
+            for s in steps
+        ],
+        "total_duration_ms": run.duration_ms,
+    }

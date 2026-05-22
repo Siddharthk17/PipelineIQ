@@ -15,6 +15,14 @@ from sentry_sdk.integrations.celery import CeleryIntegration
 from backend.config import settings
 from backend.execution.duckdb_executor import close_worker_duckdb, initialize_worker_duckdb
 
+from backend.telemetry import instrument_redis, setup_telemetry
+setup_telemetry()
+
+from opentelemetry.instrumentation.celery import CeleryInstrumentor
+CeleryInstrumentor().instrument()
+
+instrument_redis()
+
 if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,

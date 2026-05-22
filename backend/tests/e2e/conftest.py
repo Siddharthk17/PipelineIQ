@@ -2,6 +2,8 @@
 import os
 import sys
 
+os.environ.setdefault("ENVIRONMENT", "test")
+
 # CRITICAL: Set local storage BEFORE any backend imports to avoid S3/MinIO connection
 os.environ["STORAGE_TYPE"] = "local"
 os.environ["UPLOAD_DIR"] = "/tmp/pipelineiq-test-uploads"

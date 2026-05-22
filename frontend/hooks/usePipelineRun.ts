@@ -3,7 +3,7 @@ import { usePipelineStore } from "@/store/pipelineStore";
 import { useQueryClient } from "@tanstack/react-query";
 import { getPipelineRun } from "@/lib/api";
 import { API_V1 } from "@/lib/constants";
-import type { PipelineRun, StepResult } from "@/lib/types";
+import type { PipelineRun, StepResult, ContractViolation } from "@/lib/types";
 import { getToken } from "@/lib/api";
 
 /**
@@ -167,6 +167,41 @@ export function usePipelineRun(runId: string | null) {
       eventSource.addEventListener("pipeline_completed", handleTerminal("COMPLETED"));
       eventSource.addEventListener("pipeline_failed", handleTerminal("FAILED"));
       eventSource.addEventListener("pipeline_cancelled", handleTerminal("CANCELLED"));
+
+      eventSource.addEventListener("contract_violation", (e: MessageEvent) => {
+        const data = JSON.parse(e.data);
+        const violation: ContractViolation = {
+          id: data.id ?? "",
+          run_id: data.run_id ?? runId!,
+          step_name: data.step_name ?? "",
+          step_index: data.step_index ?? 0,
+          step_type: data.step_type ?? "",
+          column: data.column ?? "",
+          rule: data.rule ?? "",
+          severity: data.severity ?? "error",
+          message: data.message ?? "",
+          actual: data.actual ?? null,
+          expected: data.expected ?? null,
+          created_at: data.created_at ?? new Date().toISOString(),
+        };
+        usePipelineStore.setState((state) => {
+          if (!state.activeRun) return state;
+          const existing = state.activeRun.step_results ?? [];
+          const steps = existing.map((s) => {
+            if (s.step_name !== violation.step_name) return s;
+            const existingViolations = s.contract_violations ?? [];
+            if (existingViolations.some((v) => v.id === violation.id)) return s;
+            return { ...s, contract_violations: [...existingViolations, violation] };
+          });
+          return {
+            activeRun: {
+              ...state.activeRun,
+              status: violation.severity === "error" ? ("CONTRACT_VIOLATION" as PipelineRun["status"]) : state.activeRun.status,
+              step_results: steps,
+            },
+          };
+        });
+      });
 
       eventSource.onerror = () => {
         eventSource.close();

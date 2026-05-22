@@ -3,6 +3,37 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [10.18.1] — Week 18: OpenTelemetry Distributed Tracing & Data Contracts
+
+*Note: This release introduces two major enterprise capabilities to PipelineIQ. First, full-stack distributed tracing via OpenTelemetry provides granular visibility into every request, query, and pipeline step. Second, data contracts allow data teams to commit to output schemas, automatically detecting and blocking downstream propagation of breaking schema changes.*
+
+### Added
+- **OpenTelemetry Distributed Tracing** — Implemented end-to-end distributed tracing, exporting spans to Jaeger via the OTLP gRPC protocol.
+  - Integrated auto-instrumentation for FastAPI (HTTP requests), SQLAlchemy (SQL queries), Redis (cache hits/misses), and Celery (background tasks) with zero code changes to route handlers.
+  - Added manual, business-level spans for pipeline step execution inside the `SmartExecutor`. Spans capture rich context including `pipelineiq.step.name`, `step.type`, `step.engine`, `rows.in`, and `rows.out`.
+  - Configured `BatchSpanProcessor` to buffer and export spans asynchronously in background threads, ensuring zero latency impact on the main event loop.
+  - Failed steps automatically record exceptions and set `StatusCode.ERROR`, appearing as highlighted red spans in the Jaeger UI.
+- **Execution Gantt Chart** — Added a visual timeline component (`ExecutionGantt`) to the run detail page frontend.
+  - Displays horizontal bars proportional to step duration, color-coded by the execution engine used (DuckDB=emerald, Pandas=blue, Wasm=orange, IO=amber).
+  - Includes rich hover tooltips detailing row counts, duration, and engine type.
+  - Features a direct deep-link (⧉) to open the exact step execution span in the Jaeger UI.
+- **Data Contracts** — Introduced schema commitments to guarantee data quality and prevent silent downstream failures.
+  - Added `data_contracts` and `contract_breaches` tables to define and track schema promises, including expected columns, semantic types, null thresholds, and row count bounds.
+  - Implemented a post-run `ContractValidator` that detects 6 distinct breach types: `column_removed`, `type_changed`, `null_threshold_exceeded`, `row_count_below_minimum`, `row_count_above_maximum`, and `unexpected_column`.
+  - **Smart Type Mapping:** Type validation compares semantic categories (e.g., `int32` and `int64` both map to `integer`), preventing false positives from harmless precision differences.
+  - **Backward Compatibility:** Adding new columns (`unexpected_column`) is treated as a backward-compatible change and will never block a pipeline.
+- **Severity Enforcement & Alerting** — Contracts support two severity levels:
+  - `warn`: Logs the breach and notifies consumers, but the pipeline run still succeeds.
+  - `block`: Logs the breach, notifies consumers, marks the run as a violation, and strictly refuses to trigger any downstream scheduled pipelines.
+- **Contracts API** — Added full CRUD endpoints (`POST`, `GET`, `DELETE`) for managing data contracts and retrieving breach history (`GET /api/contracts/{id}/breaches`).
+- **Test Suite Expansion** — Added 22 new tests across 2 files covering OTel setup (BatchSpanProcessor verification, span attributes, singleton enforcement) and contract validation (type category mapping, severity enforcement, null thresholds, and row count bounds).
+
+### Changed
+- **Pipeline Run Status Machine** — Added `contract_violation` to the `pipeline_runs.status` enum to represent runs that executed successfully but breached a blocking data contract.
+- **Step Results Schema** — Expanded the `step_results` table to store execution timing and tracing metadata (`span_id`, `trace_id`, `start_at`, `end_at`, `duration_ms`, `engine`, `row_in`, `row_out`), powering the new Gantt chart API (`GET /api/runs/{id}/timing`).
+
+---
+
 ## [10.1.0] — Week 17: Global Data Mesh, Blast Radius & OpenLineage
 
 *Note: This release answers the critical enterprise question: "What breaks if this column changes?" It introduces a global data asset catalog with instant blast radius analysis, exports lineage in the industry-standard OpenLineage format, and resolves a major memory bottleneck by shifting graph traversal from Python to PostgreSQL.*

@@ -35,7 +35,8 @@ export interface PipelineRun {
     | "COMPLETED"
     | "FAILED"
     | "CANCELLED"
-    | "TIMEOUT";
+    | "TIMEOUT"
+    | "CONTRACT_VIOLATION";
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -45,13 +46,34 @@ export interface PipelineRun {
   duration_ms: number | null;
   step_results: StepResult[];
   healing_attempts: HealingAttempt[];
+  trace_id?: string | null;
+}
+
+export interface ContractViolation {
+  id: string;
+  run_id: string;
+  step_name: string;
+  step_index: number;
+  step_type: string;
+  column: string;
+  rule: string;
+  severity: "error" | "warning";
+  message: string;
+  actual: string | null;
+  expected: string | null;
+  created_at: string;
+}
+
+export interface ContractViolationBadge {
+  severity: "error" | "warning";
+  count: number;
 }
 
 export interface StepResult {
   step_name: string;
   step_type: string;
   step_index: number;
-  status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "SKIPPED";
+  status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "SKIPPED" | "CONTRACT_VIOLATION";
   rows_in: number | null;
   rows_out: number | null;
   columns_in: string[];
@@ -59,6 +81,33 @@ export interface StepResult {
   duration_ms: number | null;
   error_message: string | null;
   warnings: string[];
+  trace_id?: string | null;
+  span_id?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  engine?: string | null;
+  contract_violations?: ContractViolation[];
+}
+
+export interface TimelineStep {
+  step_index: number;
+  step_name: string;
+  step_type: string;
+  status: string;
+  rows_in: number | null;
+  rows_out: number | null;
+  duration_ms: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  trace_id: string | null;
+  span_id: string | null;
+}
+
+export interface RunTimingResponse {
+  run_id: string;
+  status: string;
+  steps: TimelineStep[];
+  total_duration_ms: number | null;
 }
 
 export interface HealingAttempt {
@@ -326,4 +375,37 @@ export interface WasmModuleValidateResponse {
   imports: string[];
   errors: string[];
   warnings: string[];
+}
+
+// Data Contract types
+export interface ContractDef {
+  id: string;
+  pipeline_name: string;
+  version: number;
+  yaml_content: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractListResponse {
+  pipeline_name: string;
+  contracts: ContractDef[];
+  total: number;
+}
+
+export interface ContractStatusResponse {
+  pipeline_name: string;
+  has_contract: boolean;
+  active_contract_id: string | null;
+  active_contract_version: number | null;
+  last_run_id: string | null;
+  last_run_status: string | null;
+  total_violations: number;
+}
+
+export interface ContractViolationResponse {
+  run_id: string;
+  total_violations: number;
+  violations: ContractViolation[];
 }

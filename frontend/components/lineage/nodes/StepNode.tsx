@@ -1,10 +1,13 @@
 import React from "react";
 import { Handle, Position } from "@xyflow/react";
-import { Settings2 } from "lucide-react";
+import { Settings2, AlertTriangle, XCircle } from "lucide-react";
 import { useImpactState } from "../ImpactContext";
+import type { ContractViolation } from "@/lib/types";
 
 export function StepNode({ id, data }: { id: string; data: any }) {
   const { clickedNodeId, affectedSteps } = useImpactState();
+  const violations: ContractViolation[] = data?.contractViolations ?? [];
+  const hasViolations = violations.length > 0;
 
   let impact: string | undefined;
   if (clickedNodeId) {
@@ -18,6 +21,10 @@ export function StepNode({ id, data }: { id: string; data: any }) {
     border: '1px solid var(--widget-border)',
     transition: 'all 0.3s ease',
   };
+  if (hasViolations && impact !== 'dimmed') {
+    style.border = '2px solid var(--accent-error)';
+    style.boxShadow = '0 0 8px rgba(255,80,80,0.15)';
+  }
   if (impact === 'clicked') {
     style.border = '2px solid var(--accent-error)';
     style.transform = 'scale(1.05)';
@@ -37,7 +44,19 @@ export function StepNode({ id, data }: { id: string; data: any }) {
         <div className="p-1.5 rounded text-[var(--accent-secondary)]" style={{ background: 'color-mix(in srgb, var(--accent-secondary) 20%, transparent)' }}>
           <Settings2 className="w-4 h-4" />
         </div>
-        <div className="font-bold text-sm text-[var(--text-primary)]">{data.label}</div>
+        <div className="flex-1 flex items-center justify-between min-w-0">
+          <div className="font-bold text-sm text-[var(--text-primary)]">{data.label}</div>
+          {hasViolations && (
+            <div className="flex items-center gap-0.5 ml-2">
+              {violations.filter(v => v.severity === "error").length > 0 && (
+                <XCircle className="w-3 h-3 text-[var(--accent-error)]" />
+              )}
+              {violations.some(v => v.severity === "warning") && (
+                <AlertTriangle className="w-3 h-3 text-[var(--accent-warning)]" />
+              )}
+            </div>
+          )}
+        </div>
       </div>
       <div className="flex items-center justify-between text-xs">
         <span className="px-1.5 py-0.5 rounded text-[var(--text-secondary)] uppercase" style={{ background: 'var(--bg-surface)' }}>{data.type}</span>

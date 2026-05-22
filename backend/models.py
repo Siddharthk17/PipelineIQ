@@ -17,6 +17,7 @@ from sqlalchemy import (
     Enum as SQLEnum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -60,6 +61,7 @@ class PipelineStatus(str, PyEnum):
     HEALING = "HEALING"
     HEALED = "HEALED"
     COMPLETED = "COMPLETED"
+    CONTRACT_VIOLATION = "CONTRACT_VIOLATION"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     TIMEOUT = "TIMEOUT"
@@ -129,6 +131,8 @@ class PipelineRun(Base):
     )
     celery_task_id: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True)
+    trace_id: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True)
     trigger: Mapped[str] = mapped_column(
         String(20), nullable=False, default="manual")
     schedule_id: Mapped[Optional[str]] = mapped_column(Uuid, ForeignKey(
@@ -189,6 +193,15 @@ class StepResult(Base):
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     warnings: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    span_id: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    engine: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -718,6 +731,85 @@ class StreamingStats(Base):
     consumer_group: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     avg_batch_latency_ms: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True)
+
+
+class ContractSeverity(str, PyEnum):
+    """Breach handling severity for data contracts."""
+
+    WARN = "warn"
+    BLOCK = "block"
+
+
+class PipelineContract(Base):
+    """A data contract definition for a pipeline.
+
+    Stores YAML-based schema expectations (column types, constraints, nullability)
+    that are checked against pipeline output data during or after execution.
+    A pipeline may have multiple contract versions (similar to PipelineVersion).
+
+    severity controls breach handling:
+      warn  = log breach + alert, run stays COMPLETED
+      block = log breach + alert, run → CONTRACT_VIOLATION, downstream blocked
+    """
+
+    __tablename__ = "pipeline_contracts"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid)
+    pipeline_name: Mapped[str] = mapped_column(
+        String(255), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    yaml_content: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[ContractSeverity] = mapped_column(
+        SQLEnum(ContractSeverity, name="contractseverity",
+                values_callable=_enum_values, validate_strings=True),
+        nullable=False, default=ContractSeverity.WARN,
+        server_default="'warn'")
+    consumers: Mapped[list] = mapped_column(
+        PgJSONB, nullable=False, default=list, server_default="'[]'")
+    user_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ContractViolationRecord(Base):
+    """Persistent record of a data contract violation detected during a pipeline run.
+
+    Each violation maps to a single rule (dtype, not_null, unique, min_value, etc.)
+    that was checked against a step's output columns. Links back to both the
+    parent PipelineRun and the specific StepResult where the violation occurred.
+    """
+
+    __tablename__ = "contract_violations"
+
+    id: Mapped[str] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid)
+    run_id: Mapped[str] = mapped_column(
+        Uuid, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    column: Mapped[str] = mapped_column(String(255), nullable=False)
+    rule: Mapped[str] = mapped_column(String(50), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    actual: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    expected: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_contract_violations_run_step", "run_id", "step_name"),
+        Index("ix_contract_violations_severity", "run_id", "severity"),
+    )
 
 
 class DataAsset(Base):

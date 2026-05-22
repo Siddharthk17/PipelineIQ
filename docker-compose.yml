@@ -805,6 +805,26 @@ services:
     networks:
       - pipelineiq-network
 
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: pipelineiq-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:16686"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
   grafana:
     image: grafana/grafana:10.2.0
     container_name: pipelineiq-grafana

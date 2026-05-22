@@ -4,13 +4,15 @@ import type { Node as ReactFlowNode, Edge as ReactFlowEdge } from "@xyflow/react
 import "@xyflow/react/dist/style.css";
 import { useLineageGraph } from "@/hooks/useLineage";
 import { ApiError, getImpactAnalysis } from "@/lib/api";
-import { ImpactAnalysis } from "@/lib/types";
+import { ImpactAnalysis, ContractViolation } from "@/lib/types";
 import { ImpactProvider, ImpactState } from "./ImpactContext";
 import { SourceFileNode } from "./nodes/SourceFileNode";
 import { StepNode } from "./nodes/StepNode";
 import { ColumnNode } from "./nodes/ColumnNode";
 import { OutputFileNode } from "./nodes/OutputFileNode";
 import { LineageSidebar } from "./LineageSidebar";
+import { ContractViolationBadge } from "@/components/pipeline-builder/ContractViolationBadge";
+import { usePipelineStore } from "@/store/pipelineStore";
 
 const nodeTypes = {
   sourceFile: SourceFileNode,
@@ -42,6 +44,26 @@ export function LineageGraph({ runId, mode }: LineageGraphProps) {
   const [affectedSteps, setAffectedSteps] = useState<Set<string>>(new Set());
   const [clickedStepName, setClickedStepName] = useState<string | null>(null);
 
+  // Contract violation tracking from active run
+  const { activeRun } = usePipelineStore();
+  const violatingSteps = useMemo(() => {
+    const names = new Set<string>();
+    for (const s of activeRun?.step_results ?? []) {
+      if ((s.contract_violations?.length ?? 0) > 0) {
+        names.add(s.step_name);
+      }
+    }
+    return names;
+  }, [activeRun?.step_results]);
+
+  const allViolations = useMemo(() => {
+    const all: ContractViolation[] = [];
+    for (const s of activeRun?.step_results ?? []) {
+      if (s.contract_violations) all.push(...s.contract_violations);
+    }
+    return all;
+  }, [activeRun?.step_results]);
+
   const impactState = useMemo<ImpactState>(() => ({
     clickedNodeId,
     affectedSteps,
@@ -64,10 +86,17 @@ export function LineageGraph({ runId, mode }: LineageGraphProps) {
   useEffect(() => {
     if (graphData) {
       baseEdgesRef.current = graphData.edges;
-      setNodes(graphData.nodes);
+      const enriched = graphData.nodes.map((n: ReactFlowNode) => {
+        if (n.type === "stepNode" && n.data?.stepName && violatingSteps.has(n.data.stepName as string)) {
+          const violationsForStep = allViolations.filter(v => v.step_name === n.data.stepName);
+          return { ...n, data: { ...n.data, contractViolations: violationsForStep } };
+        }
+        return n;
+      });
+      setNodes(enriched);
       setEdges(graphData.edges);
     }
-  }, [graphData, setNodes, setEdges]);
+  }, [graphData, setNodes, setEdges, violatingSteps, allViolations]);
 
   const resetGraph = useCallback(() => {
     // Reset impact context state
@@ -193,6 +222,12 @@ export function LineageGraph({ runId, mode }: LineageGraphProps) {
 
   return (
     <div className="relative w-full h-full">
+      {allViolations.length > 0 && (
+        <div className="absolute top-2 left-2 z-20 flex items-center gap-2 px-2 py-1 rounded-md text-xs bg-[var(--accent-error)]/10 border border-[var(--accent-error)]/20">
+          <span className="text-[var(--accent-error)] font-medium">{allViolations.length} violation{allViolations.length > 1 ? "s" : ""}</span>
+          <ContractViolationBadge violations={allViolations} />
+        </div>
+      )}
       <ImpactProvider value={impactState}>
         <ReactFlow
           nodes={nodes}

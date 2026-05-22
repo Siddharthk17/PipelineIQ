@@ -20,6 +20,7 @@ from backend.config import settings
 from backend.database import SessionLocal
 from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.models import (
+    ContractViolationRecord,
     HealingAttempt,
     HealingAttemptStatus,
     LineageGraph,
@@ -98,6 +99,7 @@ def make_redis_progress_callback(run_id: str) -> ProgressCallback:
             "rows_out": event.rows_out,
             "duration_ms": event.duration_ms,
             "error_message": event.error_message,
+            "contract_violations": event.contract_violations,
         }
         _publish_progress_payload(run_id, payload)
 
@@ -153,6 +155,16 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
             return {"run_id": run_id, "status": pipeline_run.status.value}
 
         pipeline_run.celery_task_id = self.request.id
+
+        # Capture OpenTelemetry trace context for distributed tracing
+        try:
+            from backend.telemetry import current_span_context
+            span_ctx = current_span_context()
+            if span_ctx.get("trace_id"):
+                pipeline_run.trace_id = span_ctx["trace_id"]
+        except Exception:
+            logger.debug("Failed to capture OTel trace context", exc_info=True)
+
         db.commit()
 
         _mark_running(db, pipeline_run)
@@ -629,13 +641,30 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         > 0
     )
 
+    # Check for contract violations before using the flag in status logic
+    has_contract_violations = False
+    for result in summary.step_results:
+        violations = getattr(result, "contract_violations", None) or []
+        if violations:
+            has_contract_violations = True
+            break
+
     if summary.status == RunnerPipelineStatus.COMPLETED:
-        pipeline_run.status = (
-            PipelineStatus.HEALED if healed_run else PipelineStatus.COMPLETED
-        )
-        PIPELINE_RUNS_TOTAL.labels(
-            status="healed" if pipeline_run.status == PipelineStatus.HEALED else "success"
-        ).inc()
+        if has_contract_violations and healed_run:
+            pipeline_run.status = PipelineStatus.CONTRACT_VIOLATION
+        elif has_contract_violations:
+            pipeline_run.status = PipelineStatus.CONTRACT_VIOLATION
+        elif healed_run:
+            pipeline_run.status = PipelineStatus.HEALED
+        else:
+            pipeline_run.status = PipelineStatus.COMPLETED
+
+        if pipeline_run.status == PipelineStatus.HEALED:
+            PIPELINE_RUNS_TOTAL.labels(status="healed").inc()
+        elif pipeline_run.status == PipelineStatus.CONTRACT_VIOLATION:
+            PIPELINE_RUNS_TOTAL.labels(status="contract_violation").inc()
+        else:
+            PIPELINE_RUNS_TOTAL.labels(status="success").inc()
         event_type = "pipeline_completed"
     else:
         pipeline_run.status = PipelineStatus.FAILED
@@ -709,8 +738,38 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             columns_out=result.columns_out,
             duration_ms=result.duration_ms,
             warnings=result.warnings,
+            trace_id=getattr(result, "trace_id", None),
+            span_id=getattr(result, "span_id", None),
+            engine=getattr(result, "engine", None),
+            started_at=getattr(result, "started_at", None),
+            completed_at=getattr(result, "completed_at", None),
         )
         db.add(step_record)
+
+        violations = getattr(result, "contract_violations", None) or []
+        if violations:
+            for v in violations:
+                violation_record = ContractViolationRecord(
+                    run_id=pipeline_run.id,
+                    step_name=result.step_name,
+                    step_index=idx,
+                    step_type=result.step_type,
+                    column=v.get("column", ""),
+                    rule=v.get("rule", ""),
+                    severity=v.get("severity", "error"),
+                    message=v.get("message", ""),
+                    actual=v.get("actual"),
+                    expected=v.get("expected"),
+                )
+                db.add(violation_record)
+
+                _publish_contract_violation_event(
+                    run_id=str(pipeline_run.id),
+                    step_name=result.step_name,
+                    step_index=idx,
+                    violation=v,
+                    severity=v.get("severity", "error"),
+                )
 
     lineage_data = summary.lineage.serialize()
     lineage_record = LineageGraph(
@@ -743,6 +802,87 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     except Exception as exc:
         logger.error("Catalog registration failed for run %s: %s", pipeline_run.id, exc)
 
+    # Post-run data contract validation against active PipelineContract
+    try:
+        from backend.contracts import validate_against_contract
+        from backend.models import ContractSeverity, PipelineContract
+
+        active_contract = (
+            db.query(PipelineContract)
+            .filter(
+                PipelineContract.pipeline_name == (pipeline_run.name or ""),
+                PipelineContract.is_active.is_(True),
+            )
+            .order_by(PipelineContract.version.desc())
+            .first()
+        )
+        post_run_violations = []
+        contract_severity = None
+        if active_contract and summary.step_results:
+            contract_severity = active_contract.severity
+            final_result = summary.step_results[-1]
+            output_table = getattr(final_result, "output_table", None)
+            validation = validate_against_contract(
+                output_table=output_table,
+                yaml_content=active_contract.yaml_content,
+            )
+            if not validation.passed:
+                for v in validation.violations:
+                    violation_record = ContractViolationRecord(
+                        run_id=pipeline_run.id,
+                        step_name=final_result.step_name,
+                        step_index=len(summary.step_results) - 1,
+                        step_type=final_result.step_type,
+                        column=v.column,
+                        rule=v.rule,
+                        severity=v.severity,
+                        message=v.message,
+                        actual=v.actual,
+                        expected=v.expected,
+                    )
+                    db.add(violation_record)
+                    post_run_violations.append(v)
+
+                    _publish_contract_violation_event(
+                        run_id=str(pipeline_run.id),
+                        step_name=final_result.step_name,
+                        step_index=len(summary.step_results) - 1,
+                        violation={
+                            "column": v.column,
+                            "rule": v.rule,
+                            "message": v.message,
+                            "actual": v.actual,
+                            "expected": v.expected,
+                        },
+                        severity=contract_severity.value if contract_severity else "warn",
+                    )
+
+                if post_run_violations and pipeline_run.status not in (
+                    PipelineStatus.CONTRACT_VIOLATION,
+                    PipelineStatus.FAILED,
+                ):
+                    if contract_severity == ContractSeverity.BLOCK:
+                        pipeline_run.status = PipelineStatus.CONTRACT_VIOLATION
+                        db.add(pipeline_run)
+                        _block_downstream_schedules(
+                            db,
+                            pipeline_run.name or "",
+                            active_contract.consumers or [],
+                        )
+                        logger.warning(
+                            "Contract BREACH (block) on run %s: %d violations, downstream pipelines blocked",
+                            pipeline_run.id,
+                            len(post_run_violations),
+                        )
+                    else:
+                        logger.warning(
+                            "Contract breach (warn) on run %s: %d violations, run stays COMPLETED",
+                            pipeline_run.id,
+                            len(post_run_violations),
+                        )
+    except Exception as exc:
+        logger.error("Contract validation failed for run %s: %s", pipeline_run.id, exc)
+
     # Update schedule stats if this was a scheduled run
     if pipeline_run.schedule_id:
         _update_schedule_stats(db, pipeline_run)
@@ -761,6 +901,87 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         pipeline_run.status.value,
         summary.total_duration_ms,
     )
+
+
+def _publish_contract_violation_event(
+    run_id: str,
+    step_name: str,
+    step_index: int,
+    violation: dict,
+    severity: str = "warn",
+) -> None:
+    """Publish a dedicated contract_violation SSE event for real-time frontend updates."""
+    try:
+        redis_client = get_pubsub_redis()
+        channel = f"pipeline_progress:{run_id}"
+        payload = {
+            "run_id": run_id,
+            "event_type": "contract_violation",
+            "step_name": step_name,
+            "step_index": step_index,
+            "severity": severity,
+            "column": violation.get("column", ""),
+            "rule": violation.get("rule", ""),
+            "message": violation.get("message", ""),
+            "actual": violation.get("actual"),
+            "expected": violation.get("expected"),
+        }
+        redis_client.publish(channel, orjson.dumps(payload))
+    except RedisError:
+        logger.warning(
+            "Failed to publish contract_violation event for run_id=%s",
+            run_id)
+
+
+def _block_downstream_schedules(
+    db,
+    breached_pipeline_name: str,
+    consumers: list[str],
+) -> int:
+    """Block downstream pipeline schedules when a contract breach has severity=block.
+
+    Finds all active schedules whose pipeline_name appears in the consumers list
+    and pushes their next_run_at forward by 1 hour to prevent immediate triggering.
+    This gives engineers time to investigate and fix the breach before dependent
+    pipelines run against bad data.
+
+    Returns the number of schedules blocked.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import update
+
+    if not consumers:
+        return 0
+
+    blocked_count = 0
+    for consumer_name in consumers:
+        affected = db.execute(
+            update(PipelineSchedule)
+            .where(
+                PipelineSchedule.pipeline_name == consumer_name,
+                PipelineSchedule.is_active.is_(True),
+            )
+            .values(
+                next_run_at=utcnow() + timedelta(hours=1),
+                last_run_status="BLOCKED_BY_CONTRACT",
+            )
+        )
+        count = affected.rowcount
+        if count > 0:
+            blocked_count += count
+            logger.info(
+                "Blocked %d schedule(s) for downstream pipeline '%s' "
+                "(breached: '%s')",
+                count,
+                consumer_name,
+                breached_pipeline_name,
+            )
+
+    if blocked_count > 0:
+        db.commit()
+
+    return blocked_count
 
 
 def _update_schedule_stats(db, pipeline_run: PipelineRun) -> None:
@@ -783,6 +1004,7 @@ def _update_schedule_stats(db, pipeline_run: PipelineRun) -> None:
         status_map = {
             PipelineStatus.COMPLETED: "COMPLETED",
             PipelineStatus.HEALED: "HEALED",
+            PipelineStatus.CONTRACT_VIOLATION: "CONTRACT_VIOLATION",
             PipelineStatus.FAILED: "FAILED",
             PipelineStatus.CANCELLED: "CANCELLED",
             PipelineStatus.RUNNING: "RUNNING",
@@ -812,7 +1034,7 @@ def _update_schedule_stats(db, pipeline_run: PipelineRun) -> None:
             update_values["successful_runs"] = PipelineSchedule.successful_runs + 1
         elif pipeline_run.status == PipelineStatus.HEALED:
             update_values["healed_runs"] = PipelineSchedule.healed_runs + 1
-        elif pipeline_run.status == PipelineStatus.FAILED:
+        elif pipeline_run.status in (PipelineStatus.FAILED, PipelineStatus.CONTRACT_VIOLATION):
             update_values["failed_runs"] = PipelineSchedule.failed_runs + 1
 
         db.execute(

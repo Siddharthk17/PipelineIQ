@@ -4,6 +4,12 @@ Provides deterministic sample DataFrames, in-memory SQLite DB sessions,
 FastAPI test clients, and pre-configured LineageRecorder instances.
 """
 
+import os
+
+# CRITICAL: Set test environment BEFORE any backend imports to prevent
+# OpenTelemetry from trying to connect to Jaeger during test runs.
+os.environ.setdefault("ENVIRONMENT", "test")
+
 import warnings
 from typing import Generator
 from unittest.mock import MagicMock, patch

@@ -9,6 +9,7 @@ row counts, and column metadata.
 import json
 import logging
 import time
+from datetime import datetime, timezone
 import pandas as pd
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,6 +67,12 @@ class StepExecutionResult:
     columns_out: List[str]
     duration_ms: int
     warnings: List[str] = field(default_factory=list)
+    contract_violations: List[dict] = field(default_factory=list)
+    trace_id: str | None = None
+    span_id: str | None = None
+    engine: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
     @property
     def output_df(self) -> pd.DataFrame:

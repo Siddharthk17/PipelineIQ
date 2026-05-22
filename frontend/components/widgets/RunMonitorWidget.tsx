@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { usePipelineRun } from "@/hooks/usePipelineRun";
-import { CheckCircle, XCircle, PlayCircle, Clock, AlertTriangle } from "lucide-react";
+import { CheckCircle, XCircle, PlayCircle, Clock, AlertTriangle, BarChart3, List, AlertOctagon } from "lucide-react";
 import { motion } from "motion/react";
 import { HealingBanner } from "@/components/widgets/HealingBanner";
+import { GanttChart } from "@/components/runs/GanttChart";
+import { ContractViolationBadge } from "@/components/pipeline-builder/ContractViolationBadge";
 
 export function RunMonitorWidget() {
   const { activeRunId, activeRun } = usePipelineStore();
@@ -14,6 +16,24 @@ export function RunMonitorWidget() {
   usePipelineRun(activeRunId);
 
   const [expandedValidations, setExpandedValidations] = useState<Set<number>>(new Set());
+  const [viewMode, setViewMode] = useState<"list" | "gantt">("list");
+
+  const stepViolations = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of activeRun?.step_results ?? []) {
+      const count = s.contract_violations?.length ?? 0;
+      if (count > 0) map.set(s.step_name, count);
+    }
+    return map;
+  }, [activeRun?.step_results]);
+
+  const allViolations = useMemo(() => {
+    const all: import("@/lib/types").ContractViolation[] = [];
+    for (const s of activeRun?.step_results ?? []) {
+      if (s.contract_violations) all.push(...s.contract_violations);
+    }
+    return all;
+  }, [activeRun?.step_results]);
   const toggleValidation = (idx: number) => {
     setExpandedValidations(prev => {
       const next = new Set(prev);
@@ -58,6 +78,22 @@ export function RunMonitorWidget() {
           </div>
         </div>
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border" style={{ borderColor: "var(--widget-border)", backgroundColor: "var(--bg-elevated)" }}>
+          <div className="flex items-center gap-1.5 mr-2">
+            <button
+              onClick={() => setViewMode("list")}
+              className={`p-1 rounded ${viewMode === "list" ? "bg-[var(--interactive-hover)]" : ""}`}
+              title="Step list view"
+            >
+              <List className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+            </button>
+            <button
+              onClick={() => setViewMode("gantt")}
+              className={`p-1 rounded ${viewMode === "gantt" ? "bg-[var(--interactive-hover)]" : ""}`}
+              title="Timeline Gantt view"
+            >
+              <BarChart3 className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
+            </button>
+          </div>
           {activeRun.status === "HEALED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
           {activeRun.status === "COMPLETED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
           {activeRun.status === "FAILED" && <XCircle className="w-4 h-4 text-[var(--accent-error)]" />}
@@ -65,11 +101,12 @@ export function RunMonitorWidget() {
           {activeRun.status === "HEALING" && <div className="w-3 h-3 rounded-full bg-[var(--accent-primary)] animate-pulse" />}
           {activeRun.status === "PENDING" && <Clock className="w-4 h-4 text-[var(--text-secondary)]" />}
           {activeRun.status === "TIMEOUT" && <AlertTriangle className="w-4 h-4 text-[var(--accent-error)]" />}
+          {activeRun.status === "CONTRACT_VIOLATION" && <AlertOctagon className="w-4 h-4 text-[var(--accent-error)]" />}
           <span className="text-xs font-bold tracking-wider uppercase" style={{ 
             color:
               activeRun.status === "COMPLETED" || activeRun.status === "HEALED"
                 ? "var(--accent-success)"
-                : activeRun.status === "FAILED" || activeRun.status === "TIMEOUT"
+                : activeRun.status === "FAILED" || activeRun.status === "TIMEOUT" || activeRun.status === "CONTRACT_VIOLATION"
                   ? "var(--accent-error)"
                   : activeRun.status === "RUNNING"
                     ? "var(--accent-warning)"
@@ -112,6 +149,25 @@ export function RunMonitorWidget() {
         </div>
       )}
 
+      {allViolations.length > 0 && (
+        <div className="p-2 border-b flex items-center justify-between" style={{ borderColor: "var(--widget-border)" }}>
+          <div className="flex items-center gap-2">
+            <AlertOctagon className="w-4 h-4 text-[var(--accent-error)]" />
+            <span className="text-xs text-[var(--text-primary)]">
+              {allViolations.length} contract violation{allViolations.length > 1 ? "s" : ""}
+            </span>
+          </div>
+          <ContractViolationBadge violations={allViolations} />
+        </div>
+      )}
+
+      {viewMode === "gantt" ? (
+        <GanttChart
+          steps={activeRun.step_results ?? []}
+          totalDurationMs={activeRun.duration_ms}
+          violations={stepViolations}
+        />
+      ) : (
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {activeRun.step_results?.map((step, idx) => {
           const isRunning = step.status === "RUNNING";
@@ -219,6 +275,7 @@ export function RunMonitorWidget() {
           );
         })}
       </div>
+      )}
     </div>
   );
 }

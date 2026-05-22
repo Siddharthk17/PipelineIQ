@@ -123,6 +123,11 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     MINIO_IMAGE_TAG: str = "latest"
 
+    # OpenTelemetry
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://jaeger:4317"
+    OTEL_SAMPLE_RATE: float = 0.1
+    OTEL_ENABLED: bool = True
+
     # Gemini AI
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"

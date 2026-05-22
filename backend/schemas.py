@@ -243,6 +243,16 @@ class StepResultResponse(BaseModel):
         None, description="Non-fatal warnings")
     error_message: Optional[str] = Field(
         None, description="Error details if failed")
+    trace_id: Optional[str] = Field(
+        None, description="OpenTelemetry trace ID")
+    span_id: Optional[str] = Field(
+        None, description="OpenTelemetry span ID")
+    started_at: Optional[str] = Field(
+        None, description="Step start timestamp (ISO 8601)")
+    completed_at: Optional[str] = Field(
+        None, description="Step completion timestamp (ISO 8601)")
+    engine: Optional[str] = Field(
+        None, description="Execution engine (pandas, duckdb)")
 
 
 class HealingAttemptResponse(BaseModel):
@@ -317,6 +327,71 @@ class HealingAttemptResponse(BaseModel):
     )
 
 
+class ContractDefResponse(BaseModel):
+    """A data contract definition for a pipeline."""
+
+    id: str = Field(..., description="Contract ID")
+    pipeline_name: str = Field(..., description="Pipeline name")
+    version: int = Field(..., description="Contract version number")
+    yaml_content: str = Field(..., description="Contract YAML content")
+    severity: str = Field("warn", description="Breach severity: warn or block")
+    consumers: list[str] = Field(default_factory=list, description="Notification targets for breaches")
+    is_active: bool = Field(..., description="Whether the contract is active")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+
+
+class ContractCreateRequest(BaseModel):
+    """Request body to create a data contract."""
+
+    yaml_content: str = Field(..., description="Contract YAML content", min_length=1)
+    severity: str = Field(default="warn", description="Breach severity: warn or block", pattern="^(warn|block)$")
+    consumers: list[str] = Field(default_factory=list, description="Notification targets for breaches")
+
+
+class ContractUpdateRequest(BaseModel):
+    """Request body to update a data contract."""
+
+    yaml_content: str = Field(..., description="Contract YAML content", min_length=1)
+    severity: str = Field(default="warn", description="Breach severity: warn or block", pattern="^(warn|block)$")
+    consumers: list[str] = Field(default_factory=list, description="Notification targets for breaches")
+
+
+class ContractListResponse(BaseModel):
+    """List of contract definitions for a pipeline."""
+
+    pipeline_name: str = Field(..., description="Pipeline name")
+    contracts: list[ContractDefResponse] = Field(
+        default_factory=list, description="Contract definitions"
+    )
+    total: int = Field(..., description="Total number of contracts")
+
+
+class ContractStatusResponse(BaseModel):
+    """Status of a pipeline's data contract against its latest run."""
+
+    pipeline_name: str = Field(..., description="Pipeline name")
+    has_contract: bool = Field(..., description="Whether a contract is defined")
+    active_contract_id: Optional[str] = Field(None, description="Active contract ID")
+    active_contract_version: Optional[int] = Field(
+        None, description="Active contract version"
+    )
+    last_run_id: Optional[str] = Field(None, description="Latest run ID")
+    last_run_status: Optional[str] = Field(None, description="Latest run status")
+    total_violations: int = Field(default=0, description="Total violations in latest run")
+
+
+class ContractViolationResponse(BaseModel):
+    """A single data contract violation detected during pipeline execution."""
+
+    column: str = Field(..., description="Column name")
+    rule: str = Field(..., description="Violated rule (dtype, not_null, unique, etc.)")
+    severity: str = Field(..., description="Severity level: error or warning")
+    message: str = Field(..., description="Human-readable violation description")
+    actual: Optional[str] = Field(None, description="Actual value observed")
+    expected: Optional[str] = Field(None, description="Expected value per contract")
+
+
 class PipelineRunResponse(BaseModel):
     """Full details of a pipeline run including all step results."""
 
@@ -337,6 +412,8 @@ class PipelineRunResponse(BaseModel):
     total_rows_out: Optional[int] = Field(
         None, description="Total output rows")
     error_message: Optional[str] = Field(None, description="Error if failed")
+    trace_id: Optional[str] = Field(
+        None, description="OpenTelemetry trace ID for distributed tracing")
     step_results: List[StepResultResponse] = Field(
         default_factory=list, description="Ordered list of step results"
     )
