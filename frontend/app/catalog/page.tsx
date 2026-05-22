@@ -154,7 +154,7 @@ export default function CatalogPage() {
         <div className="overflow-y-auto rounded border border-[var(--widget-border)] bg-[var(--widget-bg)] p-2" data-testid="catalog-results">
           {searching && <p className="text-sm text-[var(--text-muted)] p-2">Searching...</p>}
           {!searching && searchResults.length === 0 && query.length >= 2 && (
-            <p className="text-sm text-[var(--text-muted)] p-2">No assets found for "{query}"</p>
+             <p className="text-sm text-[var(--text-muted)] p-2">No assets found for &ldquo;{query}&rdquo;</p>
           )}
           {searchResults.map((asset) => (
             <div
@@ -182,7 +182,7 @@ export default function CatalogPage() {
         {selectedAsset && (
           <div className="overflow-y-auto rounded border border-[var(--widget-border)] bg-[var(--widget-bg)] p-4" data-testid="catalog-impact-panel">
             <h3 className="text-lg font-semibold text-[var(--text-primary)]">
-              Impact of "{selectedAsset.name}"
+               Impact of &ldquo;{selectedAsset.name}&rdquo;
             </h3>
             <p className="text-xs text-[var(--text-muted)] mt-1">
               What breaks if this {selectedAsset.asset_type} changes?

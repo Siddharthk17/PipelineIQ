@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { usePipelineRun } from "@/hooks/usePipelineRun";
 import { Clock, CheckCircle, XCircle, Loader2, BarChart3, GanttChart } from "lucide-react";
@@ -99,32 +99,31 @@ export function ExecutionTimelineWidget() {
   const [timing, setTiming] = useState<RunTimingResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const prevRunId = useRef(activeRunId);
 
   useEffect(() => {
-    if (!activeRunId) {
-      setTiming(null);
-      return;
+    if (activeRunId !== prevRunId.current) {
+      prevRunId.current = activeRunId;
     }
+    if (!activeRunId) return;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+
+    Promise.resolve().then(() => {
+      if (!cancelled) { setLoading(true); setError(null); }
+    });
 
     fetchApi<RunTimingResponse>(`/pipelines/${activeRunId}/timing`)
       .then((data) => {
-        if (!cancelled) setTiming(data);
+        if (!cancelled) { setTiming(data); setLoading(false); }
       })
       .catch((e) => {
-        if (!cancelled)
+        if (!cancelled) {
           setError(e instanceof Error ? e.message : "Failed to load timing data");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+          setLoading(false);
+        }
       });
 
-    return () => {
-      cancelled = true;
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
   }, [activeRunId, stepsDone, runStatus]);
 
   if (!activeRunId) {

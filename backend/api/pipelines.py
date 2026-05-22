@@ -413,13 +413,13 @@ async def run_pipeline_legacy(
         yaml_config = payload.get("yaml")
     if not isinstance(yaml_config, str) or not yaml_config.strip():
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Request body must include 'yaml_config' (or legacy 'yaml')",
         )
     name = payload.get("name")
     if name is not None and not isinstance(name, str):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="'name' must be a string when provided",
         )
     return _create_and_queue_pipeline_run(
@@ -623,7 +623,7 @@ def get_healing_attempt(
     _validate_uuid_format(run_id)
     if attempt_number < 1:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="attempt_number must be >= 1",
         )
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Search, X, Palette, Keyboard, RotateCcw, Layout } from 'lucide-react';
 import { useWidgetStore, ALL_WIDGETS } from '@/store/widgetStore';
 import { useThemeStore } from '@/store/themeStore';
@@ -8,8 +8,8 @@ import { useThemeStore } from '@/store/themeStore';
 interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
-  onOpenThemeBuilder: () => void;
-  onOpenKeybindings: () => void;
+  onOpenThemeBuilder?: () => void;
+  onOpenKeybindings?: () => void;
 }
 
 interface Command {
@@ -20,25 +20,24 @@ interface Command {
   action: () => void;
 }
 
+function isWidgetInLayout(node: unknown, id: string): boolean {
+  if (!node || typeof node !== 'object') return false;
+  const n = node as Record<string, unknown>;
+  if (n.type === 'widget') return n.id === id;
+  return isWidgetInLayout(n.first, id) || isWidgetInLayout(n.second, id);
+}
+
 export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeybindings }: CommandPaletteProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { widgets, addWidget, removeWidget, resetLayout, workspaces, activeWorkspaceId } = useWidgetStore();
+  const { workspaces, activeWorkspaceId, removeWidget, addWidget, resetLayout } = useWidgetStore();
   const { setTheme } = useThemeStore();
-
   const currentLayout = workspaces[activeWorkspaceId];
 
-  const isWidgetInLayout = (node: unknown, id: string): boolean => {
-    if (!node || typeof node !== 'object') return false;
-    const n = node as Record<string, unknown>;
-    if (n.type === 'widget') return n.id === id;
-    return isWidgetInLayout(n.first, id) || isWidgetInLayout(n.second, id);
-  };
+  const themes = useMemo(() => ['catppuccin-mocha', 'tokyo-night', 'gruvbox-dark', 'nord', 'rose-pine', 'pipelineiq-dark', 'pipelineiq-light'], []);
 
-  const themes = ['catppuccin-mocha', 'tokyo-night', 'gruvbox-dark', 'nord', 'rose-pine', 'pipelineiq-dark', 'pipelineiq-light'];
-
-  const commands: Command[] = [
+  const commands: Command[] = useMemo(() => [
     ...ALL_WIDGETS.map((w) => {
       const vis = isWidgetInLayout(currentLayout, w.id);
       return {
@@ -61,14 +60,14 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
       label: 'Open Theme Builder',
       category: 'Actions',
       icon: <Palette className="w-4 h-4" />,
-      action: () => { onOpenThemeBuilder(); onClose(); },
+      action: () => { onOpenThemeBuilder?.(); onClose(); },
     },
     {
       id: 'open-keybindings',
       label: 'View Keybindings',
       category: 'Actions',
       icon: <Keyboard className="w-4 h-4" />,
-      action: () => { onOpenKeybindings(); onClose(); },
+      action: () => { onOpenKeybindings?.(); onClose(); },
     },
     {
       id: 'reset-layout',
@@ -77,11 +76,14 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
       icon: <RotateCcw className="w-4 h-4" />,
       action: () => { resetLayout(); onClose(); },
     },
-  ];
+  ], [currentLayout, removeWidget, addWidget, onClose, onOpenThemeBuilder, onOpenKeybindings, resetLayout, setTheme, themes]);
 
-  const filtered = query
-    ? (Array.isArray(commands) ? commands : []).filter((c) => c.label.toLowerCase().includes(query.toLowerCase()))
-    : (Array.isArray(commands) ? commands : []);
+  const filtered = useMemo(
+    () => query
+      ? (Array.isArray(commands) ? commands : []).filter((c) => c.label.toLowerCase().includes(query.toLowerCase()))
+      : (Array.isArray(commands) ? commands : []),
+    [commands, query]
+  );
 
   const prevIsOpen = useRef(isOpen);
   useEffect(() => {

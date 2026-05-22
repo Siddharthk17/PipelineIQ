@@ -13,6 +13,7 @@ import type {
   NotificationConfig,
   NotificationType,
   PipelineVersion,
+  RunTimingResponse,
   PipelineDiff,
   SchemaSnapshot,
   AIGeneratePipelineResponse,

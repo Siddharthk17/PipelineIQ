@@ -305,7 +305,6 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     };
     window.addEventListener("pipeline:run", handleRun);
     return () => window.removeEventListener("pipeline:run", handleRun);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, editorMode, isRunCoolingDown, pipelineName, runMutation, validation]);
 
   const insertFileId = useCallback((id: string) => {
