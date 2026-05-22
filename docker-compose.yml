@@ -587,8 +587,6 @@ services:
       --save ""
       --appendonly no
       --loglevel notice
-    sysctls:
-      - vm.overcommit_memory=1
     ports:
       - "6379:6379"
     volumes:
@@ -612,8 +610,6 @@ services:
       --save ""
       --appendonly no
       --loglevel notice
-    sysctls:
-      - vm.overcommit_memory=1
     ports:
       - "6380:6380"
     healthcheck:
@@ -639,8 +635,6 @@ services:
       --auto-aof-rewrite-min-size 64mb
       --aof-rewrite-incremental-fsync yes
       --loglevel notice
-    sysctls:
-      - vm.overcommit_memory=1
     ports:
       - "6381:6381"
     volumes:
@@ -663,8 +657,6 @@ services:
       --maxmemory 128mb
       --appendonly yes
       --loglevel notice
-    sysctls:
-      - vm.overcommit_memory=1
     ports:
       - "6382:6382"
     volumes:

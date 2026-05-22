@@ -17,6 +17,7 @@ build/
 coverage/
 node_modules/
 .next/
+.next-build/
 frontend/.env.local
 *.log
 .DS_Store

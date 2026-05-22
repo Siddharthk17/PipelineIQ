@@ -200,6 +200,9 @@ jobs:
           CELERY_WORKERS_BULK=1
           EOF
 
+      - name: Set kernel sysctl for Redis
+        run: sudo sysctl -w vm.overcommit_memory=1
+
       - name: Build and start all services
         run: |
           docker compose build
@@ -367,6 +370,9 @@ jobs:
           CELERY_WORKERS_DEFAULT=1
           CELERY_WORKERS_BULK=1
           EOF
+
+      - name: Set kernel sysctl for Redis
+        run: sudo sysctl -w vm.overcommit_memory=1
 
       - name: Build and start all services
         run: |
