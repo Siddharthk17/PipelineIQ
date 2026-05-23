@@ -127,6 +127,7 @@ class Settings(BaseSettings):
     OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://jaeger:4317"
     OTEL_SAMPLE_RATE: float = 0.1
     OTEL_ENABLED: bool = True
+    OTEL_SERVICE_NAME: str = "pipelineiq-api"
 
     # Gemini AI
     GEMINI_API_KEY: str = ""

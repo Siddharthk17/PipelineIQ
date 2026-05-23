@@ -15,11 +15,15 @@ from sentry_sdk.integrations.celery import CeleryIntegration
 from backend.config import settings
 from backend.execution.duckdb_executor import close_worker_duckdb, initialize_worker_duckdb
 
-from backend.telemetry import instrument_redis, setup_telemetry
+from backend.telemetry import (
+    force_flush,
+    instrument_redis,
+    reset_telemetry,
+    setup_celery_telemetry,
+    setup_telemetry,
+)
 setup_telemetry()
-
-from opentelemetry.instrumentation.celery import CeleryInstrumentor
-CeleryInstrumentor().instrument()
+setup_celery_telemetry()
 
 instrument_redis()
 
@@ -64,12 +68,17 @@ celery_app.autodiscover_tasks(
 
 
 @worker_process_init.connect
-def _init_worker_duckdb(**kwargs) -> None:
-    """Initialize one DuckDB connection in each worker process."""
+def _init_worker_process(**kwargs) -> None:
+    """Re-initialize per-process resources after fork (DuckDB + OTel)."""
+    reset_telemetry()
+    setup_telemetry()
+    setup_celery_telemetry()
+    instrument_redis()
     initialize_worker_duckdb()
 
 
 @worker_process_shutdown.connect
-def _close_worker_duckdb(**kwargs) -> None:
-    """Close worker DuckDB connection on process shutdown."""
+def _close_worker_process(**kwargs) -> None:
+    """Flush OTel spans and close DuckDB on worker shutdown."""
+    force_flush()
     close_worker_duckdb()

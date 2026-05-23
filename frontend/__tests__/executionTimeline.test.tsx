@@ -53,6 +53,7 @@ const MOCK_TIMING: RunTimingResponse = {
       step_name: "load_sales",
       step_type: "load",
       status: "COMPLETED",
+      engine: null,
       rows_in: 0,
       rows_out: 100,
       duration_ms: 200,
@@ -66,6 +67,7 @@ const MOCK_TIMING: RunTimingResponse = {
       step_name: "filter_active",
       step_type: "filter",
       status: "COMPLETED",
+      engine: null,
       rows_in: 100,
       rows_out: 72,
       duration_ms: 80,
@@ -316,5 +318,48 @@ describe("ExecutionTimelineWidget", () => {
     await waitFor(() =>
       expect(vi.mocked(fetchApi)).toHaveBeenCalledWith("/pipelines/run-xyz/timing"),
     );
+  });
+
+  // ── Engine display tests ────────────────────────────────────────────────────
+  it("shows engine badge when engine is present", async () => {
+    const engineTiming: RunTimingResponse = {
+      ...MOCK_TIMING,
+      steps: [{ ...MOCK_TIMING.steps[0], engine: "duckdb" }],
+    };
+    vi.mocked(fetchApi).mockResolvedValue(engineTiming);
+    usePipelineStore.setState({ activeRunId: "run-abc", activeRun: null } as any);
+    render(<ExecutionTimelineWidget />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("duckdb")).toBeInTheDocument();
+    });
+  });
+
+  it("shows dash when engine is null", async () => {
+    const noEngineTiming: RunTimingResponse = {
+      ...MOCK_TIMING,
+      steps: [{ ...MOCK_TIMING.steps[0], engine: null }],
+    };
+    vi.mocked(fetchApi).mockResolvedValue(noEngineTiming);
+    usePipelineStore.setState({ activeRunId: "run-abc", activeRun: null } as any);
+    render(<ExecutionTimelineWidget />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("—")).toBeInTheDocument();
+    });
+  });
+
+  it("shows pandas engine badge for pandas-routed steps", async () => {
+    const pandasTiming: RunTimingResponse = {
+      ...MOCK_TIMING,
+      steps: [{ ...MOCK_TIMING.steps[0], engine: "pandas" }],
+    };
+    vi.mocked(fetchApi).mockResolvedValue(pandasTiming);
+    usePipelineStore.setState({ activeRunId: "run-abc", activeRun: null } as any);
+    render(<ExecutionTimelineWidget />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("pandas")).toBeInTheDocument();
+    });
   });
 });

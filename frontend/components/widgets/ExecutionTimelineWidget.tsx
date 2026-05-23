@@ -64,6 +64,9 @@ function StepBar({
       <span className="w-16 text-[var(--text-secondary)] shrink-0">
         {step.step_type}
       </span>
+      <span className="w-14 text-[var(--text-muted)] font-mono text-[10px] shrink-0 hidden sm:block">
+        {step.engine ?? "—"}
+      </span>
       <div className="flex-1 h-4 rounded-full overflow-hidden bg-[var(--bg-elevated)] min-w-[60px]">
         <motion.div
           className={`h-full rounded-full ${barColor}`}
@@ -184,6 +187,7 @@ export function ExecutionTimelineWidget() {
           <span className="w-4 shrink-0" />
           <span className="w-28 shrink-0">Step</span>
           <span className="w-16 shrink-0">Type</span>
+          <span className="w-14 shrink-0 hidden sm:block">Engine</span>
           <span className="flex-1">Duration</span>
           <span className="w-16 shrink-0 text-right">Time</span>
           <span className="w-24 shrink-0 text-right">Trace</span>

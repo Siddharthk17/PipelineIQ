@@ -18,7 +18,7 @@ from opentelemetry.instrumentation.redis import RedisInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION, DEPLOYMENT_ENVIRONMENT
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import ParentBasedTraceIdRatio
 
 from backend.config import settings
@@ -44,7 +44,11 @@ def _is_otel_enabled() -> bool:
     return bool(getattr(settings, "OTEL_ENABLED", True))
 
 
-OTEL_SERVICE_NAME = "pipelineiq"
+def _get_otel_service_name() -> str:
+    return getattr(settings, "OTEL_SERVICE_NAME", "pipelineiq")
+
+
+OTEL_SERVICE_NAME = _get_otel_service_name()
 
 
 def setup_telemetry() -> None:
@@ -61,7 +65,7 @@ def setup_telemetry() -> None:
     endpoint = _get_otel_endpoint()
 
     resource = Resource.create({
-        SERVICE_NAME: OTEL_SERVICE_NAME,
+        SERVICE_NAME: _get_otel_service_name(),
         SERVICE_VERSION: settings.APP_VERSION,
         DEPLOYMENT_ENVIRONMENT: settings.ENVIRONMENT,
     })
@@ -90,6 +94,23 @@ def setup_telemetry() -> None:
     trace.set_tracer_provider(provider)
     _TRACER_PROVIDER = provider
     _TRACER = provider.get_tracer("pipelineiq")
+
+
+_celery_instrumented: bool = False
+
+
+def setup_celery_telemetry() -> None:
+    global _celery_instrumented
+    if _celery_instrumented:
+        return
+    if _TRACER_PROVIDER is None:
+        setup_telemetry()
+    try:
+        CeleryInstrumentor().instrument()
+        logger.info("OTel: Celery instrumented")
+    except Exception as exc:
+        logger.warning("OTel: Celery instrumentation failed: %s", exc)
+    _celery_instrumented = True
 
 
 def instrument_fastapi(app):
@@ -189,3 +210,15 @@ def format_span_id(sid: int) -> str:
 def force_flush() -> None:
     if _TRACER_PROVIDER is not None:
         _TRACER_PROVIDER.force_flush()
+
+
+def reset_telemetry() -> None:
+    """Reset telemetry state so worker children get fresh SDK post-fork."""
+    global _TRACER_PROVIDER, _TRACER, _fastapi_instrumented
+    global _sqlalchemy_instrumented, _redis_instrumented, _celery_instrumented
+    _TRACER_PROVIDER = None
+    _TRACER = None
+    _fastapi_instrumented = False
+    _sqlalchemy_instrumented = False
+    _redis_instrumented = False
+    _celery_instrumented = False

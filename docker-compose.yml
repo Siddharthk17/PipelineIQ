@@ -158,6 +158,7 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - OTEL_SERVICE_NAME=pipelineiq-api
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -232,6 +233,7 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - OTEL_SERVICE_NAME=pipelineiq-sse
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -293,6 +295,7 @@ services:
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - OTEL_SERVICE_NAME=pipelineiq-worker
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
@@ -359,6 +362,7 @@ services:
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - OTEL_SERVICE_NAME=pipelineiq-worker
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
@@ -425,6 +429,7 @@ services:
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
       - REDPANDA_BROKERS=redpanda:9093
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - OTEL_SERVICE_NAME=pipelineiq-worker
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
@@ -494,6 +499,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - GEMINI_FALLBACK_MODELS=${GEMINI_FALLBACK_MODELS:-gemini-2.0-flash,gemini-1.5-flash}
+      - OTEL_SERVICE_NAME=pipelineiq-worker
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
@@ -556,6 +562,7 @@ services:
       - REDIS_CACHE_URL=redis://redis-cache:6381/0
       - REDIS_YJS_URL=redis://redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - OTEL_SERVICE_NAME=pipelineiq-worker
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -813,11 +820,13 @@ services:
       - pipelineiq-network
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.57
     container_name: pipelineiq-jaeger
+    mem_limit: 200m
     environment:
       - COLLECTOR_OTLP_ENABLED=true
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - SPAN_STORAGE_TYPE=memory
     ports:
       - "16686:16686"
       - "4317:4317"
@@ -936,6 +945,7 @@ services:
       - REDIS_BROKER_URL=redis://redis-broker:6379/0
       - REDPANDA_BROKERS=redpanda:9093
       - CELERY_CONCURRENCY=8
+      - OTEL_SERVICE_NAME=pipelineiq-worker
     depends_on:
       redis-broker:
         condition: service_healthy

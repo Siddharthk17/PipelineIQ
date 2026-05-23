@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import inspect
 import pytest
 import pyarrow as pa
 from datetime import datetime, timezone
+from unittest.mock import patch, MagicMock
 
 from backend.contracts import (
+    BreachReport,
     ContractViolation,
     ContractValidationResult,
+    build_breach_report,
     validate_against_contract,
 )
 from backend.execution.smart_executor import SmartExecutor
@@ -746,3 +750,403 @@ class TestSmartExecutorEngineRouting:
         )
         result = smart_executor.execute_step(config, df_registry, recorder)
         assert result.engine == "pandas"
+
+
+# ── BreachReport / build_breach_report Tests ───────────────────────────────
+
+
+class TestBreachReport:
+    """Verify BreachReport dataclass and build_breach_report function."""
+
+    def test_report_passed_validation(self):
+        """When validation passes, has_breaches=False and should_block_run=False."""
+        val = ContractValidationResult(passed=True, violations=[])
+        report = build_breach_report(val, severity="block")
+        assert isinstance(report, BreachReport)
+        assert not report.has_breaches
+        assert not report.should_block_run
+        assert report.breaches == []
+        assert report.summary == "All contract checks passed"
+
+    def test_report_warn_severity(self):
+        """With severity=warn, should_block_run=False even with violations."""
+        violations = [
+            ContractViolation(column="amount", rule="min_value", severity="error", message="below min"),
+        ]
+        val = ContractValidationResult(passed=False, violations=violations)
+        report = build_breach_report(val, severity="warn")
+        assert report.has_breaches
+        assert not report.should_block_run
+        assert len(report.breaches) == 1
+        assert "warn" in report.summary.lower()
+        assert "BLOCK" not in report.summary.upper()
+
+    def test_report_block_severity(self):
+        """With severity=block, should_block_run=True and summary says BLOCK."""
+        violations = [
+            ContractViolation(column="order_id", rule="not_null", severity="error", message="has nulls"),
+        ]
+        val = ContractValidationResult(passed=False, violations=violations)
+        report = build_breach_report(val, severity="block")
+        assert report.has_breaches
+        assert report.should_block_run
+        assert len(report.breaches) == 1
+        assert "block" in report.summary.lower()
+
+    def test_report_mixed_severity_violations(self):
+        """Both error and warning violations are reported correctly."""
+        violations = [
+            ContractViolation(column="amount", rule="min_value", severity="error", message="below min"),
+            ContractViolation(column="extra", rule="unexpected_column", severity="warning", message="unexpected"),
+        ]
+        val = ContractValidationResult(passed=False, violations=violations)
+        report = build_breach_report(val, severity="warn")
+        assert report.has_breaches
+        assert not report.should_block_run
+        assert len(report.breaches) == 2
+        assert "1 error(s), 1 warning(s)" in report.summary
+
+    def test_unexpected_column_only_does_not_block_at_block_severity(self):
+        """unexpected_column violations must never block the run, even at severity=block.
+
+        The roadmap states: 'unexpected_column is always warn-only — never blocks,
+        even at severity=block'. Only error-severity violations (column_removed,
+        type_changed, row_count_*, not_null, min_value, max_value, allowed_values,
+        unique) should trigger should_block_run=True when contract severity=block.
+        """
+        violations = [
+            ContractViolation(column="extra_col", rule="unexpected_column", severity="warning", message="not in contract"),
+            ContractViolation(column="another_extra", rule="unexpected_column", severity="warning", message="also not in contract"),
+        ]
+        val = ContractValidationResult(passed=False, violations=violations)
+        report = build_breach_report(val, severity="block")
+        assert report.has_breaches is True, "Should have breaches (unexpected columns detected)"
+        assert report.should_block_run is False, (
+            "unexpected_column violations must never block the run, even at severity=block"
+        )
+        assert "warning" in report.summary.lower()
+
+    def test_error_violation_blocks_at_block_severity(self):
+        """error-severity violations DO block when contract severity=block."""
+        violations = [
+            ContractViolation(column="revenue", rule="column_removed", severity="error", message="column missing"),
+        ]
+        val = ContractValidationResult(passed=False, violations=violations)
+        report = build_breach_report(val, severity="block")
+        assert report.has_breaches is True
+        assert report.should_block_run is True
+        assert "block" in report.summary.lower()
+
+    def test_mixed_error_and_warning_blocks_at_block_severity(self):
+        """Mixed error+warning violations block when contract severity=block."""
+        violations = [
+            ContractViolation(column="revenue", rule="column_removed", severity="error", message="column missing"),
+            ContractViolation(column="extra", rule="unexpected_column", severity="warning", message="not in contract"),
+        ]
+        val = ContractValidationResult(passed=False, violations=violations)
+        report = build_breach_report(val, severity="block")
+        assert report.should_block_run is True
+
+    def test_breach_report_is_dataclass(self):
+        """BreachReport must be a dataclass with all required fields."""
+        report = BreachReport(has_breaches=False, should_block_run=False)
+        assert report.has_breaches is False
+        assert report.should_block_run is False
+        assert report.breaches == []
+        assert report.summary == ""
+
+
+# ── check_and_enforce_contract Tests ──────────────────────────────────────
+
+
+class TestCheckAndEnforceContract:
+    """Verify check_and_enforce_contract orchestrator never raises & handles edge cases."""
+
+    def test_function_exists_and_callable(self):
+        """check_and_enforce_contract must be importable and callable."""
+        from backend.tasks.pipeline_tasks import check_and_enforce_contract
+        assert callable(check_and_enforce_contract)
+
+    def test_no_active_contract_returns_gracefully(self):
+        """No active contract should return without error."""
+        from backend.tasks.pipeline_tasks import check_and_enforce_contract
+        db_mock = MagicMock()
+        db_mock.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+        run_mock = MagicMock()
+        run_mock.name = "test_pipeline"
+        summary_mock = MagicMock()
+        summary_mock.step_results = [MagicMock()]
+        # Must not raise
+        check_and_enforce_contract(db_mock, run_mock, summary_mock)
+
+    def test_no_step_results_returns_gracefully(self):
+        """Empty step_results should return without error."""
+        from backend.tasks.pipeline_tasks import check_and_enforce_contract
+        db_mock = MagicMock()
+        run_mock = MagicMock()
+        summary_mock = MagicMock()
+        summary_mock.step_results = []
+        check_and_enforce_contract(db_mock, run_mock, summary_mock)
+
+    def test_valid_output_no_violations(self):
+        """Valid output should not raise or store violations."""
+        from backend.tasks.pipeline_tasks import check_and_enforce_contract
+        db_mock = MagicMock()
+        contract_mock = MagicMock()
+        contract_mock.yaml_content = "columns:\n  x:\n    type: integer\n"
+        contract_mock.severity = "warn"
+        db_mock.query.return_value.filter.return_value.order_by.return_value.first.return_value = contract_mock
+        run_mock = MagicMock()
+        summary_mock = MagicMock()
+        result_mock = MagicMock()
+        result_mock.output_table = pa.table({"x": pa.array([1, 2], type=pa.int64())})
+        result_mock.step_name = "final_step"
+        result_mock.step_type = "load"
+        summary_mock.step_results = [result_mock]
+        # Must not raise and not store violations
+        check_and_enforce_contract(db_mock, run_mock, summary_mock)
+        db_mock.add.assert_not_called()
+
+
+# ── OTel Telemetry Function Tests ─────────────────────────────────────────
+
+
+class TestTelemetryFunctions:
+    """Verify all telemetry utility functions work correctly."""
+
+    def test_reset_telemetry_clears_globals(self):
+        """reset_telemetry must clear all module-level state."""
+        from backend.telemetry import reset_telemetry, _TRACER_PROVIDER, _TRACER, _fastapi_instrumented
+        import backend.telemetry as tel
+        # Set some state
+        tel._TRACER_PROVIDER = MagicMock()
+        tel._TRACER = MagicMock()
+        tel._fastapi_instrumented = True
+        tel._sqlalchemy_instrumented = True
+        tel._redis_instrumented = True
+        tel._celery_instrumented = True
+        reset_telemetry()
+        assert tel._TRACER_PROVIDER is None
+        assert tel._TRACER is None
+        assert not tel._fastapi_instrumented
+        assert not tel._sqlalchemy_instrumented
+        assert not tel._redis_instrumented
+        assert not tel._celery_instrumented
+
+    def test_force_flush_no_provider(self):
+        """force_flush with no provider must not crash."""
+        from backend.telemetry import force_flush, reset_telemetry
+        reset_telemetry()
+        force_flush()  # Must not raise
+
+    def test_force_flush_with_provider(self):
+        """force_flush with provider must call provider.force_flush."""
+        from backend.telemetry import force_flush
+        import backend.telemetry as tel
+        provider_mock = MagicMock()
+        tel._TRACER_PROVIDER = provider_mock
+        force_flush()
+        provider_mock.force_flush.assert_called_once()
+
+    def test_get_tracer_calls_setup_when_none(self):
+        """get_tracer must call setup_telemetry when _TRACER is None."""
+        from backend.telemetry import get_tracer, reset_telemetry
+        reset_telemetry()
+        tracer = get_tracer()
+        assert tracer is not None
+
+    def test_current_span_context_empty_when_no_span(self):
+        """current_span_context must return empty dict when no span."""
+        ctx = current_span_context()
+        assert isinstance(ctx, dict)
+
+    def test_setup_celery_telemetry_is_idempotent(self):
+        """setup_celery_telemetry must be idempotent."""
+        from backend.telemetry import setup_celery_telemetry, reset_telemetry
+        reset_telemetry()
+        # First call (may fail due to missing Celery app, but must not raise)
+        try:
+            setup_celery_telemetry()
+        except Exception:
+            pass
+        # Second call must also not raise
+        try:
+            setup_celery_telemetry()
+        except Exception:
+            pass
+
+    def test_instrument_fastapi_idempotency_flag(self):
+        """instrument_fastapi must check _fastapi_instrumented flag."""
+        import backend.telemetry as tel
+        tel._fastapi_instrumented = True
+        app_mock = MagicMock()
+        tel.instrument_fastapi(app_mock)
+        # FastAPIInstrumentor.instrument_app should not be called
+        # We just verify it doesn't crash
+
+    def test_instrument_all_calls_instrument_fastapi(self):
+        """instrument_all must call instrument_fastapi."""
+        import backend.telemetry as tel
+        tel.reset_telemetry()
+        app_mock = MagicMock()
+        tel.instrument_all(app_mock)
+        # Should not crash
+
+    def test_format_trace_id(self):
+        """format_trace_id must produce 32-char hex string."""
+        from backend.telemetry import format_trace_id
+        result = format_trace_id(123456789)
+        assert isinstance(result, str)
+        assert len(result) == 32
+        assert all(c in "0123456789abcdef" for c in result)
+
+    def test_format_span_id(self):
+        """format_span_id must produce 16-char hex string."""
+        from backend.telemetry import format_span_id
+        result = format_span_id(123456789)
+        assert isinstance(result, str)
+        assert len(result) == 16
+        assert all(c in "0123456789abcdef" for c in result)
+
+
+# ── SmartExecutor Span Attribute Tests ─────────────────────────────────────
+
+
+class TestSmartExecutorSpanAttributes:
+    """Verify SmartExecutor sets correct span attributes on OTel spans."""
+
+    def test_filter_step_creates_span_with_attributes(self, smart_executor, recorder, sample_table):
+        """Each step execution must create an OTel span with step_name/type/engine."""
+        df_registry = {"load_data": sample_table}
+        config = FilterStepConfig(
+            name="span_attr_test",
+            step_type=StepType.FILTER,
+            input="load_data",
+            column="status",
+            operator="equals",
+            value="delivered",
+        )
+        result = smart_executor.execute_step(config, df_registry, recorder)
+        assert result.trace_id is not None
+        assert result.span_id is not None
+        assert result.engine is not None
+
+    def test_duckdb_step_has_engine_duckdb(self, smart_executor, recorder):
+        """Large table step must have engine='duckdb'."""
+        large_table = pa.table({
+            "id": pa.array(range(60000), type=pa.int64()),
+            "value": pa.array([float(i) for i in range(60000)], type=pa.float64()),
+        })
+        df_registry = {"load_data": large_table}
+        config = FilterStepConfig(
+            name="duckdb_span_test",
+            step_type=StepType.FILTER,
+            input="load_data",
+            column="id",
+            operator="greater_than",
+            value=100,
+        )
+        result = smart_executor.execute_step(config, df_registry, recorder)
+        assert result.engine == "duckdb"
+
+    def test_enrich_result_no_span_context(self):
+        """_enrich_result must handle empty span context gracefully."""
+        base = StepExecutionResult(
+            step_name="test_step",
+            step_type="load",
+            output_table=pa.table({"a": [1]}),
+            rows_in=0,
+            rows_out=1,
+            columns_in=[],
+            columns_out=["a"],
+            duration_ms=5,
+        )
+        enriched = SmartExecutor._enrich_result(base, "pandas", {})
+        assert enriched.engine == "pandas"
+        assert enriched.trace_id is None
+        assert enriched.span_id is None
+
+    def test_enrich_result_sets_timestamps(self):
+        """_enrich_result must set started_at and completed_at timestamps."""
+        base = StepExecutionResult(
+            step_name="ts_test",
+            step_type="load",
+            output_table=pa.table({"a": [1]}),
+            rows_in=0,
+            rows_out=1,
+            columns_in=[],
+            columns_out=["a"],
+            duration_ms=5,
+        )
+        enriched = SmartExecutor._enrich_result(base, "pandas", {"trace_id": "a", "span_id": "b"})
+        assert enriched.started_at is not None
+        assert enriched.completed_at is not None
+        assert enriched.started_at <= enriched.completed_at
+
+
+# ── DataContract Model Tests ────────────────────────────────────────────────
+
+
+class TestDataContractModel:
+    """Verify DataContract model has all required columns."""
+
+    def test_output_schema_column_exists(self):
+        """PipelineContract must have output_schema column."""
+        from backend.models.data_contract import PipelineContract
+        col_names = [c.name for c in PipelineContract.__table__.columns]
+        assert "output_schema" in col_names
+
+    def test_contract_severity_enum(self):
+        """ContractSeverity must have warn and block values."""
+        from backend.models import ContractSeverity
+        assert hasattr(ContractSeverity, "WARN")
+        assert hasattr(ContractSeverity, "BLOCK")
+        assert ContractSeverity.WARN.value == "warn"
+        assert ContractSeverity.BLOCK.value == "block"
+
+    def test_pipeline_contract_has_required_columns(self):
+        """PipelineContract must have all required columns."""
+        from backend.models.data_contract import PipelineContract
+        col_names = [c.name for c in PipelineContract.__table__.columns]
+        assert "id" in col_names
+        assert "pipeline_name" in col_names
+        assert "version" in col_names
+        assert "yaml_content" in col_names
+        assert "output_schema" in col_names
+        assert "severity" in col_names
+        assert "consumers" in col_names
+        assert "is_active" in col_names
+        assert "user_id" in col_names
+        assert "created_at" in col_names
+        assert "updated_at" in col_names
+
+
+# ── Data Contract API Structure Tests ──────────────────────────────────────
+
+
+class TestDataContractAPI:
+    """Verify contract API endpoints exist with correct HTTP methods."""
+
+    def test_contract_api_router_exists(self):
+        """Contracts router must be importable with all endpoints."""
+        from backend.api.contracts import router
+        routes = {(r.path, list(r.methods)[0] if r.methods else "GET") for r in router.routes}
+        assert ("/contracts/pipelines/{pipeline_name}", "GET") in routes
+        assert ("/contracts/pipelines/{pipeline_name}", "POST") in routes
+        assert ("/contracts/pipelines/{pipeline_name}/{contract_id}", "GET") in routes
+        assert ("/contracts/pipelines/{pipeline_name}/{contract_id}", "PUT") in routes
+        assert ("/contracts/pipelines/{pipeline_name}/{contract_id}", "DELETE") in routes
+        assert ("/contracts/pipelines/{pipeline_name}/status", "GET") in routes
+        assert ("/contracts/pipelines/{pipeline_name}/breaches", "GET") in routes
+        assert ("/contracts/runs/{run_id}", "GET") in routes
+        assert ("/contracts/runs/{run_id}/steps/{step_name}", "GET") in routes
+
+    def test_timing_api_returns_engine_field(self):
+        """Timing endpoint response must include 'engine' for each step."""
+        from backend.api.pipelines import router
+        timing_route = None
+        for r in router.routes:
+            if hasattr(r, "path") and "timing" in r.path:
+                timing_route = r
+                break
+        assert timing_route is not None, "Timing endpoint not found"

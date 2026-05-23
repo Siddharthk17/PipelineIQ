@@ -45,6 +45,8 @@ BACKPRESSURE_COOLDOWN_SEC = 10       # Wait 10s before resuming after backpressu
 IDEMPOTENT_CACHE_TTL = 10_000        # Keep last 10K processed offsets in memory
 
 
+
+
 @celery_app.task(
     name="tasks.run_streaming_pipeline",
     queue="streaming",

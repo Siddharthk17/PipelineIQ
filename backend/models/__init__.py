@@ -27,20 +27,15 @@ from sqlalchemy import (
     func,
     event,
 )
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.types import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 from sqlalchemy.engine import Engine
 
 from backend.database import Base
+from backend.models._base import PgJSONB, _enum_values, _generate_uuid
 
-# Dialect-aware JSONB: native JSONB on PostgreSQL, JSON fallback on SQLite
-PgJSONB = JSONB().with_variant(JSON(), "sqlite")
-
-
-def _enum_values(enum_class: type[PyEnum]) -> list[str]:
-    """Persist Python Enum values (not names) in database columns."""
-    return [member.value for member in enum_class]
+# Re-export contract models from their canonical modules
+from backend.models.data_contract import ContractSeverity, PipelineContract  # noqa: F401
+from backend.models.contract_breach import ContractViolationRecord  # noqa: F401
 
 
 @event.listens_for(Engine, "connect")
@@ -89,10 +84,6 @@ class HealingAttemptStatus(str, PyEnum):
     VALIDATION_FAILED = "VALIDATION_FAILED"
     APPLIED = "APPLIED"
     FAILED = "FAILED"
-
-
-def _generate_uuid() -> uuid.UUID:
-    return uuid.uuid4()
 
 
 class PipelineRun(Base):
@@ -735,87 +726,6 @@ class StreamingStats(Base):
     consumer_group: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     avg_batch_latency_ms: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True)
-
-
-class ContractSeverity(str, PyEnum):
-    """Breach handling severity for data contracts."""
-
-    WARN = "warn"
-    BLOCK = "block"
-
-
-class PipelineContract(Base):
-    """A data contract definition for a pipeline.
-
-    Stores YAML-based schema expectations (column types, constraints, nullability)
-    that are checked against pipeline output data during or after execution.
-    A pipeline may have multiple contract versions (similar to PipelineVersion).
-
-    severity controls breach handling:
-      warn  = log breach + alert, run stays COMPLETED
-      block = log breach + alert, run → CONTRACT_VIOLATION, downstream blocked
-    """
-
-    __tablename__ = "pipeline_contracts"
-
-    id: Mapped[str] = mapped_column(
-        Uuid, primary_key=True, default=_generate_uuid)
-    pipeline_name: Mapped[str] = mapped_column(
-        String(255), nullable=False, index=True)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    yaml_content: Mapped[str] = mapped_column(Text, nullable=False)
-    severity: Mapped[ContractSeverity] = mapped_column(
-        SQLEnum(ContractSeverity, name="contractseverity",
-                values_callable=_enum_values, validate_strings=True),
-        nullable=False, default=ContractSeverity.WARN,
-        server_default="'warn'")
-    consumers: Mapped[list] = mapped_column(
-        PgJSONB, nullable=False, default=list, server_default="'[]'")
-    user_id: Mapped[str] = mapped_column(
-        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
-    )
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-
-class ContractViolationRecord(Base):
-    """Persistent record of a data contract violation detected during a pipeline run.
-
-    Each violation maps to a single rule (dtype, not_null, unique, min_value, etc.)
-    that was checked against a step's output columns. Links back to both the
-    parent PipelineRun and the specific StepResult where the violation occurred.
-    """
-
-    __tablename__ = "contract_violations"
-
-    id: Mapped[str] = mapped_column(
-        Uuid, primary_key=True, default=_generate_uuid)
-    run_id: Mapped[str] = mapped_column(
-        Uuid, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    step_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    step_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    column: Mapped[str] = mapped_column(String(255), nullable=False)
-    rule: Mapped[str] = mapped_column(String(50), nullable=False)
-    severity: Mapped[str] = mapped_column(String(20), nullable=False)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    actual: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    expected: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    __table_args__ = (
-        Index("ix_contract_violations_run_step", "run_id", "step_name"),
-        Index("ix_contract_violations_severity", "run_id", "severity"),
-    )
-
-
 class DataAsset(Base):
     """A data asset in the global catalog: file, column, pipeline, or topic."""
 

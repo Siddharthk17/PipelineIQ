@@ -401,9 +401,14 @@ class TestStreamingCeleryTask:
         assert "Up" in result.stdout
 
     def test_streaming_task_registered_in_worker(self):
-        result = subprocess.run(["docker", "compose", "logs", "worker-streaming", "--tail", "50"],
-                                capture_output=True, text=True)
-        assert "run_streaming_pipeline" in result.stdout
+        result = subprocess.run(
+            ["docker", "compose", "exec", "-T", "worker-streaming",
+             "python", "-c",
+             "from backend.celery_app import celery_app; "
+             "import backend.tasks.streaming_pipeline; "
+             "print('tasks.run_streaming_pipeline' in celery_app.tasks)"],
+            capture_output=True, text=True, timeout=30)
+        assert "True" in result.stdout
 
 
 # ---------------------------------------------------------------------------

@@ -130,6 +130,106 @@ def _publish_terminal_event(
             run_id)
 
 
+def check_and_enforce_contract(
+    db,
+    pipeline_run: PipelineRun,
+    summary,
+) -> None:
+    """Post-run contract validation: load active contract → validate → store breaches → alert → block downstream.
+
+    This is a reusable orchestrator extracted from the inline logic inside
+    execute_pipeline_task.  It never raises — all contract failures are
+    handled gracefully by logging and status transitions.
+
+    Args:
+        db: Active SQLAlchemy session
+        pipeline_run: The PipelineRun model instance (mutated in place)
+        summary: RunSummary from PipelineRunner.execute()
+    """
+    from backend.contracts import build_breach_report, validate_against_contract
+    from backend.models import ContractSeverity, PipelineContract
+
+    try:
+        active_contract = (
+            db.query(PipelineContract)
+            .filter(
+                PipelineContract.pipeline_name == (pipeline_run.name or ""),
+                PipelineContract.is_active.is_(True),
+            )
+            .order_by(PipelineContract.version.desc())
+            .first()
+        )
+        if not active_contract or not summary.step_results:
+            return
+
+        final_result = summary.step_results[-1]
+        output_table = getattr(final_result, "output_table", None)
+        validation = validate_against_contract(
+            output_table=output_table,
+            yaml_content=active_contract.yaml_content,
+        )
+        if validation.passed:
+            return
+
+        report = build_breach_report(
+            validation,
+            severity=active_contract.severity.value if hasattr(active_contract.severity, "value") else str(active_contract.severity),
+        )
+
+        # Store violations + publish SSE events
+        post_run_violations: list = []
+        for v in validation.violations:
+            violation_record = ContractViolationRecord(
+                run_id=pipeline_run.id,
+                step_name=final_result.step_name,
+                step_index=len(summary.step_results) - 1,
+                step_type=final_result.step_type,
+                column=v.column,
+                rule=v.rule,
+                severity=v.severity,
+                message=v.message,
+                actual=v.actual,
+                expected=v.expected,
+            )
+            db.add(violation_record)
+            post_run_violations.append(v)
+
+            _publish_contract_violation_event(
+                run_id=str(pipeline_run.id),
+                step_name=final_result.step_name,
+                step_index=len(summary.step_results) - 1,
+                violation={
+                    "column": v.column,
+                    "rule": v.rule,
+                    "message": v.message,
+                    "actual": v.actual,
+                    "expected": v.expected,
+                },
+                severity=active_contract.severity or "warn",
+            )
+
+        # Enforce: block or warn
+        if pipeline_run.status not in (
+            PipelineStatus.CONTRACT_VIOLATION,
+            PipelineStatus.FAILED,
+        ):
+            if report.should_block_run:
+                pipeline_run.status = PipelineStatus.CONTRACT_VIOLATION
+                db.add(pipeline_run)
+                _block_downstream_schedules(
+                    db,
+                    pipeline_run.name or "",
+                    active_contract.consumers or [],
+                )
+            logger.warning("%s", report.summary)
+
+    except Exception:
+        logger.exception(
+            "Contract validation failed for run %s — breach logged, run continues",
+            pipeline_run.id,
+        )
+
+
 @celery_app.task(
     bind=True,
     name="pipeline.execute",
@@ -743,91 +843,8 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     )
     db.add(lineage_record)
 
-    # Post-run data contract validation against active PipelineContract
-    #
-    # NOTE: This block assumes the `severity` column exists on
-    # pipeline_contracts.  If you see "UndefinedColumn" here, run:
-    #   alembic upgrade head
-    try:
-        from backend.contracts import validate_against_contract
-        from backend.models import ContractSeverity, PipelineContract
-
-        active_contract = (
-            db.query(PipelineContract)
-            .filter(
-                PipelineContract.pipeline_name == (pipeline_run.name or ""),
-                PipelineContract.is_active.is_(True),
-            )
-            .order_by(PipelineContract.version.desc())
-            .first()
-        )
-        post_run_violations = []
-        if active_contract and summary.step_results:
-            final_result = summary.step_results[-1]
-            output_table = getattr(final_result, "output_table", None)
-            validation = validate_against_contract(
-                output_table=output_table,
-                yaml_content=active_contract.yaml_content,
-            )
-            if not validation.passed:
-                for v in validation.violations:
-                    violation_record = ContractViolationRecord(
-                        run_id=pipeline_run.id,
-                        step_name=final_result.step_name,
-                        step_index=len(summary.step_results) - 1,
-                        step_type=final_result.step_type,
-                        column=v.column,
-                        rule=v.rule,
-                        severity=v.severity,
-                        message=v.message,
-                        actual=v.actual,
-                        expected=v.expected,
-                    )
-                    db.add(violation_record)
-                    post_run_violations.append(v)
-
-                    _publish_contract_violation_event(
-                        run_id=str(pipeline_run.id),
-                        step_name=final_result.step_name,
-                        step_index=len(summary.step_results) - 1,
-                        violation={
-                            "column": v.column,
-                            "rule": v.rule,
-                            "message": v.message,
-                            "actual": v.actual,
-                            "expected": v.expected,
-                        },
-                        severity=active_contract.severity or "warn",
-                    )
-
-                if post_run_violations and pipeline_run.status not in (
-                    PipelineStatus.CONTRACT_VIOLATION,
-                    PipelineStatus.FAILED,
-                ):
-                    is_block = active_contract.severity == ContractSeverity.BLOCK
-                    if is_block:
-                        pipeline_run.status = PipelineStatus.CONTRACT_VIOLATION
-                        db.add(pipeline_run)
-                        _block_downstream_schedules(
-                            db,
-                            pipeline_run.name or "",
-                            active_contract.consumers or [],
-                        )
-                        logger.warning(
-                            "Contract BREACH (block) on run %s: %d violations, downstream pipelines blocked",
-                            pipeline_run.id,
-                            len(post_run_violations),
-                        )
-                    else:
-                        logger.warning(
-                            "Contract breach (warn) on run %s: %d violations, run stays COMPLETED",
-                            pipeline_run.id,
-                            len(post_run_violations),
-                        )
-    except Exception as exc:
-        logger.error("Contract validation failed for run %s: %s", pipeline_run.id, exc)
-        db.rollback()
-        raise RuntimeError(f"Contract validation failed: {exc}") from exc
+    # Post-run data contract validation
+    check_and_enforce_contract(db, pipeline_run, summary)
 
     try:
         from backend.repositories.catalog import register_run_assets

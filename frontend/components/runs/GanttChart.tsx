@@ -18,6 +18,20 @@ const STATUS_COLORS: Record<string, string> = {
   CONTRACT_VIOLATION: "var(--accent-warning)",
 };
 
+const ENGINE_COLORS: Record<string, string> = {
+  duckdb: "#10B981",
+  pandas: "#3B82F6",
+  wasm: "#F97316",
+  io: "#F59E0B",
+};
+
+const ENGINE_LABELS: Record<string, string> = {
+  duckdb: "DuckDB",
+  pandas: "Pandas",
+  wasm: "Wasm",
+  io: "IO",
+};
+
 const STEP_ICONS: Record<string, typeof CheckCircle> = {
   COMPLETED: CheckCircle,
   FAILED: XCircle,
@@ -110,6 +124,16 @@ export function GanttChart({ steps, totalDurationMs, violations }: GanttChartPro
         )}
       </div>
 
+      {/* Engine legend */}
+      <div className="flex items-center gap-3 px-3 py-1 border-b text-[10px]" style={{ borderColor: "var(--widget-border)" }}>
+        {Object.entries(ENGINE_COLORS).map(([engine, color]) => (
+          <div key={engine} className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: color }} />
+            <span className="text-[var(--text-muted)]">{ENGINE_LABELS[engine]}</span>
+          </div>
+        ))}
+      </div>
+
       {/* Time axis */}
       <div className="relative h-4 px-2 flex items-end border-b" style={{ borderColor: "var(--widget-border)" }}>
         {[0, 0.25, 0.5, 0.75, 1].map((frac) => {
@@ -129,7 +153,9 @@ export function GanttChart({ steps, totalDurationMs, violations }: GanttChartPro
       <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
         {steps.map((step, idx) => {
           const Icon = STEP_ICONS[step.status] ?? Clock;
-          const color = STATUS_COLORS[step.status] ?? "var(--text-secondary)";
+          const statusColor = STATUS_COLORS[step.status] ?? "var(--text-secondary)";
+          const engineColor = step.engine ? ENGINE_COLORS[step.engine] : undefined;
+          const barColor = engineColor ?? statusColor;
           const offset = getBarOffset(step);
           const width = getBarWidth(step);
           const stepViolations = violations?.get(step.step_name);
@@ -145,13 +171,16 @@ export function GanttChart({ steps, totalDurationMs, violations }: GanttChartPro
                   : step.step_name
               }
             >
-              <Icon className="w-3 h-3 flex-shrink-0" style={{ color }} />
+              <Icon className="w-3 h-3 flex-shrink-0" style={{ color: statusColor }} />
               <span className="text-xs text-[var(--text-primary)] w-28 truncate flex-shrink-0" title={step.step_name}>
                 {step.step_name}
               </span>
               {step.engine && (
-                <span className="text-[9px] font-mono text-[var(--text-muted)] w-12 flex-shrink-0 hidden sm:block">
-                  {step.engine}
+                <span
+                  className="text-[9px] font-mono w-12 flex-shrink-0 hidden sm:block"
+                  style={{ color: engineColor ?? "var(--text-muted)" }}
+                >
+                  {ENGINE_LABELS[step.engine] ?? step.engine}
                 </span>
               )}
               {hasViolations && (
@@ -167,7 +196,7 @@ export function GanttChart({ steps, totalDurationMs, violations }: GanttChartPro
                     style={{
                       left: `${offset}%`,
                       width: `${width}%`,
-                      backgroundColor: color,
+                      backgroundColor: barColor,
                     }}
                   />
                 )}

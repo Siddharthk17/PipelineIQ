@@ -94,6 +94,7 @@ export interface TimelineStep {
   step_name: string;
   step_type: string;
   status: string;
+  engine: string | null;
   rows_in: number | null;
   rows_out: number | null;
   duration_ms: number | null;
