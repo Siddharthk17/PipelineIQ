@@ -3,6 +3,10 @@
 Creates and configures the Celery app with Redis as both broker
 and result backend. Task modules are auto-discovered from the
 tasks package.
+
+OTel and Redis instrumentation are initialized ONLY in worker
+child processes via `worker_process_init` to avoid fork-safety
+issues with gRPC channels and singleton instrumentors.
 """
 
 import ssl
@@ -15,27 +19,6 @@ from sentry_sdk.integrations.celery import CeleryIntegration
 from backend.config import settings
 from backend.execution.duckdb_executor import close_worker_duckdb, initialize_worker_duckdb
 
-from backend.telemetry import (
-    force_flush,
-    instrument_redis,
-    reset_telemetry,
-    setup_celery_telemetry,
-    setup_telemetry,
-)
-setup_telemetry()
-setup_celery_telemetry()
-
-instrument_redis()
-
-if settings.SENTRY_DSN:
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        integrations=[CeleryIntegration()],
-        traces_sample_rate=0.1,
-        environment=settings.ENVIRONMENT,
-        release=f"pipelineiq@{settings.APP_VERSION}",
-        send_default_pii=False,
-    )
 
 celery_app = Celery(
     "pipelineiq",
@@ -66,10 +49,37 @@ celery_app.autodiscover_tasks(
     ["backend.tasks"],
     related_name="streaming_pipeline")
 
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        integrations=[CeleryIntegration()],
+        traces_sample_rate=0.1,
+        environment=settings.ENVIRONMENT,
+        release=f"pipelineiq@{settings.APP_VERSION}",
+        send_default_pii=False,
+    )
+
 
 @worker_process_init.connect
 def _init_worker_process(**kwargs) -> None:
-    """Re-initialize per-process resources after fork (DuckDB + OTel)."""
+    """Initialize per-process resources AFTER Celery fork.
+
+    OTel and Redis instrumentation MUST be initialized here, not at
+    module level, because:
+    1. Celery uses a pre-fork model — module-level code runs in the
+       parent process and is inherited (not re-run) by forked workers.
+    2. gRPC channels used by the OTLP exporter are not fork-safe.
+    3. CeleryInstrumentor/RedisInstrumentor are singletons — calling
+       .instrument() in the parent poisons the global state for all
+       children, causing "Overriding of current TracerProvider" warnings.
+    """
+    from backend.telemetry import (
+        instrument_redis,
+        reset_telemetry,
+        setup_celery_telemetry,
+        setup_telemetry,
+    )
+
     reset_telemetry()
     setup_telemetry()
     setup_celery_telemetry()
@@ -80,5 +90,9 @@ def _init_worker_process(**kwargs) -> None:
 @worker_process_shutdown.connect
 def _close_worker_process(**kwargs) -> None:
     """Flush OTel spans and close DuckDB on worker shutdown."""
-    force_flush()
+    from backend.telemetry import force_flush
+    try:
+        force_flush()
+    except Exception:
+        pass
     close_worker_duckdb()

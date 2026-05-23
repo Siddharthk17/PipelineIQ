@@ -12,15 +12,15 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY backend ./backend
 COPY alembic.ini /app/alembic.ini
 
-RUN mkdir -p /tmp/uploads /app/data /app/uploads && \
+RUN mkdir -p /tmp/uploads /app/data /app/uploads /tmp/gunicorn && \
     ln -sfn /app/backend/tests /app/tests && \
     ln -sfn /app/backend/scripts /app/scripts && \
     ln -sfn /app/backend/celery_app.py /app/celery_app.py && \
-    chown -R appuser:appuser /app /tmp/uploads
+    chown -R appuser:appuser /app /tmp/uploads /tmp/gunicorn
 
 USER appuser
 
 EXPOSE 8000
 EXPOSE 8001
 
-CMD ["gunicorn", "backend.main:app", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--worker-connections", "1000", "--max-requests", "10000", "--max-requests-jitter", "1000", "--timeout", "30", "--graceful-timeout", "30", "--bind", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info"]
+CMD ["gunicorn", "backend.main:app", "--config", "backend/gunicorn.conf.py"]

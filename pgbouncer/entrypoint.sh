@@ -18,6 +18,7 @@ RESERVE_POOL_SIZE="${PGBOUNCER_RESERVE_POOL_SIZE:-5}"
 SERVER_IDLE_TIMEOUT="${PGBOUNCER_SERVER_IDLE_TIMEOUT:-600}"
 CLIENT_IDLE_TIMEOUT="${PGBOUNCER_CLIENT_IDLE_TIMEOUT:-0}"
 LOG_POOLER_ERRORS="${PGBOUNCER_LOG_POOLER_ERRORS:-1}"
+SERVER_LOGIN_RETRY="${PGBOUNCER_SERVER_LOGIN_RETRY:-3}"
 
 if [ "${DB_CLIENT_ALIAS_USER}" != "${DB_USER}" ]; then
   ADMIN_USERS="${DB_USER},${DB_CLIENT_ALIAS_USER}"
@@ -43,6 +44,7 @@ reserve_pool_size = ${RESERVE_POOL_SIZE}
 server_idle_timeout = ${SERVER_IDLE_TIMEOUT}
 client_idle_timeout = ${CLIENT_IDLE_TIMEOUT}
 ignore_startup_parameters = extra_float_digits
+server_login_retry = ${SERVER_LOGIN_RETRY}
 log_pooler_errors = ${LOG_POOLER_ERRORS}
 log_connections = 0
 log_disconnections = 0

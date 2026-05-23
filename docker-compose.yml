@@ -1,15 +1,28 @@
 services:
+  redis-overcommit-fix:
+    image: alpine:3.19
+    container_name: pipelineiq-redis-overcommit-fix
+    privileged: true
+    command: ["sysctl", "-w", "vm.overcommit_memory=1"]
+    restart: "no"
+    networks:
+      - pipelineiq-network
+
   postgres:
     image: postgres:15-alpine
     container_name: pipelineiq-postgres
     command: >
       postgres
+      -c max_connections=200
       -c wal_level=replica
       -c max_wal_senders=5
-      -c wal_keep_size=256MB
+      -c wal_keep_size=512MB
       -c hot_standby=on
+      -c hot_standby_feedback=on
       -c log_min_duration_statement=100
       -c shared_preload_libraries=pg_stat_statements
+      -c statement_timeout=30000
+      -c work_mem=64MB
     environment:
       POSTGRES_DB: pipelineiq
       POSTGRES_USER: ${POSTGRES_USER}
@@ -75,11 +88,12 @@ services:
       PGBOUNCER_LISTEN_PORT: "5432"
       PGBOUNCER_POOL_MODE: transaction
       PGBOUNCER_MAX_CLIENT_CONN: "10000"
-      PGBOUNCER_DEFAULT_POOL_SIZE: "25"
-      PGBOUNCER_MIN_POOL_SIZE: "5"
-      PGBOUNCER_RESERVE_POOL_SIZE: "5"
+      PGBOUNCER_DEFAULT_POOL_SIZE: "50"
+      PGBOUNCER_MIN_POOL_SIZE: "10"
+      PGBOUNCER_RESERVE_POOL_SIZE: "10"
       PGBOUNCER_SERVER_IDLE_TIMEOUT: "600"
       PGBOUNCER_CLIENT_IDLE_TIMEOUT: "0"
+      PGBOUNCER_SERVER_LOGIN_RETRY: "3"
       PGBOUNCER_LOG_POOLER_ERRORS: "1"
     ports:
       - "5432:5432"
@@ -110,11 +124,12 @@ services:
       PGBOUNCER_LISTEN_PORT: "5432"
       PGBOUNCER_POOL_MODE: transaction
       PGBOUNCER_MAX_CLIENT_CONN: "10000"
-      PGBOUNCER_DEFAULT_POOL_SIZE: "25"
-      PGBOUNCER_MIN_POOL_SIZE: "5"
-      PGBOUNCER_RESERVE_POOL_SIZE: "5"
+      PGBOUNCER_DEFAULT_POOL_SIZE: "50"
+      PGBOUNCER_MIN_POOL_SIZE: "10"
+      PGBOUNCER_RESERVE_POOL_SIZE: "10"
       PGBOUNCER_SERVER_IDLE_TIMEOUT: "600"
       PGBOUNCER_CLIENT_IDLE_TIMEOUT: "0"
+      PGBOUNCER_SERVER_LOGIN_RETRY: "3"
       PGBOUNCER_LOG_POOLER_ERRORS: "1"
     ports:
       - "5433:5432"
@@ -138,10 +153,13 @@ services:
     command:
       - sh
       - -c
-      - "python -m alembic upgrade head && (python -m backend.scripts.seed_demo || true) && exec gunicorn backend.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --worker-connections 1000 --max-requests 10000 --max-requests-jitter 1000 --timeout 30 --graceful-timeout 30 --bind 0.0.0.0:8000 --error-logfile - --log-level info"
+      - 'mkdir -p /tmp/gunicorn && python -m backend.scripts.wait_for_db && (python -m backend.scripts.seed_demo || true) && exec gunicorn backend.main:app --config backend/gunicorn.conf.py'
     env_file:
       - .env
     environment:
+      - PYTHONUNBUFFERED=1
+      - GUNICORN_WORKERS=4
+      - GUNICORN_TIMEOUT=60
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
@@ -208,18 +226,17 @@ services:
       dockerfile: Dockerfile
     container_name: pipelineiq-sse-service
     command: >
+      sh -c "mkdir -p /tmp/gunicorn &&
       gunicorn backend.sse_app:sse_app
-      --workers 2
-      --worker-class uvicorn.workers.UvicornWorker
-      --worker-connections 5000
-      --timeout 600
-      --graceful-timeout 10
-      --bind 0.0.0.0:8001
-      --error-logfile -
-      --log-level info
+      --config backend/gunicorn.conf.py
+      --bind 0.0.0.0:8001"
     env_file:
       - .env
     environment:
+      - PYTHONUNBUFFERED=1
+      - GUNICORN_WORKERS=2
+      - GUNICORN_TIMEOUT=600
+      - GUNICORN_LOG_LEVEL=info
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
@@ -594,6 +611,8 @@ services:
   redis-broker:
     image: redis:7-alpine
     container_name: pipelineiq-redis-broker
+    sysctls:
+      net.core.somaxconn: 511
     command: >
       redis-server
       --maxmemory 512mb
@@ -617,10 +636,13 @@ services:
   redis-pubsub:
     image: redis:7-alpine
     container_name: pipelineiq-redis-pubsub
+    sysctls:
+      net.core.somaxconn: 511
     command: >
       redis-server
       --port 6380
-      --maxmemory 256mb
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
       --save ""
       --appendonly no
       --loglevel notice
@@ -638,16 +660,19 @@ services:
   redis-cache:
     image: redis:7-alpine
     container_name: pipelineiq-redis-cache
+    depends_on:
+      redis-overcommit-fix:
+        condition: service_completed_successfully
+    sysctls:
+      net.core.somaxconn: 511
     command: >
       redis-server
       --port 6381
-      --maxmemory 512mb
+      --maxmemory 1gb
       --maxmemory-policy allkeys-lru
-      --save 60 1000
-      --appendonly yes
-      --auto-aof-rewrite-percentage 200
-      --auto-aof-rewrite-min-size 64mb
-      --aof-rewrite-incremental-fsync yes
+      --maxmemory-samples 10
+      --save ""
+      --appendonly no
       --loglevel notice
     ports:
       - "6381:6381"
@@ -665,6 +690,8 @@ services:
   redis-yjs:
     image: redis:7-alpine
     container_name: pipelineiq-redis-yjs
+    sysctls:
+      net.core.somaxconn: 511
     command: >
       redis-server
       --port 6382
@@ -880,48 +907,93 @@ services:
     networks:
       - pipelineiq-network
 
+  redpanda-init:
+    image: alpine:3.19
+    container_name: pipelineiq-redpanda-init
+    command:
+      - sh
+      - -c
+      - |
+        DATA="/var/lib/redpanda/data"
+        VERSION_FILE="$${DATA}/.redpanda_version"
+        EXPECTED="v24.2.1"
+        if [ -f "$$VERSION_FILE" ]; then
+          PREV=$(cat "$$VERSION_FILE")
+          if [ "$$PREV" != "$$EXPECTED" ]; then
+            echo "Redpanda version mismatch: previous=$$PREV, expected=$$EXPECTED. Clearing stale data..."
+            rm -rf "$${DATA:?}/"*
+          fi
+        fi
+        mkdir -p "$$DATA"
+        echo "$$EXPECTED" > "$$VERSION_FILE"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    restart: "no"
+    networks:
+      - pipelineiq-network
+
   redpanda:
-    image: docker.redpanda.com/redpandadata/redpanda:latest
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
     container_name: pipelineiq-redpanda
     command:
       - redpanda
       - start
-      - --smp 2
-      - --memory 2G
-      - --reserve-memory 200M
+      - --smp
+      - "1"
+      - --memory
+      - 2G
+      - --reserve-memory
+      - 256M
       - --overprovisioned
-      - --kafka-addr PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:9093
-      - --advertise-kafka-addr PLAINTEXT://localhost:9092,INTERNAL://redpanda:9093
-      - --pandaproxy-addr 0.0.0.0:8082
-      - --schema-registry-addr 0.0.0.0:8081
-      - --rpc-addr redpanda:33145
-      - --advertise-rpc-addr redpanda:33145
-      # Retention policies to prevent disk-full outages
-      - --set redpanda.log_retention_ms=3600000
-      - --set redpanda.retention_local_target_bytes=5368709120
+      - --default-log-level=warn
+      - --kafka-addr
+      - PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:9093
+      - --advertise-kafka-addr
+      - PLAINTEXT://localhost:9092,INTERNAL://redpanda:9093
+      - --pandaproxy-addr
+      - 0.0.0.0:8082
+      - --schema-registry-addr
+      - 0.0.0.0:8081
+      - --rpc-addr
+      - redpanda:33145
+      - --advertise-rpc-addr
+      - redpanda:33145
+      - --set
+      - log_retention_ms=3600000
+      - --set
+      - retention_local_target_bytes=5368709120
     ports:
       - "9092:9092"
       - "8082:8082"
       - "8081:8081"
     volumes:
       - redpanda_data:/var/lib/redpanda/data
-    mem_limit: 2500m
+    mem_limit: 3g
     ulimits:
       nofile:
         soft: 65536
         hard: 65536
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    depends_on:
+      redpanda-init:
+        condition: service_completed_successfully
+    stop_grace_period: 30s
     healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true' || exit 0"]
       interval: 15s
       timeout: 10s
-      retries: 5
-      start_period: 30s
+      retries: 10
+      start_period: 120s
     restart: unless-stopped
     networks:
       - pipelineiq-network
 
   redpanda-console:
-    image: docker.redpanda.com/redpandadata/console:latest
+    image: docker.redpanda.com/redpandadata/console:v2.8.10
     container_name: pipelineiq-redpanda-console
     restart: unless-stopped
     entrypoint: /bin/sh

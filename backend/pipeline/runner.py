@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 
+import networkx as nx
 import pyarrow as pa
 
 from backend.execution.arrow_bus import get_arrow_bus, ArrowDataBus
@@ -118,6 +119,7 @@ class PipelineRunner:
         file_metadata: Dict[str, Dict[str, str]],
         run_id: Optional[str] = None,
         progress_callback: Optional[ProgressCallback] = None,
+        lineage_callback: Optional[Callable[[nx.DiGraph], None]] = None,
         wasm_modules: Optional[Dict[str, bytes]] = None,
     ) -> PipelineExecutionSummary:
         """Execute a complete pipeline from a parsed configuration."""
@@ -149,6 +151,7 @@ class PipelineRunner:
                     file_paths=file_paths,
                     file_metadata=file_metadata,
                     callback=callback,
+                    lineage_callback=lineage_callback,
                     bus=bus,
                     wasm_modules=wasm_modules,
                 )
@@ -196,6 +199,7 @@ class PipelineRunner:
         file_paths: Dict[str, str],
         file_metadata: Dict[str, Dict[str, str]],
         callback: ProgressCallback,
+        lineage_callback: Optional[Callable[[nx.DiGraph], None]],
         bus: ArrowDataBus,
         wasm_modules: Optional[Dict[str, bytes]] = None,
     ) -> StepExecutionResult:
@@ -276,6 +280,9 @@ class PipelineRunner:
                 contract_violations=violations_dict,
             )
         )
+
+        if lineage_callback:
+            lineage_callback(recorder.graph)
 
         logger.info(
             "Step '%s' completed: %d → %d rows in %dms%s",

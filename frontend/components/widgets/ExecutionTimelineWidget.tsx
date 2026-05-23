@@ -110,23 +110,30 @@ export function ExecutionTimelineWidget() {
     }
     if (!activeRunId) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    Promise.resolve().then(() => {
-      if (!cancelled) { setLoading(true); setError(null); }
-    });
-
-    fetchApi<RunTimingResponse>(`/pipelines/${activeRunId}/timing`)
-      .then((data) => {
-        if (!cancelled) { setTiming(data); setLoading(false); }
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load timing data");
-          setLoading(false);
-        }
+    timer = setTimeout(() => {
+      if (cancelled) return;
+      Promise.resolve().then(() => {
+        if (!cancelled) { setLoading(true); setError(null); }
       });
 
-    return () => { cancelled = true; };
+      fetchApi<RunTimingResponse>(`/pipelines/${activeRunId}/timing`)
+        .then((data) => {
+          if (!cancelled) { setTiming(data); setLoading(false); }
+        })
+        .catch((e) => {
+          if (!cancelled) {
+            setError(e instanceof Error ? e.message : "Failed to load timing data");
+            setLoading(false);
+          }
+        });
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [activeRunId, stepsDone, runStatus]);
 
   if (!activeRunId) {

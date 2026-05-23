@@ -28,7 +28,6 @@ export function RunHistoryWidget() {
     },
   });
 
-  // Force refetch when activeRun status changes to a terminal state
   const activeRunStatus = usePipelineStore(s => s.activeRun?.status);
   React.useEffect(() => {
     if (
@@ -36,7 +35,7 @@ export function RunHistoryWidget() {
       || activeRunStatus === "HEALED"
       || activeRunStatus === "FAILED"
       || activeRunStatus === "TIMEOUT"
-      || STREAMING_STATUSES.includes(activeRunStatus || "")
+      || activeRunStatus === "CANCELLED"
     ) {
       invalidatePipelineRuns();
     }

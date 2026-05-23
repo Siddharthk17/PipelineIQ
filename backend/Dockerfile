@@ -17,13 +17,13 @@ COPY . ./backend/
 # Copy alembic.ini to project root for migration commands
 COPY alembic.ini /app/alembic.ini
 
-# Create upload/data directories and expose tests at /app/tests for compose exec parity
-RUN mkdir -p /tmp/uploads /app/data /app/uploads && \
+# Create upload/data/gunicorn-log directories and expose tests at /app/tests for compose exec parity
+RUN mkdir -p /tmp/uploads /app/data /app/uploads /tmp/gunicorn && \
     ln -sfn /app/backend/benchmark /app/benchmark && \
     ln -sfn /app/backend/tests /app/tests && \
     ln -sfn /app/backend/scripts /app/scripts && \
     ln -sfn /app/backend/celery_app.py /app/celery_app.py && \
-    chown -R appuser:appuser /app /tmp/uploads
+    chown -R appuser:appuser /app /tmp/uploads /tmp/gunicorn
 
 # Switch to non-root user
 USER appuser
@@ -32,4 +32,4 @@ USER appuser
 EXPOSE 8000
 EXPOSE 8001
 
-CMD ["gunicorn", "backend.main:app", "--workers", "4", "--worker-class", "uvicorn.workers.UvicornWorker", "--worker-connections", "1000", "--max-requests", "10000", "--max-requests-jitter", "1000", "--timeout", "30", "--graceful-timeout", "30", "--bind", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-", "--log-level", "info"]
+CMD ["gunicorn", "backend.main:app", "--config", "backend/gunicorn.conf.py"]

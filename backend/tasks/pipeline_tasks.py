@@ -455,12 +455,24 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
     runner = PipelineRunner()
     progress_callback = make_redis_progress_callback(str(pipeline_run.id))
 
+    def lineage_callback(graph):
+        from backend.repositories.catalog import register_step_assets
+        register_step_assets(
+            db=db,
+            run_id=str(pipeline_run.id),
+            pipeline_name=pipeline_run.name or "unknown",
+            lineage_graph=graph,
+            owner_id=str(pipeline_run.user_id) if pipeline_run.user_id else None,
+        )
+        db.commit()
+
     return runner.execute(
         config=config,
         file_paths=file_paths,
         file_metadata=file_metadata,
         run_id=str(pipeline_run.id),
         progress_callback=progress_callback,
+        lineage_callback=lineage_callback,
         wasm_modules=wasm_modules,
     )
 

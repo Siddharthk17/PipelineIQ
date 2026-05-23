@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
@@ -54,6 +54,8 @@ export default function CatalogPage() {
   const [blastRadius, setBlastRadius] = useState<BlastRadiusResult[] | null>(null);
   const [loadingImpact, setLoadingImpact] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const impactAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     const timer = setTimeout(async () => {
       if (query.length < 2) {
@@ -78,21 +80,28 @@ export default function CatalogPage() {
       } finally {
         setSearching(false);
       }
-    }, 500);
+    }, 400);
     return () => clearTimeout(timer);
   }, [query, typeFilter]);
 
   const handleAssetClick = useCallback(async (asset: CatalogAsset) => {
+    impactAbortRef.current?.abort();
+    const controller = new AbortController();
+    impactAbortRef.current = controller;
+
     setSelected(asset);
     setBlastRadius(null);
     setLoadingImpact(true);
     try {
       const resp = await fetch(
-        `/api/catalog/assets/${encodeURIComponent(asset.name)}/impact`,
-        { headers: { Authorization: `Bearer ${getAuthToken()}` } },
+        `/api/catalog/assets/${encodeURIComponent(asset.name)}/impact${asset.asset_type ? `?asset_type=${encodeURIComponent(asset.asset_type)}` : ""}`,
+        { signal: controller.signal, headers: { Authorization: `Bearer ${getAuthToken()}` } },
       );
+      if (controller.signal.aborted) return;
       const data = await resp.json();
       setBlastRadius(data.downstream || []);
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
     } finally {
       setLoadingImpact(false);
     }

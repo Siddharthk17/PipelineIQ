@@ -17,7 +17,6 @@ from backend.pipeline.steps import StepConfig, StepExecutionResult, StepExecutor
 from backend.telemetry import current_span_context, get_tracer
 
 logger = logging.getLogger(__name__)
-_executor_tracer = get_tracer()
 
 DUCKDB_THRESHOLD = 50_000
 DUCKDB_CAPABLE_STEPS = frozenset(

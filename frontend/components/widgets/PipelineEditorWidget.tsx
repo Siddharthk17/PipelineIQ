@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { EditorView } from "@codemirror/view";
@@ -151,6 +151,51 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     onSettled: () => setIsValidating(false),
   });
 
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+  const lastValidateTimestampRef = useRef<number>(0);
+  const validateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const debouncedValidate = React.useCallback(
+    (yaml: string) => {
+      if (validateTimerRef.current) {
+        clearTimeout(validateTimerRef.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      validateTimerRef.current = setTimeout(() => {
+        const now = Date.now();
+        if (now - lastValidateTimestampRef.current < 3000) {
+          return;
+        }
+        lastValidateTimestampRef.current = now;
+        setIsValidating(true);
+        setLastYamlConfig(yaml);
+        validateMutation.mutate(yaml);
+      }, 1500);
+    },
+    [validateMutation, setLastYamlConfig],
+  );
+
+  useEffect(() => {
+    debouncedValidate(code);
+    return () => {
+      if (validateTimerRef.current) {
+        clearTimeout(validateTimerRef.current);
+      }
+    };
+  }, [code, debouncedValidate]);
+
+  const handleManualValidate = React.useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setIsValidating(true);
+    validateMutation.mutate(code);
+  }, [code, validateMutation]);
+
   const runMutation = useMutation({
     mutationFn: (args: { yamlConfig: string; pipelineName?: string }) =>
       runPipeline(args.yamlConfig, args.pipelineName),
@@ -213,16 +258,6 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   }, [latestFileId]);
 
   useEffect(() => {
-    setIsValidating(true);
-    const timer = setTimeout(() => {
-      validateMutation.mutate(code);
-      setLastYamlConfig(code);
-    }, 800);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code]);
-
-  useEffect(() => {
     setRunError(null);
   }, [code]);
 
@@ -241,34 +276,35 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     return () => window.clearTimeout(timer);
   }, [runCooldownUntil]);
 
+  const aiSuggestionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     let cancelled = false;
 
-    const loadSuggestions = async () => {
-      const errors = validation?.errors ?? [];
-      if (errors.length === 0 || availableColumnsForAutocomplete.length === 0) {
-        if (!cancelled) {
-          setAiColumnSuggestions({});
-        }
-        return;
-      }
+    if (aiSuggestionTimerRef.current) {
+      clearTimeout(aiSuggestionTimerRef.current);
+    }
 
-      const columns = collectMissingColumnCandidates(errors);
-      if (columns.length === 0) {
-        if (!cancelled) {
-          setAiColumnSuggestions({});
-        }
-        return;
-      }
+    const errors = validation?.errors ?? [];
+    if (errors.length === 0 || availableColumnsForAutocomplete.length === 0) {
+      setAiColumnSuggestions({});
+      return;
+    }
 
+    const columns = collectMissingColumnCandidates(errors);
+    if (columns.length === 0) {
+      setAiColumnSuggestions({});
+      return;
+    }
+
+    aiSuggestionTimerRef.current = setTimeout(async () => {
+      if (cancelled) return;
       try {
         const result = await autocompleteColumnsBatchWithAI(
           columns,
           availableColumnsForAutocomplete
         );
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
         const normalizedSuggestions = Object.entries(result.suggestions).reduce<
           Record<string, string>
@@ -284,11 +320,13 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
           setAiColumnSuggestions({});
         }
       }
-    };
+    }, 1500);
 
-    void loadSuggestions();
     return () => {
       cancelled = true;
+      if (aiSuggestionTimerRef.current) {
+        clearTimeout(aiSuggestionTimerRef.current);
+      }
     };
   }, [validation?.errors, availableColumnsForAutocomplete]);
 
@@ -516,7 +554,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                 </span>
               </button>
               <button
-                onClick={() => validateMutation.mutate(code)}
+                onClick={handleManualValidate}
                 data-testid="validate-pipeline-btn"
                 className="min-h-10 shrink-0 rounded border px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--interactive-hover)]"
                 style={{ borderColor: "var(--widget-border)" }}

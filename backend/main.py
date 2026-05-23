@@ -49,7 +49,9 @@ from backend.telemetry import instrument_all, instrument_fastapi, setup_telemetr
 
 logger = logging.getLogger(__name__)
 
-setup_telemetry()
+# OTel is initialized inside instrument_all() during lifespan startup.
+# Module-level setup_telemetry() is intentionally deferred to avoid
+# double-initialization conflicts with the pre-fork model.
 
 # Silence health check and metrics access log noise
 class _HealthCheckFilter(logging.Filter):
@@ -98,6 +100,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from backend.database import ensure_pipeline_status_values
     ensure_pipeline_status_values()
     _run_startup_initialization_once()
+    from backend.database import engine as _lifespan_db_engine
+    instrument_all(app, db_engine=_lifespan_db_engine)
     logger.info("Application startup complete")
 
     yield
@@ -318,10 +322,6 @@ async def generic_error_handler(
         },
     )
 
-
-from backend.telemetry import instrument_all as _instrument_all
-from backend.database import engine as _db_engine
-_instrument_all(app, db_engine=_db_engine)
 
 app.add_middleware(
     CORSMiddleware,

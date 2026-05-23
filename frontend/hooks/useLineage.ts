@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ApiError, getLineageGraph, getColumnLineage, getImpactAnalysis } from "@/lib/api";
 
 export function shouldRetryLineageGraphQuery(failureCount: number, error: unknown): boolean {
-  if (error instanceof ApiError && error.status === 404) return failureCount < 2;
+  if (error instanceof ApiError && error.status === 404) return failureCount < 5;
   return false;
 }
 
@@ -13,6 +13,7 @@ export function useLineageGraph(runId: string | null) {
     enabled: !!runId,
     retry: shouldRetryLineageGraphQuery,
     retryDelay: (attemptIndex) => Math.min(1000 * Math.pow(2, attemptIndex), 4000),
+    staleTime: 5000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });

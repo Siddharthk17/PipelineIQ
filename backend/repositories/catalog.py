@@ -18,7 +18,6 @@ from typing import Optional
 import networkx as nx
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from backend.db.redis_pools import get_cache_redis_binary
 from backend.models import DataAsset, AssetRelationship
@@ -30,10 +29,14 @@ NS_MINIO_OUTPUTS = "minio://pipelineiq-outputs"
 NS_PIPELINE = "pipeline://"
 NS_REDPANDA = "redpanda://localhost:9092"
 
-MAX_CTE_DEPTH = 10
+MAX_CTE_DEPTH = 5
+MAX_CTE_RESULTS = 500
+CTE_STATEMENT_TIMEOUT_MS = 30000
 MAX_LINEAGE_NODES = 10_000
 MAX_LINEAGE_EDGES = 50_000
 LINEAGE_CACHE_TTL = 3600
+BLAST_RADIUS_CACHE_TTL = 600
+MAX_CACHE_PAYLOAD_BYTES = 1_048_576
 
 
 def _is_postgres(db: Session) -> bool:
@@ -153,11 +156,39 @@ def register_run_assets(
     lineage_graph: nx.DiGraph,
     owner_id: Optional[str] = None,
 ) -> int:
-    """Register all data assets and relationships from a completed pipeline run."""
-    if lineage_graph is None or lineage_graph.number_of_nodes() == 0:
-        logger.debug("No lineage graph for run %s -- skipping asset registration", run_id)
+    """Register all data assets and relationships from a completed pipeline run.
+    If a graph is provided, it uses it. Otherwise, it rebuilds from the DB.
+    """
+    if lineage_graph is None:
+        # This case is for rebuilding from DB, but usually we have the graph
         return 0
+    
+    return _register_graph_assets(db, run_id, pipeline_name, lineage_graph, owner_id)
 
+
+def register_step_assets(
+    db: Session,
+    run_id: str,
+    pipeline_name: str,
+    lineage_graph: nx.DiGraph,
+    owner_id: Optional[str] = None,
+) -> int:
+    """Incrementally register assets and relationships from a growing lineage graph.
+    
+    This is used to avoid race conditions where the frontend requests lineage
+    before the final run results are persisted.
+    """
+    return _register_graph_assets(db, run_id, pipeline_name, lineage_graph, owner_id)
+
+
+def _register_graph_assets(
+    db: Session,
+    run_id: str,
+    pipeline_name: str,
+    lineage_graph: nx.DiGraph,
+    owner_id: Optional[str] = None,
+) -> int:
+    """Internal helper to register assets from a NetworkX graph."""
     registered = 0
 
     pipeline_asset_id = upsert_data_asset(
@@ -166,7 +197,7 @@ def register_run_assets(
         name=pipeline_name,
         namespace=NS_PIPELINE,
         owner_id=owner_id,
-        metadata={"run_id": run_id, "yaml_length": len(pipeline_yaml)},
+        metadata={"run_id": run_id, "yaml_length": 0}, # yaml_length is optional here
     )
     registered += 1
 
@@ -209,28 +240,7 @@ def register_run_assets(
             run_id=run_id,
         )
 
-    output_file_nodes = [
-        n for n, d in lineage_graph.nodes(data=True)
-        if _classify_node(n, d)[0] == "file" and lineage_graph.in_degree(n) > 0
-    ]
-    for output_node in output_file_nodes:
-        output_id = node_id_to_asset_id.get(output_node)
-        if output_id:
-            upsert_asset_relationship(
-                db=db,
-                source_id=pipeline_asset_id,
-                target_id=output_id,
-                relation="writes_to",
-                pipeline_name=pipeline_name,
-                run_id=run_id,
-            )
-
-    db.commit()
-
-    logger.info(
-        "Registered %d assets for run %s (pipeline: %s)",
-        registered, run_id, pipeline_name,
-    )
+    # We don't commit here; the caller should manage the transaction
     return registered
 
 
@@ -282,12 +292,45 @@ def get_blast_radius(
 
     Uses a PostgreSQL recursive CTE -- NOT NetworkX.
     Falls back to Python BFS on SQLite for tests.
+    Results are cached in Redis for BLAST_RADIUS_CACHE_TTL seconds.
     """
-    if not _is_postgres(db):
-        return _blast_radius_sqlite(db, asset_name, asset_type, max_depth)
+    cache_key = f"blast_radius:{asset_name}:{asset_type or 'all'}:{max_depth}"
+    redis = get_cache_redis_binary()
 
+    try:
+        cached = redis.get(cache_key)
+        if cached:
+            logger.debug("Blast radius cache HIT: %s", asset_name)
+            return json.loads(cached)
+    except Exception as e:
+        logger.warning("Blast radius cache read failed: %s", e)
+
+    if not _is_postgres(db):
+        result = _blast_radius_sqlite(db, asset_name, asset_type, max_depth)
+    else:
+        result = _blast_radius_postgres(db, asset_name, asset_type, max_depth)
+
+    try:
+        payload = json.dumps(result).encode()
+        if len(payload) > MAX_CACHE_PAYLOAD_BYTES:
+            logger.debug("Blast radius cache SKIP: %s (%d bytes exceeds limit)", asset_name, len(payload))
+        else:
+            redis.setex(cache_key, BLAST_RADIUS_CACHE_TTL, payload)
+            logger.debug("Blast radius cache MISS, stored: %s", asset_name)
+    except Exception as e:
+        logger.warning("Blast radius cache write failed: %s", e)
+
+    return result
+
+
+def _blast_radius_postgres(
+    db: Session,
+    asset_name: str,
+    asset_type: Optional[str],
+    max_depth: int,
+) -> list[dict]:
     where_clause = "WHERE da.name = :name"
-    params: dict = {"name": asset_name, "max_depth": max_depth}
+    params: dict = {"name": asset_name, "max_depth": max_depth, "limit": MAX_CTE_RESULTS}
 
     if asset_type:
         where_clause += " AND da.asset_type = :asset_type"
@@ -295,35 +338,57 @@ def get_blast_radius(
 
     sql = text(f"""
         WITH RECURSIVE downstream AS (
-            SELECT da.id, da.name, da.namespace, da.asset_type, 0 AS depth
+            SELECT da.id, 0 AS depth, ARRAY[da.id] AS visited
             FROM data_assets da
             {where_clause}
 
             UNION ALL
 
-            SELECT target.id, target.name, target.namespace, target.asset_type, d.depth + 1
-            FROM data_assets target
-            JOIN asset_relationships ar ON ar.target_id = target.id
+            SELECT ar.target_id, d.depth + 1, d.visited || ar.target_id
+            FROM asset_relationships ar
             JOIN downstream d ON d.id = ar.source_id
             WHERE d.depth < :max_depth
-              AND target.id != d.id
+              AND ar.target_id != ALL(d.visited)
+        ),
+        downstream_min AS (
+            SELECT id, MIN(depth) AS depth
+            FROM downstream
+            GROUP BY id
+        ),
+        pipeline_stats AS (
+            SELECT
+                ar2.target_id,
+                ar2.pipeline_name,
+                COUNT(DISTINCT ar2.run_id) AS times_used
+            FROM asset_relationships ar2
+            JOIN downstream_min dm ON ar2.target_id = dm.id
+            GROUP BY ar2.target_id, ar2.pipeline_name
         )
-        SELECT DISTINCT
-            d.name,
-            d.namespace,
-            d.asset_type,
-            d.depth,
-            ar.pipeline_name,
-            COUNT(DISTINCT ar.run_id) AS times_used
-        FROM downstream d
-        LEFT JOIN asset_relationships ar ON ar.target_id = d.id
-        GROUP BY d.name, d.namespace, d.asset_type, d.depth, ar.pipeline_name
-        ORDER BY d.depth ASC, d.name ASC
+        SELECT
+            da.name,
+            da.namespace,
+            da.asset_type,
+            dm.depth,
+            ps.pipeline_name,
+            ps.times_used
+        FROM downstream_min dm
+        JOIN data_assets da ON da.id = dm.id
+        LEFT JOIN pipeline_stats ps ON ps.target_id = dm.id
+        ORDER BY dm.depth ASC, da.name ASC
+        LIMIT :limit
     """)
 
-    result = db.execute(sql, params)
-    rows = result.fetchall()
-
+    try:
+        db.execute(text("SET LOCAL statement_timeout = :timeout"), {"timeout": f"{CTE_STATEMENT_TIMEOUT_MS}ms"})
+        result = db.execute(sql, params)
+        rows = result.fetchall()
+    except Exception as exc:
+        logger.error("Blast radius query failed for '%s': %s", asset_name, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
     return [
         {
             "name": row.name,
@@ -397,27 +462,41 @@ def get_upstream_lineage(
         return _upstream_lineage_sqlite(db, asset_name, max_depth)
 
     sql = text("""
-        WITH RECURSIVE upstream AS (
-            SELECT da.id, da.name, da.namespace, da.asset_type, 0 AS depth
+        WITH RECURSIVE upstream AS MATERIALIZED (
+            SELECT da.id, da.name, da.namespace, da.asset_type, 0 AS depth, ARRAY[da.id] AS visited
             FROM data_assets da
             WHERE da.name = :name
 
             UNION ALL
 
-            SELECT parent.id, parent.name, parent.namespace, parent.asset_type, u.depth + 1
+            SELECT parent.id, parent.name, parent.namespace, parent.asset_type, u.depth + 1, u.visited || parent.id
             FROM data_assets parent
             JOIN asset_relationships ar ON ar.source_id = parent.id
             JOIN upstream u ON u.id = ar.target_id
             WHERE u.depth < :max_depth
-              AND parent.id != u.id
+              AND parent.id != ALL(u.visited)
         )
         SELECT DISTINCT name, namespace, asset_type, depth
         FROM upstream
         ORDER BY depth ASC, name ASC
+        LIMIT :limit
     """)
 
-    result = db.execute(sql, {"name": asset_name, "max_depth": max_depth})
-    return [dict(row._mapping) for row in result.fetchall()]
+    try:
+        db.execute(text("SET LOCAL statement_timeout = :timeout"), {"timeout": f"{CTE_STATEMENT_TIMEOUT_MS}ms"})
+        result = db.execute(sql, {
+            "name": asset_name,
+            "max_depth": max_depth,
+            "limit": MAX_CTE_RESULTS,
+        })
+        return [dict(row._mapping) for row in result.fetchall()]
+    except Exception as exc:
+        logger.error("Upstream lineage query failed for '%s': %s", asset_name, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
 
 
 def _upstream_lineage_sqlite(

@@ -54,12 +54,21 @@ OTEL_SERVICE_NAME = _get_otel_service_name()
 def setup_telemetry() -> None:
     global _TRACER_PROVIDER, _TRACER
 
-    if _TRACER_PROVIDER is not None:
-        return
-
     if not _is_otel_enabled():
         logger.info("OTel: disabled via OTEL_ENABLED")
         return
+
+    if _TRACER_PROVIDER is not None:
+        logger.debug("OTel: already initialized, skipping")
+        return
+
+    existing_provider = trace.get_tracer_provider()
+    if isinstance(existing_provider, TracerProvider) and existing_provider is not _TRACER_PROVIDER:
+        try:
+            existing_provider.force_flush()
+            existing_provider.shutdown()
+        except Exception:
+            pass
 
     sample_rate = _get_otel_sample_rate()
     endpoint = _get_otel_endpoint()
@@ -213,12 +222,36 @@ def force_flush() -> None:
 
 
 def reset_telemetry() -> None:
-    """Reset telemetry state so worker children get fresh SDK post-fork."""
+    """Reset telemetry state so worker children get fresh SDK post-fork.
+
+    Shuts down the existing TracerProvider to flush pending spans,
+    then clears all module-level state AND the OTel global module
+    state so setup_telemetry() can re-initialize from scratch without
+    triggering the 'Overriding of current TracerProvider' warning.
+
+    Celery's pre-fork model means child processes inherit the parent's
+    memory including OTel's module-level _TRACER_PROVIDER and the
+    _TRACER_PROVIDER_SET_ONCE guard. We must clear both directly on
+    the opentelemetry.trace module.
+    """
     global _TRACER_PROVIDER, _TRACER, _fastapi_instrumented
     global _sqlalchemy_instrumented, _redis_instrumented, _celery_instrumented
+
+    if _TRACER_PROVIDER is not None:
+        try:
+            _TRACER_PROVIDER.force_flush(timeout_millis=2000)
+            _TRACER_PROVIDER.shutdown()
+        except Exception:
+            pass
+
     _TRACER_PROVIDER = None
     _TRACER = None
     _fastapi_instrumented = False
     _sqlalchemy_instrumented = False
     _redis_instrumented = False
     _celery_instrumented = False
+
+    # Clear OTel module-level state directly to handle Celery fork
+    import opentelemetry.trace as otel_trace
+    otel_trace._TRACER_PROVIDER = None
+    otel_trace._TRACER_PROVIDER_SET_ONCE._done = False

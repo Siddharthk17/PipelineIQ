@@ -17,17 +17,18 @@ class TestBlastRadiusCTE:
 
     def test_max_cte_depth_constant(self):
         from backend.repositories.catalog import MAX_CTE_DEPTH
-        assert MAX_CTE_DEPTH == 10
+        assert MAX_CTE_DEPTH == 5
 
     def test_sql_contains_depth_limit(self):
-        source = inspect.getsource(cat_module.get_blast_radius)
+        from backend.repositories.catalog import _blast_radius_postgres
+        source = inspect.getsource(_blast_radius_postgres)
         assert "depth < " in source or "depth <= " in source
 
     def test_sql_uses_recursive_cte(self):
-        source = inspect.getsource(cat_module.get_blast_radius)
+        from backend.repositories.catalog import _blast_radius_postgres
+        source = inspect.getsource(_blast_radius_postgres)
         assert "WITH RECURSIVE" in source or "with recursive" in source.lower()
         assert "nx." not in source
-        assert "networkx" not in source.lower() or "import networkx" not in source
 
     def test_upstream_lineage_uses_reverse_direction(self):
         source = inspect.getsource(cat_module.get_upstream_lineage)

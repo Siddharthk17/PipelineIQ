@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.config import settings
-from backend.dependencies import get_read_db_dependency
+from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User
 from backend.repositories.catalog import (
     search_assets,
@@ -52,15 +52,18 @@ def get_impact_analysis(
     response: Response,
     asset_name: str,
     asset_type: Optional[str] = Query(None),
-    max_depth: int = Query(default=10, le=15),
+    max_depth: int = Query(default=5, le=10),
     current_user: User = Depends(get_current_user),
-    db: Session = get_read_db_dependency(),
+    db: Session = Depends(get_read_db_dependency),
 ):
     """Forward blast radius: what downstream assets break if this asset changes.
 
-    Uses a PostgreSQL recursive CTE -- returns instantly regardless of catalog size.
+    Uses a PostgreSQL recursive CTE with Redis result caching and
+    statement timeout protection against disk-filling queries.
     """
     results = get_blast_radius(db, asset_name=asset_name, asset_type=asset_type, max_depth=max_depth)
+
+    response.headers["Cache-Control"] = "private, max-age=300, stale-while-revalidate=60"
 
     if not results:
         return {
@@ -92,11 +95,14 @@ def get_asset_lineage(
     request: Request,
     response: Response,
     asset_name: str,
-    max_depth: int = Query(default=10, le=15),
+    max_depth: int = Query(default=5, le=10),
     current_user: User = Depends(get_current_user),
-    db: Session = get_read_db_dependency(),
+    db: Session = Depends(get_read_db_dependency),
 ):
-    """Backward lineage: where does this asset come from."""
+    """Backward lineage: where does this asset come from.
+
+    Uses statement timeout protection against long-running CTE queries.
+    """
     results = get_upstream_lineage(db, asset_name=asset_name, max_depth=max_depth)
     return {
         "asset_name": asset_name,

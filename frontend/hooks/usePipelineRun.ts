@@ -173,8 +173,14 @@ export function usePipelineRun(runId: string | null) {
           });
         });
         eventSource.close();
-        queryClient.invalidateQueries({ queryKey: ["lineage", runId] });
         queryClient.invalidateQueries({ queryKey: ["pipelineRuns"] });
+        // Delay lineage invalidation by 3s to allow Celery worker time
+        // to finish registering assets to the database.
+        setTimeout(() => {
+          if (!cancelled) {
+            queryClient.invalidateQueries({ queryKey: ["lineage", runId] });
+          }
+        }, 3000);
       };
 
       eventSource.addEventListener("pipeline_completed", handleTerminal("COMPLETED"));

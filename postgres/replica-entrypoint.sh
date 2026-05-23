@@ -33,7 +33,19 @@ if [ ! -s "${PGDATA}/PG_VERSION" ]; then
   done
 fi
 
+echo "Ensuring max_connections >= primary on replica..."
+AUTO_CONF="${PGDATA}/postgresql.auto.conf"
+PG_CONF="${PGDATA}/postgresql.conf"
+if [ -f "${PG_CONF}" ] || [ -f "${AUTO_CONF}" ]; then
+  sed -i '/^max_connections/d' "${AUTO_CONF}" 2>/dev/null || true
+  echo "max_connections = 200" >> "${AUTO_CONF}"
+fi
+
 exec su-exec postgres postgres \
   -D "${PGDATA}" \
   -c hot_standby=on \
+  -c max_connections=200 \
+  -c max_standby_streaming_delay=10min \
+  -c max_standby_archive_delay=60s \
+  -c hot_standby_feedback=on \
   -c primary_conninfo="host=${PRIMARY_HOST} user=${REPLICATION_USER} password=${REPLICATION_PASSWORD}"
