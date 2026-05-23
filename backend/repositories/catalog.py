@@ -146,6 +146,7 @@ def upsert_asset_relationship(
                 created_at=datetime.now(timezone.utc),
             )
             db.add(rel)
+            db.flush()
 
 
 def register_run_assets(
@@ -189,6 +190,9 @@ def _register_graph_assets(
     owner_id: Optional[str] = None,
 ) -> int:
     """Internal helper to register assets from a NetworkX graph."""
+    if lineage_graph.number_of_nodes() == 0:
+        return 0
+
     registered = 0
 
     pipeline_asset_id = upsert_data_asset(

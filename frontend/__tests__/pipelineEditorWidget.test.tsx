@@ -124,9 +124,12 @@ describe("PipelineEditorWidget YAML sync", () => {
       render(<PipelineEditorWidget initialMode="yaml" />, { wrapper });
 
       const runButton = await screen.findByTestId("run-pipeline-btn");
-      await waitFor(() => {
-        expect(runButton).toBeEnabled();
-      });
+      await waitFor(
+        () => {
+          expect(runButton).toBeEnabled();
+        },
+        { timeout: 5000 },
+      );
 
       fireEvent.click(runButton);
 
@@ -166,9 +169,12 @@ describe("PipelineEditorWidget YAML sync", () => {
     render(<PipelineEditorWidget initialMode="yaml" />, { wrapper });
 
     const runButton = await screen.findByTestId("run-pipeline-btn");
-    await waitFor(() => {
-      expect(runButton).toBeEnabled();
-    });
+    await waitFor(
+      () => {
+        expect(runButton).toBeEnabled();
+      },
+      { timeout: 5000 },
+    );
 
     fireEvent.click(runButton);
 

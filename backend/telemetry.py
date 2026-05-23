@@ -33,19 +33,19 @@ _redis_instrumented: bool = False
 
 
 def _get_otel_sample_rate() -> float:
-    return getattr(settings, "OTEL_SAMPLE_RATE", 0.1)
+    return settings.OTEL_SAMPLE_RATE
 
 
 def _get_otel_endpoint() -> str:
-    return getattr(settings, "OTEL_EXPORTER_OTLP_ENDPOINT", "http://jaeger:4317")
+    return settings.OTEL_EXPORTER_OTLP_ENDPOINT
 
 
 def _is_otel_enabled() -> bool:
-    return bool(getattr(settings, "OTEL_ENABLED", True))
+    return bool(settings.OTEL_ENABLED)
 
 
 def _get_otel_service_name() -> str:
-    return getattr(settings, "OTEL_SERVICE_NAME", "pipelineiq")
+    return settings.OTEL_SERVICE_NAME
 
 
 OTEL_SERVICE_NAME = _get_otel_service_name()

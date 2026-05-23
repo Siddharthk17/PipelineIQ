@@ -586,7 +586,7 @@ class TestFrontendIntegration:
     def test_streaming_card_auto_refresh(self):
         with open(self._path("components", "runs", "StreamingRunCard.tsx")) as f:
             c = f.read()
-        assert "setInterval" in c
+        assert "setTimeout" in c
         assert "3000" in c
 
     def test_run_history_splits_streaming_vs_batch(self):
