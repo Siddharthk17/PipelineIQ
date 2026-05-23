@@ -95,6 +95,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     if settings.AUTO_CREATE_TABLES:
         create_all_tables()
+    from backend.database import ensure_pipeline_status_values
+    ensure_pipeline_status_values()
     _run_startup_initialization_once()
     logger.info("Application startup complete")
 

@@ -103,3 +103,40 @@ def create_all_tables() -> None:
     Called once at application startup. In production, prefer Alembic migrations.
     """
     Base.metadata.create_all(bind=write_engine)
+
+
+def ensure_pipeline_status_values() -> None:
+    """Ensure CONTRACT_VIOLATION exists in the pipelinestatus Postgres enum.
+
+    ALTER TYPE … ADD VALUE cannot run inside a transaction. When pgbouncer
+    pools connections in transaction mode this causes the migration to fail
+    silently. This function runs at startup, outside any migration transaction,
+    connecting directly to Postgres to guarantee the value exists regardless
+    of whether the database was freshly created or restored from backup.
+    """
+    from sqlalchemy import text
+
+    if "postgresql" not in str(write_engine.url):
+        return
+
+    required_values = {
+        "CONTRACT_VIOLATION",
+    }
+
+    with write_engine.connect() as conn:
+        conn.execute(text("COMMIT"))
+        try:
+            existing_rows = conn.execute(
+                text("SELECT unnest(enum_range(NULL::pipelinestatus))")
+            ).fetchall()
+            existing = {r[0] for r in existing_rows}
+            for value in sorted(required_values - existing):
+                conn.execute(
+                    text(f"ALTER TYPE pipelinestatus ADD VALUE '{value}'")
+                )
+                import logging
+                logging.getLogger(__name__).info(
+                    "Added pipelinestatus value: %s", value
+                )
+        finally:
+            conn.execute(text("BEGIN"))

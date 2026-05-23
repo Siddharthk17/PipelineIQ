@@ -17,9 +17,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "postgresql":
-        op.execute("ALTER TYPE pipelinestatus ADD VALUE IF NOT EXISTS 'CONTRACT_VIOLATION'")
+    # CONTRACT_VIOLATION enum value is added by database.ensure_pipeline_status_values()
+    # at application startup rather than here, because ALTER TYPE … ADD VALUE cannot
+    # run inside a transaction — it fails silently behind pgbouncer transaction pooling.
 
     # ── OTel columns on step_results ───────────────────────────────────────
     # trace_id, span_id: link each step to its OpenTelemetry span in Jaeger

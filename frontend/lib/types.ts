@@ -107,6 +107,7 @@ export interface TimelineStep {
 export interface RunTimingResponse {
   run_id: string;
   status: string;
+  jaeger_ui_url?: string;
   steps: TimelineStep[];
   total_duration_ms: number | null;
 }

@@ -1125,6 +1125,7 @@ def get_run_timing(
     return {
         "run_id": str(run.id),
         "status": run.status.value,
+        "jaeger_ui_url": settings.JAEGER_UI_URL,
         "steps": [
             {
                 "step_index": s.step_index,

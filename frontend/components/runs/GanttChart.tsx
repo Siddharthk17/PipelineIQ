@@ -1,12 +1,13 @@
 "use client";
 
 import type { StepResult } from "@/lib/types";
-import { CheckCircle, XCircle, PlayCircle, Clock, AlertTriangle } from "lucide-react";
+import { CheckCircle, XCircle, PlayCircle, Clock, AlertTriangle, ExternalLink } from "lucide-react";
 
 interface GanttChartProps {
   steps: StepResult[];
   totalDurationMs: number | null;
   violations?: Map<string, number>;
+  jaegerUiUrl?: string;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -47,7 +48,7 @@ function parseTimestamp(ts: string | null | undefined): number | null {
   return isNaN(d.getTime()) ? null : d.getTime();
 }
 
-export function GanttChart({ steps, totalDurationMs, violations }: GanttChartProps) {
+export function GanttChart({ steps, totalDurationMs, violations, jaegerUiUrl }: GanttChartProps) {
   if (steps.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-[var(--text-secondary)]">
@@ -182,6 +183,18 @@ export function GanttChart({ steps, totalDurationMs, violations }: GanttChartPro
                 >
                   {ENGINE_LABELS[step.engine] ?? step.engine}
                 </span>
+              )}
+              {step.trace_id && jaegerUiUrl && (
+                <a
+                  href={`${jaegerUiUrl}/trace/${step.trace_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-shrink-0 hidden sm:block opacity-40 hover:opacity-100 transition-opacity"
+                  title="View trace in Jaeger"
+                  data-testid={`jaeger-link-${step.step_name}`}
+                >
+                  <ExternalLink className="w-3 h-3" style={{ color: "var(--accent-primary)" }} />
+                </a>
               )}
               {hasViolations && (
                 <span className="flex items-center gap-0.5 px-1 text-[10px] rounded bg-[var(--accent-error)]/10 text-[var(--accent-error)] flex-shrink-0">

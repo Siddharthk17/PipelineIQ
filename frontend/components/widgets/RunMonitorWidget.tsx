@@ -166,6 +166,7 @@ export function RunMonitorWidget() {
           steps={activeRun.step_results ?? []}
           totalDurationMs={activeRun.duration_ms}
           violations={stepViolations}
+          jaegerUiUrl={process.env.NEXT_PUBLIC_JAEGER_UI_URL ?? "http://localhost:16686"}
         />
       ) : (
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
