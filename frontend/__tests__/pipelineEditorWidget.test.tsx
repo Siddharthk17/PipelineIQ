@@ -34,6 +34,21 @@ vi.mock("@/components/widgets/AIPipelineModals", () => ({
   AIGeneratePipelineModal: () => null,
 }));
 
+vi.mock("@/lib/auth-context", () => ({
+  useAuth: () => ({
+    user: { id: "test-user", username: "Test", email: "test@example.com", role: "admin" as const, isDemo: false },
+    token: "mock-token",
+    login: vi.fn(),
+    loginAsDemo: vi.fn(),
+    logout: vi.fn(),
+    isLoading: false,
+  }),
+}));
+
+vi.mock("@/components/collaboration/CollaboratorPresence", () => ({
+  CollaboratorPresence: () => null,
+}));
+
 vi.mock("@/hooks/usePipelineEditor", () => ({
   usePipelineEditor: ({
     onYamlTextChange,
@@ -60,6 +75,11 @@ vi.mock("@/hooks/usePipelineEditor", () => ({
     handleDeleteEdge: vi.fn(),
     handleYamlChange: onYamlTextChange,
     getAvailableColumns: () => [],
+    collaborators: [],
+    updateCursor: undefined,
+    updateSelectedNode: undefined,
+    provider: undefined,
+    yYaml: undefined,
   }),
 }));
 

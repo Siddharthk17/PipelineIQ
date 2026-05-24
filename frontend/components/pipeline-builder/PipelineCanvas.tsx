@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type DragEvent } from "react";
+import { useCallback, useMemo, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
   Background,
   BackgroundVariant,
@@ -15,6 +15,8 @@ import "@xyflow/react/dist/style.css";
 import { isVisualStepType, type VisualStepType } from "@/lib/stepDefinitions";
 import type { BuilderEdge, BuilderNode } from "@/lib/yamlGraphSync";
 import { StepNode } from "./StepNode";
+import { RemoteCursors } from "@/components/collaboration/RemoteCursors";
+import type { CollaboratorState } from "@/hooks/useCollaborativePipeline";
 
 interface PipelineCanvasProps {
   nodes: BuilderNode[];
@@ -26,6 +28,9 @@ interface PipelineCanvasProps {
   onConfigureNode: (nodeId: string) => void;
   onDeleteNode: (nodeId: string) => void;
   onDeleteEdge: (edgeId: string) => void;
+  collaborators?: CollaboratorState[];
+  onMouseMove?: (event: ReactMouseEvent) => void;
+  onSelectionChange?: (selectedIds: { nodes: string[]; edges: string[] }) => void;
 }
 
 const nodeTypes = {
@@ -42,6 +47,9 @@ export function PipelineCanvas({
   onConfigureNode,
   onDeleteNode,
   onDeleteEdge,
+  collaborators,
+  onMouseMove,
+  onSelectionChange,
 }: PipelineCanvasProps) {
   const [instance, setInstance] = useState<ReactFlowInstance<BuilderNode, BuilderEdge> | null>(
     null,
@@ -55,9 +63,17 @@ export function PipelineCanvas({
           ...node.data,
           onConfigure: onConfigureNode,
           onDelete: onDeleteNode,
+          collaborators: collaborators || [],
         },
       })),
-    [nodes, onConfigureNode, onDeleteNode],
+    [nodes, onConfigureNode, onDeleteNode, collaborators],
+  );
+
+  const wrapperRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (!el) return;
+    },
+    [],
   );
 
   const handleDragOver = useCallback((event: DragEvent) => {
@@ -89,12 +105,35 @@ export function PipelineCanvas({
     [instance, onDropStep],
   );
 
+  const handleMouseMove = useCallback(
+    (event: ReactMouseEvent) => {
+      if (onMouseMove) onMouseMove(event);
+    },
+    [onMouseMove],
+  );
+
+  const handleSelectionChange = useCallback(
+    (params: { nodes: BuilderNode[]; edges: BuilderEdge[] }) => {
+      if (onSelectionChange) {
+        onSelectionChange({
+          nodes: params.nodes.map((n) => n.id),
+          edges: params.edges.map((e) => e.id),
+        });
+      }
+    },
+    [onSelectionChange],
+  );
+
   return (
     <div
       className="relative h-full w-full overflow-hidden rounded-md border bg-[var(--bg-base)]"
       style={{ borderColor: "var(--widget-border)" }}
       data-testid="pipeline-canvas"
+      onMouseMove={handleMouseMove}
     >
+      {collaborators && collaborators.length > 0 && (
+        <RemoteCursors collaborators={collaborators} />
+      )}
       <ReactFlow<BuilderNode, BuilderEdge>
         nodes={decoratedNodes}
         edges={edges}
@@ -109,6 +148,7 @@ export function PipelineCanvas({
         onInit={setInstance}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
+        onSelectionChange={handleSelectionChange}
         nodeTypes={nodeTypes}
         fitView
         minZoom={0.2}

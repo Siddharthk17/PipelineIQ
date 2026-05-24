@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { EditorView } from "@codemirror/view";
+import { yCollab } from "y-codemirror.next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   validatePipeline,
@@ -32,6 +33,8 @@ import { StepDAG } from "./StepDAG";
 import { ConfigPanel, PipelineCanvas, StepPalette } from "@/components/pipeline-builder";
 import { AIGeneratePipelineModal } from "@/components/widgets/AIPipelineModals";
 import { usePipelineEditor } from "@/hooks/usePipelineEditor";
+import { useAuth } from "@/lib/auth-context";
+import { CollaboratorPresence } from "@/components/collaboration/CollaboratorPresence";
 import {
   DEFAULT_PIPELINE_YAML,
   extractPipelineName,
@@ -52,6 +55,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   const queryClient = useQueryClient();
   const { lastYamlConfig, setLastYamlConfig, setActiveRunId, setActiveRun } = usePipelineStore();
   const { activeTheme } = useThemeStore();
+  const { user, token } = useAuth();
   const [code, setCode] = useState(lastYamlConfig || DEFAULT_PIPELINE_YAML);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
@@ -130,11 +134,27 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     handleDeleteEdge,
     handleYamlChange,
     getAvailableColumns,
+    collaborators,
+    updateCursor,
+    updateSelectedNode,
+    yYaml,
+    provider,
   } = usePipelineEditor({
     yamlText: code,
     onYamlTextChange: setCode,
     availableFiles,
+    collaborative: true,
+    currentUser: user ? { id: user.id, name: user.username, email: user.email } : undefined,
+    authToken: token ?? undefined,
   });
+
+  const yCollabExtension = useMemo(
+    () => {
+      if (!yYaml || !provider) return [];
+      return [yCollab(yYaml, provider.awareness)];
+    },
+    [yYaml, provider],
+  );
 
   const configuringNode = useMemo(
     () => nodes.find((node) => node.id === configuringNodeId) ?? null,
@@ -412,6 +432,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     const baseExtensions = [
       yaml(),
       EditorView.contentAttributes.of({ "aria-label": "Pipeline YAML editor" }),
+      ...yCollabExtension,
     ];
 
     if (isLightTheme) {
@@ -433,7 +454,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
         ".cm-activeLineGutter": { color: "var(--text-primary)" },
       }),
     ];
-  }, [isLightTheme]);
+  }, [isLightTheme, yCollabExtension]);
 
   return (
     <div className="flex h-full min-w-0 overflow-hidden" data-testid="pipeline-editor-widget">
@@ -486,6 +507,17 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                     onConfigureNode={handleConfigure}
                     onDeleteNode={handleDeleteNode}
                     onDeleteEdge={handleDeleteEdge}
+                    collaborators={collaborators}
+                    onMouseMove={(e) => {
+                      if (updateCursor) {
+                        const target = e.currentTarget as HTMLElement;
+                        const rect = target.getBoundingClientRect();
+                        updateCursor(e.clientX - rect.left, e.clientY - rect.top);
+                      }
+                    }}
+                    onSelectionChange={(selectedIds) => {
+                      updateSelectedNode?.(selectedIds.nodes[0] ?? null);
+                    }}
                   />
                 </div>
                 {builderParseError && (
@@ -602,7 +634,8 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
             </div>
           </div>
 
-          <div className="mt-1.5 flex justify-end">
+          <div className="mt-1.5 flex justify-between items-center">
+            <CollaboratorPresence collaborators={collaborators} />
             <button
               onClick={() => {
                 const pipelineNameValue =

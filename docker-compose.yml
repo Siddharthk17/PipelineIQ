@@ -687,6 +687,33 @@ services:
     networks:
       - pipelineiq-network
 
+  y-websocket:
+    image: node:20-alpine
+    container_name: pipelineiq-y-websocket
+    working_dir: /app
+    command: sh -c "npm install --production && node server.js"
+    volumes:
+      - ./y-websocket:/app
+    ports:
+      - "1234:1234"
+    environment:
+      - REDIS_YJS_URL=redis://redis-yjs:6382
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-development}
+      - PORT=1234
+    depends_on:
+      redis-yjs:
+        condition: service_healthy
+    mem_limit: 80m
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('net').createConnection(1234,'localhost').on('connect',function(){process.exit(0)}).on('error',function(){process.exit(1)})\""]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+    networks:
+      - pipelineiq-network
+
   redis-yjs:
     image: redis:7-alpine
     container_name: pipelineiq-redis-yjs

@@ -13,11 +13,15 @@ import type { UploadedFile } from "@/lib/types";
 import { STEP_DEFINITIONS, getDefaultStepConfig, isVisualStepType, type VisualStepType } from "@/lib/stepDefinitions";
 import { graphToYAML, type BuilderEdge, type BuilderGraph, type BuilderNode, yamlToGraph } from "@/lib/yamlGraphSync";
 import { topologicalSort } from "@/lib/topologicalSort";
+import { useCollaborativePipeline, type CollaboratorState } from "./useCollaborativePipeline";
 
 interface UsePipelineEditorOptions {
   yamlText: string;
   onYamlTextChange: (nextYaml: string) => void;
   availableFiles: UploadedFile[];
+  collaborative?: boolean;
+  currentUser?: { id: string; name: string; email?: string };
+  authToken?: string;
 }
 
 export interface ConnectionValidationResult {
@@ -149,6 +153,9 @@ export function usePipelineEditor({
   yamlText,
   onYamlTextChange,
   availableFiles,
+  collaborative = false,
+  currentUser,
+  authToken,
 }: UsePipelineEditorOptions) {
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<BuilderNode>([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<BuilderEdge>([]);
@@ -206,6 +213,7 @@ export function usePipelineEditor({
         emittedFromGraphRef.current = true;
         onYamlTextChange(nextYaml);
       }
+      if (collab) collab.syncYamlToYjs(nextYaml);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to generate YAML";
       setParseError(message);
@@ -552,6 +560,53 @@ export function usePipelineEditor({
     [edges, fileById, nodes],
   );
 
+  const collab = collaborative && currentUser && authToken
+      ? useCollaborativePipeline({
+        pipelineName: pipelineName || "my_pipeline",
+        initialNodes: nodes,
+        initialEdges: edges,
+        initialYaml: yamlText,
+        currentUser,
+        authToken,
+        onNodesChange: (newNodes) => { setNodes(newNodes as BuilderNode[]); },
+        onEdgesChange: (newEdges) => { setEdges(newEdges as BuilderEdge[]); },
+        onYamlChange: (newYaml) => {
+          onYamlTextChange(newYaml);
+        },
+        onNodeConfigure: handleConfigure,
+      })
+    : null;
+
+  const effectiveOnNodesChange = useCallback(
+    (changes: NodeChange<BuilderNode>[]) => {
+      onNodesChangeBase(changes);
+      const removedIds = new Set(
+        changes.filter((change) => change.type === "remove").map((change) => change.id),
+      );
+      if (configuringNodeId && removedIds.has(configuringNodeId)) {
+        setConfiguringNodeId(null);
+      }
+    },
+    [configuringNodeId, onNodesChangeBase],
+  );
+
+  useEffect(() => {
+    if (!collab) return;
+    collab.syncNodesToYjs(nodes);
+  }, [nodes, collab?.syncNodesToYjs]);
+
+  useEffect(() => {
+    if (!collab) return;
+    collab.syncEdgesToYjs(edges);
+  }, [edges, collab?.syncEdgesToYjs]);
+
+  const handleYamlChangeWithCollab = useCallback(
+    (nextYaml: string) => {
+      onYamlTextChange(nextYaml);
+    },
+    [onYamlTextChange],
+  );
+
   return {
     yamlText,
     pipelineName,
@@ -562,7 +617,7 @@ export function usePipelineEditor({
     configuringNodeId,
     parseError,
     toastMessage,
-    onNodesChange,
+    onNodesChange: effectiveOnNodesChange,
     onEdgesChange,
     handleConnect,
     handleDragStart,
@@ -573,7 +628,12 @@ export function usePipelineEditor({
     handleConfigSave,
     handleDeleteNode,
     handleDeleteEdge,
-    handleYamlChange,
+    handleYamlChange: handleYamlChangeWithCollab,
     getAvailableColumns,
+    collaborators: collab?.collaborators ?? [] as CollaboratorState[],
+    updateCursor: collab?.updateCursor,
+    updateSelectedNode: collab?.updateSelectedNode,
+    provider: collab?.provider,
+    yYaml: collab?.yYaml,
   };
 }

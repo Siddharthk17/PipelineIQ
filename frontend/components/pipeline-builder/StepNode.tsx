@@ -2,14 +2,21 @@ import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { STEP_DEFINITIONS } from "@/lib/stepDefinitions";
 import type { BuilderNode } from "@/lib/yamlGraphSync";
+import type { CollaboratorState } from "@/hooks/useCollaborativePipeline";
 
 function StepNodeComponent({ id, data, selected }: NodeProps<BuilderNode>) {
   const definition = STEP_DEFINITIONS[data.type];
+  const collaborators: CollaboratorState[] =
+    (data as Record<string, unknown>).collaborators as CollaboratorState[] ?? [];
+  const remoteSelector = collaborators.find(
+    (c) => c.selectedNode === id && c.user
+  );
 
   return (
     <div
       data-testid={`step-node-${id}`}
       className={[
+        "relative",
         "min-w-[190px] rounded-lg border px-3 py-2 shadow-sm transition-all",
         selected ? "ring-2 ring-[var(--accent-primary)]" : "ring-0",
       ].join(" ")}
@@ -19,6 +26,21 @@ function StepNodeComponent({ id, data, selected }: NodeProps<BuilderNode>) {
         color: "var(--text-primary)",
       }}
     >
+      {remoteSelector && (
+        <div
+          className="step-node-remote-selection"
+          style={{
+            position: "absolute",
+            inset: "-3px",
+            borderRadius: "10px",
+            border: `2px solid ${remoteSelector.user.color}`,
+            pointerEvents: "none",
+            zIndex: 10,
+          }}
+          title={`${remoteSelector.user.name} is viewing this step`}
+          data-testid={`remote-selection-${id}`}
+        />
+      )}
       {definition.maxInputs > 0 && data.type !== "join" && (
         <Handle
           id="input"

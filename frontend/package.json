@@ -38,9 +38,13 @@
     "react-dom": "^19.2.1",
     "tailwind-merge": "^3.3.1",
     "use-debounce": "^10.1.1",
+    "y-codemirror.next": "^0.3.5",
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.30",
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@tailwindcss/postcss": "4.1.11",
     "@tailwindcss/typography": "^0.5.19",
     "@testing-library/jest-dom": "^6.9.1",
@@ -50,7 +54,6 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5.1.4",
-    "@playwright/test": "^1.56.1",
     "eslint": "9.39.1",
     "eslint-config-next": "16.0.8",
     "jsdom": "^28.1.0",
