@@ -213,7 +213,7 @@ export function usePipelineEditor({
         emittedFromGraphRef.current = true;
         onYamlTextChange(nextYaml);
       }
-      if (collab) collab.syncYamlToYjs(nextYaml);
+      if (collabRef.current) collabRef.current.syncYamlToYjs(nextYaml);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to generate YAML";
       setParseError(message);
@@ -560,22 +560,22 @@ export function usePipelineEditor({
     [edges, fileById, nodes],
   );
 
-  const collab = collaborative && currentUser && authToken
-      ? useCollaborativePipeline({
-        pipelineName: pipelineName || "my_pipeline",
-        initialNodes: nodes,
-        initialEdges: edges,
-        initialYaml: yamlText,
-        currentUser,
-        authToken,
-        onNodesChange: (newNodes) => { setNodes(newNodes as BuilderNode[]); },
-        onEdgesChange: (newEdges) => { setEdges(newEdges as BuilderEdge[]); },
-        onYamlChange: (newYaml) => {
-          onYamlTextChange(newYaml);
-        },
-        onNodeConfigure: handleConfigure,
-      })
-    : null;
+  const collab = useCollaborativePipeline({
+    pipelineName: pipelineName || "my_pipeline",
+    initialNodes: nodes,
+    initialEdges: edges,
+    initialYaml: yamlText,
+    currentUser: currentUser ?? undefined,
+    authToken: collaborative ? (authToken ?? undefined) : undefined,
+    onNodesChange: (newNodes) => { setNodes(newNodes as BuilderNode[]); },
+    onEdgesChange: (newEdges) => { setEdges(newEdges as BuilderEdge[]); },
+    onYamlChange: (newYaml) => {
+      onYamlTextChange(newYaml);
+    },
+    onNodeConfigure: handleConfigure,
+  });
+  const collabRef = useRef(collab);
+  collabRef.current = collab;
 
   const effectiveOnNodesChange = useCallback(
     (changes: NodeChange<BuilderNode>[]) => {
@@ -593,11 +593,13 @@ export function usePipelineEditor({
   useEffect(() => {
     if (!collab) return;
     collab.syncNodesToYjs(nodes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync on node changes, not collab identity changes
   }, [nodes, collab?.syncNodesToYjs]);
 
   useEffect(() => {
     if (!collab) return;
     collab.syncEdgesToYjs(edges);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync on edge changes, not collab identity changes
   }, [edges, collab?.syncEdgesToYjs]);
 
   const handleYamlChangeWithCollab = useCallback(

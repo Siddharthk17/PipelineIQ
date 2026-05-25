@@ -7,6 +7,7 @@ error messages and suggestions.
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Union
@@ -345,6 +346,21 @@ _STEP_CONFIG_MAP: Dict[StepType, type] = {
 }
 
 
+_RE_DOUBLED_QUOTED_VALUE = re.compile(
+    r'([\w_]+):\s*""([^"]+)""\s*$', re.MULTILINE
+)
+
+
+def _repair_quoted_values(yaml_text: str) -> str:
+    """Fix YAML where js-yaml output has doubled quotes on scalar values.
+
+    js-yaml may produce ``file_id: ""uuid""`` instead of ``file_id: "uuid"``
+    when round-tripping through incompatible parsers. This strips one layer
+    of quoting to recover a parseable YAML string.
+    """
+    return _RE_DOUBLED_QUOTED_VALUE.sub(r'\1: "\2"', yaml_text)
+
+
 class PipelineParser:
     """Parses YAML pipeline configurations into typed PipelineConfig objects.
 
@@ -415,9 +431,16 @@ class PipelineParser:
             cleaned_yaml = strip_diff_markers(yaml_string)
             raw = yaml.safe_load(cleaned_yaml.strip())
         except yaml.YAMLError as exc:
-            line = getattr(exc, "problem_mark", None)
-            line_num = line.line + 1 if line else None
-            raise InvalidYAMLError(str(exc), line=line_num) from exc
+            # Attempt auto-recovery for js-yaml vs PyYAML incompatibilities
+            try:
+                from backend.pipeline.diff_utils import strip_diff_markers
+                cleaned_yaml = strip_diff_markers(yaml_string).strip()
+                repaired = _repair_quoted_values(cleaned_yaml)
+                raw = yaml.safe_load(repaired)
+            except yaml.YAMLError:
+                line = getattr(exc, "problem_mark", None)
+                line_num = line.line + 1 if line else None
+                raise InvalidYAMLError(str(exc), line=line_num) from exc
 
         if not isinstance(raw, dict):
             raise InvalidYAMLError(

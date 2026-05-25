@@ -15,6 +15,8 @@ import {
 
 const YJS_SERVER_URL = process.env.NEXT_PUBLIC_YJS_URL || 'ws://localhost:1234'
 const SYNC_DEBOUNCE_MS = 300
+const AUTH_FAILURE_CLOSE_CODE = 4001
+const MAX_BACKOFF_TIME = 30000
 
 export interface CollaboratorState {
   user: {
@@ -35,8 +37,8 @@ interface UseCollaborativePipelineOptions {
   initialNodes: Node[]
   initialEdges: Edge[]
   initialYaml: string
-  currentUser: { id: string; name: string; email?: string }
-  authToken: string
+  currentUser?: { id: string; name: string; email?: string }
+  authToken?: string
   onNodesChange: (nodes: Node[]) => void
   onEdgesChange: (edges: Edge[]) => void
   onYamlChange: (yaml: string) => void
@@ -57,16 +59,86 @@ export function useCollaborativePipeline({
 }: UseCollaborativePipelineOptions) {
   const [doc] = useState(() => new Y.Doc())
 
-  const [provider] = useState(() => {
-    return new WebsocketProvider(YJS_SERVER_URL, pipelineName, doc, {
-      params: { token: authToken },
-    })
-  })
+  const providerRef = useRef<WebsocketProvider | null>(null)
+  const authTokenRef = useRef(authToken)
+  authTokenRef.current = authToken
 
-  const yNodes = doc.getMap<SerializedNode>('nodes')
-  const yEdges = doc.getMap<SerializedEdge>('edges')
-  const yYaml = doc.getText('yaml')
-  const awareness = provider.awareness
+  const authFailedRef = useRef(false)
+  const authFailedForRoomRef = useRef<string | null>(null)
+
+  const [provider, setProvider] = useState<WebsocketProvider | null>(null)
+  const [yNodes] = useState(() => doc.getMap<SerializedNode>('nodes'))
+  const [yEdges] = useState(() => doc.getMap<SerializedEdge>('edges'))
+  const [yYaml] = useState(() => doc.getText('yaml'))
+
+  useEffect(() => {
+    if (!authToken || !pipelineName) {
+      if (providerRef.current) {
+        providerRef.current.destroy()
+        providerRef.current = null
+        setProvider(null)
+      }
+      return
+    }
+
+    if (authFailedRef.current && authFailedForRoomRef.current === pipelineName) {
+      return
+    }
+
+    if (providerRef.current) {
+      providerRef.current.destroy()
+      providerRef.current = null
+    }
+
+    const wsProvider = new WebsocketProvider(
+      YJS_SERVER_URL,
+      pipelineName,
+      doc,
+      {
+        params: { token: authToken },
+        maxBackoffTime: MAX_BACKOFF_TIME,
+        connect: true,
+      },
+    )
+
+    wsProvider.on('connection-close', (event: unknown) => {
+      const closeEvent = event as CloseEvent | null
+      if (closeEvent && closeEvent.code === AUTH_FAILURE_CLOSE_CODE) {
+        authFailedRef.current = true
+        authFailedForRoomRef.current = pipelineName
+        console.error(
+          `[YJS] Authentication failed for room "${pipelineName}". ` +
+          `Reason: ${closeEvent.reason || 'Unknown'}. Stopping reconnection.`
+        )
+        wsProvider.disconnect()
+      }
+    })
+
+    wsProvider.on('connection-error', () => {
+      // connection-error fires before connection-close; close handler above
+      // decides whether to stop reconnecting.
+    })
+
+    providerRef.current = wsProvider
+    setProvider(wsProvider)
+
+    return () => {
+      wsProvider.destroy()
+      if (providerRef.current === wsProvider) {
+        providerRef.current = null
+      }
+      setProvider(null)
+    }
+  }, [authToken, pipelineName, doc])
+
+  useEffect(() => {
+    if (authFailedRef.current && authFailedForRoomRef.current === pipelineName) {
+      authFailedRef.current = false
+      authFailedForRoomRef.current = null
+    }
+  }, [authToken, pipelineName])
+
+  const awareness = provider?.awareness ?? null
 
   const [collaborators, setCollaborators] = useState<CollaboratorState[]>([])
 
@@ -74,10 +146,13 @@ export function useCollaborativePipeline({
   const yjsSyncingRef = useRef(false)
 
   useEffect(() => {
+    const aw = provider?.awareness
+    if (!aw || !currentUser) return
+
     const userColor = getColorForUser(currentUser.id)
     const userInitials = currentUser.name.slice(0, 2).toUpperCase()
 
-    awareness.setLocalState({
+    aw.setLocalState({
       user: {
         id: currentUser.id,
         name: currentUser.name,
@@ -89,17 +164,20 @@ export function useCollaborativePipeline({
     })
 
     return () => {
-      awareness.setLocalState(null)
-      provider.destroy()
+      aw.setLocalState(null)
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-set awareness when user identity or provider changes
+  }, [provider?.awareness, currentUser?.id, currentUser?.name])
 
   useEffect(() => {
+    const aw = provider?.awareness
+    if (!aw) return
+
     const handleAwarenessChange = () => {
-      const localClientId = awareness.clientID
+      const localClientId = aw.clientID
       const states: CollaboratorState[] = []
 
-      awareness.getStates().forEach((state, clientId) => {
+      aw.getStates().forEach((state, clientId) => {
         if (clientId === localClientId) return
         if (!state?.user) return
         states.push(state as unknown as CollaboratorState)
@@ -108,9 +186,9 @@ export function useCollaborativePipeline({
       setCollaborators(states)
     }
 
-    awareness.on('change', handleAwarenessChange)
-    return () => awareness.off('change', handleAwarenessChange)
-  }, [awareness])
+    aw.on('change', handleAwarenessChange)
+    return () => aw.off('change', handleAwarenessChange)
+  }, [provider?.awareness])
 
   useEffect(() => {
     if (yNodes.size === 0 && initialNodes.length > 0) {
@@ -125,6 +203,7 @@ export function useCollaborativePipeline({
         yYaml.insert(0, initialYaml)
       })
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only initialization
   }, [])
 
   useEffect(() => {
@@ -223,14 +302,18 @@ export function useCollaborativePipeline({
   )
 
   const updateCursor = useCallback((x: number, y: number) => {
-    const currentState = awareness.getLocalState() || {}
-    awareness.setLocalState({ ...currentState, cursor: { x, y } })
-  }, [awareness])
+    const aw = provider?.awareness
+    if (!aw) return
+    const currentState = aw.getLocalState() || {}
+    aw.setLocalState({ ...currentState, cursor: { x, y } })
+  }, [provider])
 
   const updateSelectedNode = useCallback((nodeId: string | null) => {
-    const currentState = awareness.getLocalState() || {}
-    awareness.setLocalState({ ...currentState, selectedNode: nodeId })
-  }, [awareness])
+    const aw = provider?.awareness
+    if (!aw) return
+    const currentState = aw.getLocalState() || {}
+    aw.setLocalState({ ...currentState, selectedNode: nodeId })
+  }, [provider])
 
   return {
     syncNodesToYjs,
@@ -239,7 +322,7 @@ export function useCollaborativePipeline({
     collaborators,
     updateCursor,
     updateSelectedNode,
-    awareness,
+    awareness: provider?.awareness ?? null,
     provider,
     yYaml,
   }

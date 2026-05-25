@@ -31,10 +31,26 @@ function verifyJWT(token) {
   }
 }
 
+const AUTH_REJECTION_LOG_INTERVAL_MS = 5000
+const authRejectionCounts = new Map()
+
+setInterval(() => {
+  for (const [room, count] of authRejectionCounts) {
+    if (count > 1) {
+      console.warn(`Auth rejections for room "${room}": ${count} in last ${AUTH_REJECTION_LOG_INTERVAL_MS}ms`)
+    }
+    authRejectionCounts.delete(room)
+  }
+}, AUTH_REJECTION_LOG_INTERVAL_MS)
+
 const wss = new WebSocketServer({
   port: PORT,
   maxPayload: 100 * 1024 * 1024,
 })
+
+const CLOSE_CODE_AUTH_FAILURE = 4001
+const CLOSE_REASON_INVALID_TOKEN = 'Invalid or missing JWT token'
+const CLOSE_REASON_TOKEN_EXPIRED = 'JWT token expired'
 
 wss.on('connection', (ws, req) => {
   let roomName, token
@@ -49,10 +65,27 @@ wss.on('connection', (ws, req) => {
     return
   }
 
+  if (!token) {
+    const count = authRejectionCounts.get(roomName) || 0
+    authRejectionCounts.set(roomName, count + 1)
+    ws.close(CLOSE_CODE_AUTH_FAILURE, CLOSE_REASON_INVALID_TOKEN)
+    return
+  }
+
   const payload = verifyJWT(token)
   if (!payload) {
-    console.warn(`Rejected unauthenticated connection to room: ${roomName}`)
-    ws.close(1008, 'Unauthorized: Invalid or missing JWT')
+    const count = authRejectionCounts.get(roomName) || 0
+    authRejectionCounts.set(roomName, count + 1)
+
+    let reason = CLOSE_REASON_INVALID_TOKEN
+    try {
+      const decoded = jwt.decode(token)
+      if (decoded && decoded.exp && decoded.exp * 1000 < Date.now()) {
+        reason = CLOSE_REASON_TOKEN_EXPIRED
+      }
+    } catch (_) { /* ignore */ }
+
+    ws.close(CLOSE_CODE_AUTH_FAILURE, reason)
     return
   }
 

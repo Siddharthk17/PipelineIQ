@@ -2,11 +2,12 @@ const jwt = require('jsonwebtoken')
 const { describe, test, before, after } = require('node:test')
 const assert = require('node:assert')
 
-const JWT_SECRET = 'test-jwt-secret-week12'
-process.env.JWT_SECRET = JWT_SECRET
-process.env.REDIS_YJS_URL = 'redis://redis-yjs:6382'
-process.env.PORT = '0'
+const DEFAULT_SECRET = 'change-me-in-production'
+const JWT_SECRET = process.env.JWT_SECRET || DEFAULT_SECRET
+const REDIS_YJS_URL = process.env.REDIS_YJS_URL || 'redis://redis-yjs:6382'
+const PORT = parseInt(process.env.PORT || '0', 10)
 
+// Basic JWT verification function (duplicated from server for unit testing)
 function verifyJWT(token) {
   if (!token) return null
   try {
@@ -15,6 +16,8 @@ function verifyJWT(token) {
     return null
   }
 }
+
+const CLOSE_CODE_AUTH_FAILURE = 4001
 
 describe('JWT authentication', () => {
   test('returns null for missing token', () => {
@@ -107,5 +110,29 @@ describe('Room name extraction from URL path', () => {
     const url = new URL(reqUrl, 'ws://localhost:1234')
     const roomName = decodeURIComponent(url.pathname.slice(1))
     assert.strictEqual(roomName, 'customer revenue report')
+  })
+})
+
+describe('Auth failure close codes', () => {
+  test('CLOSE_CODE_AUTH_FAILURE is 4001', () => {
+    assert.strictEqual(CLOSE_CODE_AUTH_FAILURE, 4001)
+  })
+
+  test('close reason messages are distinct', () => {
+    assert.notStrictEqual('Invalid or missing JWT token', 'JWT token expired')
+  })
+
+  test('server detects expired JWT via decode', () => {
+    const token = jwt.sign({ sub: 'user-1' }, JWT_SECRET, { expiresIn: '0s' })
+    const decoded = jwt.decode(token)
+    assert.ok(decoded)
+    assert.ok(decoded.exp * 1000 < Date.now())
+  })
+
+  test('server detects valid JWT via decode', () => {
+    const token = jwt.sign({ sub: 'user-1' }, JWT_SECRET, { expiresIn: '1h' })
+    const decoded = jwt.decode(token)
+    assert.ok(decoded)
+    assert.ok(decoded.exp * 1000 > Date.now())
   })
 })

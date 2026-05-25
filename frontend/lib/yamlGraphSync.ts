@@ -317,6 +317,44 @@ export function yamlToGraph(yamlText: string): BuilderGraph {
   };
 }
 
+function sanitizeYamlValue(value: unknown): unknown {
+  if (typeof value !== "string") return value
+  let cleaned = value.trim()
+  // Strip surrounding double/single quotes that may have been embedded
+  // from a prior YAML round-trip through an incompatible parser
+  const first = cleaned[0]
+  const last = cleaned[cleaned.length - 1]
+  if ((first === '"' || first === "'") && first === last) {
+    const inner = cleaned.slice(1, -1)
+    if (inner.length > 0 && !inner.includes(first)) {
+      cleaned = inner
+    }
+  }
+  return cleaned
+}
+
+function sanitizeConfig(
+  config: Record<string, unknown>
+): Record<string, unknown> {
+  const cleaned: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(config)) {
+    if (typeof value === "string") {
+      cleaned[key] = sanitizeYamlValue(value)
+    } else if (Array.isArray(value)) {
+      cleaned[key] = value.map((item) =>
+        typeof item === "string" ? sanitizeYamlValue(item) : item
+      )
+    } else if (value && typeof value === "object") {
+      cleaned[key] = sanitizeConfig(
+        value as Record<string, unknown>
+      )
+    } else {
+      cleaned[key] = value
+    }
+  }
+  return cleaned
+}
+
 function normalizeJoinConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   return {
     on: asString(config.on),
@@ -545,13 +583,13 @@ export function graphToYAML(graph: BuilderGraph): string {
 
       step.left = leftEdge ? stepNameByNodeId.get(leftEdge.source) ?? "" : "";
       step.right = rightEdge ? stepNameByNodeId.get(rightEdge.source) ?? "" : "";
-      Object.assign(step, normalizeJoinConfigForYaml(resolvedNode.data.config));
+      Object.assign(step, sanitizeConfig(normalizeJoinConfigForYaml(resolvedNode.data.config)));
     } else {
       if (STEP_DEFINITIONS[stepType].maxInputs > 0) {
         const sourceEdge = incomingEdges[0];
         step.input = sourceEdge ? stepNameByNodeId.get(sourceEdge.source) ?? "" : "";
       }
-      Object.assign(step, normalizeConfigForYaml(stepType, resolvedNode.data.config));
+      Object.assign(step, sanitizeConfig(normalizeConfigForYaml(stepType, resolvedNode.data.config)));
     }
 
     steps.push(step);

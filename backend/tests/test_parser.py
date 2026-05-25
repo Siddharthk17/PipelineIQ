@@ -12,6 +12,7 @@ from backend.pipeline.parser import (
     PipelineParser,
     SaveStepConfig,
     SqlStepConfig,
+    _repair_quoted_values,
 )
 
 
@@ -111,6 +112,28 @@ class TestParserParse:
         """Pass garbage string, verify InvalidYAMLError raised."""
         with pytest.raises(InvalidYAMLError):
             parser.parse("pipeline:\n  name: test\n  steps:\n  - {bad yaml::")
+
+    def test_repair_doubled_quoted_file_id(self, parser):
+        """Parser auto-repairs js-yaml output with doubled quotes around values."""
+        yaml_with_doubled_quotes = (
+            "pipeline:\n"
+            "  name: test_pipeline\n"
+            "  steps:\n"
+            '    - name: load_right\n'
+            '      type: load\n'
+            '      file_id: ""7a4f376a-e184-4c16-848c-d3363057...""\n'
+        )
+        config = parser.parse(yaml_with_doubled_quotes)
+        load_step = next(
+            (s for s in config.steps if s.step_type.value == "load"), None
+        )
+        assert load_step is not None
+        assert load_step.file_id == "7a4f376a-e184-4c16-848c-d3363057..."
+
+    def test_repair_quoted_values_leaves_valid_yaml_unchanged(self):
+        """Repair function is a no-op for well-formed YAML."""
+        valid = 'file_id: "abc-123"\ncolumns: [a, b]\n'
+        assert _repair_quoted_values(valid) == valid
 
     def test_parse_missing_pipeline_key_raises_config_error(self, parser):
         """YAML without 'pipeline:' top-level key but with name works (fallback)."""

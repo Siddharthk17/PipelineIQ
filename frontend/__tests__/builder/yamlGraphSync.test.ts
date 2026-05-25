@@ -2,6 +2,9 @@ import yaml from "js-yaml";
 import { describe, expect, it } from "vitest";
 import { graphToYAML, yamlToGraph, type BuilderEdge, type BuilderNode } from "@/lib/yamlGraphSync";
 
+// Import internal functions for unit testing via dynamic access pattern
+// (sanitizeYamlValue and sanitizeConfig are exported via graphToYAML's behavior)
+
 function makeNode(id: string, type: BuilderNode["data"]["type"]): BuilderNode {
   return {
     id,
@@ -68,5 +71,53 @@ pipeline:
     ];
 
     expect(graphToYAML({ pipelineName: "cyclic", nodes, edges })).toBe("");
+  });
+
+  it("sanitizes embedded quotes from node config values before YAML dump", () => {
+    const node: BuilderNode = {
+      id: "load_data",
+      type: "stepNode",
+      position: { x: 0, y: 0 },
+      data: {
+        label: "load_data",
+        type: "load",
+        // Simulates a value that acquired surrounding quotes from a js-yaml round-trip
+        config: { file_id: '"file-uuid-123"' },
+        backendSupported: true,
+      },
+    };
+    const edges: BuilderEdge[] = [];
+
+    const outputYaml = graphToYAML({ pipelineName: "test", nodes: [node], edges });
+    const parsed = yaml.load(outputYaml) as {
+      pipeline: { steps: Array<{ file_id: string }> };
+    };
+
+    expect(parsed.pipeline.steps[0].file_id).toBe("file-uuid-123");
+    // The YAML text must not contain doubled quotes
+    expect(outputYaml).not.toContain('""file-uuid-123""');
+    expect(outputYaml).not.toContain("'\"file-uuid-123\"'");
+  });
+
+  it("leaves plain file_id values untouched", () => {
+    const node: BuilderNode = {
+      id: "load_data",
+      type: "stepNode",
+      position: { x: 0, y: 0 },
+      data: {
+        label: "load_data",
+        type: "load",
+        config: { file_id: "abc-123-def" },
+        backendSupported: true,
+      },
+    };
+    const edges: BuilderEdge[] = [];
+
+    const outputYaml = graphToYAML({ pipelineName: "test", nodes: [node], edges });
+    const parsed = yaml.load(outputYaml) as {
+      pipeline: { steps: Array<{ file_id: string }> };
+    };
+
+    expect(parsed.pipeline.steps[0].file_id).toBe("abc-123-def");
   });
 });
