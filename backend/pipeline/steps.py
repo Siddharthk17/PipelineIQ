@@ -350,7 +350,7 @@ class StepExecutor:
                 config.value,
                 config.name,
                 config.column,
-                config.operator.value,
+                getattr(config.operator, 'value', config.operator),
             )
             try:
                 filtered_df = input_df[mask(column_series, coerced_value)].copy()
@@ -360,7 +360,7 @@ class StepExecutor:
                     column=config.column,
                     column_dtype=str(column_series.dtype),
                     value=config.value,
-                    operator=config.operator.value,
+                    operator=getattr(config.operator, 'value', config.operator),
                 ) from exc
             return pa.Table.from_pandas(filtered_df, preserve_index=False)
 
