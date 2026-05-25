@@ -132,6 +132,7 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
                 response_status=resp.status_code,
                 response_body=resp.text[:1000] if resp.text else None,
                 attempt_number=attempt_number,
+                duration_ms=duration_ms,
             )
             if success:
                 delivery.delivered_at = datetime.now(timezone.utc)
@@ -162,6 +163,7 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
                 event_type=payload.get("event_type", "unknown"),
                 payload=payload,
                 attempt_number=attempt_number,
+                duration_ms=duration_ms,
             )
             delivery.failed_at = datetime.now(timezone.utc)
             delivery.error_message = error_str

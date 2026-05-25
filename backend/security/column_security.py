@@ -132,13 +132,13 @@ def get_column_policies_for_file(
     file_id: str,
     db,
 ) -> list[ColumnPolicyRecord]:
-    from backend.db.redis_pools import get_cache_redis
+    from backend.db.redis_pools import get_cache_redis_binary, get_cache_redis
     from backend.models.column_policy import ColumnPolicy
 
     cache_key = f"col_policies:{file_id}"
 
     try:
-        redis = get_cache_redis()
+        redis = get_cache_redis_binary()
         cached = redis.get(cache_key)
         if cached:
             return pickle.loads(cached)
@@ -158,7 +158,7 @@ def get_column_policies_for_file(
     ]
 
     try:
-        redis = get_cache_redis()
+        redis = get_cache_redis_binary()
         redis.setex(cache_key, POLICY_CACHE_TTL, pickle.dumps(records))
     except Exception:
         pass

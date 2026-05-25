@@ -6,6 +6,7 @@ import pytest
 
 from backend.pipeline.exceptions import (
     ColumnNotFoundError,
+    FilterTypeMismatchError,
     JoinKeyMissingError,
 )
 from backend.pipeline.lineage import LineageRecorder
@@ -208,6 +209,59 @@ class TestFilterStep:
         result = executor.execute_filter(df_registry, config, recorder)
         assert result.rows_out == 0
         assert len(result.output_df) == 0
+
+    def test_filter_coerces_numeric_string_to_int(
+        self, executor, recorder, sample_sales_table
+    ):
+        """String value '100' coerces to 100 for numeric column comparison."""
+        df_registry = {"load_sales": sample_sales_table}
+        config = FilterStepConfig(
+            name="filter_coerce",
+            step_type=StepType.FILTER,
+            input="load_sales",
+            column="amount",
+            operator=FilterOperator.EQUALS,
+            value="100.0",
+        )
+        result = executor.execute_filter(df_registry, config, recorder)
+        assert result.rows_out >= 0
+
+    def test_filter_non_numeric_string_on_int_column_raises(
+        self, executor, recorder, sample_sales_table
+    ):
+        """Non-numeric string value on int column raises FilterTypeMismatchError."""
+        df_registry = {"load_sales": sample_sales_table}
+        config = FilterStepConfig(
+            name="filter_mismatch",
+            step_type=StepType.FILTER,
+            input="load_sales",
+            column="amount",
+            operator=FilterOperator.GREATER_THAN,
+            value="invalid_text",
+        )
+        with pytest.raises(FilterTypeMismatchError) as exc_info:
+            executor.execute_filter(df_registry, config, recorder)
+        assert exc_info.value.column == "amount"
+        assert exc_info.value.filter_value == "invalid_text"
+
+    def test_filter_non_numeric_string_on_float_column_raises(
+        self, executor, recorder
+    ):
+        """Non-numeric string on float column raises FilterTypeMismatchError."""
+        df = pd.DataFrame({"score": [1.5, 2.3, 3.7], "label": ["a", "b", "c"]})
+        df_registry = {"source": pa.Table.from_pandas(df, preserve_index=False)}
+        config = FilterStepConfig(
+            name="filter_mismatch_float",
+            step_type=StepType.FILTER,
+            input="source",
+            column="score",
+            operator=FilterOperator.LESS_THAN_OR_EQUAL,
+            value="not_a_number",
+        )
+        with pytest.raises(FilterTypeMismatchError) as exc_info:
+            executor.execute_filter(df_registry, config, recorder)
+        assert exc_info.value.column == "score"
+        assert "float" in exc_info.value.column_dtype
 
 
 class TestSelectStep:

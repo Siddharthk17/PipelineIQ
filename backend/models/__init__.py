@@ -422,6 +422,7 @@ class Webhook(Base):
 
     id: Mapped[str] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, default="Webhook")
     user_id: Mapped[str] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
@@ -471,6 +472,7 @@ class WebhookDelivery(Base):
         DateTime(timezone=True), nullable=True
     )
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -4,13 +4,19 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     String,
+    Text,
     Uuid,
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.types import JSON
 
 from backend.database import Base
-from backend.models._base import PgJSONB, _generate_uuid
+from backend.models._base import _generate_uuid
+
+_PgArray = ARRAY(Text())
+_AllowedRoles = _PgArray.with_variant(JSON(), "sqlite")
 
 
 class ColumnPolicy(Base):
@@ -30,7 +36,9 @@ class ColumnPolicy(Base):
     policy = Column(String(20), nullable=False)
     mask_pattern = Column(String(100), nullable=True)
     allowed_roles = Column(
-        PgJSONB, nullable=False, server_default="[]"
+        _AllowedRoles,
+        nullable=False,
+        server_default="{}",
     )
     created_by = Column(
         Uuid,

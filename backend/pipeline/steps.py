@@ -21,6 +21,7 @@ from backend.pipeline.exceptions import (
     AggregationError,
     ColumnNotFoundError,
     FileReadError,
+    FilterTypeMismatchError,
     InvalidOperatorError,
     JoinKeyMissingError,
     UnsupportedFileFormatError,
@@ -273,6 +274,52 @@ class StepExecutor:
                 reason=str(exc),
             ) from exc
 
+    def _coerce_filter_value(
+        self,
+        series: pd.Series,
+        value: Any,
+        step_name: str,
+        column: str,
+        operator: str,
+    ) -> Any:
+        """Coerce a filter value to match the column dtype for safe comparison.
+
+        When a string value is provided for a numeric column, attempts
+        conversion to the column's dtype. If the value cannot be coerced
+        and the operator is a comparison (>, <, >=, <=), raises a
+        FilterTypeMismatchError with actionable guidance.
+        """
+        if value is None:
+            return value
+
+        if pd.api.types.is_numeric_dtype(series):
+            try:
+                return pd.to_numeric(value)
+            except (ValueError, TypeError):
+                raise FilterTypeMismatchError(
+                    step_name=step_name,
+                    column=column,
+                    column_dtype=str(series.dtype),
+                    value=value,
+                    operator=operator,
+                )
+
+        if pd.api.types.is_datetime64_any_dtype(series):
+            try:
+                coerced = pd.to_datetime(value)
+                if coerced is not None:
+                    return coerced
+            except (ValueError, TypeError):
+                raise FilterTypeMismatchError(
+                    step_name=step_name,
+                    column=column,
+                    column_dtype=str(series.dtype),
+                    value=value,
+                    operator=operator,
+                )
+
+        return value
+
     def execute_filter(
         self,
         table_registry: Dict[str, pa.Table],
@@ -284,6 +331,8 @@ class StepExecutor:
         Raises:
             ColumnNotFoundError: If the filter column doesn't exist.
             InvalidOperatorError: If the operator is not supported.
+            FilterTypeMismatchError: If the filter value type cannot be
+                coerced to match the column dtype.
         """
         start = time.perf_counter()
         input_table = table_registry[config.input]
@@ -295,8 +344,24 @@ class StepExecutor:
 
         def _pandas_filter() -> pa.Table:
             mask = self._apply_filter_operator(config)
-            filtered_df = input_df[mask(
-                input_df[config.column], config.value)].copy()
+            column_series = input_df[config.column]
+            coerced_value = self._coerce_filter_value(
+                column_series,
+                config.value,
+                config.name,
+                config.column,
+                config.operator.value,
+            )
+            try:
+                filtered_df = input_df[mask(column_series, coerced_value)].copy()
+            except TypeError as exc:
+                raise FilterTypeMismatchError(
+                    step_name=config.name,
+                    column=config.column,
+                    column_dtype=str(column_series.dtype),
+                    value=config.value,
+                    operator=config.operator.value,
+                ) from exc
             return pa.Table.from_pandas(filtered_df, preserve_index=False)
 
         filtered_table = _pandas_filter()

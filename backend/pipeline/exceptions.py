@@ -407,6 +407,39 @@ class UnsupportedFileFormatError(StepExecutionError):
         }
 
 
+class FilterTypeMismatchError(StepExecutionError):
+    """Raised when a filter value type is incompatible with the column dtype."""
+
+    def __init__(
+        self,
+        step_name: str,
+        column: str,
+        column_dtype: str,
+        value: Any,
+        operator: str,
+    ) -> None:
+        self.column = column
+        self.column_dtype = column_dtype
+        self.filter_value = value
+        self.filter_operator = operator
+        super().__init__(
+            step_name,
+            f"Cannot apply filter '{operator}' on column '{column}' "
+            f"(dtype={column_dtype}) with value '{value}' "
+            f"(type={type(value).__name__}). "
+            f"Check that the filter value type is compatible with the column type.",
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            **super().to_dict(),
+            "column": self.column,
+            "column_dtype": self.column_dtype,
+            "filter_value": self.filter_value,
+            "filter_operator": self.filter_operator,
+        }
+
+
 class StepTimeoutError(StepExecutionError):
     """Raised when a step exceeds its allowed execution time."""
 
