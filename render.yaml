@@ -22,7 +22,7 @@ services:
       - key: FIRST_SUPERUSER_PASSWORD
         sync: false
       - key: CORS_ORIGINS
-        value: '["https://pipelineiq.vercel.app","https://pipelineiq-api.onrender.com","https://frontend-zeta-blue-67.vercel.app"]'
+        value: '["https://pipeline-iq0.vercel.app","https://pipelineiq-api.onrender.com"]'
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
