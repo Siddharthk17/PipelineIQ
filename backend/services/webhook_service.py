@@ -18,6 +18,8 @@ from backend.models import Webhook, WebhookDelivery
 
 logger = logging.getLogger(__name__)
 
+MAX_ATTEMPTS = 3
+RETRY_DELAYS = (0, 30, 120)
 
 def _sign_payload(secret: str, body: str | bytes) -> str:
     body_bytes = body if isinstance(body, bytes) else body.encode()
@@ -86,6 +88,14 @@ def trigger_webhooks_for_run(
 ) -> dict[str, Any]:
     """Fire webhooks via Celery tasks for non-blocking delivery."""
     event_type = f"pipeline_{status.lower()}"
+
+    if not user_id:
+        return {
+            "status": "skipped",
+            "matched_webhooks": 0,
+            "delivered": 0,
+            "failed": 0,
+        }
 
     try:
         from backend.tasks.webhook_tasks import fire_webhooks_for_event

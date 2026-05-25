@@ -255,7 +255,11 @@ def fire_webhooks_for_event(
     """Fire webhooks for a specific event type for a given user.
 
     Non-blocking: enqueues Celery tasks without waiting for delivery.
+    Returns immediately if user_id is empty (no webhooks to fire).
     """
+    if not user_id:
+        return
+
     from backend.database import SessionLocal
     from backend.models import Webhook
 
