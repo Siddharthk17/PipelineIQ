@@ -1145,3 +1145,49 @@ def get_run_timing(
         ],
         "total_duration_ms": run.duration_ms,
     }
+
+
+from fastapi import Body as _Body
+
+
+@legacy_runs_router.post("/estimate")
+def estimate_run_cost(
+    pipeline_yaml: str = _Body(...),
+    file_ids: list[str] = _Body(default_factory=list),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_read_db_dependency),
+):
+    from backend.cost.estimator import estimate_pipeline_cost
+
+    estimate = estimate_pipeline_cost(
+        pipeline_yaml=pipeline_yaml,
+        file_ids=file_ids,
+        db=db,
+    )
+
+    total_seconds = estimate.total_ms / 1000
+    if total_seconds < 60:
+        duration_human = f"{total_seconds:.1f}s"
+    else:
+        duration_human = f"{int(total_seconds // 60)}m {int(total_seconds % 60)}s"
+
+    return {
+        "total_ms": estimate.total_ms,
+        "duration_human": duration_human,
+        "peak_memory_mb": estimate.peak_memory_mb,
+        "confidence": estimate.confidence,
+        "optimization_tip": estimate.optimization_tip,
+        "data_points_used": estimate.data_points_used,
+        "steps": [
+            {
+                "step_name": s.step_name,
+                "step_type": s.step_type,
+                "engine": s.engine,
+                "predicted_ms": s.predicted_ms,
+                "confidence": round(s.confidence * 100, 1),
+                "row_in_est": s.row_in_est,
+                "row_out_est": s.row_out_est,
+            }
+            for s in estimate.step_estimates
+        ],
+    }

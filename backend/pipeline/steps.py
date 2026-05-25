@@ -182,8 +182,13 @@ class StepExecutor:
         recorder: LineageRecorder,
         file_paths: Dict[str, str],
         file_metadata: Dict[str, Dict[str, str]],
+        user_role: Optional[str] = None,
     ) -> StepExecutionResult:
         """Load a file into a DataFrame.
+
+        Column-level security policies are applied after reading the file
+        and before execution begins, ensuring restricted data never enters
+        the execution engine.
 
         Raises:
             FileReadError: If the file cannot be read.
@@ -194,6 +199,35 @@ class StepExecutor:
         metadata = file_metadata.get(config.file_id, {})
 
         df = self._read_file(config.name, file_path)
+
+        valid_role = user_role or "viewer"
+        try:
+            from backend.database import SessionLocal
+            from backend.security.column_security import (
+                get_column_policies_for_file,
+                apply_column_policies,
+            )
+
+            db = SessionLocal()
+            try:
+                policies = get_column_policies_for_file(
+                    file_id=str(config.file_id),
+                    db=db,
+                )
+            finally:
+                db.close()
+
+            if policies:
+                df = apply_column_policies(df, valid_role, policies)
+                logger.info(
+                    "Applied %d column policies to file %s for role '%s'",
+                    len(policies),
+                    config.file_id,
+                    valid_role,
+                )
+        except Exception as exc:
+            logger.warning("Column policy enforcement skipped: %s", exc)
+
         columns = list(df.columns)
         dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
 

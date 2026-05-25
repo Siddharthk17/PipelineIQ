@@ -124,6 +124,7 @@ class SmartExecutor:
         file_metadata: Optional[dict[str, dict[str, str]]] = None,
         extra_tables: Optional[dict[str, pa.Table]] = None,
         wasm_modules: Optional[dict[str, bytes]] = None,
+        user_role: Optional[str] = None,
     ) -> StepExecutionResult:
         """Execute a step using Pandas or DuckDB based on compatibility and size."""
         step_type = self._step_type(step)
@@ -159,6 +160,7 @@ class SmartExecutor:
                         recorder,
                         file_paths or {},
                         file_metadata or {},
+                        user_role=user_role,
                     )
                     _step_span.set_attribute("pipelineiq.rows.out", result.rows_out)
                     _step_span.set_attribute("pipelineiq.columns_out", len(result.columns_out))

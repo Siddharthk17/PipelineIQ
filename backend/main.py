@@ -107,6 +107,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info("Shutting down %s", settings.APP_NAME)
+    from backend.auth import close_bcrypt_pool
+    close_bcrypt_pool()
     if read_engine is write_engine:
         write_engine.dispose()
     else:
@@ -433,9 +435,13 @@ app.include_router(streaming_router)
 
 from backend.routers.catalog import router as catalog_router
 from backend.routers.lineage_export import router as lineage_export_router
+from backend.routers.column_policies import router as column_policies_router
+from backend.routers.catalog_pipelines import router as catalog_pipelines_router
 
 app.include_router(catalog_router)
 app.include_router(lineage_export_router)
+app.include_router(column_policies_router)
+app.include_router(catalog_pipelines_router)
 
 if settings.ENVIRONMENT != "production":
     from backend.api.debug import router as debug_router

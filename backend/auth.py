@@ -2,8 +2,15 @@
 
 Provides password hashing, token creation/verification, and FastAPI
 dependency functions for protecting routes with Bearer token auth.
+
+bcrypt operations at module level use ProcessPoolExecutor to avoid
+blocking the event loop. Synchronous versions are kept for non-async
+contexts (scripts, tests).
 """
 
+import asyncio
+import logging
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -24,6 +31,18 @@ ACCESS_TOKEN_EXPIRE_MINUTES = getattr(
 BCRYPT_ROUNDS = 12
 security = HTTPBearer(auto_error=False)
 
+logger = logging.getLogger(__name__)
+
+_bcrypt_pool = ProcessPoolExecutor(max_workers=2)
+
+
+def _bcrypt_check_sync(plain_bytes: bytes, hashed_bytes: bytes) -> bool:
+    return bcrypt.checkpw(plain_bytes, hashed_bytes)
+
+
+def _bcrypt_hash_sync(plain_bytes: bytes, salt: bytes) -> bytes:
+    return bcrypt.hashpw(plain_bytes, salt)
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     if not hashed_password.startswith(("$2a$", "$2b$", "$2y$")):
@@ -43,6 +62,41 @@ def get_password_hash(password: str) -> str:
         password.encode("utf-8"),
         bcrypt.gensalt(rounds=BCRYPT_ROUNDS),
     ).decode("utf-8")
+
+
+async def verify_password_async(plain: str, hashed: str) -> bool:
+    if not hashed.startswith(("$2a$", "$2b$", "$2y$")):
+        return False
+
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _bcrypt_pool,
+            _bcrypt_check_sync,
+            plain.encode("utf-8"),
+            hashed.encode("utf-8"),
+        )
+        return result
+    except Exception as e:
+        logger.error("Password verification error: %s", e)
+        return False
+
+
+async def hash_password_async(plain: str) -> str:
+    loop = asyncio.get_event_loop()
+    salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
+    hashed_bytes = await loop.run_in_executor(
+        _bcrypt_pool,
+        _bcrypt_hash_sync,
+        plain.encode("utf-8"),
+        salt,
+    )
+    return hashed_bytes.decode("utf-8")
+
+
+def close_bcrypt_pool() -> None:
+    _bcrypt_pool.shutdown(wait=False)
+    logger.info("bcrypt ProcessPoolExecutor shut down")
 
 
 def create_access_token(
@@ -72,12 +126,10 @@ async def get_current_user(
     request: Request = None,
     db: Session = Depends(get_db),
 ) -> User:
-    # First try Authorization header (Bearer token)
     token = None
     if credentials is not None:
         token = credentials.credentials
 
-    # Fallback to cookie if no Bearer token
     if token is None and request is not None:
         token = request.cookies.get("pipelineiq_token")
 
@@ -131,12 +183,10 @@ async def get_current_user_sse(
     request: Request = None,
     db: Session = Depends(get_db),
 ) -> User:
-    """Authenticate SSE clients via query token, standard Bearer header, or cookies."""
     raw_token = token
     if raw_token is None and credentials is not None:
         raw_token = credentials.credentials
 
-    # Fallback to cookie if no token provided in query or header
     if raw_token is None and request is not None:
         raw_token = request.cookies.get("pipelineiq_token")
 
@@ -178,7 +228,6 @@ def get_optional_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: Session = Depends(get_db),
 ) -> Optional[User]:
-    """Used for endpoints that work with or without auth."""
     if credentials is None:
         return None
     payload = verify_token(credentials.credentials)

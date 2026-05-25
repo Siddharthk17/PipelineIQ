@@ -32,6 +32,7 @@ from backend.models import (
     StepResult,
     StepStatus,
     UploadedFile,
+    User,
     WasmModule,
 )
 from backend.pipeline.cache import get_parsed_pipeline
@@ -452,6 +453,12 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
 
     wasm_modules = _load_wasm_modules(db, referenced_wasm_ids)
 
+    user_role = "viewer"
+    if pipeline_run.user_id:
+        user = db.query(User).filter(User.id == pipeline_run.user_id).first()
+        if user:
+            user_role = user.role or "viewer"
+
     runner = PipelineRunner()
     progress_callback = make_redis_progress_callback(str(pipeline_run.id))
 
@@ -474,6 +481,7 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
         progress_callback=progress_callback,
         lineage_callback=lineage_callback,
         wasm_modules=wasm_modules,
+        user_role=user_role,
     )
 
 

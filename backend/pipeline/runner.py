@@ -121,6 +121,7 @@ class PipelineRunner:
         progress_callback: Optional[ProgressCallback] = None,
         lineage_callback: Optional[Callable[[nx.DiGraph], None]] = None,
         wasm_modules: Optional[Dict[str, bytes]] = None,
+        user_role: Optional[str] = None,
     ) -> PipelineExecutionSummary:
         """Execute a complete pipeline from a parsed configuration."""
         run_id = run_id or str(uuid.uuid4())
@@ -154,6 +155,7 @@ class PipelineRunner:
                     lineage_callback=lineage_callback,
                     bus=bus,
                     wasm_modules=wasm_modules,
+                    user_role=user_role,
                 )
                 step_results.append(result)
                 table_registry[step.name] = result.output_table
@@ -202,6 +204,7 @@ class PipelineRunner:
         lineage_callback: Optional[Callable[[nx.DiGraph], None]],
         bus: ArrowDataBus,
         wasm_modules: Optional[Dict[str, bytes]] = None,
+        user_role: Optional[str] = None,
     ) -> StepExecutionResult:
         """Execute a single step with progress event emission."""
         callback(
@@ -230,6 +233,7 @@ class PipelineRunner:
                 file_paths=file_paths,
                 file_metadata=file_metadata,
                 wasm_modules=wasm_modules,
+                user_role=user_role,
             )
             # Persist result to Arrow data bus (tiered storage)
             bus.put(key=step.name, table=result.output_table, run_id=run_id)

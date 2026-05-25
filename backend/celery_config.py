@@ -27,6 +27,7 @@ task_routes = {
     "tasks.execute_scheduled_pipeline": {"queue": "bulk"},
     "tasks.schedule_run_completion_callback": {"queue": "bulk"},
     "tasks.run_streaming_pipeline": {"queue": "streaming"},
+    "tasks.deliver_webhook": {"queue": "critical"},
 }
 
 task_serializer = "json"

@@ -1,4 +1,8 @@
-"""Webhook delivery service with HMAC signing and retry logic."""
+"""Webhook delivery service with HMAC signing and async Celery delivery.
+
+Delegates to Celery tasks for non-blocking HTTP delivery via
+httpx.AsyncClient. The webhook_deliveries table records every attempt.
+"""
 
 import hashlib
 import hmac
@@ -7,7 +11,6 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-import httpx
 import orjson
 
 from backend.database import SessionLocal
@@ -15,23 +18,19 @@ from backend.models import Webhook, WebhookDelivery
 
 logger = logging.getLogger(__name__)
 
-MAX_ATTEMPTS = 3
-RETRY_DELAYS = [0, 60, 300]  # seconds
-
 
 def _sign_payload(secret: str, body: str | bytes) -> str:
-    """Generate HMAC SHA256 signature."""
     body_bytes = body if isinstance(body, bytes) else body.encode()
     return hmac.new(secret.encode(), body_bytes, hashlib.sha256).hexdigest()
 
 
-def deliver_webhook(
+def deliver_webhook_sync(
     webhook: Webhook,
     event_type: str,
     payload: dict,
     db=None,
 ) -> WebhookDelivery:
-    """Attempt to POST payload to webhook URL and record the result."""
+    """Synchronous webhook delivery — used for test webhooks only."""
     own_session = db is None
     if own_session:
         db = SessionLocal()
@@ -54,6 +53,8 @@ def deliver_webhook(
     )
 
     try:
+        import httpx
+
         with httpx.Client(timeout=10) as client:
             resp = client.post(webhook.url, content=body, headers=headers)
         delivery.response_status = resp.status_code
@@ -74,81 +75,6 @@ def deliver_webhook(
     return delivery
 
 
-def deliver_with_retry(
-    webhook_id: UUID,
-    event_type: str,
-    payload: dict,
-) -> None:
-    """Deliver webhook with up to 3 retry attempts."""
-    import time
-
-    db = SessionLocal()
-    try:
-        webhook = db.query(Webhook).filter(Webhook.id == webhook_id).first()
-        if not webhook or not webhook.is_active:
-            return
-
-        body = orjson.dumps(payload)
-        headers = {
-            "Content-Type": "application/json",
-            "X-PipelineIQ-Event": event_type,
-        }
-        if webhook.secret:
-            sig = _sign_payload(webhook.secret, body)
-            headers["X-PipelineIQ-Signature"] = f"sha256={sig}"
-
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            if attempt > 1:
-                time.sleep(RETRY_DELAYS[attempt - 1])
-
-            delivery = WebhookDelivery(
-                webhook_id=webhook.id,
-                run_id=payload.get("data", {}).get("run_id"),
-                event_type=event_type,
-                payload=payload,
-                attempt_number=attempt,
-            )
-
-            try:
-                with httpx.Client(timeout=10) as client:
-                    resp = client.post(
-                        webhook.url, content=body, headers=headers)
-                delivery.response_status = resp.status_code
-                delivery.response_body = resp.text[:1000] if resp.text else None
-                if 200 <= resp.status_code < 300:
-                    delivery.delivered_at = datetime.now(timezone.utc)
-                    db.add(delivery)
-                    db.commit()
-                    logger.info(
-                        "Webhook %s delivered on attempt %d",
-                        webhook_id,
-                        attempt)
-                    return
-                else:
-                    delivery.failed_at = datetime.now(timezone.utc)
-                    delivery.error_message = f"HTTP {resp.status_code}"
-            except Exception as e:
-                delivery.failed_at = datetime.now(timezone.utc)
-                delivery.error_message = str(e)[:500]
-
-            db.add(delivery)
-            db.commit()
-            logger.warning(
-                "Webhook %s attempt %d/%d failed: %s",
-                webhook_id,
-                attempt,
-                MAX_ATTEMPTS,
-                delivery.error_message,
-            )
-
-        logger.error(
-            "Webhook %s permanently failed after %d attempts",
-            webhook_id,
-            MAX_ATTEMPTS)
-    finally:
-        db.close()
-
-
 def trigger_webhooks_for_run(
     run_id: str,
     status: str,
@@ -158,55 +84,61 @@ def trigger_webhooks_for_run(
     rows_processed: int = 0,
     user_id: str = "",
 ) -> dict[str, Any]:
-    """Fire webhooks for the pipeline owner that registered for this event type."""
+    """Fire webhooks via Celery tasks for non-blocking delivery."""
     event_type = f"pipeline_{status.lower()}"
-    payload = {
-        "event": event_type,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "data": {
-            "run_id": str(run_id),
-            "pipeline_name": pipeline_name,
-            "status": status,
-            "duration_ms": duration_ms,
-            "steps_count": steps_count,
-            "rows_processed": rows_processed,
-        },
-    }
 
-    db = SessionLocal()
     try:
-        query = db.query(Webhook).filter(Webhook.is_active)
-        if user_id:
-            query = query.filter(Webhook.user_id == user_id)
-        webhooks = query.all()
-        matched_webhooks = 0
-        delivered = 0
-        failed = 0
-        for wh in webhooks:
-            if event_type in (wh.events or []):
-                matched_webhooks += 1
-                try:
-                    delivery = deliver_webhook(wh, event_type, payload, db=db)
-                    if delivery.delivered_at is not None:
-                        delivered += 1
-                    else:
-                        failed += 1
-                except Exception as e:
-                    failed += 1
-                    logger.error("Failed to deliver webhook %s: %s", wh.id, e)
-        if delivered > 0 and failed == 0:
-            status_label = "delivered"
-        elif delivered > 0 and failed > 0:
-            status_label = "partial"
-        elif matched_webhooks == 0:
-            status_label = "skipped"
-        else:
-            status_label = "failed"
-        return {
-            "status": status_label,
-            "matched_webhooks": matched_webhooks,
-            "delivered": delivered,
-            "failed": failed,
+        from backend.tasks.webhook_tasks import fire_webhooks_for_event
+
+        payload = {
+            "event": event_type,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "data": {
+                "run_id": str(run_id),
+                "pipeline_name": pipeline_name,
+                "status": status,
+                "duration_ms": duration_ms,
+                "steps_count": steps_count,
+                "rows_processed": rows_processed,
+            },
         }
-    finally:
-        db.close()
+        fire_webhooks_for_event(event_type, payload, user_id)
+
+        return {
+            "status": "enqueued",
+            "matched_webhooks": -1,
+            "delivered": 0,
+            "failed": 0,
+        }
+    except Exception as e:
+        logger.error("Webhook trigger failed: %s", e)
+        return {"status": "failed", "matched_webhooks": 0, "delivered": 0, "failed": 0}
+
+
+def deliver_webhook(
+    webhook: Webhook,
+    event_type: str,
+    payload: dict,
+    db=None,
+) -> WebhookDelivery:
+    """Convenience wrapper for test webhooks — uses sync delivery."""
+    return deliver_webhook_sync(webhook, event_type, payload, db=db)
+
+
+def deliver_with_retry(
+    webhook_id: UUID,
+    event_type: str,
+    payload: dict,
+) -> None:
+    """Enqueue webhook delivery as a Celery task.
+
+    The deliver_webhook task handles retries with exponential backoff
+    and records delivery attempts in webhook_deliveries.
+    """
+    from backend.tasks.webhook_tasks import deliver_webhook as deliver_task
+
+    payload_with_event = {**payload, "event_type": event_type}
+    deliver_task.apply_async(
+        args=[str(webhook_id), payload_with_event],
+        queue="critical",
+    )

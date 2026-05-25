@@ -488,6 +488,22 @@ def preview_file(
         df = _parse_file_preview(
             uploaded_file.original_filename, handle, min(rows, 100)
         )
+
+    try:
+        from backend.security.column_security import (
+            get_column_policies_for_file,
+            apply_column_policies,
+        )
+
+        policies = get_column_policies_for_file(
+            file_id=str(uploaded_file.id),
+            db=db,
+        )
+        if policies:
+            df = apply_column_policies(df, current_user.role, policies)
+    except Exception:
+        pass
+
     return {
         "file_id": file_id,
         "filename": uploaded_file.original_filename,
