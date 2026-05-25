@@ -33,7 +33,8 @@ from sqlalchemy.engine import Engine
 from backend.database import Base
 from backend.models._base import PgJSONB, _enum_values, _generate_uuid
 
-# Re-export contract models from their canonical modules
+# Re-export contract and policy models from their canonical modules
+from backend.models.column_policy import ColumnPolicy  # noqa: F401
 from backend.models.data_contract import ContractSeverity, PipelineContract  # noqa: F401
 from backend.models.contract_breach import ContractViolationRecord  # noqa: F401
 

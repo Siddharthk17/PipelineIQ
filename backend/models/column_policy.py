@@ -1,26 +1,28 @@
 from sqlalchemy import (
     CheckConstraint,
     Column,
+    DateTime,
     ForeignKey,
     String,
+    Uuid,
     UniqueConstraint,
+    func,
 )
-from sqlalchemy.dialects.postgresql import UUID, TIMESTAMP, ARRAY
-from sqlalchemy.sql import text
 
 from backend.database import Base
+from backend.models._base import PgJSONB, _generate_uuid
 
 
 class ColumnPolicy(Base):
     __tablename__ = "column_policies"
 
     id = Column(
-        UUID(as_uuid=True),
+        Uuid,
         primary_key=True,
-        server_default=text("gen_random_uuid()"),
+        default=_generate_uuid,
     )
     file_id = Column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("uploaded_files.id", ondelete="CASCADE"),
         nullable=False,
     )
@@ -28,16 +30,16 @@ class ColumnPolicy(Base):
     policy = Column(String(20), nullable=False)
     mask_pattern = Column(String(100), nullable=True)
     allowed_roles = Column(
-        ARRAY(String()), nullable=False, server_default="{}"
+        PgJSONB, nullable=False, server_default="[]"
     )
     created_by = Column(
-        UUID(as_uuid=True),
+        Uuid,
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
     created_at = Column(
-        TIMESTAMP(timezone=True),
-        server_default=text("NOW()"),
+        DateTime(timezone=True),
+        server_default=func.now(),
         nullable=False,
     )
 
