@@ -293,7 +293,14 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
         try:
             from backend.execution.arrow_bus import get_arrow_bus
 
-            get_arrow_bus().cleanup_run(run_id)
+            cleanup_result = get_arrow_bus().cleanup_run(run_id)
+            logger.info(
+                "Arrow bus cleanup: run_id=%s, hot=%d, warm=%d, cold=%d",
+                run_id[:16],
+                cleanup_result.get("hot", 0),
+                cleanup_result.get("warm", 0),
+                cleanup_result.get("cold", 0),
+            )
         except Exception:
             logger.debug("Arrow bus cleanup skipped for run_id=%s", run_id)
         db.close()

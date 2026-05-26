@@ -458,19 +458,33 @@ class ArrowDataBus:
         self._delete_location_payload(location)
         self._remove_manifest_entry(location.run_id, key)
 
-    def cleanup_run(self, run_id: str) -> None:
+    def cleanup_run(self, run_id: str) -> dict[str, int]:
+        deleted = {"hot": 0, "warm": 0, "cold": 0}
+
         with self._lock:
             keys = [k for k, meta in self._locations.items()
                     if meta.run_id == run_id]
 
         for key in keys:
+            loc = self._locations.get(key)
+            if loc:
+                if loc.tier == "redis":
+                    deleted["hot"] += 1
+                elif loc.tier == "shm":
+                    deleted["warm"] += 1
+                elif loc.tier == "spill":
+                    deleted["cold"] += 1
             self.delete(key)
 
-        # Recover and clean locations persisted by crashed/restarted worker
-        # processes.
         for location in self._load_manifest_locations(run_id):
             if location.key in keys:
                 continue
+            if location.tier == "redis":
+                deleted["hot"] += 1
+            elif location.tier == "shm":
+                deleted["warm"] += 1
+            elif location.tier == "spill":
+                deleted["cold"] += 1
             self._delete_location_payload(location)
             self._remove_manifest_entry(run_id, location.key)
 
@@ -480,8 +494,9 @@ class ArrowDataBus:
 
         log_storage_event(
             event_type="cleanup_run", tier="hot",
-            payload_bytes=len(keys), run_id=run_id,
+            payload_bytes=sum(deleted.values()), run_id=run_id,
         )
+        return deleted
 
     def clear_all(self) -> None:
         with self._lock:
@@ -574,15 +589,20 @@ class ArrowDataBus:
                 info = redis_client.info("memory")
                 used = info.get("used_memory", 0)
                 maxmem = info.get("maxmemory", 0) or info.get("used_memory", 0)
+                hot_key_count = sum(
+                    1 for _ in redis_client.scan_iter("arrow_bus:*", count=100)
+                    if not str(_).startswith(("arrow_bus:manifest:", "arrow_bus:shm:"))
+                )
                 stats["hot"] = {
                     "used_bytes": int(used),
                     "max_bytes":  int(maxmem) if maxmem else None,
+                    "key_count":  hot_key_count,
                     "utilization": round(used / max(maxmem, 1), 4),
                 }
             except Exception as exc:
-                stats["hot"] = {"error": str(exc)}
+                stats["hot"] = {"error": str(exc), "key_count": 0}
         else:
-            stats["hot"] = {"error": "Redis unavailable"}
+            stats["hot"] = {"error": "Redis unavailable", "key_count": 0}
 
         # Tier 2 — /dev/shm
         used_shm, total_shm = shm_store.usage_bytes()

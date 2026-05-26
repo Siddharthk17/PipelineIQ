@@ -31,6 +31,8 @@ import type {
   ContractStatusResponse,
   ContractViolation,
   ContractViolationResponse,
+  StorageStatsResponse,
+  TierHealthResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -764,4 +766,20 @@ export async function getStepContractViolations(
 
 export async function getRunTiming(runId: string): Promise<RunTimingResponse> {
   return fetchApi<RunTimingResponse>(`/pipelines/${runId}/timing`);
+}
+
+export async function getStorageStats(): Promise<StorageStatsResponse> {
+  return fetchApi<StorageStatsResponse>("/storage/stats");
+}
+
+export async function getTierHealth(): Promise<TierHealthResponse> {
+  return fetchApi<TierHealthResponse>("/storage/tier-health");
+}
+
+export async function triggerEviction(): Promise<{ evicted: number }> {
+  return fetchApi<{ evicted: number }>("/storage/evict", { method: "POST" });
+}
+
+export async function cleanupStaleShm(): Promise<{ deleted: number }> {
+  return fetchApi<{ deleted: number }>("/storage/cleanup-stale-shm", { method: "POST" });
 }

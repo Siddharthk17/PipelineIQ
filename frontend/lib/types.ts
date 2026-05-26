@@ -411,3 +411,97 @@ export interface ContractViolationResponse {
   total_violations: number;
   violations: ContractViolation[];
 }
+
+export interface TierStats {
+  used_bytes: number;
+  max_bytes: number | null;
+  key_count?: number;
+  utilization: number;
+  error?: string;
+}
+
+export interface WarmTierStats {
+  used_bytes: number;
+  total_bytes: number;
+  utilization: number;
+  available: boolean;
+}
+
+export interface ColdTierStats {
+  object_count: number;
+  total_bytes: number;
+  provider?: string;
+  note?: string;
+  error?: string;
+}
+
+export interface TierHealthWarning {
+  tier: string;
+  message: string;
+  severity: "warning" | "critical" | "error";
+}
+
+export interface TierHealthResponse {
+  healthy: boolean;
+  warnings: TierHealthWarning[];
+}
+
+export interface BucketObjectRef {
+  name: string;
+  size_mb: number;
+}
+
+export interface BucketStats {
+  object_count: number;
+  total_bytes: number;
+  total_mb: number;
+  largest_object?: {
+    name: string;
+    size_bytes: number;
+    size_mb: number;
+  };
+  oldest_object?: {
+    name: string;
+    last_modified: string | null;
+  };
+  top10_by_size?: BucketObjectRef[];
+  error?: string;
+}
+
+export interface LifecycleRule {
+  id: string;
+  status: string;
+  prefix: string | null;
+  expiry_days: number | null;
+}
+
+export interface LifecyclePolicy {
+  rules: LifecycleRule[];
+  note?: string;
+  error?: string;
+}
+
+export interface EventStat {
+  tier: string;
+  event_count: number;
+  total_bytes: number;
+  avg_duration_ms: number;
+}
+
+export interface GrowthTrendPoint {
+  day: string;
+  mb: number;
+}
+
+export interface StorageStatsResponse {
+  tiers: {
+    hot?: TierStats;
+    warm?: WarmTierStats;
+    cold?: ColdTierStats;
+  };
+  buckets: Record<string, BucketStats>;
+  lifecycle: Record<string, LifecyclePolicy>;
+  event_stats: EventStat[];
+  growth_trend_7d: GrowthTrendPoint[];
+  generated_at: string;
+}

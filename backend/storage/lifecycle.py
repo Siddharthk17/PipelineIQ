@@ -94,8 +94,11 @@ def get_lifecycle_policies() -> dict[str, dict[str, Any]]:
     for bucket in BUCKETS:
         try:
             config = client.get_bucket_lifecycle(bucket)
+            if config is None or config.rules is None:
+                results[bucket] = {"rules": [], "note": "no lifecycle configured"}
+                continue
             rules = []
-            for rule in config.rules or []:
+            for rule in config.rules:
                 prefix = None
                 if rule.rule_filter and hasattr(rule.rule_filter, "prefix"):
                     prefix = rule.rule_filter.prefix

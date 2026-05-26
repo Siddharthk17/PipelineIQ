@@ -60,4 +60,4 @@ def log_storage_event(
                 )
                 conn.commit()
     except Exception:
-        pass
+        logger.debug("Storage event log insert failed (non-fatal)", exc_info=True)
