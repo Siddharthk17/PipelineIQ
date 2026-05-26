@@ -3,6 +3,32 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [11.13.2] — Week 21: Tiered Storage Completion & MinIO Lifecycle
+
+*Note: This release makes PipelineIQ storage-intelligent, completing the Arrow data bus architecture and introducing automated storage management. Intermediate data now automatically flows across three storage tiers (Redis, shared memory, MinIO) based on size, while MinIO buckets self-manage their contents via lifecycle policies to prevent unbounded disk growth.*
+
+### Performance & Scalability
+- **Three-Tier Arrow IPC Data Bus (Bottleneck #13)** — Completed the zero-copy data bus by introducing a "Warm" tier, bridging the gap between Redis and MinIO. Data is routed automatically based on payload size:
+  - **Tier 1 (HOT):** Redis (`< 10MB`). Ultra-fast (~0.2ms) for small payloads.
+  - **Tier 2 (WARM):** `/dev/shm` Linux shared memory (`10MB - 500MB`). Near-RAM speeds (~0.5ms) without consuming Redis memory limits.
+  - **Tier 3 (COLD):** MinIO Parquet with Snappy compression (`≥ 500MB`). For massive datasets, with ~50ms network/decompression latency.
+- **MinIO Lifecycle Policies (Bottleneck #14)** — Implemented S3-compatible object lifecycle rules to prevent unbounded storage growth on single-node deployments.
+  - `pipelineiq-outputs` automatically expire after 7 days.
+  - `pipelineiq-spills` (cold tier Arrow IPC) automatically expire after 48 hours.
+  - User uploads and Wasm modules remain persistent with no auto-expiry.
+
+### Added
+- **Proactive Cache Eviction** — Added `maybe_evict_hot_to_warm()` to automatically demote large Redis entries to `/dev/shm` when Redis memory utilization exceeds 90%, preventing OOM crashes.
+- **Automated Run Cleanup** — The pipeline completion hook now triggers a synchronized purge across all three storage tiers, ensuring transient intermediate data is immediately deleted upon run success, failure, or cancellation.
+- **Storage Analytics Dashboard** — Added a comprehensive storage overview UI and API (`/api/storage/stats`).
+  - Displays real-time tier utilization, bucket sizes, and lifecycle policy status.
+  - Includes a 7-day data growth sparkline and lists the top 10 largest objects per bucket.
+  - Added a quick health check endpoint (`/api/storage/tier-health`) that surfaces warnings if Redis or `/dev/shm` exceed 85% or 80% capacity, respectively.
+- **Storage Event Auditing** — Added Alembic migration `0015_add_storage_events.py` to create the `storage_events` table. Logs every read, write, eviction, and cleanup operation across the Arrow data bus for granular analytics.
+- **Test Suite Expansion** — Added 14 new tests covering tier thresholds, Arrow IPC binary roundtrips, `/dev/shm` path determinism, cleanup idempotency, and MinIO lifecycle rule configurations.
+
+---
+
 ## [11.1.9] — Week 20: Column-Level Security, Cost Estimation & Async Webhooks
 
 *Note: This release introduces enterprise-grade column-level access policies and pre-run cost estimation. It also resolves two critical event loop bottlenecks related to synchronous HTTP calls and CPU-bound password hashing, ensuring the API remains highly responsive under load.*

@@ -48,6 +48,9 @@ celery_app.autodiscover_tasks(
 celery_app.autodiscover_tasks(
     ["backend.tasks"],
     related_name="streaming_pipeline")
+celery_app.autodiscover_tasks(
+    ["backend.tasks"],
+    related_name="storage_maintenance")
 
 if settings.SENTRY_DSN:
     sentry_sdk.init(

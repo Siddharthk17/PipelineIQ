@@ -28,6 +28,7 @@ task_routes = {
     "tasks.schedule_run_completion_callback": {"queue": "bulk"},
     "tasks.run_streaming_pipeline": {"queue": "streaming"},
     "tasks.deliver_webhook": {"queue": "critical"},
+    "tasks.maintain_storage": {"queue": "bulk"},
 }
 
 task_serializer = "json"
@@ -54,5 +55,9 @@ beat_schedule = {
     "check-pipeline-schedules": {
         "task": "schedules.check",
         "schedule": 60.0,
-    }
+    },
+    "maintain-storage": {
+        "task": "tasks.maintain_storage",
+        "schedule": 300.0,  # every 5 minutes
+    },
 }

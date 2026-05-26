@@ -154,6 +154,7 @@ def _run_startup_initialization_once() -> None:
 
         _validate_upload_dir()
         _init_storage_bucket()
+        _apply_minio_lifecycle_policies()
         _STARTUP_MARKER_PATH.write_text("initialized\n", encoding="utf-8")
 
 
@@ -181,6 +182,20 @@ def _init_storage_bucket() -> None:
                 bucket_name)
     except Exception as exc:
         logger.warning("Failed to initialize S3 bucket: %s", exc)
+
+
+def _apply_minio_lifecycle_policies() -> None:
+    """Apply MinIO lifecycle policies (idempotent)."""
+    try:
+        from backend.storage.lifecycle import apply_all_lifecycle_policies
+        results = apply_all_lifecycle_policies()
+        for bucket, result in results.items():
+            if result.get("status") == "ok":
+                logger.info("Lifecycle policy OK: %s — %s", bucket, result.get("policy"))
+            else:
+                logger.warning("Lifecycle policy failed: %s — %s", bucket, result.get("error"))
+    except Exception as exc:
+        logger.warning("MinIO lifecycle setup failed (non-fatal): %s", exc)
 
 
 app = FastAPI(
@@ -438,10 +453,13 @@ from backend.routers.lineage_export import router as lineage_export_router
 from backend.routers.column_policies import router as column_policies_router
 from backend.routers.catalog_pipelines import router as catalog_pipelines_router
 
+from backend.routers.storage import router as storage_router
+
 app.include_router(catalog_router)
 app.include_router(lineage_export_router)
 app.include_router(column_policies_router)
 app.include_router(catalog_pipelines_router)
+app.include_router(storage_router)
 
 if settings.ENVIRONMENT != "production":
     from backend.api.debug import router as debug_router
