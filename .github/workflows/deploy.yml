@@ -70,12 +70,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check if KUBE_CONFIG is available
+        id: check-kube
+        run: |
+          if [ -z "${{ secrets.KUBE_CONFIG }}" ]; then
+            echo "KUBE_CONFIG secret not set — running in dry-run mode"
+            echo "dry-run=true" >> $GITHUB_OUTPUT
+          else
+            echo "dry-run=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Install kubectl
+        if: steps.check-kube.outputs.dry-run == 'false'
         uses: azure/setup-kubectl@v3
         with:
           version: v1.29.0
 
       - name: Configure kubectl for Civo
+        if: steps.check-kube.outputs.dry-run == 'false'
         run: |
           mkdir -p ~/.kube
           echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
@@ -83,9 +95,11 @@ jobs:
           kubectl config current-context
 
       - name: Verify cluster connectivity
+        if: steps.check-kube.outputs.dry-run == 'false'
         run: kubectl get nodes
 
       - name: Update Kubernetes secrets
+        if: steps.check-kube.outputs.dry-run == 'false'
         run: |
           kubectl delete secret pipelineiq-secrets -n pipelineiq --ignore-not-found
           kubectl create secret generic pipelineiq-secrets \
@@ -107,6 +121,7 @@ jobs:
             --from-literal=S3_SECRET_KEY="${{ secrets.S3_SECRET_KEY }}"
 
       - name: Apply Kubernetes manifests
+        if: steps.check-kube.outputs.dry-run == 'false'
         run: |
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/configmap.yaml
@@ -118,6 +133,7 @@ jobs:
           kubectl apply -f k8s/ingress/
 
       - name: Update image tag in deployments
+        if: steps.check-kube.outputs.dry-run == 'false'
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image-tag }}"
           kubectl set image deployment/pipelineiq-api api=$IMAGE -n pipelineiq
@@ -130,6 +146,7 @@ jobs:
           kubectl set image deployment/sse-service sse=$IMAGE -n pipelineiq
 
       - name: Wait for rollout to complete
+        if: steps.check-kube.outputs.dry-run == 'false'
         timeout-minutes: 10
         run: |
           kubectl rollout status deployment/pipelineiq-api -n pipelineiq --timeout=5m
@@ -137,6 +154,7 @@ jobs:
           kubectl rollout status deployment/worker-bulk -n pipelineiq --timeout=5m
 
       - name: Run smoke tests against production
+        if: steps.check-kube.outputs.dry-run == 'false'
         run: |
           sleep 30
 
@@ -156,6 +174,22 @@ jobs:
 
           echo "Deployment successful!"
           echo "API: https://api.pipelineiq.YOURDOMAIN.com"
+
+      - name: Dry-run deploy (no KUBE_CONFIG — skipping k3s)
+        if: steps.check-kube.outputs.dry-run == 'true'
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image-tag }}"
+          echo "::group::Dry-Run Deployment Summary"
+          echo "  Image built: $IMAGE"
+          echo "  Registry:    ${{ env.REGISTRY }}"
+          echo "  Namespace:   pipelineiq"
+          echo "  Manifests:   k8s/ (namespace, configmap, postgres, redis, minio, backend, workers, ingress)"
+          echo "  Deployments: pipelineiq-api, worker-critical, worker-default, worker-bulk, worker-gemini, worker-streaming, worker-beat, sse-service"
+          echo "::endgroup::"
+          echo ""
+          echo "SKIPPED: k3s cluster not configured (set KUBE_CONFIG secret to enable real deploy)"
+          echo "FAKE URL: https://api.pipelineiq.dry-run.example.com"
+          echo "::notice title=Dry-Run Deploy::Image $IMAGE ready. No k3s cluster connected. FAKE URL: https://api.pipelineiq.dry-run.example.com"
 
       - name: Notify on failure
         if: failure()

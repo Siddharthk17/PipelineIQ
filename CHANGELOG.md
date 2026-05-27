@@ -3,6 +3,42 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [11.22.33] — Week 22: Civo k3s Kubernetes Deployment & CI/CD
+
+*Note: This is the first official PRODUCTION RELEASE of PipelineIQ. It transitions the platform from a local Docker Compose environment to a highly available, cloud-native Kubernetes deployment on Civo k3s. It also introduces a fully automated GitHub Actions CI/CD pipeline, ensuring that every push to the main branch is rigorously tested, built, and deployed with zero downtime.*
+
+### Infrastructure & Deployment
+- **Civo k3s Kubernetes Cluster** — Deployed the entire PipelineIQ stack to a production-grade, lightweight Kubernetes cluster.
+- **Comprehensive Kubernetes Manifests** — Created a complete suite of `k8s/` manifests including Deployments, Services, PersistentVolumeClaims (PVCs), ConfigMaps, and Secrets.
+- **Service Architecture & Scaling**:
+  - **API**: Configured with 2 base replicas and a Horizontal Pod Autoscaler (HPA) to scale up to 5 pods based on CPU utilization (70% threshold).
+  - **Workers**: Deployed dedicated deployments for `worker-default` (concurrency=4) and `worker-bulk` (concurrency=2).
+  - **Singleton Workers**: Strictly enforced 1 replica for `worker-beat` (to prevent duplicate cron scheduling) and `worker-gemini` (to strictly adhere to API rate limits).
+  - **Stateful Services**: Provisioned Civo block storage PVCs for PostgreSQL (10GB) and MinIO (20GB). Deployed the 4 distinct Redis instances (broker, pubsub, cache, yjs) for workload isolation.
+- **Automated TLS & Ingress** — Configured Traefik Ingress with `cert-manager` to automatically provision and renew Let's Encrypt SSL/TLS certificates for the production domain.
+
+### CI/CD & Automation
+- **Continuous Integration (`ci.yml`)** — Runs on all branches and PRs.
+  - Spins up ephemeral PostgreSQL and Redis service containers.
+  - Executes the full backend `pytest` suite and frontend `pnpm test` / `tsc` checks.
+  - Enforces Dockerfile best practices using `hadolint`.
+- **Continuous Deployment (`deploy.yml`)** — Runs exclusively on pushes to `main`.
+  - Builds and pushes the Docker image to the GitHub Container Registry (GHCR) utilizing layer caching for speed.
+  - Applies Kubernetes manifests idempotently and updates image tags.
+  - Executes post-deployment smoke tests against the live production `/healthz` and `/readyz` endpoints before marking the deployment as successful.
+
+### Security & Reliability
+- **Zero-Downtime Rolling Updates** — Configured Kubernetes deployment strategies with `maxSurge: 1` and `maxUnavailable: 0` to ensure the API never drops requests during a deployment.
+- **Multi-Stage Docker Build** — Optimized the production Dockerfile using a multi-stage build, stripping out C-compilers and build dependencies to keep the final image size minimal and secure.
+- **Non-Root Container Execution** — Hardened the Docker image to run as a restricted `appuser` (UID 1000) instead of root.
+- **Liveness & Readiness Probes** — Implemented strict Kubernetes health checks:
+  - `GET /healthz`: Lightweight liveness probe to automatically restart dead pods.
+  - `GET /readyz`: Deep readiness probe that verifies PostgreSQL and Redis connectivity before routing traffic to a new pod.
+- **Init Containers for Migrations** — Configured an `initContainer` to automatically run Alembic database migrations (`alembic upgrade head`) before the API pods are allowed to start, guaranteeing schema consistency.
+- **Production Runbook** — Added a comprehensive `RUNBOOK.md` detailing disaster recovery procedures, manual scaling, log inspection, and secret rotation protocols.
+
+---
+
 ## [11.13.2] — Week 21: Tiered Storage Completion & MinIO Lifecycle
 
 *Note: This release makes PipelineIQ storage-intelligent, completing the Arrow data bus architecture and introducing automated storage management. Intermediate data now automatically flows across three storage tiers (Redis, shared memory, MinIO) based on size, while MinIO buckets self-manage their contents via lifecycle policies to prevent unbounded disk growth.*
