@@ -1,0 +1,352 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-critical
+  namespace: pipelineiq
+  labels:
+    app: worker-critical
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-critical
+  template:
+    metadata:
+      labels:
+        app: worker-critical
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - worker
+            - --queues=critical
+            - --concurrency=2
+            - --prefetch-multiplier=1
+            - --hostname=critical@%(h)s
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pipelineiq-worker-critical
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-default
+  namespace: pipelineiq
+  labels:
+    app: worker-default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker-default
+  template:
+    metadata:
+      labels:
+        app: worker-default
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - worker
+            - --queues=default
+            - --concurrency=4
+            - --prefetch-multiplier=1
+            - --hostname=default@%(h)s
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pipelineiq-worker-default
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - backend.celery_app
+                - inspect
+                - ping
+                - --timeout=5
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-bulk
+  namespace: pipelineiq
+  labels:
+    app: worker-bulk
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker-bulk
+  template:
+    metadata:
+      labels:
+        app: worker-bulk
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - worker
+            - --queues=bulk
+            - --concurrency=2
+            - --prefetch-multiplier=1
+            - --hostname=bulk@%(h)s
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pipelineiq-worker-bulk
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-gemini
+  namespace: pipelineiq
+  labels:
+    app: worker-gemini
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-gemini
+  template:
+    metadata:
+      labels:
+        app: worker-gemini
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - worker
+            - --queues=gemini
+            - --concurrency=1
+            - --prefetch-multiplier=1
+            - --hostname=gemini@%(h)s
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-streaming
+  namespace: pipelineiq
+  labels:
+    app: worker-streaming
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-streaming
+  template:
+    metadata:
+      labels:
+        app: worker-streaming
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - worker
+            - --queues=streaming
+            - --concurrency=4
+            - --prefetch-multiplier=1
+            - --hostname=streaming@%(h)s
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pipelineiq-worker-streaming
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-beat
+  namespace: pipelineiq
+  labels:
+    app: worker-beat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-beat
+  template:
+    metadata:
+      labels:
+        app: worker-beat
+    spec:
+      containers:
+        - name: beat
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - beat
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sse-service
+  namespace: pipelineiq
+  labels:
+    app: sse-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sse-service
+  template:
+    metadata:
+      labels:
+        app: sse-service
+    spec:
+      containers:
+        - name: sse
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - gunicorn
+            - backend.sse_app:app
+            - -k
+            - uvicorn.workers.UvicornWorker
+            - -w
+            - "2"
+            - -b
+            - 0.0.0.0:8001
+          workingDir: /app
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pipelineiq-sse-service
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sse-service
+  namespace: pipelineiq
+spec:
+  selector:
+    app: sse-service
+  ports:
+    - port: 8001
+      targetPort: 8001
+  type: ClusterIP

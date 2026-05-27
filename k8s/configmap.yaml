@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pipelineiq-config
+  namespace: pipelineiq
+data:
+  REDIS_BROKER_URL: redis://redis-broker:6379/0
+  REDIS_BACKEND_URL: redis://redis-broker:6379/1
+  REDIS_PUBSUB_URL: redis://redis-pubsub:6380/0
+  REDIS_CACHE_URL: redis://redis-cache:6381/0
+  REDIS_YJS_URL: redis://redis-yjs:6382/0
+
+  CELERY_RESULT_BACKEND: redis://redis-broker:6379/1
+
+  MINIO_ENDPOINT: minio:9000
+  S3_ENDPOINT_URL: http://minio:9000
+  STORAGE_TYPE: s3
+  S3_BUCKET: pipelineiq-uploads
+
+  ENVIRONMENT: production
+  DEBUG: "false"
+  OTEL_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger-collector:4317
+
+  CELERY_WORKERS_CRITICAL: "2"
+  CELERY_WORKERS_DEFAULT: "4"
+  CELERY_WORKERS_BULK: "2"
+  CELERY_WORKERS_STREAMING: "4"
+  CELERY_CONCURRENCY_BULK: "2"
+  CELERY_CONCURRENCY_GEMINI: "1"
+
+  GUNICORN_WORKERS: "4"
+
+  APP_VERSION: "3.0.0"
+  ALLOW_REGISTRATION: "false"
+
+  CACHE_TTL_STATS: "30"
+  DRIFT_DETECTION_ENABLED: "true"
+  MAX_VERSIONS_PER_PIPELINE: "50"
+  MAX_UPLOAD_SIZE: "52428800"
+
+  RATE_LIMIT_PIPELINE_RUN: 10/minute
+  RATE_LIMIT_FILE_UPLOAD: 30/minute
+  RATE_LIMIT_VALIDATION: 60/minute
+  RATE_LIMIT_READ: 120/minute

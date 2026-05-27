@@ -1,0 +1,163 @@
+name: Deploy to Civo k3s
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/pipelineiq-backend
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  build-and-push:
+    name: Build and Push to GHCR
+    runs-on: ubuntu-22.04
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  deploy:
+    name: Deploy to Production
+    needs: build-and-push
+    runs-on: ubuntu-22.04
+
+    environment:
+      name: production
+      url: https://api.pipelineiq.YOURDOMAIN.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: v1.29.0
+
+      - name: Configure kubectl for Civo
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl config current-context
+
+      - name: Verify cluster connectivity
+        run: kubectl get nodes
+
+      - name: Update Kubernetes secrets
+        run: |
+          kubectl delete secret pipelineiq-secrets -n pipelineiq --ignore-not-found
+          kubectl create secret generic pipelineiq-secrets \
+            --namespace=pipelineiq \
+            --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+            --from-literal=DATABASE_WRITE_URL="${{ secrets.DATABASE_WRITE_URL }}" \
+            --from-literal=DATABASE_READ_URL="${{ secrets.DATABASE_READ_URL }}" \
+            --from-literal=POSTGRES_USER="${{ secrets.POSTGRES_USER }}" \
+            --from-literal=POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
+            --from-literal=POSTGRES_DB="${{ secrets.POSTGRES_DB }}" \
+            --from-literal=JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            --from-literal=SECRET_KEY="${{ secrets.SECRET_KEY }}" \
+            --from-literal=GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
+            --from-literal=GEMINI_MODEL="${{ secrets.GEMINI_MODEL }}" \
+            --from-literal=GEMINI_FALLBACK_MODELS="${{ secrets.GEMINI_FALLBACK_MODELS }}" \
+            --from-literal=MINIO_ROOT_USER="${{ secrets.MINIO_ROOT_USER }}" \
+            --from-literal=MINIO_ROOT_PASSWORD="${{ secrets.MINIO_ROOT_PASSWORD }}" \
+            --from-literal=S3_ACCESS_KEY="${{ secrets.S3_ACCESS_KEY }}" \
+            --from-literal=S3_SECRET_KEY="${{ secrets.S3_SECRET_KEY }}"
+
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/postgres/
+          kubectl apply -f k8s/redis/
+          kubectl apply -f k8s/minio/
+          kubectl apply -f k8s/backend/
+          kubectl apply -f k8s/workers/
+          kubectl apply -f k8s/ingress/
+
+      - name: Update image tag in deployments
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image-tag }}"
+          kubectl set image deployment/pipelineiq-api api=$IMAGE -n pipelineiq
+          kubectl set image deployment/worker-critical worker=$IMAGE -n pipelineiq
+          kubectl set image deployment/worker-default worker=$IMAGE -n pipelineiq
+          kubectl set image deployment/worker-bulk worker=$IMAGE -n pipelineiq
+          kubectl set image deployment/worker-gemini worker=$IMAGE -n pipelineiq
+          kubectl set image deployment/worker-streaming worker=$IMAGE -n pipelineiq
+          kubectl set image deployment/worker-beat beat=$IMAGE -n pipelineiq
+          kubectl set image deployment/sse-service sse=$IMAGE -n pipelineiq
+
+      - name: Wait for rollout to complete
+        timeout-minutes: 10
+        run: |
+          kubectl rollout status deployment/pipelineiq-api -n pipelineiq --timeout=5m
+          kubectl rollout status deployment/worker-default -n pipelineiq --timeout=5m
+          kubectl rollout status deployment/worker-bulk -n pipelineiq --timeout=5m
+
+      - name: Run smoke tests against production
+        run: |
+          sleep 30
+
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://api.pipelineiq.YOURDOMAIN.com/healthz)
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: /healthz returned $HTTP_STATUS"
+            exit 1
+          fi
+          echo "PASS: /healthz returned 200"
+
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://api.pipelineiq.YOURDOMAIN.com/readyz)
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "WARN: /readyz returned $HTTP_STATUS (dependencies may still be starting)"
+          fi
+
+          echo "Deployment successful!"
+          echo "API: https://api.pipelineiq.YOURDOMAIN.com"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Deployment FAILED. Check the GitHub Actions log."

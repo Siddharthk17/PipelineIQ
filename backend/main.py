@@ -472,8 +472,13 @@ if settings.ENVIRONMENT != "production":
     include_in_schema=False,
     response_model=None,
 )
+@app.get(
+    "/healthz",
+    include_in_schema=False,
+    response_model=None,
+)
 def live_check() -> dict:
-    """Lightweight liveness endpoint."""
+    """Lightweight liveness endpoint — no DB or Redis calls."""
     return {"status": "ok", "version": settings.APP_VERSION}
 
 

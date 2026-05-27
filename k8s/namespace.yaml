@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pipelineiq
+  labels:
+    app.kubernetes.io/name: pipelineiq
+    environment: production

@@ -1,0 +1,208 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-broker
+  namespace: pipelineiq
+  labels:
+    app: redis-broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-broker
+  template:
+    metadata:
+      labels:
+        app: redis-broker
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - redis-server
+            - --port
+            - "6379"
+            - --save
+            - "60"
+            - "1"
+            - --loglevel
+            - warning
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "200m"
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "-p", "6379", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-broker
+  namespace: pipelineiq
+spec:
+  selector:
+    app: redis-broker
+  ports:
+    - port: 6379
+      targetPort: 6379
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-pubsub
+  namespace: pipelineiq
+  labels:
+    app: redis-pubsub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-pubsub
+  template:
+    metadata:
+      labels:
+        app: redis-pubsub
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - redis-server
+            - --port
+            - "6380"
+            - --loglevel
+            - warning
+          ports:
+            - containerPort: 6380
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "30m"
+            limits:
+              memory: "256Mi"
+              cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-pubsub
+  namespace: pipelineiq
+spec:
+  selector:
+    app: redis-pubsub
+  ports:
+    - port: 6380
+      targetPort: 6380
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-cache
+  namespace: pipelineiq
+  labels:
+    app: redis-cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-cache
+  template:
+    metadata:
+      labels:
+        app: redis-cache
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - redis-server
+            - --port
+            - "6381"
+            - --maxmemory
+            - 1gb
+            - --maxmemory-policy
+            - allkeys-lru
+            - --loglevel
+            - warning
+          ports:
+            - containerPort: 6381
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "50m"
+            limits:
+              memory: "1200Mi"
+              cpu: "300m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cache
+  namespace: pipelineiq
+spec:
+  selector:
+    app: redis-cache
+  ports:
+    - port: 6381
+      targetPort: 6381
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-yjs
+  namespace: pipelineiq
+  labels:
+    app: redis-yjs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-yjs
+  template:
+    metadata:
+      labels:
+        app: redis-yjs
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - redis-server
+            - --port
+            - "6382"
+            - --loglevel
+            - warning
+          ports:
+            - containerPort: 6382
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "30m"
+            limits:
+              memory: "256Mi"
+              cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-yjs
+  namespace: pipelineiq
+spec:
+  selector:
+    app: redis-yjs
+  ports:
+    - port: 6382
+      targetPort: 6382
+  type: ClusterIP

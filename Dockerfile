@@ -1,13 +1,29 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS builder
 
-RUN groupadd --gid 1000 appuser && \
-    useradd --uid 1000 --gid appuser --shell /bin/bash --create-home appuser
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y \
+    gcc g++ libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+
+FROM python:3.11-slim AS production
 
 WORKDIR /app
 
-COPY backend/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && apt-get install -y \
+    libpq5 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /root/.local /root/.local
+
+ENV PATH=/root/.local/bin:$PATH
+
+RUN groupadd --gid 1000 appuser && \
+    useradd --uid 1000 --gid appuser --shell /bin/bash --create-home appuser
 
 COPY backend ./backend
 COPY alembic.ini /app/alembic.ini
@@ -22,5 +38,8 @@ USER appuser
 
 EXPOSE 8000
 EXPOSE 8001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:8000/healthz || exit 1
 
 CMD ["gunicorn", "backend.main:app", "--config", "backend/gunicorn.conf.py"]
