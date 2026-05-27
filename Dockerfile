@@ -36,10 +36,18 @@ RUN mkdir -p /tmp/uploads /app/data /app/uploads /tmp/gunicorn && \
 
 USER appuser
 
+ENV PORT=8000
+ENV WORKERS=4
+
 EXPOSE 8000
 EXPOSE 8001
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -sf http://localhost:8000/healthz || exit 1
 
-CMD ["gunicorn", "backend.main:app", "--config", "backend/gunicorn.conf.py"]
+CMD ["gunicorn", "backend.main:app", \
+     "-k", "uvicorn.workers.UvicornWorker", \
+     "-w", "4", \
+     "-b", "0.0.0.0:8000", \
+     "--timeout", "120", \
+     "--graceful-timeout", "30"]

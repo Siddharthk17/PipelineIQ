@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-default
+  namespace: pipelineiq
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker-default
+  template:
+    metadata:
+      labels:
+        app: worker-default
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - worker
+            - --queues=default
+            - --concurrency=4
+            - --prefetch-multiplier=1
+            - --hostname=default@%(h)s
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pipelineiq-worker-default
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - backend.celery_app
+                - inspect
+                - ping
+                - --timeout=5
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3

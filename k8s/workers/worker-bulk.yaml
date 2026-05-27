@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-bulk
+  namespace: pipelineiq
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker-bulk
+  template:
+    metadata:
+      labels:
+        app: worker-bulk
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - worker
+            - --queues=bulk
+            - --concurrency=2
+            - --prefetch-multiplier=1
+            - --hostname=bulk@%(h)s
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pipelineiq-worker-bulk
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"

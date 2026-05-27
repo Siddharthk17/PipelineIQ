@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-streaming
+  namespace: pipelineiq
+  labels:
+    app: worker-streaming
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-streaming
+  template:
+    metadata:
+      labels:
+        app: worker-streaming
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - worker
+            - --queues=streaming
+            - --concurrency=4
+            - --prefetch-multiplier=1
+            - --hostname=streaming@%(h)s
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pipelineiq-worker-streaming
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"

@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-gemini
+  namespace: pipelineiq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-gemini
+  template:
+    metadata:
+      labels:
+        app: worker-gemini
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - backend.celery_app
+            - worker
+            - --queues=gemini
+            - --concurrency=1
+            - --prefetch-multiplier=1
+            - --hostname=gemini@%(h)s
+            - --loglevel=info
+          workingDir: /app
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

@@ -17,3 +17,15 @@ backend/vendor
 frontend/node_modules
 frontend/.next
 pipelineiq.db
+k8s
+e2e
+grafana
+nginx
+pgbouncer
+postgres
+prometheus
+postman
+tests
+y-websocket
+*.md
+*.log

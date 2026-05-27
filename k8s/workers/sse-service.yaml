@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sse-service
+  namespace: pipelineiq
+  labels:
+    app: sse-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sse-service
+  template:
+    metadata:
+      labels:
+        app: sse-service
+    spec:
+      containers:
+        - name: sse
+          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          imagePullPolicy: Always
+          command:
+            - gunicorn
+            - backend.sse_app:app
+            - -k
+            - uvicorn.workers.UvicornWorker
+            - -w
+            - "2"
+            - -b
+            - 0.0.0.0:8001
+          workingDir: /app
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+            - secretRef:
+                name: pipelineiq-secrets
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pipelineiq-sse-service
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sse-service
+  namespace: pipelineiq
+spec:
+  selector:
+    app: sse-service
+  ports:
+    - port: 8001
+      targetPort: 8001
+  type: ClusterIP

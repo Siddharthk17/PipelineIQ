@@ -59,6 +59,7 @@ class _HealthCheckFilter(logging.Filter):
         msg = record.getMessage()
         return (
             "/health" not in msg
+            and "/healthz" not in msg
             and "/livez" not in msg
             and "/readyz" not in msg
             and "/metrics" not in msg
