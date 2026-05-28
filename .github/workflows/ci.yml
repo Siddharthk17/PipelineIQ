@@ -299,7 +299,49 @@ jobs:
         if: always()
         run: docker compose down --volumes
 
-  # JOB 4: Streaming E2E Tests
+  # JOB 4: E2E Tests (Playwright)
+  e2e-tests:
+    name: E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-check]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        env:
+          E2E_BASE_URL: ${{ secrets.PRODUCTION_URL }}
+          E2E_API_URL: ${{ secrets.PRODUCTION_API_URL }}
+        run: |
+          npx playwright test \
+            --reporter=html \
+            --output=playwright-results \
+            e2e/01-auth.spec.ts \
+            e2e/02-file-upload.spec.ts \
+            e2e/03-pipeline-builder.spec.ts \
+            e2e/10-templates.spec.ts
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-results/
+          retention-days: 14
+
+  # JOB 5: Streaming E2E Tests
   week9-streaming-e2e:
     name: Streaming E2E
     runs-on: ubuntu-latest

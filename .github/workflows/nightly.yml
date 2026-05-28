@@ -1,0 +1,62 @@
+name: Nightly Load Tests
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  load-tests:
+    name: k6 Load Tests
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | \
+            sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update && sudo apt-get install -y k6
+
+      - name: Run auth load test
+        env:
+          BASE_URL: ${{ secrets.PRODUCTION_API_URL }}
+        run: |
+          k6 run \
+            --env BASE_URL="$BASE_URL" \
+            --summary-export=k6-results/auth-summary.json \
+            k6/load-auth.js
+
+      - name: Run YAML validation load test
+        env:
+          BASE_URL: ${{ secrets.PRODUCTION_API_URL }}
+          AUTH_TOKEN: ${{ secrets.LOAD_TEST_TOKEN }}
+        run: |
+          k6 run \
+            --env BASE_URL="$BASE_URL" \
+            --env AUTH_TOKEN="$AUTH_TOKEN" \
+            --summary-export=k6-results/validate-summary.json \
+            k6/load-pipeline-api.js
+
+      - name: Run file upload load test
+        env:
+          BASE_URL: ${{ secrets.PRODUCTION_API_URL }}
+          AUTH_TOKEN: ${{ secrets.LOAD_TEST_TOKEN }}
+        run: |
+          k6 run \
+            --env BASE_URL="$BASE_URL" \
+            --env AUTH_TOKEN="$AUTH_TOKEN" \
+            --summary-export=k6-results/upload-summary.json \
+            k6/load-file-upload.js
+
+      - name: Upload k6 results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: k6-results-${{ github.run_id }}
+          path: k6-results/

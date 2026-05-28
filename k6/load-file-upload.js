@@ -1,0 +1,52 @@
+import http from 'k6/http'
+import { check, sleep } from 'k6'
+import { Rate, Trend } from 'k6/metrics'
+
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000'
+const TOKEN = __ENV.AUTH_TOKEN || ''
+
+const uploadSuccess = new Rate('upload_success')
+const uploadDuration = new Trend('upload_duration_ms')
+
+function generateCSV(rows: number = 100): string {
+  const header = 'id,name,amount,status\n'
+  const lines = Array.from({ length: rows }, (_, i) =>
+    `${i},User${i},${(Math.random() * 1000).toFixed(2)},${i % 2 === 0 ? 'active' : 'inactive'}`,
+  )
+  return header + lines.join('\n')
+}
+
+export const options = {
+  stages: [
+    { duration: '20s', target: 10 },
+    { duration: '60s', target: 50 },
+    { duration: '30s', target: 0 },
+  ],
+  thresholds: {
+    http_req_duration: ['p(95)<2000'],
+    upload_success: ['rate>0.95'],
+  },
+}
+
+export default function () {
+  const csvContent = generateCSV(50)
+  const start = Date.now()
+  const resp = http.post(
+    `${BASE_URL}/api/files/upload`,
+    { file: http.file(csvContent, `load_test_${Date.now()}.csv`, 'text/csv') },
+    { headers: { Authorization: `Bearer ${TOKEN}` } },
+  )
+
+  const duration = Date.now() - start
+  const ok = check(resp, {
+    'upload status 2xx': (r) => r.status >= 200 && r.status < 300,
+    'has file_id': (r) => {
+      try { return JSON.parse(r.body).file_id !== undefined } catch { return false }
+    },
+    'upload under 2s': () => duration < 2000,
+  })
+
+  uploadSuccess.add(ok)
+  uploadDuration.add(duration)
+  sleep(0.5)
+}

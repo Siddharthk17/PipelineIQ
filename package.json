@@ -1,0 +1,27 @@
+{
+  "name": "pipelineiq",
+  "version": "1.0.0",
+  "description": "A data pipeline orchestration engine. Define pipelines in YAML, upload CSV/JSON files, execute transformations with real-time monitoring, and trace every column back to its source through automatic lineage graphs.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Siddharthk17/PipelineIQ.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Siddharthk17/PipelineIQ/issues"
+  },
+  "homepage": "https://github.com/Siddharthk17/PipelineIQ#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}

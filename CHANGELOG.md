@@ -3,6 +3,31 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [12.0.3] — Week 23: Full Test Suite, Load Testing & Chaos Engineering
+
+*Note: This release validates that PipelineIQ is not just built correctly, but proven correct under extreme conditions. It introduces comprehensive End-to-End (E2E) testing, high-concurrency load testing, and chaos engineering to guarantee graceful degradation and recovery during infrastructure failures.*
+
+### Reliability & Resilience (Chaos Engineering)
+- **Production Chaos Suite** — Introduced a 7-scenario chaos engineering suite (`chaos-scenarios.sh`) executed directly against the production Civo k3s cluster to verify system resilience.
+- **Graceful Degradation** — Verified that the system degrades gracefully rather than failing catastrophically:
+  - **Stateful Failures:** If PostgreSQL crashes, the API safely returns 503s and recovers instantly upon DB restart. If Redis crashes, the system seamlessly falls back to uncached database reads.
+  - **Worker Failures:** If a Celery bulk worker is killed, active tasks safely re-queue to surviving workers. If the Gemini AI worker dies, the AI generation endpoint degrades gracefully (returning a timeout/503 instead of an unhandled 500).
+  - **Storage Exhaustion:** Simulated 85% memory pressure on `/dev/shm` to verify the Arrow data bus successfully falls back to the MinIO cold tier without dropping data.
+- **Zero-Downtime Recovery** — Validated that killing active API pods results in immediate traffic rerouting to surviving pods with recovery in < 10 seconds.
+
+### Performance & Scalability (Load Testing)
+- **k6 Load Testing** — Integrated `k6` to simulate high-concurrency virtual user traffic against the production API, establishing strict performance baselines:
+  - **Authentication:** Sustains 100 concurrent user logins with a >99% success rate and p95 latency < 500ms.
+  - **YAML Validation:** Handles 200 requests/second (bypassing DB/Redis) with p99 latency < 100ms.
+  - **File Uploads:** Processes 50 concurrent multipart CSV uploads with p95 latency < 2s.
+
+### Added
+- **Playwright E2E Suite** — Added ~40 full user journey tests across 10 suites. Tests run against a real Chromium browser and cover critical flows including authentication, visual pipeline building, run submission, SSE streaming, AI generation, scheduling, data contracts, Wasm modules, and the data catalog.
+- **CI/CD Integration** — Expanded GitHub Actions to automatically run the Playwright E2E suite on pushes to `main` (`ci.yml`). Added a new `nightly.yml` workflow to execute the `k6` load tests automatically every day at 2 AM UTC.
+- **Unified Test Reporting** — Added `generate_test_report.py` to aggregate results across `pytest`, Playwright, and `k6`. Enforces a strict ≥ 80% backend line coverage gate. The platform now boasts over 350+ automated tests across unit, E2E, load, and chaos categories.
+
+---
+
 ## [11.22.33] — Week 22: Civo k3s Kubernetes Deployment & CI/CD
 
 *Note: This is the first official PRODUCTION RELEASE of PipelineIQ. It transitions the platform from a local Docker Compose environment to a highly available, cloud-native Kubernetes deployment on Civo k3s. It also introduces a fully automated GitHub Actions CI/CD pipeline, ensuring that every push to the main branch is rigorously tested, built, and deployed with zero downtime.*
