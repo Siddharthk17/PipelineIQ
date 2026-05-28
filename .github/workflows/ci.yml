@@ -313,8 +313,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install frontend dependencies
-        working-directory: frontend
+      - name: Install root dependencies (Playwright)
         run: npm ci
 
       - name: Install Playwright browsers
