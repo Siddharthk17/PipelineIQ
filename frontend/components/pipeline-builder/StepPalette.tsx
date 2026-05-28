@@ -58,7 +58,7 @@ export function StepPalette({ onDragStart, onAddStep }: StepPaletteProps) {
                         onDragStart(event, stepType);
                       }}
                       onClick={() => handleCardClick(stepType)}
-                      data-testid={`step-card-${stepType}`}
+                      data-testid={`palette-item-${stepType}`}
                       className="w-full rounded-md border bg-[var(--bg-elevated)] px-2.5 py-2 text-left transition-colors hover:bg-[var(--interactive-hover)]"
                       style={{ borderColor: "var(--widget-border)" }}
                     >

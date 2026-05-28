@@ -117,7 +117,7 @@ export function GanttChart({ steps, totalDurationMs, violations, jaegerUiUrl }: 
   }
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div data-testid="execution-gantt" className="flex flex-col h-full overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 border-b text-xs text-[var(--text-secondary)]" style={{ borderColor: "var(--widget-border)" }}>
         <span className="font-medium">Step Timeline</span>
         {totalDurationMs && (

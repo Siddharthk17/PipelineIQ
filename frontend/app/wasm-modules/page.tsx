@@ -131,7 +131,7 @@ export default function WasmModulesPage() {
   }
 
   return (
-    <main className="flex h-screen w-screen flex-col bg-[var(--bg-base)] text-[var(--text-primary)]">
+    <main data-testid="wasm-manager-page" className="flex h-screen w-screen flex-col bg-[var(--bg-base)] text-[var(--text-primary)]">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-[var(--widget-border)] px-6 py-4">
         <div>

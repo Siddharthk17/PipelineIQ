@@ -1,72 +1,81 @@
-import { test, expect } from './fixtures/auth'
+import { expect, test } from "@playwright/test";
 
-test.describe('AI Pipeline Generation', () => {
-  test('AI Generate modal opens from builder toolbar', async ({ page, user }) => {
-    await page.goto('/login')
-    await page.fill('[data-testid="email-input"]', user.email)
-    await page.fill('[data-testid="password-input"]', user.password)
-    await page.click('[data-testid="login-btn"]')
-    await page.waitForURL((url) => !url.pathname.endsWith('/login'), { timeout: 10_000 })
+const baseUrl = process.env.E2E_BASE_URL;
+const apiUrl = process.env.E2E_API_URL ?? baseUrl;
+const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
+const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
-    await page.goto('/pipelines/new')
-    const btn = page.locator('[data-testid="open-ai-generate-btn"]').or(
-      page.locator('text=Generate with AI'),
-    )
-    await expect(btn).toBeVisible({ timeout: 10_000 })
-    await btn.click()
-    await expect(
-      page.locator('[data-testid="ai-generate-modal"]').or(page.locator('[role="dialog"]')),
-    ).toBeVisible({ timeout: 5000 })
-  })
+async function login(page: import("@playwright/test").Page) {
+  test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
+  await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("email-input").fill(email);
+  await page.getByTestId("password-input").fill(password);
+  await page.getByTestId("login-btn").click();
+  await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 15_000 });
+}
 
-  test('Generate button is disabled until description and files are provided', async ({
-    page,
-    user,
-  }) => {
-    await page.goto('/login')
-    await page.fill('[data-testid="email-input"]', user.email)
-    await page.fill('[data-testid="password-input"]', user.password)
-    await page.click('[data-testid="login-btn"]')
-    await page.waitForURL((url) => !url.pathname.endsWith('/login'), { timeout: 10_000 })
+test.describe("AI Pipeline Generation", () => {
+  test("AI Generate modal opens from builder toolbar", async ({ page }) => {
+    await login(page);
+    await page.goto(`${baseUrl}/pipelines/new`, { waitUntil: "domcontentloaded" });
 
-    await page.goto('/pipelines/new')
-    await page.locator('[data-testid="open-ai-generate-btn"]').click()
-    const generateBtn = page.locator('[data-testid="ai-generate-btn"]')
-    await expect(generateBtn).toBeDisabled()
-  })
+    await page.getByTestId("open-ai-generate-btn").click();
+    await expect(page.getByTestId("ai-generate-modal")).toBeVisible({ timeout: 5_000 });
+  });
 
-  test('AI validate YAML endpoint returns structured response', async ({
-    page,
-    user,
-  }) => {
-    await page.goto('/login')
-    await page.fill('[data-testid="email-input"]', user.email)
-    await page.fill('[data-testid="password-input"]', user.password)
-    await page.click('[data-testid="login-btn"]')
-    await page.waitForURL((url) => !url.pathname.endsWith('/login'), { timeout: 10_000 })
+  test("Generate button is disabled until requirements are met", async ({ page }) => {
+    await login(page);
+    await page.goto(`${baseUrl}/pipelines/new`, { waitUntil: "domcontentloaded" });
 
-    const token = await page.evaluate(() => localStorage.getItem('pipelineiq_token'))
-    if (!token) {
-      test.skip(true, 'No token found in localStorage')
-      return
+    await page.getByTestId("open-ai-generate-btn").click();
+    await expect(page.getByTestId("ai-generate-btn")).toBeDisabled();
+
+    await page.getByTestId("ai-description-input").fill(
+      "Build a pipeline that filters delivered orders and aggregates by region",
+    );
+
+    const checkboxes = page.locator('[data-testid="ai-generate-modal"] input[type="checkbox"]');
+    const checkboxCount = await checkboxes.count();
+    if (checkboxCount > 0) {
+      for (let i = 0; i < checkboxCount; i++) {
+        await checkboxes.nth(i).uncheck().catch(() => {});
+      }
+      await checkboxes.first().check();
+      await expect(page.getByTestId("ai-generate-btn")).toBeEnabled();
     }
+  });
 
-    const baseUrl = process.env.E2E_BASE_URL || 'http://localhost:8000'
-    const response = await page.request.post(`${baseUrl}/api/ai/validate-yaml`, {
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  test("AI validate YAML endpoint returns structured response", async ({ page }) => {
+    await login(page);
+    const token = await page.evaluate(() => localStorage.getItem("pipelineiq_token"));
+    expect(token).toBeTruthy();
+
+    const response = await page.request.post(`${apiUrl}/api/ai/validate-yaml`, {
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       data: {
         yaml_text: [
-          'pipeline:',
-          '  name: validate_test',
-          '  steps:',
-          '    - name: one',
-          '      type: load',
-          '      file_id: dummy',
-        ].join('\n'),
+          "pipeline:",
+          "  name: validate_test",
+          "  steps:",
+          "    - name: one",
+          "      type: load",
+          "      file_id: dummy",
+        ].join("\n"),
       },
-    })
-    expect(response.ok()).toBeTruthy()
-    const payload = await response.json()
-    expect(payload).toHaveProperty('valid')
-  })
-})
+    });
+    expect(response.ok()).toBeTruthy();
+    const payload = await response.json();
+    expect(payload).toHaveProperty("valid");
+  });
+
+  test("repair action visible on failed runs", async ({ page }) => {
+    await login(page);
+    await page.goto(`${baseUrl}/runs`, { waitUntil: "domcontentloaded" });
+
+    const failedRows = page.locator('[data-status="failed"]');
+    const failedCount = await failedRows.count();
+    test.skip(failedCount === 0, "No failed runs available in this environment.");
+
+    await expect(page.getByTestId("repair-pipeline-btn").first()).toBeVisible();
+  });
+});

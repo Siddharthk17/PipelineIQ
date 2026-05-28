@@ -103,7 +103,7 @@ export function RunHistoryWidget() {
                     data-status={run.status.toLowerCase()}
                   >
                     <td className="py-3 pl-3">
-                      <div className="flex items-center gap-2">
+                      <div data-testid="run-status" className="flex items-center gap-2">
                         {run.status === "HEALED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
                         {run.status === "COMPLETED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
                         {run.status === "FAILED" && <XCircle className="w-4 h-4 text-[var(--accent-error)]" />}

@@ -121,6 +121,7 @@ export default function LoginPage() {
 
           {error && (
             <div
+              data-testid="login-error"
               className="mb-5 px-3 py-2 text-[12px]"
               style={{
                 fontFamily: "var(--font-mono)",

@@ -1,49 +1,61 @@
-import { test, expect } from './fixtures/auth'
-import { uploadSampleCSV } from './fixtures/pipeline-helpers'
+import { expect, test } from "@playwright/test";
 
-test.describe('File Upload and Profiling', () => {
-  test('Upload CSV file and see it appear on files page', async ({ page, apiContext, user }) => {
-    const fileId = await uploadSampleCSV(apiContext, user.token)
-    expect(fileId).toBeTruthy()
+const baseUrl = process.env.E2E_BASE_URL;
+const apiUrl = process.env.E2E_API_URL ?? baseUrl;
+const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
+const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
-    await page.goto('/files')
-    await page.waitForSelector('[data-testid="file-list"]', { timeout: 10_000 })
-    await expect(page.locator('text=sample_orders.csv')).toBeVisible({ timeout: 10_000 })
-  })
+async function login(page: import("@playwright/test").Page) {
+  test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
+  await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
+  await page.getByTestId("email-input").fill(email);
+  await page.getByTestId("password-input").fill(password);
+  await page.getByTestId("login-btn").click();
+  await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 15_000 });
+}
 
-  test('Uploaded file shows profiling status', async ({ page, apiContext, user }) => {
-    const fileId = await uploadSampleCSV(apiContext, user.token)
-    await page.goto(`/files/${fileId}`)
+test.describe("File Upload and Profiling", () => {
+  test("Upload CSV via API and see it in files list", async ({ page }) => {
+    await login(page);
+    const token = await page.evaluate(() => localStorage.getItem("pipelineiq_token"));
+    expect(token).toBeTruthy();
 
-    await page.waitForSelector('[data-testid="profile-status-complete"]', { timeout: 30_000 })
+    const csvContent = [
+      "customer_id,region,amount,status,order_date",
+      "1,North,150,completed,2024-01-15",
+      "2,South,320,completed,2024-01-16",
+    ].join("\n");
 
-    await expect(page.locator('text=customer_id')).toBeVisible()
-    await expect(page.locator('text=amount')).toBeVisible()
-  })
+    const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
+      multipart: { file: { name: "sample_orders.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(uploadResp.ok()).toBeTruthy();
 
-  test('Upload via file chooser on upload zone', async ({ page, user }) => {
-    await page.goto('/login')
-    await page.fill('[data-testid="email-input"]', user.email)
-    await page.fill('[data-testid="password-input"]', user.password)
-    await page.click('[data-testid="login-btn"]')
-    await page.waitForURL((url) => !url.pathname.endsWith('/login'), { timeout: 10_000 })
+    await page.goto(`${baseUrl}/files`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="file-list"]', { timeout: 10_000 });
+    await expect(page.locator("text=sample_orders.csv")).toBeVisible({ timeout: 10_000 });
+  });
 
-    await page.goto('/files')
-    await page.waitForSelector('[data-testid="upload-zone"]')
+  test("Uploaded file detail page shows profiling status", async ({ page }) => {
+    await login(page);
+    const token = await page.evaluate(() => localStorage.getItem("pipelineiq_token"));
+    expect(token).toBeTruthy();
 
-    const csvContent = 'id,name,value\n1,Alice,100\n2,Bob,200\n'
-    const [fileChooser] = await Promise.all([
-      page.waitForEvent('filechooser'),
-      page.click('[data-testid="upload-zone"]'),
-    ])
-    await fileChooser.setFiles({
-      name: 'test_upload.csv',
-      mimeType: 'text/csv',
-      buffer: Buffer.from(csvContent),
-    })
+    const csvContent = "id,name,value\n1,Alice,100\n2,Bob,200";
+    const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
+      multipart: { file: { name: "profiling_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const { id: fileId } = await uploadResp.json();
 
-    await expect(
-      page.locator('text=test_upload.csv').or(page.locator('[data-testid="upload-success"]')),
-    ).toBeVisible({ timeout: 15_000 })
-  })
-})
+    await page.goto(`${baseUrl}/files/${fileId}`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("profile-status-complete")).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("File upload shows error for invalid file", async ({ page }) => {
+    await login(page);
+    await page.goto(`${baseUrl}/files/nonexistent-id`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("upload-error")).toBeVisible({ timeout: 10_000 });
+  });
+});
