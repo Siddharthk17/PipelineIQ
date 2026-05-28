@@ -9,7 +9,7 @@ describe("StepPalette", () => {
 
     render(<StepPalette onDragStart={onDragStart} onAddStep={onAddStep} />);
 
-    fireEvent.click(screen.getByTestId("step-card-load"));
+    fireEvent.click(screen.getByTestId("palette-item-load"));
 
     expect(onAddStep).toHaveBeenCalledWith("load");
   });
