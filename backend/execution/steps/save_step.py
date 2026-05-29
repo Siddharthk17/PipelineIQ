@@ -64,12 +64,12 @@ def execute_save_step(
     minio = _get_minio_client()
 
     minio.put_object(
-        bucket_name="pipelineiq-outputs",
-        object_name=object_name,
-        data=io.BytesIO(content),
-        length=len(content),
-        content_type=content_type,
-        metadata={
+        Bucket="pipelineiq-outputs",
+        Key=object_name,
+        Body=io.BytesIO(content),
+        ContentLength=len(content),
+        ContentType=content_type,
+        Metadata={
             "run-id": run_id,
             "row-count": str(table.num_rows),
             "format": ext,
@@ -80,10 +80,13 @@ def execute_save_step(
         "Saved pipeline output: run_id=%s, filename=%s, size=%.1fKB, rows=%d",
         run_id, filename, len(content) / 1024, table.num_rows)
 
-    download_url = minio.presigned_get_object(
-        bucket_name="pipelineiq-outputs",
-        object_name=object_name,
-        expires=DOWNLOAD_URL_EXPIRY,
+    download_url = minio.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": "pipelineiq-outputs",
+            "Key": object_name,
+        },
+        ExpiresIn=int(DOWNLOAD_URL_EXPIRY.total_seconds()),
     )
 
     return SaveResult(
@@ -100,10 +103,13 @@ def execute_save_step(
 def refresh_download_url(object_name: str) -> str:
     """Generate a fresh presigned URL for an existing output file."""
     minio = _get_minio_client()
-    return minio.presigned_get_object(
-        bucket_name="pipelineiq-outputs",
-        object_name=object_name,
-        expires=DOWNLOAD_URL_EXPIRY,
+    return minio.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": "pipelineiq-outputs",
+            "Key": object_name,
+        },
+        ExpiresIn=int(DOWNLOAD_URL_EXPIRY.total_seconds()),
     )
 
 
