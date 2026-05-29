@@ -1304,7 +1304,7 @@ class TestWasmConfig:
     def test_wasm_bucket_config_exists(self):
         from backend.config import settings
         assert hasattr(settings, "WASM_BUCKET")
-        assert settings.WASM_BUCKET == "pipelineiq-wasm-modules"
+        assert settings.WASM_BUCKET == "pipelineiq-wasm"
 
     def test_s3_config_exists(self):
         from backend.config import settings
