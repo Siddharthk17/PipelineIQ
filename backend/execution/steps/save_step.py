@@ -60,6 +60,11 @@ def execute_save_step(
     ext = _resolve_extension(filename)
     filename = _ensure_extension(filename, ext)
 
+    if not run_id:
+        import uuid
+        run_id = uuid.uuid4().hex
+        logger.debug("Empty run_id, using generated: %s", run_id)
+
     content, content_type = _serialize(table, ext)
 
     object_name = f"outputs/{run_id}/{filename}"
