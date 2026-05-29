@@ -3,6 +3,7 @@ import pytest
 import pandas as pd
 import pyarrow as pa
 from unittest.mock import patch, MagicMock
+from backend.config import settings
 from backend.execution.steps.save_step import execute_save_step, SaveResult
 
 
@@ -56,7 +57,7 @@ class TestSaveCsv:
             mock_minio.return_value = client
             execute_save_step(sample_table, mock_save_step, run_id="run-001")
             put_call = client.put_object.call_args
-            assert put_call[1]["Bucket"] == "pipelineiq-outputs"
+            assert put_call[1]["Bucket"] == settings.S3_BUCKET
 
     def test_csv_object_name_includes_run_id(self, sample_table, mock_save_step):
         with patch("backend.execution.steps.save_step._get_minio_client") as mock_minio:

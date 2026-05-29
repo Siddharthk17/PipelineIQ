@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 
 import pyarrow as pa
 
+from backend.config import settings
 from backend.execution.steps.save_step import execute_save_step, refresh_download_url
 
 
@@ -39,7 +40,7 @@ class TestSaveUrlGeneration:
             assert url == "https://minio/refreshed-url"
             assert client.generate_presigned_url.called
             call_kwargs = client.generate_presigned_url.call_args[1]
-            assert call_kwargs["Params"]["Bucket"] == "pipelineiq-outputs"
+            assert call_kwargs["Params"]["Bucket"] == settings.S3_BUCKET
             assert call_kwargs["Params"]["Key"] == "outputs/run-001/output.csv"
 
     def test_size_bytes_is_positive(self):

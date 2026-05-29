@@ -1,7 +1,7 @@
 """Production save step: writes DataFrame output to MinIO.
 
 Supported formats: CSV, JSON, Parquet
-Output location: pipelineiq-outputs/outputs/{run_id}/{filename}
+Output location: {S3_BUCKET}/outputs/{run_id}/{filename}
 Download URL: presigned GET URL valid for 48 hours.
 """
 
@@ -15,6 +15,8 @@ from pathlib import Path
 import orjson
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +65,9 @@ def execute_save_step(
     object_name = f"outputs/{run_id}/{filename}"
     minio = _get_minio_client()
 
+    bucket = settings.S3_BUCKET
     minio.put_object(
-        Bucket="pipelineiq-outputs",
+        Bucket=bucket,
         Key=object_name,
         Body=io.BytesIO(content),
         ContentLength=len(content),
@@ -83,7 +86,7 @@ def execute_save_step(
     download_url = minio.generate_presigned_url(
         "get_object",
         Params={
-            "Bucket": "pipelineiq-outputs",
+            "Bucket": bucket,
             "Key": object_name,
         },
         ExpiresIn=int(DOWNLOAD_URL_EXPIRY.total_seconds()),
@@ -106,7 +109,7 @@ def refresh_download_url(object_name: str) -> str:
     return minio.generate_presigned_url(
         "get_object",
         Params={
-            "Bucket": "pipelineiq-outputs",
+            "Bucket": settings.S3_BUCKET,
             "Key": object_name,
         },
         ExpiresIn=int(DOWNLOAD_URL_EXPIRY.total_seconds()),
@@ -181,17 +184,38 @@ def _serialize_parquet(table: pa.Table) -> tuple[bytes, str]:
     return buf.getvalue().to_pybytes(), "application/octet-stream"
 
 
+_bucket_ensured = False
+
+
 def _get_minio_client():
     from backend.services.storage_service import storage_service
     if hasattr(storage_service, "provider") and hasattr(
             storage_service.provider, "s3"):
-        return storage_service.provider.s3
+        client = storage_service.provider.s3
+    else:
+        import boto3
+        client = boto3.client(
+            "s3",
+            aws_access_key_id=settings.S3_ACCESS_KEY,
+            aws_secret_access_key=settings.S3_SECRET_KEY,
+            endpoint_url=settings.S3_ENDPOINT_URL,
+        )
 
-    import boto3
-    from backend.config import settings
-    return boto3.client(
-        "s3",
-        aws_access_key_id=settings.S3_ACCESS_KEY,
-        aws_secret_access_key=settings.S3_SECRET_KEY,
-        endpoint_url=settings.S3_ENDPOINT_URL,
-    )
+    global _bucket_ensured
+    if not _bucket_ensured:
+        _bucket_ensured = True
+        try:
+            client.head_bucket(Bucket=settings.S3_BUCKET)
+            logger.debug("S3 bucket exists: %s", settings.S3_BUCKET)
+        except Exception:
+            try:
+                client.create_bucket(Bucket=settings.S3_BUCKET)
+                logger.info("Created S3 bucket: %s", settings.S3_BUCKET)
+            except client.exceptions.BucketAlreadyOwnedByYou:
+                logger.debug("S3 bucket already owned: %s", settings.S3_BUCKET)
+            except client.exceptions.BucketAlreadyExists:
+                logger.warning("S3 bucket name conflict: %s", settings.S3_BUCKET)
+            except Exception as exc:
+                logger.warning("Failed to initialize S3 bucket: %s", exc)
+
+    return client
