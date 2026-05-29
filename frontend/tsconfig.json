@@ -36,6 +36,11 @@
     "next-env.d.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "__tests__",
+    "e2e",
+    "test-results"
   ]
 }

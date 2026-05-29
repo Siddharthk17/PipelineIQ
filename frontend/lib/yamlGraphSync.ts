@@ -8,6 +8,9 @@ export interface StepNodeData extends Record<string, unknown> {
   type: VisualStepType;
   config: Record<string, unknown>;
   backendSupported: boolean;
+  inferredSchema?: string[];
+  outputSchema?: string[];
+  validationError?: string;
   onConfigure?: (nodeId: string) => void;
   onDelete?: (nodeId: string) => void;
 }
@@ -318,41 +321,39 @@ export function yamlToGraph(yamlText: string): BuilderGraph {
 }
 
 function sanitizeYamlValue(value: unknown): unknown {
-  if (typeof value !== "string") return value
-  let cleaned = value.trim()
-  // Strip surrounding double/single quotes that may have been embedded
-  // from a prior YAML round-trip through an incompatible parser
-  const first = cleaned[0]
-  const last = cleaned[cleaned.length - 1]
+  if (typeof value !== "string") return value;
+  let cleaned = value.trim();
+  const first = cleaned[0];
+  const last = cleaned[cleaned.length - 1];
   if ((first === '"' || first === "'") && first === last) {
-    const inner = cleaned.slice(1, -1)
+    const inner = cleaned.slice(1, -1);
     if (inner.length > 0 && !inner.includes(first)) {
-      cleaned = inner
+      cleaned = inner;
     }
   }
-  return cleaned
+  return cleaned;
 }
 
 function sanitizeConfig(
   config: Record<string, unknown>
 ): Record<string, unknown> {
-  const cleaned: Record<string, unknown> = {}
+  const cleaned: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(config)) {
     if (typeof value === "string") {
-      cleaned[key] = sanitizeYamlValue(value)
+      cleaned[key] = sanitizeYamlValue(value);
     } else if (Array.isArray(value)) {
       cleaned[key] = value.map((item) =>
         typeof item === "string" ? sanitizeYamlValue(item) : item
-      )
+      );
     } else if (value && typeof value === "object") {
       cleaned[key] = sanitizeConfig(
         value as Record<string, unknown>
-      )
+      );
     } else {
-      cleaned[key] = value
+      cleaned[key] = value;
     }
   }
-  return cleaned
+  return cleaned;
 }
 
 function normalizeJoinConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
@@ -535,9 +536,25 @@ function normalizeConfigForYaml(
   }
 }
 
-export function graphToYAML(graph: BuilderGraph): string {
-  const nodes = graph.nodes ?? [];
-  const edges = graph.edges ?? [];
+export function graphToYAML(nodesOrGraph: BuilderNode[] | BuilderGraph, edgesParam?: BuilderEdge[], pipelineNameParam?: string): string {
+  let nodes: BuilderNode[];
+  let edges: BuilderEdge[];
+  let pipelineName: string;
+
+  if (Array.isArray(nodesOrGraph)) {
+    nodes = nodesOrGraph;
+    edges = edgesParam ?? [];
+    pipelineName = pipelineNameParam ?? "my_pipeline";
+  } else {
+    nodes = nodesOrGraph.nodes ?? [];
+    edges = nodesOrGraph.edges ?? [];
+    pipelineName = nodesOrGraph.pipelineName ?? "my_pipeline";
+  }
+
+  if (nodes.length === 0) {
+    return `pipeline:\n  name: ${pipelineName}\n  steps: []\n`;
+  }
+
   const orderedNodes = topologicalSort(nodes, edges);
   if (!orderedNodes) {
     return "";
@@ -585,7 +602,8 @@ export function graphToYAML(graph: BuilderGraph): string {
       step.right = rightEdge ? stepNameByNodeId.get(rightEdge.source) ?? "" : "";
       Object.assign(step, sanitizeConfig(normalizeJoinConfigForYaml(resolvedNode.data.config)));
     } else {
-      if (STEP_DEFINITIONS[stepType].maxInputs > 0) {
+      const definition = STEP_DEFINITIONS[stepType];
+      if (definition && definition.maxInputs > 0) {
         const sourceEdge = incomingEdges[0];
         step.input = sourceEdge ? stepNameByNodeId.get(sourceEdge.source) ?? "" : "";
       }
@@ -598,7 +616,7 @@ export function graphToYAML(graph: BuilderGraph): string {
   return yaml.dump(
     {
       pipeline: {
-        name: graph.pipelineName.trim() || "my_pipeline",
+        name: pipelineName.trim() || "my_pipeline",
         steps,
       },
     },

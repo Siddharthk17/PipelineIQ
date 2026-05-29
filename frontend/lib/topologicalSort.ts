@@ -60,3 +60,17 @@ export function topologicalSort<TNode extends Node>(
 export function hasCycle<TNode extends Node>(nodes: TNode[], edges: Edge[]): boolean {
   return topologicalSort(nodes, edges) === null;
 }
+
+export function wouldCreateCycle(
+  nodes: Node[],
+  edges: Edge[],
+  sourceId: string,
+  targetId: string,
+): boolean {
+  const candidateEdge: Edge = {
+    id: `__cycle_test_${sourceId}__${targetId}`,
+    source: sourceId,
+    target: targetId,
+  };
+  return topologicalSort(nodes, [...edges, candidateEdge]) === null;
+}

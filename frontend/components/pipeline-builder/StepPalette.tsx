@@ -1,4 +1,4 @@
-import { useRef, type DragEvent } from "react";
+import React, { useRef, type DragEvent } from "react";
 import { STEP_CATEGORY_LABELS, STEP_DEFINITIONS, STEP_TYPES, type StepCategory, type VisualStepType } from "@/lib/stepDefinitions";
 
 interface StepPaletteProps {

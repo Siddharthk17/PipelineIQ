@@ -21,12 +21,12 @@ test.describe("Visual Pipeline Builder", () => {
     await expect(page.getByTestId("pipeline-canvas")).toBeVisible();
   });
 
-  test("Step palette items are rendered", async ({ page }) => {
+  test("Step palette renders all step types", async ({ page }) => {
     await login(page);
     await page.goto(`${baseUrl}/pipelines/new`, { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-testid="step-palette"]');
     const items = await page.locator('[data-testid^="palette-item-"]').count();
-    expect(items).toBeGreaterThanOrEqual(1);
+    expect(items).toBeGreaterThanOrEqual(16);
   });
 
   test("Dragging a step onto canvas creates a node", async ({ page }) => {
@@ -101,5 +101,72 @@ test.describe("Visual Pipeline Builder", () => {
     const configBtn = page.locator('[data-testid^="config-btn-"]').first();
     await configBtn.click();
     await expect(page.getByTestId("config-panel")).toBeVisible({ timeout: 5_000 });
+  });
+
+  test("Config panel closes on close button click", async ({ page }) => {
+    await login(page);
+    await page.goto(`${baseUrl}/pipelines/new`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="step-palette"]');
+
+    const paletteItem = page.locator('[data-testid^="palette-item-"]').first();
+    const canvas = page.locator('[data-testid="pipeline-canvas"]');
+    const box = await canvas.boundingBox();
+    if (!box) {
+      test.skip(true, "Canvas not rendered");
+      return;
+    }
+
+    await paletteItem.dragTo(canvas, {
+      targetPosition: { x: box.width / 2, y: box.height / 2 },
+    });
+    await page.waitForTimeout(400);
+
+    await page.locator('[data-testid^="config-btn-"]').first().click();
+    await expect(page.getByTestId("config-panel")).toBeVisible({ timeout: 5_000 });
+
+    await page.getByTestId("config-panel-close").click();
+    await expect(page.getByTestId("config-panel")).not.toBeVisible();
+  });
+
+  test("Join step shows two input handles", async ({ page }) => {
+    await login(page);
+    await page.goto(`${baseUrl}/pipelines/new`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="step-palette"]');
+
+    const paletteJoin = page.locator('[data-testid="palette-item-join"]');
+    const canvas = page.locator('[data-testid="pipeline-canvas"]');
+    const box = await canvas.boundingBox();
+    if (!box || !(await paletteJoin.isVisible())) {
+      test.skip(true, "Join step or canvas not available");
+      return;
+    }
+
+    await paletteJoin.dragTo(canvas, {
+      targetPosition: { x: box.width / 2, y: box.height / 2 },
+    });
+    await page.waitForTimeout(400);
+
+    const handles = await page.locator('[data-testid^="handle-"][data-testid$="-left"], [data-testid^="handle-"][data-testid$="-right"]').count();
+    expect(handles).toBeGreaterThanOrEqual(2);
+  });
+
+  test("Run pipeline button is present", async ({ page }) => {
+    await login(page);
+    await page.goto(`${baseUrl}/pipelines/new`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("run-pipeline-btn")).toBeVisible({ timeout: 5_000 });
+  });
+
+  test("YAML/Visual mode toggle switches modes", async ({ page }) => {
+    await login(page);
+    await page.goto(`${baseUrl}/pipelines/new`, { waitUntil: "domcontentloaded" });
+
+    await expect(page.getByTestId("mode-visual-btn")).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("mode-yaml-btn")).toBeVisible({ timeout: 5_000 });
+
+    await page.getByTestId("mode-visual-btn").click();
+    await expect(page.getByTestId("step-palette")).toBeVisible({ timeout: 5_000 });
+
+    await page.getByTestId("mode-yaml-btn").click();
+    await page.waitForSelector(".cm-editor, [data-testid='yaml-editor']", { timeout: 5_000 });
   });
 });

@@ -65,6 +65,14 @@ export function validateConnectionCandidate(
     return { valid: false, message: "Unsupported step type in connection." };
   }
 
+  if (sourceDef.isTerminal) {
+    return { valid: false, message: `${sourceDef.label} is terminal and cannot have outgoing connections.` };
+  }
+
+  if (targetDef.isSource) {
+    return { valid: false, message: `${targetDef.label} is a source step and cannot have incoming connections.` };
+  }
+
   if (targetDef.maxInputs === 0) {
     return { valid: false, message: `${targetDef.label} does not accept upstream inputs.` };
   }
@@ -203,7 +211,7 @@ export function usePipelineEditor({
       const message = error instanceof Error ? error.message : "Failed to parse YAML";
       setParseError(message);
     }
-  }, 250);
+  }, 300);
 
   const emitGraphToYaml = useDebouncedCallback((graph: BuilderGraph) => {
     try {
@@ -226,6 +234,7 @@ export function usePipelineEditor({
       return;
     }
     parseYamlToGraph(yamlText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [yamlText, parseYamlToGraph]);
 
   useEffect(() => {
@@ -237,6 +246,7 @@ export function usePipelineEditor({
       return;
     }
     emitGraphToYaml({ pipelineName, nodes, edges });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edges, emitGraphToYaml, nodes, pipelineName]);
 
   const selectedNodeId = useMemo(

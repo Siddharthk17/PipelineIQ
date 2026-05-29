@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { UploadedFile, WasmModule } from "@/lib/types";
-import { STEP_DEFINITIONS } from "@/lib/stepDefinitions";
+import { STEP_DEFINITIONS, FILTER_OPERATORS, JOIN_TYPES, FILL_STRATEGIES } from "@/lib/stepDefinitions";
 import type { BuilderNode } from "@/lib/yamlGraphSync";
 import { listWasmModules } from "@/lib/api";
 
@@ -422,22 +422,9 @@ export function ConfigPanel({
                 onChange={(event) => update("operator", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
               >
-                {[
-                  "equals",
-                  "not_equals",
-                  "greater_than",
-                  "less_than",
-                  "gte",
-                  "lte",
-                  "contains",
-                  "not_contains",
-                  "starts_with",
-                  "ends_with",
-                  "is_null",
-                  "is_not_null",
-                ].map((operator) => (
-                  <option key={operator} value={operator}>
-                    {operator}
+                {FILTER_OPERATORS.map((op) => (
+                  <option key={op.value} value={op.value}>
+                    {op.label}
                   </option>
                 ))}
               </select>
@@ -484,9 +471,9 @@ export function ConfigPanel({
                 onChange={(event) => update("how", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
               >
-                {["inner", "left", "right", "outer"].map((how) => (
-                  <option key={how} value={how}>
-                    {how}
+                {JOIN_TYPES.map((jt) => (
+                  <option key={jt.value} value={jt.value}>
+                    {jt.label}
                   </option>
                 ))}
               </select>
@@ -746,16 +733,9 @@ export function ConfigPanel({
                 onChange={(event) => update("strategy", event.target.value)}
                 className="w-full rounded border bg-background px-2 py-1.5"
               >
-                {[
-                  "constant",
-                  "forward_fill",
-                  "backward_fill",
-                  "mean",
-                  "median",
-                  "mode",
-                ].map((strategy) => (
-                  <option key={strategy} value={strategy}>
-                    {strategy}
+                {FILL_STRATEGIES.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
                   </option>
                 ))}
               </select>
