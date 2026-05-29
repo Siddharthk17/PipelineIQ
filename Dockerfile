@@ -48,6 +48,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 CMD ["gunicorn", "backend.main:app", \
      "-k", "uvicorn.workers.UvicornWorker", \
      "-w", "4", \
+     "--worker-connections", "1000", \
+     "--max-requests", "10000", \
+     "--max-requests-jitter", "1000", \
+     "--timeout", "30", \
+     "--graceful-timeout", "30", \
      "-b", "0.0.0.0:8000", \
-     "--timeout", "120", \
-     "--graceful-timeout", "30"]
+     "--access-logfile", "-", \
+     "--error-logfile", "-", \
+     "--log-level", "info"]

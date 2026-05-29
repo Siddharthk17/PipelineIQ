@@ -3,7 +3,7 @@
 GET /api/runs/{run_id}/openlineage -- single run event (JSON)
 GET /api/lineage/export -- all runs as NDJSON bulk export
 """
-import json
+import orjson
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -117,7 +117,7 @@ def export_all_openlineage(
                 lineage_graph=lineage_graph,
                 file_ids=[],
             )
-            events.append(json.dumps(event))
+            events.append(orjson.dumps(event).decode())
         except Exception as e:
             logger.warning("Skipping run %s in bulk export: %s", run.id, e)
             continue

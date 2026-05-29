@@ -6,7 +6,7 @@ signature pattern, returning a StepExecutionResult with timing,
 row counts, and column metadata.
 """
 
-import json
+import orjson
 import logging
 import time
 from datetime import datetime, timezone
@@ -1260,7 +1260,7 @@ class StepExecutor:
                     if key_col and key_col in record
                     else None
                 )
-                value = json.dumps(record, default=str).encode()
+                value = orjson.dumps({k: str(v) if not isinstance(v, (str, int, float, bool, type(None), list, dict)) else v for k, v in record.items()})
                 producer.produce(topic=config.topic, key=key, value=value)
             pending = producer.flush(timeout=10)
             if pending > 0:

@@ -13,9 +13,9 @@ bind = "0.0.0.0:8000"
 workers = int(os.environ.get("GUNICORN_WORKERS", "4"))
 worker_class = "uvicorn.workers.UvicornWorker"
 worker_connections = 1000
-max_requests = 5000
-max_requests_jitter = 500
-timeout = int(os.environ.get("GUNICORN_TIMEOUT", "120"))
+max_requests = 10000
+max_requests_jitter = 1000
+timeout = int(os.environ.get("GUNICORN_TIMEOUT", "30"))
 graceful_timeout = 30
 loglevel = os.environ.get("GUNICORN_LOG_LEVEL", "info")
 

@@ -1,6 +1,6 @@
 """Streaming pipeline control and Dead Letter Queue management API."""
 
-import json
+import orjson
 import logging
 import time
 import uuid as uuid_module
@@ -199,7 +199,7 @@ async def inspect_dlq(
             try:
                 val = msg.value().decode("utf-8", errors="replace")
                 try:
-                    val = json.loads(val)
+                    val = orjson.loads(val)
                 except Exception:
                     pass
             except Exception:

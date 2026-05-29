@@ -9,7 +9,7 @@ Includes:
 - Redis fallback queue for zero data loss during outages
 - Topic name validation to prevent invalid topic creation
 """
-import json
+import orjson
 import logging
 import os
 import re
@@ -169,12 +169,12 @@ def fallback_enqueue(topic: str, value: bytes, key: bytes | None = None) -> bool
             logger.error("Redis unavailable — cannot enqueue fallback message")
             return False
 
-        item = json.dumps({
+        item = orjson.dumps({
             "topic": topic,
             "value": value.decode("utf-8", errors="replace"),
             "key": key.decode("utf-8", errors="replace") if key else None,
             "enqueued_at": time.time(),
-        })
+        }).decode()
 
         # Trim oldest if queue exceeds max size
         r.lpush(_FALLBACK_QUEUE_KEY, item)
@@ -204,7 +204,7 @@ def fallback_drain(producer: Producer, batch_size: int = 100) -> int:
                 break
             for raw in items:
                 try:
-                    item = json.loads(raw)
+                    item = orjson.loads(raw)
                     producer.produce(
                         topic=item["topic"],
                         value=item["value"].encode(),

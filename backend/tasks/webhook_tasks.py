@@ -12,7 +12,7 @@ to the same host.
 import asyncio
 import hashlib
 import hmac
-import json
+import orjson
 import logging
 import time
 from datetime import datetime, timezone
@@ -87,7 +87,7 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
         logger.debug("Webhook %s is inactive — skipping delivery", webhook_id)
         return {"success": True, "skipped": True}
 
-    payload_bytes = json.dumps(payload, sort_keys=True).encode("utf-8")
+    payload_bytes = orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)
     signature = hmac.new(
         webhook.secret.encode("utf-8") if webhook.secret else b"",
         payload_bytes,

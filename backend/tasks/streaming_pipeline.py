@@ -8,7 +8,7 @@ Architectural differences from batch pipeline task:
   - Failed batches route to DLQ, pipeline continues (does NOT stop)
 """
 
-import json
+import orjson
 import logging
 import time
 from datetime import datetime, timezone
@@ -276,7 +276,7 @@ def _deserialize(messages, fmt: str) -> pd.DataFrame:
             continue
         try:
             if fmt == "json":
-                records.append(json.loads(v))
+                records.append(orjson.loads(v))
             else:
                 records.append({"raw": v.decode("utf-8", errors="replace")})
         except Exception:
@@ -293,7 +293,7 @@ def _publish(producer, df: pd.DataFrame, publish_step) -> None:
             if key_col and key_col in record
             else None
         )
-        value = json.dumps(record, default=str).encode()
+        value = orjson.dumps({k: str(v) if not isinstance(v, (str, int, float, bool, type(None), list, dict)) else v for k, v in record.items()})
         producer.produce(topic=topic, key=key, value=value)
     producer.poll(0)
 
@@ -417,7 +417,7 @@ def _sse_progress(run_id: str, stats: dict, throughput: float) -> None:
     try:
         redis = get_pubsub_redis()
         channel = f"pipeline_progress:{run_id}"
-        redis.publish(channel, json.dumps({
+        redis.publish(channel, orjson.dumps({
             "event": "streaming_stats",
             "run_id": str(run_id),
             "batches": stats["batches"],

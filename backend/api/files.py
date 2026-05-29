@@ -162,14 +162,20 @@ async def request_upload_url(
             },
         )
 
-        return UploadUrlResponse(
-            method="direct",
-            file_id=file_id,
-            upload_url=(
+        presigned_url = storage_service.get_presigned_upload_url(
+            str(stored_path), DIRECT_UPLOAD_TTL_SECONDS
+        )
+        if presigned_url is None:
+            presigned_url = (
                 f"{absolute_api_prefix}/direct-upload/{file_id}"
                 if is_legacy_api
                 else f"{api_prefix}/direct-upload/{file_id}"
-            ),
+            )
+
+        return UploadUrlResponse(
+            method="direct",
+            file_id=file_id,
+            upload_url=presigned_url,
             confirm_endpoint=(
                 f"{absolute_api_prefix}/{file_id}/confirm"
                 if is_legacy_api

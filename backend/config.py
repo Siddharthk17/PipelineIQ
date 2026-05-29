@@ -63,7 +63,7 @@ class Settings(BaseSettings):
 
     UPLOAD_DIR: Path = Path("./uploads")
     MAX_UPLOAD_SIZE: int = 500 * 1024 * 1024  # 500 MB
-    ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json"})
+    ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json", ".parquet", ".xlsx"})
 
     MAX_PIPELINE_STEPS: int = 50
     MAX_ROWS_PER_FILE: int = 1_000_000

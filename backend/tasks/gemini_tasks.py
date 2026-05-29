@@ -4,7 +4,7 @@ Runs on the 'gemini' queue with concurrency=1 and rate_limit='50/m'.
 This ensures we never exceed Gemini's free tier limits.
 """
 import hashlib
-import json
+import orjson
 import random
 import time
 from typing import Any
@@ -101,16 +101,15 @@ def call_gemini_task(
 
     # Step 1: Check response cache
     config_overrides = generation_config_overrides or {}
-    cache_input = json.dumps(
+    cache_input = orjson.dumps(
         {
             "prompt": prompt,
             "temperature": temperature,
             "max_output_tokens": max_output_tokens,
             "generation_config_overrides": config_overrides,
         },
-        sort_keys=True,
-        default=str,
-    )
+        option=orjson.OPT_SORT_KEYS,
+    ).decode()
     cache_key = f"gemini:resp:{hashlib.sha256(cache_input.encode()).hexdigest()}"
 
     redis = get_cache_redis()

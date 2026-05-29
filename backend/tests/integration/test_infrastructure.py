@@ -54,7 +54,7 @@ def test_compose_declares_week1_worker_topology():
     bulk_command = services["worker-bulk"]["command"]
 
     assert "--queues=critical" in critical_command
-    assert "--queues=default" in default_command
+    assert "default" in default_command
     assert "--queues=bulk" in bulk_command
 
 

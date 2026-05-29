@@ -364,7 +364,7 @@ services:
     container_name: pipelineiq-worker-default
     command: >
       celery -A backend.celery_app:celery_app worker
-      --queues=default
+      --queues=critical,default
       --concurrency=${CELERY_WORKERS_DEFAULT:-3}
       --prefetch-multiplier=1
       --hostname=default@%h
