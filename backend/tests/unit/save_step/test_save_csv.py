@@ -8,7 +8,8 @@ from backend.execution.steps.save_step import execute_save_step, SaveResult
 
 def _make_minio_client():
     client = MagicMock()
-    client.presigned_get_object.return_value = "https://minio/presigned-url"
+    client.generate_presigned_url.return_value = "https://minio/presigned-url"
+    client.put_object = MagicMock()
     return client
 
 
@@ -55,7 +56,7 @@ class TestSaveCsv:
             mock_minio.return_value = client
             execute_save_step(sample_table, mock_save_step, run_id="run-001")
             put_call = client.put_object.call_args
-            assert put_call[1]["bucket_name"] == "pipelineiq-outputs"
+            assert put_call[1]["Bucket"] == "pipelineiq-outputs"
 
     def test_csv_object_name_includes_run_id(self, sample_table, mock_save_step):
         with patch("backend.execution.steps.save_step._get_minio_client") as mock_minio:
@@ -63,7 +64,7 @@ class TestSaveCsv:
             mock_minio.return_value = client
             execute_save_step(sample_table, mock_save_step, run_id="run-xyz")
             put_call = client.put_object.call_args
-            object_name = put_call[1]["object_name"]
+            object_name = put_call[1]["Key"]
             assert "run-xyz" in object_name
             assert "output.csv" in object_name
 
@@ -75,7 +76,7 @@ class TestSaveCsv:
 
             def capture_put(**kwargs):
                 nonlocal uploaded_bytes
-                uploaded_bytes = kwargs["data"].read()
+                uploaded_bytes = kwargs["Body"].read()
 
             client.put_object = MagicMock(side_effect=lambda **kwargs: capture_put(**kwargs))
             mock_minio.return_value = client

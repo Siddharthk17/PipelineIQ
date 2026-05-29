@@ -45,7 +45,8 @@ class TestSaveJson:
 
         with patch("backend.execution.steps.save_step._get_minio_client") as mock_minio:
             client = MagicMock()
-            client.presigned_get_object.return_value = "https://minio/presigned"
+            client.generate_presigned_url.return_value = "https://minio/presigned"
+            client.put_object = MagicMock()
             mock_minio.return_value = client
 
             from backend.execution.steps.save_step import execute_save_step

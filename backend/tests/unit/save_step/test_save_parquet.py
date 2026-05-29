@@ -17,7 +17,8 @@ def _large_table():
 
 def _mock_minio():
     client = MagicMock()
-    client.presigned_get_object.return_value = "https://minio/presigned-url"
+    client.generate_presigned_url.return_value = "https://minio/presigned-url"
+    client.put_object = MagicMock()
     return client
 
 
@@ -46,7 +47,7 @@ class TestSaveParquet:
 
             def capture(**kwargs):
                 nonlocal uploaded_bytes
-                uploaded_bytes = kwargs["data"].read()
+                uploaded_bytes = kwargs["Body"].read()
 
             client.put_object = MagicMock(side_effect=lambda **kwargs: capture(**kwargs))
             mock_minio.return_value = client

@@ -8,7 +8,8 @@ from backend.execution.steps.save_step import execute_save_step, refresh_downloa
 
 def _make_minio_client():
     client = MagicMock()
-    client.presigned_get_object.return_value = "https://minio/presigned-url"
+    client.generate_presigned_url.return_value = "https://minio/presigned-url"
+    client.put_object = MagicMock()
     return client
 
 
@@ -20,7 +21,7 @@ class TestSaveUrlGeneration:
 
         with patch("backend.execution.steps.save_step._get_minio_client") as mock_minio:
             client = _make_minio_client()
-            client.presigned_get_object.return_value = "https://minio/outputs/run-001/output.csv?token=xyz"
+            client.generate_presigned_url.return_value = "https://minio/outputs/run-001/output.csv?token=xyz"
             mock_minio.return_value = client
 
             result = execute_save_step(table, step, run_id="run-001")
@@ -31,15 +32,15 @@ class TestSaveUrlGeneration:
     def test_refresh_download_url_generates_new_url(self):
         with patch("backend.execution.steps.save_step._get_minio_client") as mock_minio:
             client = _make_minio_client()
-            client.presigned_get_object.return_value = "https://minio/refreshed-url"
+            client.generate_presigned_url.return_value = "https://minio/refreshed-url"
             mock_minio.return_value = client
 
             url = refresh_download_url("outputs/run-001/output.csv")
             assert url == "https://minio/refreshed-url"
-            assert client.presigned_get_object.called
-            call_kwargs = client.presigned_get_object.call_args[1]
-            assert call_kwargs["bucket_name"] == "pipelineiq-outputs"
-            assert call_kwargs["object_name"] == "outputs/run-001/output.csv"
+            assert client.generate_presigned_url.called
+            call_kwargs = client.generate_presigned_url.call_args[1]
+            assert call_kwargs["Params"]["Bucket"] == "pipelineiq-outputs"
+            assert call_kwargs["Params"]["Key"] == "outputs/run-001/output.csv"
 
     def test_size_bytes_is_positive(self):
         table = pa.table({"x": pa.array(range(100))})
