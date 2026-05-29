@@ -91,6 +91,11 @@ sample:
   fraction: <0.0-1.0>   # proportion of rows — OR use n, not both
   random_state: 42
 
+transform:
+  input: <step_name>
+  column: <new_column_name>
+  expression: "df['existing_column'] * 1.2"   # valid pandas expression
+
 sql:
   input: <step_name>
   query: |

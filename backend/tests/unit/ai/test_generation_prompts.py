@@ -25,6 +25,7 @@ class TestGenerationPrompt:
             "unpivot",
             "deduplicate",
             "fill_nulls",
+            "transform",
             "sample",
             "sql",
         ]
