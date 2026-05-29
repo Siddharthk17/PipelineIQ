@@ -44,7 +44,7 @@ def test_load_step_always_routes_to_pandas_load() -> None:
         step_type="load",
         file_id="file-1")
 
-    router.execute_step(
+    router.execute(
         step=step,
         table_registry={},
         recorder=object(),
@@ -71,7 +71,7 @@ def test_save_step_stays_on_pandas_even_for_large_input() -> None:
         filename="out.csv",
     )
 
-    router.execute_step(step, {"filtered": large_table}, object())
+    router.execute(step, {"filtered": large_table}, object())
 
     pandas_exec.execute.assert_called_once()
     duckdb_exec.execute_step.assert_not_called()
@@ -90,7 +90,7 @@ def test_sql_step_always_routes_to_duckdb_even_for_small_input() -> None:
         input="load",
         query="SELECT * FROM {{input}}",
     )
-    router.execute_step(step, {"load": small_table}, object())
+    router.execute(step, {"load": small_table}, object())
 
     duckdb_exec.execute_step.assert_called_once()
     pandas_exec.execute.assert_not_called()
@@ -107,7 +107,7 @@ def test_large_filter_routes_to_duckdb() -> None:
         name="filter_step",
         step_type="filter",
         input="load")
-    router.execute_step(step, {"load": large_table}, object())
+    router.execute(step, {"load": large_table}, object())
 
     duckdb_exec.execute_step.assert_called_once_with(
         step, large_table, extra_tables=None)
@@ -130,7 +130,7 @@ def test_large_join_routes_to_duckdb_with_join_aliases() -> None:
         on="id",
         how="inner",
     )
-    router.execute_step(
+    router.execute(
         step, {
             "left_input": left, "right_input": right}, object())
 

@@ -44,12 +44,12 @@ def run_benchmark_step(
         input_table = bus.get(input_key)
 
     # Execute step
-    # Note: SmartExecutor.execute_step returns StepExecutionResult
+    # Note: SmartExecutor.execute returns StepExecutionResult
     from backend.pipeline.lineage import LineageRecorder
 
     recorder = LineageRecorder()
     registry = {input_key: input_table} if input_key else {}
-    result = executor.execute_step(step_config, registry, recorder)
+    result = executor.execute(step_config, registry, recorder)
     result_table = result.output_table
 
     # Store output

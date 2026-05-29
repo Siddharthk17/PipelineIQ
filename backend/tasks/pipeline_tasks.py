@@ -389,22 +389,13 @@ def _load_wasm_modules(
     if not modules:
         return {}
 
-    from io import BytesIO
+    from backend.repositories.wasm import load_wasm_bytes_sync
 
-    from backend.db.minio_client import get_minio_client
-    from backend.config import settings
-
-    minio_client = get_minio_client()
     wasm_modules: Dict[str, bytes] = {}
 
     for module in modules:
         try:
-            response = minio_client.get_object(
-                settings.WASM_BUCKET, module.storage_key
-            )
-            wasm_bytes = response.read()
-            response.close()
-            response.release_conn()
+            wasm_bytes = load_wasm_bytes_sync(module.storage_key)
             wasm_modules[str(module.id)] = wasm_bytes
             logger.info(
                 "Loaded Wasm module: name=%s, id=%s, size=%d",

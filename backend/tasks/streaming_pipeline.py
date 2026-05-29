@@ -199,7 +199,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
                 output_name = "_stream_input"
 
                 for step in middle_steps:
-                    result = executor.execute_step(
+                    result = executor.execute(
                         step,
                         table_registry,
                         recorder,

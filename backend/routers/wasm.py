@@ -312,6 +312,16 @@ async def delete_wasm_module(
     if not module:
         raise HTTPException(status_code=404, detail="Wasm module not found")
 
+    if module.pipeline_usage_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot delete: module is referenced by "
+                f"{module.pipeline_usage_count} pipeline(s). "
+                f"Remove all wasm_compute steps referencing this module first."
+            ),
+        )
+
     minio_client = get_minio_client()
     try:
         minio_client.remove_object(settings.WASM_BUCKET, module.storage_key)

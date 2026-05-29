@@ -728,7 +728,7 @@ class TestSqlStep:
                 "FROM {{input}} WHERE amount > 100"
             ),
         )
-        result = smart_executor.execute_step(
+        result = smart_executor.execute(
             step=config,
             table_registry=df_registry,
             recorder=recorder,
@@ -749,7 +749,7 @@ class TestSqlStep:
             query="DELETE FROM {{input}}",
         )
         with pytest.raises(ValueError):
-            smart_executor.execute_step(
+            smart_executor.execute(
                 step=config,
                 table_registry=df_registry,
                 recorder=recorder,

@@ -695,6 +695,8 @@ class WasmModule(Base):
     imports: Mapped[list] = mapped_column(PgJSONB, nullable=False)
     fuel_budget: Mapped[int] = mapped_column(
         Integer, nullable=False, default=10_000_000)
+    pipeline_usage_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true")
     user_id: Mapped[str] = mapped_column(

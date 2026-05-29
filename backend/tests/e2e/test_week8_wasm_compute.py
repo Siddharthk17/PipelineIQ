@@ -766,7 +766,7 @@ class TestSmartExecutorWasmComputeRouting:
         smart = SmartExecutor()
         wasm_modules = {"test-id": simple_add_wasm}
 
-        result = smart.execute_step(
+        result = smart.execute(
             step_config, table_registry, MagicMock(), wasm_modules=wasm_modules
         )
 

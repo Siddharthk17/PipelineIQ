@@ -114,7 +114,7 @@ class SmartExecutor:
         result.completed_at = now
         return result
 
-    def execute_step(
+    def execute(
         self,
         step: StepConfig,
         table_registry: dict[str, pa.Table],

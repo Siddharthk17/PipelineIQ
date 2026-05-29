@@ -116,7 +116,7 @@ class Settings(BaseSettings):
     S3_SECRET_KEY: str = ""
     S3_BUCKET: str = "pipelineiq-outputs"  # Dedicated bucket for pipeline outputs
     S3_ENDPOINT_URL: Optional[str] = None  # Required for MinIO
-    WASM_BUCKET: str = "pipelineiq-wasm-modules"  # Dedicated bucket for Wasm UDF modules
+    WASM_BUCKET: str = "pipelineiq-wasm"
 
     # Sentry
     SENTRY_DSN: str = ""

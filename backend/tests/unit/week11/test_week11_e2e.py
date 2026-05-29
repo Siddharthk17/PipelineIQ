@@ -73,7 +73,7 @@ class TestOTelPersistence:
             operator="equals",
             value="delivered",
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.trace_id is not None, "trace_id must be populated"
         assert result.span_id is not None, "span_id must be populated"
         assert result.engine is not None, "engine must be populated"
@@ -97,7 +97,7 @@ class TestOTelPersistence:
                 {"column": "order_id", "function": "count"},
             ],
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.trace_id is not None
         assert result.span_id is not None
         assert result.engine is not None
@@ -140,7 +140,7 @@ class TestOTelPersistence:
             operator="equals",
             value="delivered",
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.started_at <= result.completed_at
 
     def test_trace_id_is_hex_string(self, smart_executor, recorder, sample_table):
@@ -154,7 +154,7 @@ class TestOTelPersistence:
             operator="equals",
             value="delivered",
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert isinstance(result.trace_id, str)
         assert len(result.trace_id) == 32
         assert all(c in "0123456789abcdef" for c in result.trace_id)
@@ -170,7 +170,7 @@ class TestOTelPersistence:
             operator="equals",
             value="delivered",
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert isinstance(result.span_id, str)
         assert len(result.span_id) == 16
         assert all(c in "0123456789abcdef" for c in result.span_id)
@@ -393,7 +393,7 @@ null_thresholds:
 
 
 class TestSmartExecutorReturnPaths:
-    """Every return path in SmartExecutor.execute_step must produce
+    """Every return path in SmartExecutor.execute must produce
     a StepExecutionResult with all OTel fields populated."""
 
     def test_pandas_fallback_has_otel(self, smart_executor, recorder, sample_table):
@@ -407,7 +407,7 @@ class TestSmartExecutorReturnPaths:
             operator="equals",
             value="delivered",
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         self._assert_otel_fields(result)
 
     def test_duckdb_path_has_otel(self, smart_executor, recorder):
@@ -427,7 +427,7 @@ class TestSmartExecutorReturnPaths:
             operator="equals",
             value="A",
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         self._assert_otel_fields(result)
         assert result.engine == "duckdb", f"Expected engine='duckdb' for large table, got '{result.engine}'"
 
@@ -570,7 +570,7 @@ class TestTimestampCorrectness:
             operator="equals",
             value="delivered",
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.started_at is not None
         assert result.completed_at is not None
         # started_at must be strictly less than completed_at
@@ -590,7 +590,7 @@ class TestTimestampCorrectness:
                 {"column": "amount", "function": "sum"},
             ],
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.started_at < result.completed_at
 
     def test_load_step_has_distinct_timestamps(self, smart_executor, recorder, sample_table):
@@ -603,7 +603,7 @@ class TestTimestampCorrectness:
         )
         # This will fail since file doesn't exist, but timestamps should still be set
         try:
-            result = smart_executor.execute_step(config, df_registry, recorder)
+            result = smart_executor.execute(config, df_registry, recorder)
             if result.started_at and result.completed_at:
                 assert result.started_at <= result.completed_at
         except Exception:
@@ -717,7 +717,7 @@ class TestSmartExecutorEngineRouting:
             operator="equals",
             value="delivered",
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.engine == "pandas"
 
     def test_large_table_uses_duckdb(self, smart_executor, recorder):
@@ -735,7 +735,7 @@ class TestSmartExecutorEngineRouting:
             operator="greater_than",
             value=100,
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.engine == "duckdb"
 
     def test_always_pandas_steps(self, smart_executor, recorder, sample_table):
@@ -748,7 +748,7 @@ class TestSmartExecutorEngineRouting:
             input="load_data",
             mapping={"amount": "total"},
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.engine == "pandas"
 
 
@@ -1026,7 +1026,7 @@ class TestSmartExecutorSpanAttributes:
             operator="equals",
             value="delivered",
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.trace_id is not None
         assert result.span_id is not None
         assert result.engine is not None
@@ -1046,7 +1046,7 @@ class TestSmartExecutorSpanAttributes:
             operator="greater_than",
             value=100,
         )
-        result = smart_executor.execute_step(config, df_registry, recorder)
+        result = smart_executor.execute(config, df_registry, recorder)
         assert result.engine == "duckdb"
 
     def test_enrich_result_no_span_context(self):

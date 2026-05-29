@@ -274,7 +274,7 @@ class TestExecutionPerformance:
         start = time.perf_counter()
         # We use la_registry from bus for simulation
         registry = {"load": bus.get("load")}
-        executor.execute_step(filter_cfg, registry, recorder)
+        executor.execute(filter_cfg, registry, recorder)
         duration = time.perf_counter() - start
 
         assert duration < 0.2, f"Execution took too long: {duration:.4f}s"
