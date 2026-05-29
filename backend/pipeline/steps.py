@@ -24,6 +24,7 @@ from backend.pipeline.exceptions import (
     FilterTypeMismatchError,
     InvalidOperatorError,
     JoinKeyMissingError,
+    RenameConflictError,
     UnsupportedFileFormatError,
 )
 from backend.pipeline.lineage import LineageRecorder
@@ -469,6 +470,8 @@ class StepExecutor:
 
         Raises:
             ColumnNotFoundError: If any source column doesn't exist.
+            RenameConflictError: If a new name conflicts with an existing
+                column that is not being renamed.
         """
         start = time.perf_counter()
         input_table = table_registry[config.input]
@@ -477,6 +480,16 @@ class StepExecutor:
 
         for old_name in config.mapping:
             self._validate_column_exists(config.name, old_name, columns_in)
+
+        target_names = set(config.mapping.values())
+        preserved_names = set(columns_in) - set(config.mapping.keys())
+        conflicts = target_names & preserved_names
+        if conflicts:
+            raise RenameConflictError(
+                step_name=config.name,
+                target_names=target_names,
+                conflict_names=conflicts,
+            )
 
         renamed_df = input_df.rename(columns=config.mapping).copy()
         renamed_table = pa.Table.from_pandas(renamed_df, preserve_index=False)

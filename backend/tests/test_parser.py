@@ -266,8 +266,8 @@ pipeline:
     - name: fill_data
       type: fill_nulls
       input: missing_step
-      method: constant
-      value: 0
+      strategy: constant
+      constant_value: 0
       columns: [amount]
 """,
             """

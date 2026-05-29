@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 SUPPORTED_FORMATS = {
     ".csv": lambda handle: pd.read_csv(handle),
     ".json": lambda handle: pd.read_json(handle),
+    ".parquet": lambda handle: pd.read_parquet(handle),
+    ".xlsx": lambda handle: pd.read_excel(handle, engine="openpyxl"),
 }
 
 

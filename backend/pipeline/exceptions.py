@@ -440,6 +440,33 @@ class FilterTypeMismatchError(StepExecutionError):
         }
 
 
+class RenameConflictError(StepExecutionError):
+    """Raised when a rename mapping would create duplicate column names."""
+
+    def __init__(
+        self,
+        step_name: str,
+        target_names: set,
+        conflict_names: set,
+    ) -> None:
+        self.target_names = sorted(target_names)
+        self.conflict_names = sorted(conflict_names)
+        super().__init__(
+            step_name,
+            f"Rename would create duplicate column names: {sorted(conflict_names)}. "
+            f"The new names conflict with existing columns that are not being renamed."
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "error_type": self.__class__.__name__,
+            "message": self.message,
+            "step_name": self.step_name,
+            "target_names": self.target_names,
+            "conflict_names": self.conflict_names,
+        }
+
+
 class StepTimeoutError(StepExecutionError):
     """Raised when a step exceeds its allowed execution time."""
 

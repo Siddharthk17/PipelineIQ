@@ -609,7 +609,7 @@ services:
       - pipelineiq-network
 
   redis-broker:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: pipelineiq-redis-broker
     sysctls:
       net.core.somaxconn: 511
@@ -634,7 +634,7 @@ services:
       - pipelineiq-network
 
   redis-pubsub:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: pipelineiq-redis-pubsub
     sysctls:
       net.core.somaxconn: 511
@@ -658,7 +658,7 @@ services:
       - pipelineiq-network
 
   redis-cache:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: pipelineiq-redis-cache
     depends_on:
       redis-overcommit-fix:
@@ -715,7 +715,7 @@ services:
       - pipelineiq-network
 
   redis-yjs:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: pipelineiq-redis-yjs
     sysctls:
       net.core.somaxconn: 511

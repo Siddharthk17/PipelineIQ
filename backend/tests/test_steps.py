@@ -347,6 +347,23 @@ class TestRenameStep:
         assert "customer_id" in result.output_df.columns
         assert "status" in result.output_df.columns
 
+    def test_rename_to_existing_column_raises_conflict_error(
+        self, executor, recorder, sample_sales_table
+    ):
+        """RenameConflictError raised when new name matches existing column."""
+        from backend.pipeline.exceptions import RenameConflictError
+
+        df_registry = {"load_sales": sample_sales_table}
+        config = RenameStepConfig(
+            name="rename_conflict",
+            step_type=StepType.RENAME,
+            input="load_sales",
+            mapping={"order_id": "amount"},
+        )
+        with pytest.raises(RenameConflictError) as exc_info:
+            executor.execute_rename(df_registry, config, recorder)
+        assert "amount" in exc_info.value.conflict_names
+
 
 class TestJoinStep:
     """Tests for the join step executor."""

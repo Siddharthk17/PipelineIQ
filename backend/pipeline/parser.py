@@ -622,12 +622,8 @@ class PipelineParser:
                 name=name,
                 step_type=step_type,
                 input=raw.get("input", ""),
-                strategy=raw.get(
-                    "method", "constant"
-                ),  # method in YAML maps to strategy
-                constant_value=raw.get(
-                    "value", 0
-                ),  # value in YAML maps to constant_value
+                strategy=raw.get("strategy", "constant"),
+                constant_value=raw.get("constant_value", None),
                 columns=raw.get("columns", []),
             )
         if step_type == StepType.SAMPLE:
