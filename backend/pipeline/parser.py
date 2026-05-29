@@ -241,7 +241,11 @@ class SampleStepConfig(StepConfig):
 
 @dataclass
 class SqlStepConfig(StepConfig):
-    """Configuration for SQL transformation step."""
+    """Configuration for SQL transformation step.
+
+    The query must reference {{input}} to access the upstream DataFrame.
+    Only SELECT and WITH (CTE) queries are permitted for safety.
+    """
 
     input: str = ""
     query: str = ""

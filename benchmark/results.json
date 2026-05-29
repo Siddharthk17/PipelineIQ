@@ -1,0 +1,122 @@
+{
+  "10000": {
+    "rows": 10000,
+    "operations": [
+      {
+        "operation": "GROUP BY aggregation (5 functions)",
+        "pandas_ms": 5.9,
+        "duckdb_ms": 6.8,
+        "speedup": 0.9
+      },
+      {
+        "operation": "WHERE filter (amount > 500)",
+        "pandas_ms": 1.2,
+        "duckdb_ms": 2.0,
+        "speedup": 0.6
+      },
+      {
+        "operation": "INNER JOIN (orders x customers)",
+        "pandas_ms": 2.5,
+        "duckdb_ms": 6.5,
+        "speedup": 0.4
+      }
+    ],
+    "arrow_serialization": {
+      "operation": "Arrow IPC serialize + deserialize",
+      "serialize_ms": 1.0,
+      "deserialize_ms": 0.1,
+      "total_ms": 1.1,
+      "size_mb": 0.8
+    }
+  },
+  "100000": {
+    "rows": 100000,
+    "operations": [
+      {
+        "operation": "GROUP BY aggregation (5 functions)",
+        "pandas_ms": 7.6,
+        "duckdb_ms": 7.7,
+        "speedup": 1.0
+      },
+      {
+        "operation": "WHERE filter (amount > 500)",
+        "pandas_ms": 2.5,
+        "duckdb_ms": 4.8,
+        "speedup": 0.5
+      },
+      {
+        "operation": "INNER JOIN (orders x customers)",
+        "pandas_ms": 24.8,
+        "duckdb_ms": 8.2,
+        "speedup": 3.0
+      }
+    ],
+    "arrow_serialization": {
+      "operation": "Arrow IPC serialize + deserialize",
+      "serialize_ms": 21.2,
+      "deserialize_ms": 0.1,
+      "total_ms": 21.2,
+      "size_mb": 7.6
+    }
+  },
+  "500000": {
+    "rows": 500000,
+    "operations": [
+      {
+        "operation": "GROUP BY aggregation (5 functions)",
+        "pandas_ms": 31.3,
+        "duckdb_ms": 21.2,
+        "speedup": 1.5
+      },
+      {
+        "operation": "WHERE filter (amount > 500)",
+        "pandas_ms": 21.6,
+        "duckdb_ms": 27.2,
+        "speedup": 0.8
+      },
+      {
+        "operation": "INNER JOIN (orders x customers)",
+        "pandas_ms": 75.8,
+        "duckdb_ms": 27.1,
+        "speedup": 2.8
+      }
+    ],
+    "arrow_serialization": {
+      "operation": "Arrow IPC serialize + deserialize",
+      "serialize_ms": 76.6,
+      "deserialize_ms": 0.1,
+      "total_ms": 76.7,
+      "size_mb": 38.2
+    }
+  },
+  "1000000": {
+    "rows": 1000000,
+    "operations": [
+      {
+        "operation": "GROUP BY aggregation (5 functions)",
+        "pandas_ms": 40.6,
+        "duckdb_ms": 44.1,
+        "speedup": 0.9
+      },
+      {
+        "operation": "WHERE filter (amount > 500)",
+        "pandas_ms": 45.5,
+        "duckdb_ms": 28.2,
+        "speedup": 1.6
+      },
+      {
+        "operation": "INNER JOIN (orders x customers)",
+        "pandas_ms": 173.4,
+        "duckdb_ms": 49.8,
+        "speedup": 3.5
+      }
+    ],
+    "arrow_serialization": {
+      "operation": "Arrow IPC serialize + deserialize",
+      "serialize_ms": 173.7,
+      "deserialize_ms": 0.6,
+      "total_ms": 174.2,
+      "size_mb": 76.4
+    }
+  }
+}

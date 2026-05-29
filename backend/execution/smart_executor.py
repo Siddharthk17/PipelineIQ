@@ -136,7 +136,7 @@ class SmartExecutor:
         if step_type in self.DUCKDB_CAPABLE_STEPS:
             input_step_name = getattr(step, "input", None)
             input_table = table_registry.get(input_step_name) if input_step_name else None
-            if input_table is not None and input_table.num_rows > self.DUCKDB_THRESHOLD:
+            if input_table is not None and input_table.num_rows >= self.DUCKDB_THRESHOLD:
                 engine = "duckdb"
                 row_count_in = input_table.num_rows
 
@@ -260,7 +260,7 @@ class SmartExecutor:
 
                 should_route_to_duckdb = (
                     step_type in self.DUCKDB_CAPABLE_STEPS
-                    and input_table.num_rows > self.DUCKDB_THRESHOLD
+                    and input_table.num_rows >= self.DUCKDB_THRESHOLD
                 )
                 if not should_route_to_duckdb:
                     result = self.pandas_executor.execute(table_registry, step, recorder)

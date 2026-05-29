@@ -663,6 +663,39 @@ class ArrowDataBus:
                 for key, meta in self._locations.items()
             }
 
+    @staticmethod
+    def pandas_to_arrow(df) -> pa.Table:
+        """Convert a Pandas DataFrame to Arrow Table, preserving data types."""
+        return pa.Table.from_pandas(df, preserve_index=False)
+
+    @staticmethod
+    def arrow_to_pandas(table: pa.Table):
+        """Convert an Arrow Table to Pandas DataFrame."""
+        return table.to_pandas()
+
+    @staticmethod
+    def cleanup_all_stale(max_age_seconds: int = 3600) -> int:
+        """Remove all stale PipelineIQ shm files older than max_age_seconds.
+
+        Called periodically by the worker cleanup signal or a periodic task.
+        Returns the number of files cleaned up.
+        """
+        import glob
+        import time as time_mod
+
+        removed = 0
+        now = time_mod.time()
+        pattern = os.path.join(SHM_DIR, f"{SHM_PREFIX}*.arrow")
+        for path in glob.glob(pattern):
+            try:
+                mtime = os.path.getmtime(path)
+                if now - mtime > max_age_seconds:
+                    os.unlink(path)
+                    removed += 1
+            except OSError:
+                continue
+        return removed
+
 
 _global_bus_lock = threading.Lock()
 _global_bus: Optional[ArrowDataBus] = None

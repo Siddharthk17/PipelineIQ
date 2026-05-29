@@ -1,8 +1,27 @@
-"""DuckDB execution utilities for Arrow-backed pipeline steps."""
+"""DuckDB execution utilities for Arrow-backed pipeline steps.
+
+Architecture:
+  One DuckDB connection per Celery worker process.
+  Created once at worker startup via Celery's worker_process_init signal.
+  Reused across all pipeline tasks that worker handles.
+
+Thread count tuning:
+  DuckDB uses internal threads for parallel query execution.
+  On a 4-core machine with 4 Celery workers:
+  - If each DuckDB uses 4 threads: 4 x 4 = 16 threads competing for 4 cores
+  - This causes excessive context switching -- slower than single-threaded
+  - Correct: 4 cores / 4 workers = 1 DuckDB thread per worker
+  - The parallelism comes from multiple workers, not from within each worker
+
+httpfs extension:
+  Configured at worker startup so DuckDB can query Parquet files spilled
+  to MinIO directly via S3-compatible API -- no full file download needed.
+"""
 
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import Callable, Optional
 
@@ -21,6 +40,10 @@ _worker_conn: Optional[duckdb.DuckDBPyConnection] = None
 _worker_connection = _worker_conn
 
 
+def _compute_duckdb_thread_count(cpu_cores: int, celery_concurrency: int) -> int:
+    return max(1, cpu_cores // celery_concurrency)
+
+
 def _configure_connection(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -28,20 +51,64 @@ def _configure_connection(
 ) -> None:
     conn.sql(f"PRAGMA threads={max(1, int(threads))}")
     conn.sql(f"PRAGMA memory_limit='{settings.WORKER_MEMORY_LIMIT_GB}GB'")
-    conn.sql("PRAGMA temp_directory='/tmp'")
+
+    os.makedirs("/tmp/duckdb", exist_ok=True)
+    conn.sql("PRAGMA temp_directory='/tmp/duckdb'")
+
     conn.sql("PRAGMA enable_object_cache=true")
 
+    try:
+        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+        minio_access_key = os.environ.get("MINIO_ROOT_USER", "minio")
+        minio_secret_key = os.environ.get("MINIO_ROOT_PASSWORD", "minio123")
 
-def initialize_worker_duckdb(*, threads: int = 4) -> duckdb.DuckDBPyConnection:
-    """Initialize one DuckDB connection per worker process."""
+        conn.execute("INSTALL httpfs")
+        conn.execute("LOAD httpfs")
+        conn.execute(f"SET s3_endpoint='{minio_endpoint}'")
+        conn.execute("SET s3_use_ssl=false")
+        conn.execute("SET s3_url_style='path'")
+        conn.execute(f"SET s3_access_key_id='{minio_access_key}'")
+        conn.execute(f"SET s3_secret_access_key='{minio_secret_key}'")
+        logger.info("DuckDB httpfs extension loaded for MinIO access")
+    except Exception as exc:
+        logger.warning(
+            "DuckDB httpfs setup failed (MinIO queries will use download fallback): %s",
+            exc,
+        )
+
+
+def initialize_worker_duckdb(*, threads: int | None = None) -> duckdb.DuckDBPyConnection:
+    """Initialize one DuckDB connection per worker process.
+
+    Thread count is computed dynamically as cpu_cores // celery_concurrency
+    to prevent CPU oversaturation when multiple workers share cores.
+    The default (threads=None) triggers the dynamic calculation.
+    """
     global _worker_conn, _worker_connection
     with _worker_lock:
         if _worker_conn is None:
+            if threads is None:
+                cpu_cores = os.cpu_count() or 4
+                celery_concurrency = int(
+                    os.environ.get("CELERY_CONCURRENCY", "4")
+                )
+                threads = _compute_duckdb_thread_count(
+                    cpu_cores, celery_concurrency
+                )
+
+            logger.info(
+                "Initializing DuckDB for worker: "
+                "cpu_cores=%s, celery_concurrency=%s, duckdb_threads=%s",
+                os.cpu_count() or 4,
+                os.environ.get("CELERY_CONCURRENCY", "4"),
+                threads,
+            )
+
             conn = duckdb.connect(database=":memory:")
             _configure_connection(conn, threads=threads)
             _worker_conn = conn
             _worker_connection = conn
-            logger.info("Initialized worker DuckDB connection")
+            logger.info("Initialized worker DuckDB connection (threads=%d)", threads)
     return _worker_conn
 
 
@@ -76,8 +143,19 @@ def _initialize_worker_duckdb_signal(**kwargs) -> None:
 
 @worker_shutdown.connect
 def _close_worker_duckdb_signal(**kwargs) -> None:
-    """Close the DuckDB worker connection during Celery process shutdown."""
+    """Close the DuckDB worker connection and clean up stale shm files during
+    Celery worker process shutdown."""
     close_worker_duckdb()
+
+    try:
+        from backend.execution.arrow_bus import ArrowDataBus
+        cleaned = ArrowDataBus.cleanup_all_stale(max_age_seconds=3600)
+        if cleaned > 0:
+            logger.info(
+                "Cleaned %d stale /dev/shm files during worker shutdown", cleaned
+            )
+    except Exception as exc:
+        logger.warning("Failed to clean stale shm files during shutdown: %s", exc)
 
 
 class DuckDBExecutor:
@@ -152,8 +230,6 @@ class DuckDBExecutor:
                 try:
                     conn.unregister(name)
                 except Exception:
-                    # Best-effort cleanup; unregister failure should not mask
-                    # step errors.
                     logger.debug(
                         "DuckDB relation '%s' could not be unregistered", name)
 

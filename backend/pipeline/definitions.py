@@ -111,11 +111,11 @@ STEP_DEFINITIONS: dict[str, dict] = {
         "description": "Take a random sample of rows",
     },
     "sql": {
-        "icon": "\U0001F9EE",
-        "color": "#0EA5E9",
-        "category": "transform",
-        "label": "SQL",
-        "description": "Run SELECT SQL against the input DataFrame",
+        "icon": "\U0001f9ee",
+        "color": "#1E40AF",
+        "category": "advanced",
+        "label": "SQL (DuckDB)",
+        "description": "Execute DuckDB SQL with window functions and CTEs",
     },
     "wasm_compute": {
         "icon": "\u29C6",
