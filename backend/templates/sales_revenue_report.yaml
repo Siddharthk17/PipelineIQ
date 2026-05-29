@@ -1,0 +1,51 @@
+template:
+  id: sales_revenue_report
+  name: Sales Revenue Report
+  description: Join orders with customers, filter completed orders, compute revenue by region
+  category: sales
+  required_files:
+    - placeholder: orders_file_id
+      description: Orders file with columns order_id, customer_id, amount, status, order_date
+    - placeholder: customers_file_id
+      description: Customers file with columns customer_id, name, region, tier
+pipeline:
+  name: sales_revenue_report
+  steps:
+    - name: load_orders
+      type: load
+      file_id: "{{orders_file_id}}"
+    - name: load_customers
+      type: load
+      file_id: "{{customers_file_id}}"
+    - name: filter_completed
+      type: filter
+      input: load_orders
+      column: status
+      operator: equals
+      value: completed
+    - name: join_customer_data
+      type: join
+      left: filter_completed
+      right: load_customers
+      on: customer_id
+      how: inner
+    - name: aggregate_revenue
+      type: aggregate
+      input: join_customer_data
+      group_by: [region, tier]
+      aggregations:
+        - column: amount
+          function: sum
+        - column: order_id
+          function: count
+        - column: amount
+          function: mean
+    - name: sort_by_revenue
+      type: sort
+      input: aggregate_revenue
+      by: [amount_sum]
+      ascending: [false]
+    - name: save_report
+      type: save
+      input: sort_by_revenue
+      filename: sales_revenue_report.csv

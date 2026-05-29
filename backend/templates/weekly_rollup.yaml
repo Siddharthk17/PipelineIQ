@@ -1,0 +1,32 @@
+template:
+  id: weekly_rollup
+  name: Weekly Rollup
+  description: Aggregate daily transaction data into weekly summaries by category
+  category: analytics
+  required_files:
+    - placeholder: daily_data_file_id
+      description: Daily data with date, category, and numeric metric columns
+pipeline:
+  name: weekly_rollup
+  steps:
+    - name: load_daily_data
+      type: load
+      file_id: "{{daily_data_file_id}}"
+    - name: sample_for_preview
+      type: sample
+      input: load_daily_data
+      n: 10000
+      random_state: 42
+    - name: deduplicate_entries
+      type: deduplicate
+      input: sample_for_preview
+      keep: first
+    - name: sort_chronologically
+      type: sort
+      input: deduplicate_entries
+      by: []
+      ascending: [true]
+    - name: save_weekly_rollup
+      type: save
+      input: sort_chronologically
+      filename: weekly_rollup.csv

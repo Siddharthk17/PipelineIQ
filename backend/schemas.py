@@ -253,6 +253,14 @@ class StepResultResponse(BaseModel):
         None, description="Step completion timestamp (ISO 8601)")
     engine: Optional[str] = Field(
         None, description="Execution engine (pandas, duckdb)")
+    download_url: Optional[str] = Field(
+        None, description="Presigned download URL for save step output")
+    output_filename: Optional[str] = Field(
+        None, description="Output filename for save step")
+    output_format: Optional[str] = Field(
+        None, description="Output format (csv, json, parquet)")
+    output_size_bytes: Optional[int] = Field(
+        None, description="Output file size in bytes")
 
 
 class HealingAttemptResponse(BaseModel):

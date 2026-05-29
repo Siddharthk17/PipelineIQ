@@ -75,6 +75,11 @@ class StepExecutionResult:
     engine: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    download_url: str | None = None
+    output_filename: str | None = None
+    output_format: str | None = None
+    output_object_name: str | None = None
+    output_size_bytes: int | None = None
 
     @property
     def output_df(self) -> pd.DataFrame:
@@ -736,45 +741,68 @@ class StepExecutor:
         config: SaveStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
-        """Save the input DataFrame to a file on disk (CSV or JSON)."""
-        import uuid as _uuid
-        import io
+        """Save the input DataFrame to MinIO (CSV, JSON, or Parquet).
 
+        Uses the production save step that writes structured output
+        to pipelineiq-outputs/{run_id}/{filename} and generates
+        a presigned download URL valid for 48 hours.
+        """
         start = time.perf_counter()
         input_table = table_registry[config.input]
-        input_df = input_table.to_pandas()
-        columns = list(input_df.columns)
+        columns = list(input_table.schema.names)
 
-        # Determine extension from filename or default to .csv
-        filename = config.filename
-        ext = Path(filename).suffix.lower() or ".csv"
-        if ext not in [".csv", ".json", ".parquet"]:
-            ext = ".csv"
-
-        stored_path = f"{filename}_{_uuid.uuid4().hex}{ext}"
-
+        save_result = None
         try:
-            if ext == ".json":
-                buffer = io.BytesIO()
-                input_df.to_json(buffer, orient="records", indent=2)
-                buffer.seek(0)
-            elif ext == ".parquet":
-                buffer = io.BytesIO()
-                input_df.to_parquet(buffer, engine="pyarrow", index=False)
-                buffer.seek(0)
-            else:
-                buffer = io.BytesIO()
-                input_df.to_csv(buffer, index=False)
-                buffer.seek(0)
-
-            storage_service.upload(buffer, stored_path)
+            from backend.execution.steps.save_step import execute_save_step
+            run_id = getattr(self, "_current_run_id", None) or ""
+            save_result = execute_save_step(
+                table=input_table,
+                step=config,
+                run_id=run_id,
+            )
+        except ImportError:
+            pass
         except Exception as exc:
-            logger.error("Failed to save file %s: %s", stored_path, exc)
-            raise FileReadError(  # Reusing FileReadError as a generic storage error
+            logger.error("Failed to save step output: %s", exc)
+            raise FileReadError(
                 step_name=config.name,
-                file_path=stored_path,
+                file_path=config.filename or "output",
                 reason=str(exc),
             ) from exc
+
+        if save_result is None:
+            import uuid as _uuid
+            import io
+            input_df = input_table.to_pandas()
+            filename = config.filename
+            ext = Path(filename).suffix.lower() or ".csv"
+            if ext not in [".csv", ".json", ".parquet"]:
+                ext = ".csv"
+            stored_path = f"{filename}_{_uuid.uuid4().hex}{ext}"
+            try:
+                if ext == ".json":
+                    buffer = io.BytesIO()
+                    input_df.to_json(buffer, orient="records", indent=2)
+                    buffer.seek(0)
+                elif ext == ".parquet":
+                    buffer = io.BytesIO()
+                    input_df.to_parquet(buffer, engine="pyarrow", index=False)
+                    buffer.seek(0)
+                else:
+                    buffer = io.BytesIO()
+                    input_df.to_csv(buffer, index=False)
+                    buffer.seek(0)
+                storage_service.upload(buffer, stored_path)
+            except Exception as exc:
+                logger.error("Failed to save file %s: %s", stored_path, exc)
+                raise FileReadError(
+                    step_name=config.name,
+                    file_path=stored_path,
+                    reason=str(exc),
+                ) from exc
+            logger.info(
+                "Save step '%s': %d rows, %d columns → %s",
+                config.name, len(input_df), len(columns), stored_path)
 
         recorder.record_save(
             step_name=config.name,
@@ -783,13 +811,16 @@ class StepExecutor:
             columns=columns,
         )
 
-        logger.info(
-            "Save step '%s': %d rows, %d columns → %s",
-            config.name,
-            len(input_df),
-            len(columns),
-            stored_path,
-        )
+        if save_result:
+            logger.info(
+                "Save step '%s': %d rows, %d columns → %s (%s, %.1f KB)",
+                config.name, save_result.row_count, len(columns),
+                save_result.filename, save_result.format,
+                save_result.size_bytes / 1024)
+        else:
+            logger.info(
+                "Save step '%s': %d rows, %d columns → fallback path",
+                config.name, input_table.num_rows, len(columns))
 
         return StepExecutionResult(
             step_name=config.name,
@@ -800,6 +831,11 @@ class StepExecutor:
             columns_in=columns,
             columns_out=columns,
             duration_ms=measure_ms(start),
+            download_url=save_result.download_url if save_result else None,
+            output_filename=save_result.filename if save_result else None,
+            output_format=save_result.format if save_result else None,
+            output_object_name=save_result.object_name if save_result else None,
+            output_size_bytes=save_result.size_bytes if save_result else None,
         )
 
     def execute_validate(

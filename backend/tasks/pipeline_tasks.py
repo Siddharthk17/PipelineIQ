@@ -834,6 +834,12 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             engine=getattr(result, "engine", None),
             started_at=getattr(result, "started_at", None),
             completed_at=getattr(result, "completed_at", None),
+            download_url=getattr(result, "download_url", None),
+            output_filename=getattr(result, "output_filename", None),
+            output_format=getattr(result, "output_format", None),
+            output_object_name=getattr(result, "output_object_name", None),
+            output_size_bytes=getattr(result, "output_size_bytes", None),
+            row_count_out=getattr(result, "rows_out", None) if result.step_type == "save" else None,
         )
         db.add(step_record)
 

@@ -198,6 +198,12 @@ class StepResult(Base):
         DateTime(timezone=True), nullable=True
     )
     engine: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    download_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    output_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    output_format: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    output_object_name: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    row_count_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    output_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

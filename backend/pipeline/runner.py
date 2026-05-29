@@ -226,7 +226,8 @@ class PipelineRunner:
         )
 
         try:
-            result = self._executor.execute_step(
+            self._executor._current_run_id = run_id
+            result = self._executor.execute(
                 step=step,
                 table_registry=table_registry,
                 recorder=recorder,

@@ -736,6 +736,10 @@ def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
                 started_at=sr.started_at.isoformat() if sr.started_at else None,
                 completed_at=sr.completed_at.isoformat() if sr.completed_at else None,
                 engine=sr.engine,
+                download_url=sr.download_url,
+                output_filename=sr.output_filename,
+                output_format=sr.output_format,
+                output_size_bytes=sr.output_size_bytes,
             )
             for sr in pipeline_run.step_results
         ],
@@ -923,6 +927,76 @@ def preview_pipeline_step(
             config.steps),
         "step_preview": step_info,
         "note": "Full sample data preview requires pipeline execution. Use /plan for detailed estimates.",
+    }
+
+
+@router.get(
+    "/{run_id}/download",
+    summary="Get download URL for pipeline run output",
+    description=(
+        "Returns a fresh presigned download URL (valid 48 hours) for the "
+        "output file produced by a successful pipeline run."
+    ),
+)
+def get_run_download_url(
+    run_id: str,
+    request: Request,
+    db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Get a fresh presigned download URL for the run's output file."""
+    _validate_uuid_format(run_id)
+    pipeline_run = (
+        db.query(PipelineRun)
+        .filter(PipelineRun.id == _as_uuid(run_id))
+        .first()
+    )
+    if pipeline_run is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline run '{run_id}' not found",
+        )
+
+    _check_pipeline_permission(db, current_user, pipeline_run.name, ["owner", "runner"])
+
+    eligible = {PipelineStatus.COMPLETED, PipelineStatus.HEALED}
+    if pipeline_run.status not in eligible:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Run has not completed successfully (status: {pipeline_run.status.value})",
+        )
+
+    save_steps = sorted(
+        [sr for sr in pipeline_run.step_results
+         if sr.step_type == "save" and sr.output_object_name],
+        key=lambda s: s.step_index,
+        reverse=True,
+    )
+
+    if not save_steps:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No output file found for this run",
+        )
+
+    step_result = save_steps[0]
+
+    fresh_url = step_result.download_url
+    try:
+        from backend.execution.steps.save_step import refresh_download_url
+        fresh_url = refresh_download_url(step_result.output_object_name)
+    except Exception as exc:
+        logger.warning(
+            "Could not refresh presigned URL, using stored URL: %s", exc)
+
+    return {
+        "run_id": run_id,
+        "filename": step_result.output_filename,
+        "format": step_result.output_format,
+        "size_bytes": step_result.output_size_bytes,
+        "row_count": step_result.row_count_out,
+        "download_url": fresh_url,
+        "expires_in_hours": 48,
     }
 
 

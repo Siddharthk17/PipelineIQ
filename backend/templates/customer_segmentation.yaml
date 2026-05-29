@@ -1,0 +1,34 @@
+template:
+  id: customer_segmentation
+  name: Customer Segmentation
+  description: Segment customers by total spend, order frequency, and average order value
+  category: analytics
+  required_files:
+    - placeholder: orders_file_id
+      description: Orders data with customer_id and amount columns
+pipeline:
+  name: customer_segmentation
+  steps:
+    - name: load_orders
+      type: load
+      file_id: "{{orders_file_id}}"
+    - name: aggregate_customer_metrics
+      type: aggregate
+      input: load_orders
+      group_by: [customer_id]
+      aggregations:
+        - column: amount
+          function: sum
+        - column: amount
+          function: count
+        - column: amount
+          function: mean
+    - name: sort_by_value
+      type: sort
+      input: aggregate_customer_metrics
+      by: [amount_sum]
+      ascending: [false]
+    - name: save_segments
+      type: save
+      input: sort_by_value
+      filename: customer_segmentation.csv

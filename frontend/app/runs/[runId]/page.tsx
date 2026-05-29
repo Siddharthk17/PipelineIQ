@@ -2,11 +2,12 @@
 
 import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
-import { getPipelineRun } from "@/lib/api";
+import { getPipelineRun, getRunDownloadUrl } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { GanttChart } from "@/components/runs/GanttChart";
 import { RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import type { PipelineRun } from "@/lib/types";
+import type { RunDownload } from "@/lib/api";
 import { Download } from "lucide-react";
 
 export default function RunDetailPage({ params }: { params: Promise<{ runId: string }> }) {
@@ -14,6 +15,8 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
   const { user, isLoading } = useAuth();
   const [run, setRun] = useState<PipelineRun | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
+  const [downloadInfo, setDownloadInfo] = useState<RunDownload | null>(null);
+  const [downloadLoading, setDownloadLoading] = useState(false);
   const resolvedParams = use(params);
 
   useEffect(() => {
@@ -27,6 +30,18 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
       .catch(() => {})
       .finally(() => setPageLoading(false));
   }, [isLoading, resolvedParams.runId, router, user]);
+
+  const handleDownload = async () => {
+    setDownloadLoading(true);
+    try {
+      const info = await getRunDownloadUrl(resolvedParams.runId);
+      setDownloadInfo(info);
+      window.open(info.download_url, "_blank");
+    } catch {
+    } finally {
+      setDownloadLoading(false);
+    }
+  };
 
   if (isLoading || !user || pageLoading) {
     return (
@@ -72,11 +87,13 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
           {(run.status === "COMPLETED" || run.status === "HEALED") && (
             <button
               data-testid="download-output-btn"
-              className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)]"
+              onClick={handleDownload}
+              disabled={downloadLoading}
+              className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)] disabled:opacity-50"
             >
               <span className="inline-flex items-center gap-1">
                 <Download className="h-3.5 w-3.5" />
-                Download CSV
+                {downloadLoading ? "Loading..." : "Download Output"}
               </span>
             </button>
           )}

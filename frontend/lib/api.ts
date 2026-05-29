@@ -432,6 +432,20 @@ export async function getTemplateDetail(templateId: string): Promise<PipelineTem
   return fetchApi<PipelineTemplateDetail>(`/templates/${templateId}`);
 }
 
+export async function forkTemplate(
+  templateId: string,
+  data: { pipeline_name: string; file_mappings: Record<string, string> },
+): Promise<{ pipeline_name: string; yaml: string; template_id: string }> {
+  return fetchApi<{ pipeline_name: string; yaml: string; template_id: string }>(
+    `/templates/${templateId}/fork`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    },
+  );
+}
+
 // Week 7 - Pipeline Schedules
 
 export interface PipelineSchedule {
@@ -439,9 +453,15 @@ export interface PipelineSchedule {
   pipeline_name: string;
   yaml_config: string;
   cron_expression: string;
+  cron_human?: string;
   is_active: boolean;
   next_run_at: string | null;
   last_run_at: string | null;
+  last_run_status?: string;
+  total_runs?: number;
+  successful_runs?: number;
+  failed_runs?: number;
+  healed_runs?: number;
   created_at: string;
 }
 
@@ -472,6 +492,48 @@ export async function toggleSchedule(scheduleId: string): Promise<PipelineSchedu
   return fetchApi<PipelineSchedule>(`/schedules/${scheduleId}/toggle`, {
     method: "PATCH",
   });
+}
+
+export async function pauseSchedule(scheduleId: string): Promise<PipelineSchedule> {
+  return fetchApi<PipelineSchedule>(`/schedules/${scheduleId}/pause`, {
+    method: "POST",
+  });
+}
+
+export async function resumeSchedule(scheduleId: string): Promise<PipelineSchedule> {
+  return fetchApi<PipelineSchedule>(`/schedules/${scheduleId}/resume`, {
+    method: "POST",
+  });
+}
+
+export async function getSchedulePreview(scheduleId: string, n = 5): Promise<{
+  schedule_id: string;
+  cron_expression: string;
+  cron_human: string;
+  next_runs: string[];
+}> {
+  return fetchApi<{
+    schedule_id: string;
+    cron_expression: string;
+    cron_human: string;
+    next_runs: string[];
+  }>(`/schedules/${scheduleId}/preview?n=${n}`);
+}
+
+// Week 7 - Download run output
+
+export interface RunDownload {
+  run_id: string;
+  filename: string;
+  format: string;
+  size_bytes: number | null;
+  row_count: number | null;
+  download_url: string;
+  expires_in_hours: number;
+}
+
+export async function getRunDownloadUrl(runId: string): Promise<RunDownload> {
+  return fetchApi<RunDownload>(`/pipelines/${runId}/download`);
 }
 
 // AI

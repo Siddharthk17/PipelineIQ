@@ -1,0 +1,33 @@
+template:
+  id: multi_source_merge
+  name: Multi-Source Merge
+  description: Merge two data sources on a shared key column with deduplication
+  category: integration
+  required_files:
+    - placeholder: source_a_file_id
+      description: Primary data source
+    - placeholder: source_b_file_id
+      description: Secondary data source (must share a key column with source A)
+pipeline:
+  name: multi_source_merge
+  steps:
+    - name: load_source_a
+      type: load
+      file_id: "{{source_a_file_id}}"
+    - name: load_source_b
+      type: load
+      file_id: "{{source_b_file_id}}"
+    - name: merge_sources
+      type: join
+      left: load_source_a
+      right: load_source_b
+      on: id
+      how: outer
+    - name: remove_merge_duplicates
+      type: deduplicate
+      input: merge_sources
+      keep: first
+    - name: save_merged
+      type: save
+      input: remove_merge_duplicates
+      filename: merged_output.csv

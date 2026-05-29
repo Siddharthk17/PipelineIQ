@@ -1,0 +1,33 @@
+template:
+  id: data_quality_audit
+  name: Data Quality Audit
+  description: Comprehensive data quality check — nulls, duplicates, validation
+  category: quality
+  required_files:
+    - placeholder: source_file_id
+      description: Any tabular data file to audit
+pipeline:
+  name: data_quality_audit
+  steps:
+    - name: load_source
+      type: load
+      file_id: "{{source_file_id}}"
+    - name: remove_duplicates
+      type: deduplicate
+      input: load_source
+      keep: first
+    - name: fill_missing_strings
+      type: fill_nulls
+      input: remove_duplicates
+      strategy: constant
+      columns: []
+      constant_value: "MISSING"
+    - name: sort_for_review
+      type: sort
+      input: fill_missing_strings
+      by: []
+      ascending: [true]
+    - name: save_audit_output
+      type: save
+      input: sort_for_review
+      filename: data_quality_audit.csv
