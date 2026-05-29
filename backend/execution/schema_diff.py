@@ -5,7 +5,7 @@ from __future__ import annotations
 import jellyfish
 
 
-RENAME_SIMILARITY_THRESHOLD = 0.75
+RENAME_SIMILARITY_THRESHOLD = 0.85
 
 
 def find_removed_columns(old_schema: dict, new_schema: dict) -> list[str]:

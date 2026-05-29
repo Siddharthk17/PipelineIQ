@@ -3,10 +3,11 @@
 import React, { useState, useMemo } from "react";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { usePipelineRun } from "@/hooks/usePipelineRun";
-import { CheckCircle, XCircle, PlayCircle, Clock, AlertTriangle, BarChart3, List, AlertOctagon } from "lucide-react";
+import { CheckCircle, XCircle, PlayCircle, AlertTriangle, BarChart3, List, AlertOctagon } from "lucide-react";
 import { motion } from "motion/react";
 import { HealingBanner } from "@/components/widgets/HealingBanner";
 import { GanttChart } from "@/components/runs/GanttChart";
+import { RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import { ContractViolationBadge } from "@/components/pipeline-builder/ContractViolationBadge";
 
 export function RunMonitorWidget() {
@@ -94,28 +95,7 @@ export function RunMonitorWidget() {
               <BarChart3 className="w-3.5 h-3.5 text-[var(--text-secondary)]" />
             </button>
           </div>
-          {activeRun.status === "HEALED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
-          {activeRun.status === "COMPLETED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
-          {activeRun.status === "FAILED" && <XCircle className="w-4 h-4 text-[var(--accent-error)]" />}
-          {activeRun.status === "RUNNING" && <div className="w-3 h-3 rounded-full bg-[var(--accent-warning)] animate-pulse" />}
-          {activeRun.status === "HEALING" && <div className="w-3 h-3 rounded-full bg-[var(--accent-primary)] animate-pulse" />}
-          {activeRun.status === "PENDING" && <Clock className="w-4 h-4 text-[var(--text-secondary)]" />}
-          {activeRun.status === "TIMEOUT" && <AlertTriangle className="w-4 h-4 text-[var(--accent-error)]" />}
-          {activeRun.status === "CONTRACT_VIOLATION" && <AlertOctagon className="w-4 h-4 text-[var(--accent-error)]" />}
-          <span className="text-xs font-bold tracking-wider uppercase" style={{ 
-            color:
-              activeRun.status === "COMPLETED" || activeRun.status === "HEALED"
-                ? "var(--accent-success)"
-                : activeRun.status === "FAILED" || activeRun.status === "TIMEOUT" || activeRun.status === "CONTRACT_VIOLATION"
-                  ? "var(--accent-error)"
-                  : activeRun.status === "RUNNING"
-                    ? "var(--accent-warning)"
-                    : activeRun.status === "HEALING"
-                      ? "var(--accent-primary)"
-                      : "var(--text-secondary)" 
-          }}>
-            {activeRun.status ?? "UNKNOWN"}
-          </span>
+          <RunStatusBadge status={activeRun.status} />
         </div>
       </div>
 

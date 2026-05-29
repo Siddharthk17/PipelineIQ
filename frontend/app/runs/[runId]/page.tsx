@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { getPipelineRun } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { GanttChart } from "@/components/runs/GanttChart";
+import { RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import type { PipelineRun } from "@/lib/types";
-import { CheckCircle, XCircle, Clock, Download } from "lucide-react";
+import { Download } from "lucide-react";
 
 export default function RunDetailPage({ params }: { params: Promise<{ runId: string }> }) {
   const router = useRouter();
@@ -43,28 +44,11 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
     );
   }
 
-  const statusIcon = () => {
-    switch (run.status) {
-      case "COMPLETED":
-      case "HEALED":
-        return <CheckCircle className="h-5 w-5 text-[var(--accent-success)]" />;
-      case "FAILED":
-        return <XCircle className="h-5 w-5 text-[var(--accent-error)]" />;
-      case "RUNNING":
-      case "HEALING":
-        return <div className="h-5 w-5 animate-pulse rounded-full bg-[var(--accent-primary)]" />;
-      case "PENDING":
-        return <Clock className="h-5 w-5 text-[var(--text-secondary)]" />;
-      default:
-        return <XCircle className="h-5 w-5 text-[var(--accent-error)]" />;
-    }
-  };
-
   return (
     <main className="flex h-screen w-screen flex-col bg-[var(--bg-base)] text-[var(--text-primary)]">
       <div className="flex items-center justify-between border-b border-[var(--widget-border)] px-6 py-4">
         <div className="flex items-center gap-3">
-          {statusIcon()}
+          <RunStatusBadge status={run.status} />
           <div>
             <h1 className="text-lg font-semibold">{run.name}</h1>
             <div data-testid="run-status" className="flex items-center gap-2 text-sm">

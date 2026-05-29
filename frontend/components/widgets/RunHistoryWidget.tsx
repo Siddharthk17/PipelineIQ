@@ -3,12 +3,13 @@
 import React from "react";
 import { useMutation } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { CheckCircle, XCircle, Clock, RefreshCw, Sparkles } from "lucide-react";
+import { RefreshCw, Sparkles } from "lucide-react";
 import { repairPipelineRunWithAI } from "@/lib/api";
 import { usePipelineRuns, useInvalidatePipelineRuns } from "@/hooks/usePipelineRuns";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { AIRepairDiffModal } from "@/components/widgets/AIPipelineModals";
 import { StreamingRunCard } from "@/components/runs/StreamingRunCard";
+import { RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import type { AIRepairPipelineResponse } from "@/lib/types";
 
 const STREAMING_STATUSES = ["STREAMING_ACTIVE", "STREAMING_PAUSED", "STREAMING_STOPPED"];
@@ -104,12 +105,7 @@ export function RunHistoryWidget() {
                   >
                     <td className="py-3 pl-3">
                       <div data-testid="run-status" className="flex items-center gap-2">
-                        {run.status === "HEALED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
-                        {run.status === "COMPLETED" && <CheckCircle className="w-4 h-4 text-[var(--accent-success)]" />}
-                        {run.status === "FAILED" && <XCircle className="w-4 h-4 text-[var(--accent-error)]" />}
-                        {run.status === "RUNNING" && <div className="w-4 h-4 rounded-full bg-[var(--accent-warning)] animate-pulse" />}
-                        {run.status === "HEALING" && <div className="w-4 h-4 rounded-full bg-[var(--accent-primary)] animate-pulse" />}
-                        {run.status === "PENDING" && <Clock className="w-4 h-4 text-[var(--text-secondary)]" />}
+                        <RunStatusBadge status={run.status} />
                       </div>
                     </td>
                     <td className="py-3">
