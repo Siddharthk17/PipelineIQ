@@ -38,8 +38,8 @@ test.describe('Multiplayer Pipeline Collaboration', () => {
       await pageA.waitForSelector('[data-testid="pipeline-editor-widget"]', { timeout: 15_000 })
       await pageB.waitForSelector('[data-testid="pipeline-editor-widget"]', { timeout: 15_000 })
 
-      await pageA.click('[data-testid="visual-tab"]')
-      await pageB.click('[data-testid="visual-tab"]')
+      await pageA.click('[data-testid="mode-visual-btn"]')
+      await pageB.click('[data-testid="mode-visual-btn"]')
 
       await expect(pageA.locator('[data-testid="pipeline-canvas"]')).toBeVisible()
       await expect(pageB.locator('[data-testid="pipeline-canvas"]')).toBeVisible()
@@ -50,7 +50,14 @@ test.describe('Multiplayer Pipeline Collaboration', () => {
     }
   })
 
-  test('presence panel renders in collaborative mode', async ({ page }) => {
-    test.skip()
+  test('presence panel renders in solo mode when no other users connected', async ({ page }) => {
+    await page.goto(`${BASE_URL}/pipelines/new`)
+
+    await page.waitForSelector('[data-testid="pipeline-editor-widget"]', { timeout: 15_000 })
+
+    await page.click('[data-testid="mode-visual-btn"]')
+
+    await expect(page.locator('[data-testid="presence-panel"]')).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('[data-testid="presence-panel"]')).toContainText('Editing solo')
   })
 })
