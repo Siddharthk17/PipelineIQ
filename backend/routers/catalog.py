@@ -52,7 +52,7 @@ def get_impact_analysis(
     response: Response,
     asset_name: str,
     asset_type: Optional[str] = Query(None),
-    max_depth: int = Query(default=5, le=10),
+    max_depth: int = Query(default=10, le=15),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_read_db_dependency),
 ):
@@ -95,7 +95,7 @@ def get_asset_lineage(
     request: Request,
     response: Response,
     asset_name: str,
-    max_depth: int = Query(default=5, le=10),
+    max_depth: int = Query(default=10, le=15),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_read_db_dependency),
 ):

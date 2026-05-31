@@ -461,15 +461,18 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
     progress_callback = make_redis_progress_callback(str(pipeline_run.id))
 
     def lineage_callback(graph):
-        from backend.repositories.catalog import register_step_assets
-        register_step_assets(
-            db=db,
-            run_id=str(pipeline_run.id),
-            pipeline_name=pipeline_run.name or "unknown",
-            lineage_graph=graph,
-            owner_id=str(pipeline_run.user_id) if pipeline_run.user_id else None,
-        )
-        db.commit()
+        try:
+            from backend.repositories.catalog import register_step_assets
+            register_step_assets(
+                db=db,
+                run_id=str(pipeline_run.id),
+                pipeline_name=pipeline_run.name or "unknown",
+                lineage_graph=graph,
+                owner_id=str(pipeline_run.user_id) if pipeline_run.user_id else None,
+            )
+            db.commit()
+        except Exception as e:
+            logger.warning("Incremental catalog registration failed: %s", e)
 
     return runner.execute(
         config=config,
@@ -746,9 +749,10 @@ def _record_healing_audit(
 
 def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     """Persist pipeline execution results to the database.
-    Raises RuntimeError if critical persistence steps fail, so the
-    Celery task machinery marks the run as FAILED and triggers retry /
-    error webhooks. Non-critical steps (version save) log and continue.
+
+    Catalog registration is non-fatal: a failure to register assets in
+    the global catalog does not change the run status or prevent the
+    pipeline from succeeding. Only the db.commit() failure is fatal.
     """
     from backend.metrics import PIPELINE_RUNS_TOTAL, PIPELINE_DURATION_SECONDS
 
@@ -883,19 +887,6 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         )
     except Exception as exc:
         logger.error("Catalog registration failed for run %s: %s", pipeline_run.id, exc)
-        db.rollback()
-        pipeline_run.status = PipelineStatus.FAILED
-        pipeline_run.error_message = f"Failed to register pipeline run assets: {exc}"
-        db.commit()
-        _publish_terminal_event(
-            str(pipeline_run.id),
-            "pipeline_failed",
-            PipelineStatus.FAILED.value,
-            pipeline_run.error_message,
-        )
-        raise RuntimeError(
-            f"Failed to register pipeline run assets for {pipeline_run.id}: {exc}"
-        ) from exc
 
     db.commit()
 

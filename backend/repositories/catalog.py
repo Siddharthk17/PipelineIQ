@@ -29,7 +29,7 @@ NS_MINIO_OUTPUTS = "minio://pipelineiq-outputs"
 NS_PIPELINE = "pipeline://"
 NS_REDPANDA = "redpanda://localhost:9092"
 
-MAX_CTE_DEPTH = 5
+MAX_CTE_DEPTH = 10
 MAX_CTE_RESULTS = 500
 CTE_STATEMENT_TIMEOUT_MS = 30000
 MAX_LINEAGE_NODES = 10_000

@@ -17,7 +17,7 @@ class TestBlastRadiusCTE:
 
     def test_max_cte_depth_constant(self):
         from backend.repositories.catalog import MAX_CTE_DEPTH
-        assert MAX_CTE_DEPTH == 5
+        assert MAX_CTE_DEPTH == 10
 
     def test_sql_contains_depth_limit(self):
         from backend.repositories.catalog import _blast_radius_postgres
