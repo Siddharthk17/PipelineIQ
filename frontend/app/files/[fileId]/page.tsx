@@ -4,6 +4,8 @@ import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
 import { getFile, getFilePreview } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { PIIBanner } from "@/components/widgets/PIIBanner";
+import { ColumnPolicyManager } from "@/components/widgets/ColumnPolicyManager";
 import type { UploadedFile } from "@/lib/types";
 
 export default function FileDetailPage({ params }: { params: Promise<{ fileId: string }> }) {
@@ -11,6 +13,7 @@ export default function FileDetailPage({ params }: { params: Promise<{ fileId: s
   const { user, isLoading } = useAuth();
   const [file, setFile] = useState<UploadedFile | null>(null);
   const [previewRows, setPreviewRows] = useState<Record<string, unknown>[]>([]);
+  const [piiColumns, setPiiColumns] = useState<string[]>([]);
   const [pageLoading, setPageLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const resolvedParams = use(params);
@@ -80,6 +83,16 @@ export default function FileDetailPage({ params }: { params: Promise<{ fileId: s
       </div>
 
       <div className="flex-1 overflow-auto p-6">
+        <PIIBanner
+          piiSuggestions={piiColumns}
+          fileId={resolvedParams.fileId}
+        />
+
+        <ColumnPolicyManager
+          fileId={resolvedParams.fileId}
+          fileColumns={file.columns}
+        />
+
         <div className="mb-6 rounded-lg border border-[var(--widget-border)] bg-[var(--bg-surface)] p-4">
           <h2 className="mb-3 text-sm font-medium">Schema</h2>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">

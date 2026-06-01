@@ -505,3 +505,68 @@ export interface StorageStatsResponse {
   growth_trend_7d: GrowthTrendPoint[];
   generated_at: string;
 }
+
+export interface CostStepEstimate {
+  step_name: string;
+  step_type: string;
+  engine: string;
+  predicted_ms: number;
+  confidence: number;
+  row_in_est: number;
+  row_out_est: number;
+}
+
+export interface CostEstimate {
+  total_ms: number;
+  duration_human: string;
+  peak_memory_mb: number;
+  confidence: number;
+  optimization_tip: string;
+  data_points_used: number;
+  steps: CostStepEstimate[];
+}
+
+export interface ColumnPolicyRecord {
+  id: string;
+  column_name: string;
+  policy: "redacted" | "masked";
+  mask_pattern: string | null;
+  allowed_roles: string[];
+  created_at: string;
+}
+
+export interface ColumnPoliciesResponse {
+  file_id: string;
+  policies: ColumnPolicyRecord[];
+  pii_suggestions: string[];
+}
+
+export interface CreateColumnPolicyRequest {
+  file_id: string;
+  column_name: string;
+  policy: "redacted" | "masked";
+  mask_pattern?: string | null;
+  allowed_roles?: string[];
+}
+
+export interface CatalogPipeline {
+  pipeline_name: string;
+  last_run_id: string;
+  last_run_status: string;
+  last_run_at: string;
+  schedule: {
+    active: boolean;
+    cron_human: string | null;
+    next_run_at: string | null;
+  } | null;
+}
+
+export interface CatalogPipelinesResponse {
+  pipelines: CatalogPipeline[];
+  total: number;
+}
+
+export interface PipelineDescription {
+  pipeline_name: string;
+  description: string;
+}

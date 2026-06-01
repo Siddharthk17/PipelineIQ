@@ -33,6 +33,13 @@ import type {
   ContractViolationResponse,
   StorageStatsResponse,
   TierHealthResponse,
+  CostEstimate,
+  ColumnPoliciesResponse,
+  CreateColumnPolicyRequest,
+  ColumnPolicyRecord,
+  CatalogPipelinesResponse,
+  CatalogPipeline,
+  PipelineDescription,
 } from "./types";
 
 export class ApiError extends Error {
@@ -844,4 +851,50 @@ export async function triggerEviction(): Promise<{ evicted: number }> {
 
 export async function cleanupStaleShm(): Promise<{ deleted: number }> {
   return fetchApi<{ deleted: number }>("/storage/cleanup-stale-shm", { method: "POST" });
+}
+
+export async function getCostEstimate(pipelineYaml: string, fileIds: string[]): Promise<CostEstimate> {
+  return fetchWithAuth<CostEstimate>(API_BASE_URL, "/runs/estimate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pipeline_yaml: pipelineYaml, file_ids: fileIds }),
+  });
+}
+
+export async function listColumnPolicies(fileId: string): Promise<ColumnPoliciesResponse> {
+  return fetchWithAuth<ColumnPoliciesResponse>(
+    API_BASE_URL,
+    `/api/column-policies/files/${fileId}`,
+  );
+}
+
+export async function createColumnPolicy(request: CreateColumnPolicyRequest): Promise<ColumnPolicyRecord> {
+  return fetchWithAuth<ColumnPolicyRecord>(API_BASE_URL, "/api/column-policies", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export async function deleteColumnPolicy(policyId: string): Promise<void> {
+  await fetchWithAuth<{ detail: string }>(API_BASE_URL, `/api/column-policies/${policyId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listCatalogPipelines(q?: string, status?: string): Promise<CatalogPipelinesResponse> {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (status) params.set("status", status);
+  return fetchWithAuth<CatalogPipelinesResponse>(
+    API_BASE_URL,
+    `/api/catalog/pipelines?${params.toString()}`,
+  );
+}
+
+export async function getPipelineDescription(name: string): Promise<PipelineDescription> {
+  return fetchWithAuth<PipelineDescription>(
+    API_BASE_URL,
+    `/api/catalog/pipelines/${encodeURIComponent(name)}/description`,
+  );
 }

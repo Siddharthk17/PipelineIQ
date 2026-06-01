@@ -38,10 +38,12 @@ import { CollaboratorPresence } from "@/components/collaboration/CollaboratorPre
 import {
   DEFAULT_PIPELINE_YAML,
   extractPipelineName,
+  extractFileIds,
   hasNonEmptyFileId,
   removeFileIdLines,
   upsertFileIdInFirstLoadStep,
 } from "@/lib/pipeline-yaml";
+import { PreRunCostCard } from "@/components/widgets/PreRunCostCard";
 import {
   collectMissingColumnCandidates,
   extractColumnCandidate,
@@ -72,6 +74,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   const [aiColumnSuggestions, setAiColumnSuggestions] = useState<Record<string, string>>({});
   const [runError, setRunError] = useState<string | null>(null);
   const [runCooldownUntil, setRunCooldownUntil] = useState<number>(0);
+  const [showCostCard, setShowCostCard] = useState(false);
 
   const formatRunError = useCallback((error: unknown): string => {
     if (error && typeof error === "object") {
@@ -631,8 +634,26 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                   Preview
                 </span>
               </button>
+              <button
+                onClick={() => setShowCostCard(!showCostCard)}
+                data-testid="cost-estimate-btn"
+                className="min-h-10 shrink-0 rounded border px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--interactive-hover)]"
+                style={{ borderColor: "var(--widget-border)" }}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  {showCostCard ? "▾" : "▸"} Cost
+                </span>
+              </button>
             </div>
           </div>
+
+          {showCostCard && (
+            <PreRunCostCard
+              pipelineYaml={code}
+              fileIds={extractFileIds(code)}
+              onDismiss={() => setShowCostCard(false)}
+            />
+          )}
 
           <div className="mt-1.5 flex justify-between items-center">
             <CollaboratorPresence collaborators={collaborators} />

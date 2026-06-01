@@ -110,3 +110,14 @@ function findLoadStepEnd(lines: string[], loadTypeIndex: number, loadFieldIndent
 export function removeFileIdLines(yamlConfig: string): string {
   return yamlConfig.replace(/^\s*file_id:\s*.*\n?/gm, "");
 }
+
+export function extractFileIds(yamlConfig: string): string[] {
+  const matches = yamlConfig.matchAll(/^\s*file_id:\s*["']?([a-f0-9-]{36})["']?\s*$/gm);
+  const ids: string[] = [];
+  for (const match of matches) {
+    if (match[1] && match[1].length === 36) {
+      ids.push(match[1]);
+    }
+  }
+  return [...new Set(ids)];
+}
