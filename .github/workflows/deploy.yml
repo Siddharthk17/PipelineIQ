@@ -130,6 +130,7 @@ jobs:
           kubectl apply -f k8s/minio/
           kubectl apply -f k8s/backend/
           kubectl apply -f k8s/workers/
+          kubectl apply -f k8s/y-websocket/
           kubectl apply -f k8s/ingress/
 
       - name: Update image tag in deployments
@@ -183,8 +184,8 @@ jobs:
           echo "  Image built: $IMAGE"
           echo "  Registry:    ${{ env.REGISTRY }}"
           echo "  Namespace:   pipelineiq"
-          echo "  Manifests:   k8s/ (namespace, configmap, postgres, redis, minio, backend, workers, ingress)"
-          echo "  Deployments: pipelineiq-api, worker-critical, worker-default, worker-bulk, worker-gemini, worker-streaming, worker-beat, sse-service"
+          echo "  Manifests:   k8s/ (namespace, configmap, postgres, redis, minio, backend, workers, y-websocket, ingress)"
+          echo "  Deployments: pipelineiq-api, worker-critical, worker-default, worker-bulk, worker-gemini, worker-streaming, worker-beat, sse-service, y-websocket"
           echo "::endgroup::"
           echo ""
           echo "SKIPPED: k3s cluster not configured (set KUBE_CONFIG secret to enable real deploy)"

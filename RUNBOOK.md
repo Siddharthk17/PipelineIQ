@@ -25,6 +25,7 @@
 | redis-pubsub | 6380 | SSE event pub/sub |
 | redis-cache | 6381 | LRU cache (1GB maxmemory) |
 | redis-yjs | 6382 | Yjs CRDT persistence |
+| y-websocket | 1234 | Yjs WebSocket collaboration |
 | minio | 9000/9001 | S3-compatible object storage |
 
 ### Application Services
@@ -39,6 +40,7 @@
 | worker-gemini | 1 | Gemini AI queue, concurrency=1 |
 | worker-streaming | 1 | Redpanda streaming queue, concurrency=4 |
 | worker-beat | 1 | Celery Beat scheduler |
+| y-websocket | 1 | Yjs WebSocket CRDT collaboration |
 
 ---
 

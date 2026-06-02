@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: y-websocket
+  namespace: pipelineiq
+  labels:
+    app: y-websocket
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: y-websocket
+  template:
+    metadata:
+      labels:
+        app: y-websocket
+    spec:
+      containers:
+        - name: y-websocket
+          image: yjs/y-websocket:latest
+          ports:
+            - containerPort: 1234
+              name: ws
+          env:
+            - name: YPERSISTENCE
+              value: redis
+            - name: YREDIS_HOST
+              value: redis-yjs
+            - name: YREDIS_PORT
+              value: "6382"
+          envFrom:
+            - configMapRef:
+                name: pipelineiq-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "200m"
+          livenessProbe:
+            tcpSocket:
+              port: 1234
+            initialDelaySeconds: 15
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: y-websocket
+  namespace: pipelineiq
+spec:
+  selector:
+    app: y-websocket
+  ports:
+    - port: 1234
+      targetPort: 1234
+      name: ws
+  type: ClusterIP

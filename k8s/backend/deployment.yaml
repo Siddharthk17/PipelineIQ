@@ -20,6 +20,8 @@ spec:
     metadata:
       labels:
         app: pipelineiq-api
+      annotations:
+        rollme: "initial"
     spec:
       serviceAccountName: pipelineiq-sa
       initContainers:
