@@ -4,11 +4,14 @@
 It is fast (~10GB/s read/write) and large (typically 50% of system RAM),
 making it the right warm tier for DataFrames between 10MB and 500MB.
 
-Redis handles small, frequently accessed tables. MinIO handles rare giants.
-/dev/shm bridges the middle: DataFrames too big for Redis but too accessed
-for a network round-trip to MinIO.
+Redis handles small, frequently accessed tables. Spill storage handles rare
+giants. /dev/shm bridges the middle: DataFrames too big for Redis but too
+accessed for a network round-trip to MinIO or S3.
 
-File naming: /dev/shm/pipelineiq_<run_id>_<safe_key>_<uuid>.arrow
+File naming: {shm_dir}/pipelineiq_{run_id}_{digest}.arrow
+
+All functions accept an optional `shm_dir` parameter for test isolation.
+When omitted, the default system /dev/shm is used.
 """
 
 from __future__ import annotations
@@ -24,23 +27,35 @@ import pyarrow.ipc as ipc
 
 logger = logging.getLogger(__name__)
 
-SHM_DIR = Path("/dev/shm")
+SYSTEM_SHM_DIR = Path("/dev/shm")
 SHM_PREFIX = "pipelineiq_"
 SHM_EXTENSION = ".arrow"
 SHM_MAX_AGE_HOURS = 24
 
 
-def shm_available() -> bool:
-    return SHM_DIR.is_dir() and os.access(SHM_DIR, os.W_OK)
+def shm_available(shm_dir: Path | None = None) -> bool:
+    target = shm_dir or SYSTEM_SHM_DIR
+    return target.is_dir() and os.access(target, os.W_OK)
 
 
-def shm_path_for(run_id: str, key: str, suffix: str = "") -> Path:
+def shm_path_for(
+    run_id: str,
+    key: str,
+    suffix: str = "",
+    shm_dir: Path | None = None,
+) -> Path:
+    target = shm_dir or SYSTEM_SHM_DIR
     digest = hashlib.sha256(f"{run_id}:{key}".encode()).hexdigest()[:16]
-    return SHM_DIR / f"{SHM_PREFIX}{run_id}_{digest}{suffix}{SHM_EXTENSION}"
+    return target / f"{SHM_PREFIX}{run_id}_{digest}{suffix}{SHM_EXTENSION}"
 
 
-def write(table: pa.Table, run_id: str, key: str) -> tuple[Path, int]:
-    path = shm_path_for(run_id, key)
+def write(
+    table: pa.Table,
+    run_id: str,
+    key: str,
+    shm_dir: Path | None = None,
+) -> tuple[Path, int]:
+    path = shm_path_for(run_id, key, shm_dir=shm_dir)
     ipc_bytes = _table_to_ipc_bytes(table)
     path.write_bytes(ipc_bytes)
     logger.debug("shm write: key=%s size=%.0fKB", key, len(ipc_bytes) / 1024)
@@ -61,10 +76,14 @@ def remove(path: Path) -> bool:
         return False
 
 
-def remove_for_run(run_id: str) -> int:
+def remove_for_run(
+    run_id: str,
+    shm_dir: Path | None = None,
+) -> int:
+    target = shm_dir or SYSTEM_SHM_DIR
     deleted = 0
     pattern = f"{SHM_PREFIX}{run_id}_*{SHM_EXTENSION}"
-    for entry in SHM_DIR.glob(pattern):
+    for entry in target.glob(pattern):
         try:
             entry.unlink(missing_ok=True)
             deleted += 1
@@ -73,21 +92,26 @@ def remove_for_run(run_id: str) -> int:
     return deleted
 
 
-def usage_bytes() -> tuple[int, int]:
-    if not shm_available():
+def usage_bytes(shm_dir: Path | None = None) -> tuple[int, int]:
+    target = shm_dir or SYSTEM_SHM_DIR
+    if not os.access(target, os.W_OK):
         return 0, 0
-    stat = os.statvfs(SHM_DIR)
+    stat = os.statvfs(target)
     total = stat.f_blocks * stat.f_frsize
     free = stat.f_bavail * stat.f_frsize
     return total - free, total
 
 
-def cleanup_stale() -> int:
-    if not shm_available():
+def cleanup_stale(
+    shm_dir: Path | None = None,
+    max_age_hours: int = SHM_MAX_AGE_HOURS,
+) -> int:
+    target = shm_dir or SYSTEM_SHM_DIR
+    if not target.is_dir() or not os.access(target, os.W_OK):
         return 0
     deleted = 0
-    cutoff = time.time() - SHM_MAX_AGE_HOURS * 3600
-    for entry in SHM_DIR.glob(f"{SHM_PREFIX}*{SHM_EXTENSION}"):
+    cutoff = time.time() - max_age_hours * 3600
+    for entry in target.glob(f"{SHM_PREFIX}*{SHM_EXTENSION}"):
         try:
             if entry.stat().st_mtime < cutoff:
                 entry.unlink()
@@ -95,7 +119,7 @@ def cleanup_stale() -> int:
         except OSError:
             pass
     if deleted:
-        logger.info("shm stale cleanup: removed %d files", deleted)
+        logger.info("shm stale cleanup: removed %d files from %s", deleted, target)
     return deleted
 
 

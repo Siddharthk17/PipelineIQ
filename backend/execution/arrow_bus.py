@@ -3,7 +3,7 @@
 Routing contract:
   < 10MB   -> Redis (raw Arrow IPC bytes, TTL 1h)
   10-500MB -> /dev/shm (Arrow IPC file, deleted on run completion)
-  >= 500MB -> spill storage (Parquet+Snappy, TTL 48h)
+  >= 500MB -> spill storage (Parquet+zstd, TTL 48h)
 
 The bus automatically demotes large Redis entries to /dev/shm when Redis
 memory exceeds 90% capacity. All three tiers are purged on run completion.
@@ -29,7 +29,7 @@ import pyarrow.parquet as pq
 from redis.exceptions import RedisError
 
 from backend.db.redis_pools import get_cache_redis_binary
-from backend.execution import shm_store
+from backend.execution import shm_store as shm_store
 from backend.services.storage_service import storage_service
 from backend.storage.event_logger import log_storage_event
 
@@ -37,8 +37,7 @@ logger = logging.getLogger(__name__)
 
 REDIS_THRESHOLD = 10 * 1024 * 1024   # 10MB
 SHM_THRESHOLD = 500 * 1024 * 1024    # 500MB
-SHM_PREFIX = "piq_"
-SHM_DIR = "/dev/shm"  # nosec B108 - intentional shared-memory mount for Arrow IPC
+SYSTEM_SHM_DIR = Path("/dev/shm")    # nosec B108 — intentional tmpfs mount for Arrow IPC
 
 REDIS_EVICT_THRESHOLD = 0.90  # Start evicting when Redis > 90% full
 
@@ -66,7 +65,7 @@ class ArrowDataBus:
         manifest_ttl_seconds: int = 86400,
         redis_client=None,
         disk_prefix: str = "arrow_bus",
-        shm_dir: str = SHM_DIR,
+        shm_dir: str | Path | None = None,
     ) -> None:
         if small_threshold_mb <= 0:
             raise ValueError("small_threshold_mb must be > 0")
@@ -88,11 +87,17 @@ class ArrowDataBus:
         self._lock = threading.RLock()
         self._redis = redis_client
         self._redis_retry_after = 0.0
-        self._shm_dir = Path(shm_dir)
+
+        if shm_dir is None:
+            self._shm_dir = SYSTEM_SHM_DIR
+        elif isinstance(shm_dir, Path):
+            self._shm_dir = shm_dir
+        else:
+            self._shm_dir = Path(shm_dir)
         self._shm_available = self._ensure_shm_dir()
 
     def _ensure_shm_dir(self) -> bool:
-        if not shm_store.shm_available():
+        if not shm_store.shm_available(self._shm_dir):
             logger.warning("Shared-memory path unavailable: %s", self._shm_dir)
             return False
         return True
@@ -158,7 +163,7 @@ class ArrowDataBus:
         return _SAFE_KEY_CHARS.sub("_", key).strip("_") or "step"
 
     def _shm_path(self, run_id: str, key: str) -> Path:
-        return shm_store.shm_path_for(run_id, key)
+        return shm_store.shm_path_for(run_id, key, shm_dir=self._shm_dir)
 
     def _spill_pointer(self, run_id: str, key: str) -> str:
         safe_key = self._safe_key(key)
@@ -247,7 +252,7 @@ class ArrowDataBus:
                 )
             except (ValueError, TypeError, orjson.JSONDecodeError):
                 logger.warning(
-                    "Skipping malformed Arrow bus manifest entry for run_id=%s", run_id, )
+                    "Skipping malformed Arrow bus manifest entry for run_id=%s", run_id)
         return locations
 
     def _clear_manifest(self, run_id: str) -> None:
@@ -290,7 +295,7 @@ class ArrowDataBus:
                 )
 
     def _cleanup_orphaned_shm_files(self, run_id: str) -> None:
-        deleted = shm_store.remove_for_run(run_id)
+        deleted = shm_store.remove_for_run(run_id, shm_dir=self._shm_dir)
         if deleted:
             logger.debug("Cleaned %d orphaned shm files for run_id=%s", deleted, run_id)
 
@@ -316,8 +321,10 @@ class ArrowDataBus:
         if not isinstance(table, pa.Table):
             raise ValueError("Arrow bus accepts only pyarrow.Table inputs")
 
+        start = time.perf_counter()
         self.delete(key)
         size_bytes = self._estimated_size(table)
+
         if size_bytes <= self._small_threshold_bytes:
             redis_client = self._ensure_redis()
             if redis_client is not None:
@@ -336,10 +343,11 @@ class ArrowDataBus:
                             size_bytes=size_bytes,
                         )
                     )
+                    duration_ms = (time.perf_counter() - start) * 1000.0
                     log_storage_event(
                         event_type="write_hot", tier="hot",
                         payload_bytes=size_bytes, run_id=run_id, step_name=key,
-                        object_name=redis_key,
+                        object_name=redis_key, duration_ms=duration_ms,
                     )
                     return "redis"
                 except RedisError:
@@ -348,7 +356,8 @@ class ArrowDataBus:
 
         if size_bytes <= self._medium_threshold_bytes and self._shm_available:
             try:
-                shm_path, _ = shm_store.write(table, run_id, key)
+                shm_path, _ = shm_store.write(
+                    table, run_id, key, shm_dir=self._shm_dir)
                 self._record_location(
                     _ArrowLocation(
                         key=key,
@@ -358,10 +367,11 @@ class ArrowDataBus:
                         size_bytes=size_bytes,
                     )
                 )
+                duration_ms = (time.perf_counter() - start) * 1000.0
                 log_storage_event(
                     event_type="write_warm", tier="warm",
                     payload_bytes=size_bytes, run_id=run_id, step_name=key,
-                    object_name=str(shm_path),
+                    object_name=str(shm_path), duration_ms=duration_ms,
                 )
                 return "shm"
             except OSError:
@@ -381,10 +391,11 @@ class ArrowDataBus:
                 size_bytes=size_bytes,
             )
         )
+        duration_ms = (time.perf_counter() - start) * 1000.0
         log_storage_event(
             event_type="write_cold", tier="cold",
             payload_bytes=size_bytes, run_id=run_id, step_name=key,
-            object_name=pointer,
+            object_name=pointer, duration_ms=duration_ms,
         )
         return "spill"
 
@@ -393,6 +404,7 @@ class ArrowDataBus:
         return self.put(key, table, run_id=run_id)
 
     def get(self, key: str) -> pa.Table:
+        start = time.perf_counter()
         with self._lock:
             location = self._locations.get(key)
             if location is None:
@@ -412,10 +424,12 @@ class ArrowDataBus:
                 payload_bytes = payload.encode(
                     "utf-8") if isinstance(payload, str) else payload
                 table = self._bytes_to_table(payload_bytes)
+                duration_ms = (time.perf_counter() - start) * 1000.0
                 log_storage_event(
                     event_type="read_hot", tier="hot",
                     payload_bytes=len(payload_bytes), run_id=location.run_id,
                     step_name=key, object_name=location.pointer,
+                    duration_ms=duration_ms,
                 )
                 return table
 
@@ -427,20 +441,24 @@ class ArrowDataBus:
                 result = shm_store.read(shm_file)
                 if result is None:
                     raise KeyError(f"Arrow bus shm key '{key}' missing file")
+                duration_ms = (time.perf_counter() - start) * 1000.0
                 log_storage_event(
                     event_type="read_warm", tier="warm",
                     payload_bytes=location.size_bytes, run_id=location.run_id,
                     step_name=key, object_name=location.pointer,
+                    duration_ms=duration_ms,
                 )
                 return result
 
             if location.tier == "spill":
                 with storage_service.download(location.pointer or "") as handle:
                     table = pq.read_table(handle)
+                duration_ms = (time.perf_counter() - start) * 1000.0
                 log_storage_event(
                     event_type="read_cold", tier="cold",
                     payload_bytes=location.size_bytes, run_id=location.run_id,
                     step_name=key, object_name=location.pointer,
+                    duration_ms=duration_ms,
                 )
                 return table
 
@@ -508,7 +526,6 @@ class ArrowDataBus:
 
         Called periodically (every 5 minutes by a Celery beat task).
         Evicts at most 5 entries per call to avoid stalling Redis.
-
         Returns the number of entries evicted.
         """
         if not self._shm_available:
@@ -522,7 +539,7 @@ class ArrowDataBus:
             info = redis_client.info("memory")
             maxmemory = info.get("maxmemory", 0) or info.get("maxmemory_human", 0)
             if isinstance(maxmemory, str):
-                return 0  # Could not determine limit
+                return 0
             used = info.get("used_memory", 0)
             if maxmemory <= 0 or (used / maxmemory) < REDIS_EVICT_THRESHOLD:
                 return 0
@@ -550,7 +567,8 @@ class ArrowDataBus:
 
             try:
                 table = self._bytes_to_table(raw)
-                shm_path, _ = shm_store.write(table, run_id, logical_key)
+                shm_path, _ = shm_store.write(
+                    table, run_id, logical_key, shm_dir=self._shm_dir)
             except Exception as exc:
                 logger.warning("Eviction failed for key %s: %s", logical_key, exc)
                 continue
@@ -605,7 +623,7 @@ class ArrowDataBus:
             stats["hot"] = {"error": "Redis unavailable", "key_count": 0}
 
         # Tier 2 — /dev/shm
-        used_shm, total_shm = shm_store.usage_bytes()
+        used_shm, total_shm = shm_store.usage_bytes(shm_dir=self._shm_dir)
         stats["warm"] = {
             "used_bytes":   used_shm,
             "total_bytes":  total_shm,
@@ -623,14 +641,16 @@ class ArrowDataBus:
                     f.stat().st_size for f in provider_dir.rglob("*.parquet")
                     if f.is_file()
                 )
-                spill_count = sum(1 for _ in provider_dir.rglob("*.parquet") if _.is_file())
+                spill_count = sum(
+                    1 for _ in provider_dir.rglob("*.parquet") if _.is_file())
                 stats["cold"] = {
                     "object_count": spill_count,
                     "total_bytes":  total_spill,
                     "provider":     provider_type,
                 }
             else:
-                stats["cold"] = {"provider": provider_type, "note": "No local spill dir"}
+                stats["cold"] = {"provider": provider_type,
+                                 "note": "No local spill dir"}
         except Exception as exc:
             stats["cold"] = {"error": str(exc)}
 
@@ -675,26 +695,14 @@ class ArrowDataBus:
 
     @staticmethod
     def cleanup_all_stale(max_age_seconds: int = 3600) -> int:
-        """Remove all stale PipelineIQ shm files older than max_age_seconds.
+        """Remove stale PipelineIQ shm files older than max_age_seconds.
 
         Called periodically by the worker cleanup signal or a periodic task.
         Returns the number of files cleaned up.
         """
-        import glob
-        import time as time_mod
-
-        removed = 0
-        now = time_mod.time()
-        pattern = os.path.join(SHM_DIR, f"{SHM_PREFIX}*.arrow")
-        for path in glob.glob(pattern):
-            try:
-                mtime = os.path.getmtime(path)
-                if now - mtime > max_age_seconds:
-                    os.unlink(path)
-                    removed += 1
-            except OSError:
-                continue
-        return removed
+        return shm_store.cleanup_stale(
+            max_age_hours=max(max_age_seconds // 3600, 1),
+        )
 
 
 _global_bus_lock = threading.Lock()

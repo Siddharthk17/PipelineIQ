@@ -190,16 +190,18 @@ class TestCleanupRun:
 
 class TestTierStats:
     def test_get_tier_stats_returns_hot_warm_cold(self):
+        from pathlib import Path
+        from backend.execution.arrow_bus import ArrowDataBus
+
         mock_redis = MagicMock()
         mock_redis.info.return_value = {"used_memory": 50000000, "maxmemory": 1073741824}
 
-        bus = MagicMock()
-        from backend.execution.arrow_bus import ArrowDataBus
         bus = ArrowDataBus.__new__(ArrowDataBus)
         bus._locations = {}
         bus._lock = MagicMock()
         bus._redis = mock_redis
         bus._shm_available = True
+        bus._shm_dir = Path("/dev/shm")
         bus._disk_prefix = "arrow_bus"
 
         with patch("backend.execution.arrow_bus.shm_store.usage_bytes", return_value=(1000, 5000)):
