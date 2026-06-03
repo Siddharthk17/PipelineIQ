@@ -11,6 +11,7 @@ export interface TestUser {
 
 export interface AuthFixtures {
   user: TestUser
+  authenticatedPage: Page
   apiContext: APIRequestContext
 }
 
@@ -46,6 +47,25 @@ export const test = base.extend<AuthFixtures>({
   user: async ({ request }, use) => {
     const testUser = await createTestUser(request)
     await use(testUser)
+  },
+
+  authenticatedPage: async ({ browser, user }, use) => {
+    const context = await browser.newContext()
+    const page = await context.newPage()
+
+    await page.goto('/login')
+    await page.fill('[data-testid="email-input"]', user.email)
+    await page.fill('[data-testid="password-input"]', user.password)
+    await page.click('[data-testid="login-btn"]')
+    await page.waitForURL((url) => !url.pathname.endsWith('/login'), { timeout: 10_000 })
+
+    await page.evaluate(
+      (token) => localStorage.setItem('access_token', token),
+      user.token,
+    )
+
+    await use(page)
+    await context.close()
   },
 
   apiContext: async ({ playwright, user }, use) => {

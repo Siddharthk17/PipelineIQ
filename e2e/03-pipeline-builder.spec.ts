@@ -26,7 +26,7 @@ test.describe("Visual Pipeline Builder", () => {
     await page.goto(`${baseUrl}/pipelines/new`, { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-testid="step-palette"]');
     const items = await page.locator('[data-testid^="palette-item-"]').count();
-    expect(items).toBeGreaterThanOrEqual(16);
+    expect(items).toBe(19);
   });
 
   test("Dragging a step onto canvas creates a node", async ({ page }) => {

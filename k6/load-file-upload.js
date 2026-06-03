@@ -8,11 +8,11 @@ const TOKEN = __ENV.AUTH_TOKEN || ''
 const uploadSuccess = new Rate('upload_success')
 const uploadDuration = new Trend('upload_duration_ms')
 
-function generateCSV(rows: number = 100): string {
+function generateCSV(rows) {
   const header = 'id,name,amount,status\n'
-  const lines = Array.from({ length: rows }, (_, i) =>
-    `${i},User${i},${(Math.random() * 1000).toFixed(2)},${i % 2 === 0 ? 'active' : 'inactive'}`,
-  )
+  const lines = Array.from({ length: rows }, function (_, i) {
+    return i + ',User' + i + ',' + (Math.random() * 1000).toFixed(2) + ',' + (i % 2 === 0 ? 'active' : 'inactive')
+  })
   return header + lines.join('\n')
 }
 
@@ -32,18 +32,18 @@ export default function () {
   const csvContent = generateCSV(50)
   const start = Date.now()
   const resp = http.post(
-    `${BASE_URL}/api/files/upload`,
-    { file: http.file(csvContent, `load_test_${Date.now()}.csv`, 'text/csv') },
-    { headers: { Authorization: `Bearer ${TOKEN}` } },
+    BASE_URL + '/api/files/upload',
+    { file: http.file(csvContent, 'load_test_' + Date.now() + '.csv', 'text/csv') },
+    { headers: { Authorization: 'Bearer ' + TOKEN } },
   )
 
   const duration = Date.now() - start
   const ok = check(resp, {
-    'upload status 2xx': (r) => r.status >= 200 && r.status < 300,
-    'has file_id': (r) => {
-      try { return JSON.parse(r.body).file_id !== undefined } catch { return false }
+    'upload status 2xx': function (r) { return r.status >= 200 && r.status < 300 },
+    'has file_id': function (r) {
+      try { return JSON.parse(r.body).file_id !== undefined } catch (e) { return false }
     },
-    'upload under 2s': () => duration < 2000,
+    'upload under 2s': function () { return duration < 2000 },
   })
 
   uploadSuccess.add(ok)

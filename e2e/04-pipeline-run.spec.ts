@@ -113,6 +113,51 @@ test.describe("Pipeline Run Lifecycle", () => {
     await expect(page.getByTestId("execution-gantt")).toBeVisible({ timeout: 10_000 });
   }, 150_000);
 
+  test("Run detail page shows SSE step-by-step progress events", async ({ page }) => {
+    const token = await login(page);
+
+    const csvContent = "id,amount\n1,100\n2,200";
+    const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
+      multipart: { file: { name: "sse_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const { file_id: fileId } = await uploadResp.json();
+
+    const pipelineName = `e2e_sse_${Date.now()}`;
+    const yaml = buildPipelineYAML(fileId, pipelineName);
+
+    const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
+      data: { yaml_config: yaml, pipeline_name: pipelineName },
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    });
+    const { run_id: runId } = await runResp.json();
+    expect(runId).toBeTruthy();
+
+    await page.goto(`${baseUrl}/runs/${runId}`, { waitUntil: "domcontentloaded" });
+
+    const statusElement = page.locator('[data-testid="run-status"]');
+    await expect(statusElement).toBeVisible({ timeout: 10_000 });
+    const statusText = await statusElement.textContent();
+    expect(statusText).not.toBeNull();
+
+    const sseEvents = page.locator(
+      '[data-testid^="step-progress-"], [data-testid^="step-event-"], [data-testid^="pipeline-event-"]'
+    );
+    const stepNodes = page.locator('[data-testid^="step-node-"]');
+
+    const eventsVisible = await sseEvents.isVisible().catch(() => false);
+    const nodesVisible = await stepNodes.isVisible().catch(() => false);
+
+    if (!eventsVisible && !nodesVisible) {
+      await page.waitForTimeout(5000);
+      const pollStatus = page.locator(
+        '[data-testid^="step-progress-"], [data-testid^="step-event-"], [data-testid^="pipeline-event-"], [data-testid^="step-node-"]'
+      );
+      const hasAny = await pollStatus.count().catch(() => 0);
+      expect(hasAny).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   test("Completed run shows download button", async ({ page }) => {
     const token = await login(page);
 

@@ -7,7 +7,31 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:e2e": "npx playwright test --reporter=list",
+    "test:e2e:ci": "npx playwright test --reporter=list --reporter=junit --output=test-results",
+    "test:e2e:report": "npx playwright test --reporter=html && npx playwright show-report",
+    "test:e2e:auth": "npx playwright test e2e/01-auth.spec.ts --reporter=list",
+    "test:e2e:files": "npx playwright test e2e/02-file-upload.spec.ts --reporter=list",
+    "test:e2e:builder": "npx playwright test e2e/03-pipeline-builder.spec.ts --reporter=list",
+    "test:e2e:run": "npx playwright test e2e/04-pipeline-run.spec.ts --reporter=list",
+    "test:e2e:ai": "npx playwright test e2e/05-ai-generation.spec.ts --reporter=list",
+    "test:e2e:schedules": "npx playwright test e2e/06-schedules.spec.ts --reporter=list",
+    "test:e2e:contracts": "npx playwright test e2e/07-data-contracts.spec.ts --reporter=list",
+    "test:e2e:wasm": "npx playwright test e2e/08-wasm-modules.spec.ts --reporter=list",
+    "test:e2e:catalog": "npx playwright test e2e/09-catalog.spec.ts --reporter=list",
+    "test:e2e:templates": "npx playwright test e2e/10-templates.spec.ts --reporter=list",
+    "test:e2e:healing": "npx playwright test e2e/11-healing-agent.spec.ts --reporter=list",
+    "test:e2e:collab": "npx playwright test e2e/collaboration/ --reporter=list",
+    "test:e2e:streaming": "npx playwright test e2e/streaming/ --reporter=list",
+    "test:e2e:sched": "npx playwright test e2e/scheduling/ --reporter=list",
+    "test:e2e:ai-dir": "npx playwright test e2e/ai/ --reporter=list",
+    "test:load": "bash scripts/run-load-tests.sh",
+    "test:load:auth": "k6 run k6/load-auth.js",
+    "test:load:api": "k6 run k6/load-pipeline-api.js",
+    "test:load:upload": "k6 run k6/load-file-upload.js",
+    "test:chaos": "bash chaos/chaos-scenarios.sh",
+    "test:coverage": "python3 scripts/generate_test_report.py"
   },
   "repository": {
     "type": "git",

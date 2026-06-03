@@ -43,6 +43,16 @@ test.describe("Pipeline Scheduling", () => {
     if (resp.ok()) {
       const data = await resp.json();
       expect(data.id).toBeTruthy();
+      expect(data.cron_expression).toBe("0 6 * * *");
+
+      const runsResp = await page.request.get(`${apiUrl}/api/runs?schedule_id=${data.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (runsResp.ok()) {
+        const runsData = await runsResp.json();
+        expect(Array.isArray(runsData.runs ?? runsData)).toBe(true);
+      }
+
       await page.request.delete(`${apiUrl}/api/schedules/${data.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -88,6 +98,61 @@ test.describe("Pipeline Scheduling", () => {
       const resumed = await resumeResp.json();
       expect(resumed.is_active).toBe(true);
     }
+
+    const runsResp = await page.request.get(`${apiUrl}/api/runs?schedule_id=${id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (runsResp.ok()) {
+      const runsData = await runsResp.json();
+      expect(Array.isArray(runsData.runs ?? runsData)).toBe(true);
+    }
+
+    await page.request.delete(`${apiUrl}/api/schedules/${id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  });
+
+  test("Schedule pause status persists after reload", async ({ page }) => {
+    await login(page);
+    const token = await page.evaluate(() => localStorage.getItem("pipelineiq_token"));
+    expect(token).toBeTruthy();
+
+    const apiUrl = process.env.E2E_API_URL ?? baseUrl;
+    const yaml = [
+      "pipeline:",
+      "  name: persist_test",
+      "  steps:",
+      "    - name: step1",
+      "      type: load",
+      "      file_id: dummy-id",
+    ].join("\n");
+
+    const createResp = await page.request.post(`${apiUrl}/api/schedules`, {
+      data: { pipeline_name: "persist_test", cron_expression: "0 10 * * 5", pipeline_yaml: yaml },
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    });
+    if (!createResp.ok()) {
+      test.skip(true, "Schedule creation not supported");
+      return;
+    }
+    const { id } = await createResp.json();
+
+    const pauseResp = await page.request.post(`${apiUrl}/api/schedules/${id}/pause`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!pauseResp.ok()) {
+      await page.request.delete(`${apiUrl}/api/schedules/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      test.skip(true, "Schedule pause not supported");
+      return;
+    }
+
+    const getResp = await page.request.get(`${apiUrl}/api/schedules/${id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const scheduleData = await getResp.json();
+    expect(scheduleData.is_active).toBe(false);
 
     await page.request.delete(`${apiUrl}/api/schedules/${id}`, {
       headers: { Authorization: `Bearer ${token}` },
