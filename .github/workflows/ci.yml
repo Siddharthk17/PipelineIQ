@@ -112,33 +112,27 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 8
-
       - name: Set up Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
 
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: pnpm install --frozen-lockfile
+      - name: Install dependencies (npm workspaces)
+        run: npm ci
 
       - name: TypeScript check
         working-directory: frontend
-        run: pnpm exec tsc --noEmit
+        run: npx tsc --noEmit
 
       - name: Run tests
         working-directory: frontend
-        run: pnpm test
+        run: npm test
 
       - name: Build check
         working-directory: frontend
-        run: pnpm build
+        run: npm run build
         env:
           NEXT_PUBLIC_API_URL: ""
 
