@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency
-from backend.main import ClientDisconnected
 from backend.models import User, PipelineRun, UploadedFile
 from backend.pipeline.cache import get_parsed_pipeline
+from backend.pipeline.exceptions import ClientDisconnected
 from backend.utils.uuid_utils import as_uuid
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])

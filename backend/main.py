@@ -55,15 +55,10 @@ logger = logging.getLogger(__name__)
 # Module-level setup_telemetry() is intentionally deferred to avoid
 # double-initialization conflicts with the pre-fork model.
 
-
-class ClientDisconnected(Exception):
-    """Raised by an endpoint when the HTTP client has gone away.
-
-    Routers raise this internally during long-running work (recursive
-    CTEs, AI generation) to abort the call instead of burning resources
-    on a request the user has already abandoned. The middleware below
-    converts the exception into a 499 response with no body.
-    """
+# Import the shared `ClientDisconnected` from the exceptions module to
+# avoid a circular import between `main.py` and the routers that
+# raise it. (Routers are imported at module load time below.)
+from backend.pipeline.exceptions import ClientDisconnected  # noqa: E402
 
 
 # Silence health check and metrics access log noise

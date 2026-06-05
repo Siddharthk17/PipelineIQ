@@ -45,6 +45,21 @@ class PipelineIQError(Exception):
         }
 
 
+class ClientDisconnected(Exception):
+    """Raised internally by endpoints when the HTTP client has gone away.
+
+    Routers raise this during long-running work (recursive CTEs, AI
+    generation) to abort the call instead of burning resources on a
+    request the user has already abandoned. The global exception
+    handler in `backend.main` converts it into a 499 response with no
+    body.
+
+    This exception lives in the shared `pipeline.exceptions` module
+    (rather than in `backend.main`) to avoid a circular import
+    between `main.py` and the routers that need to raise it.
+    """
+
+
 class PipelineConfigError(PipelineIQError):
     """Base for all pipeline configuration errors."""
 

@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from backend.auth import get_current_user
 from backend.config import settings
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.main import ClientDisconnected
 from backend.models import User
+from backend.pipeline.exceptions import ClientDisconnected
 from backend.repositories.catalog import (
     search_assets,
     get_blast_radius,

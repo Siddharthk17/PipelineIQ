@@ -207,18 +207,25 @@ class Settings(BaseSettings):
     def validate_secret_key_strength(self) -> "Settings":
         """Prevent startup with default or weak signing keys.
 
-        Production environments MUST have a strong, non-default SECRET_KEY.
-        Non-production environments (development, CI, test) auto-generate
-        a strong ephemeral key when one is not provided, so ephemeral
-        local/CI runs work without manual secret setup while production
-        still gets a hard fail.
+        Auto-generate a strong ephemeral SECRET_KEY when the value is
+        missing, empty, or matches a known weak placeholder. This lets
+        ephemeral local/CI/test runs (alembic upgrade, test suites,
+        developer machines) start without manual secret setup.
+
+        The only way to fail closed is when the operator has EXPLICITLY
+        opted into production mode (`ENVIRONMENT=production` set in the
+        process environment) AND supplied a weak key. Defaulting to
+        `development` is treated as the safe-but-lenient path: auto-gen
+        beats crashing the developer's alembic migration.
         """
         if self.SECRET_KEY in WEAK_SECRET_VALUES or len(self.SECRET_KEY) < 32:
-            if self.ENVIRONMENT == "production":
+            import os as _os
+            import secrets as _secrets
+            env_explicitly_prod = _os.environ.get("ENVIRONMENT") == "production"
+            if env_explicitly_prod:
                 raise ValueError(
                     "SECRET_KEY must be a non-default random value with at least 32 characters."
                 )
-            import secrets as _secrets
             self.SECRET_KEY = _secrets.token_urlsafe(48)
         return self
 
