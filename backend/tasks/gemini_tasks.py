@@ -17,6 +17,24 @@ from backend.db.redis_pools import get_cache_redis
 
 logger = get_task_logger(__name__)
 
+
+class GeminiQuotaExhaustedError(Exception):
+    """Raised when Google reports the free-tier Gemini quota is hard-exhausted.
+
+    This is a terminal failure — retries will not recover from a hard quota
+    limit set to 0. Marking the task as a real failure prevents the
+    "false success" pattern where the task returns a sentinel string
+    that the Celery worker then mis-reports as `succeeded`.
+    """
+
+
+class GeminiClientError(Exception):
+    """Raised when Gemini returns a non-retryable client error.
+
+    The original error message is preserved so callers can surface the
+    underlying cause to the user.
+    """
+
 # Token budget configuration
 TOKEN_BUDGET_PER_MINUTE = 900_000
 TOKEN_BUDGET_WINDOW_SECONDS = 60
@@ -230,10 +248,26 @@ def call_gemini_task(
         error_str = str(e)
 
         if _is_free_tier_hard_quota(error_str):
-            # Free tier exhausted - return ERROR indicator so UI can show message
-            # Don't cache this - user needs to know quota is exhausted
+            # Free tier exhausted - this is a TERMINAL failure, not a success.
+            # Raising (instead of returning a sentinel string) ensures Celery
+            # marks the task as FAILED rather than mis-reporting it as
+            # succeeded with a poisoned payload. The state update surfaces
+            # the reason to result consumers without putting a sentinel
+            # in the result backend.
             slog.warning("gemini_free_tier_quota_exhausted")
-            return "GEMINI_QUOTA_EXHAUSTED"
+            self.update_state(
+                state="FAILURE",
+                meta={
+                    "error": "gemini_free_tier_quota_exhausted",
+                    "reason": (
+                        "Google Gemini free-tier quota exhausted. "
+                        "Retries will not recover from a hard quota limit."
+                    ),
+                },
+            )
+            raise GeminiQuotaExhaustedError(
+                "Google Gemini free-tier quota exhausted."
+            ) from e
 
         if _should_retry_rate_limit(error_str):
             backoff = _compute_retry_delay(self.request.retries)
@@ -256,8 +290,14 @@ def call_gemini_task(
             )
             raise self.retry(exc=e, countdown=backoff)
 
+        # Non-retryable client error: raise a real exception so Celery marks
+        # the task as FAILED instead of returning a poisoned sentinel.
         slog.error("gemini_client_error", error=error_str[:500])
-        return f"GEMINI_ERROR: {error_str[:500]}"
+        self.update_state(
+            state="FAILURE",
+            meta={"error": "gemini_client_error", "reason": error_str[:500]},
+        )
+        raise GeminiClientError(f"Gemini AI service error: {error_str[:500]}") from e
     finally:
         structlog.contextvars.clear_contextvars()
 

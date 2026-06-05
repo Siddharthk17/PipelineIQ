@@ -307,6 +307,9 @@ function setBoundedPending<K, V>(map: Map<K, Promise<V>>, key: K, promise: Promi
   map.set(key, promise);
   while (map.size > MAX_DEDUPED_REQUESTS) {
     const oldest = map.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
     map.delete(oldest);
   }
 }

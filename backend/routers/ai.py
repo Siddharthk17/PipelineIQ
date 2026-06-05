@@ -3,20 +3,33 @@ AI feature endpoints for PipelineIQ.
 All AI calls are non-blocking — they queue a Celery task and return immediately.
 The client polls for completion using the task_id.
 """
+import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency
+from backend.main import ClientDisconnected
 from backend.models import User, PipelineRun, UploadedFile
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.utils.uuid_utils import as_uuid
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
 logger = logging.getLogger(__name__)
+
+
+async def _raise_if_disconnected(request: Request) -> None:
+    """Short-circuit a long-running call when the client has gone away.
+
+    Polls `Request.is_disconnected()` (a non-blocking check on the
+    underlying ASGI receive channel). This avoids burning CPU/DB/AI
+    quota on requests the client has already abandoned (499).
+    """
+    if await request.is_disconnected():
+        raise ClientDisconnected()
 
 
 async def generate_pipeline_from_description(**kwargs):
@@ -138,12 +151,33 @@ async def generate_pipeline(
         if not file_record:
             raise HTTPException(404, f"File not found: {file_id}")
 
-    result = await generate_pipeline_from_description(
-        description=request.description,
-        file_ids=request.file_ids,
-        db=db,
-        request_id=getattr(request_context.state, "request_id", None),
+    # Race the AI call against client disconnect so we don't burn
+    # Gemini quota on requests the user has already abandoned.
+    gen_task = asyncio.create_task(
+        generate_pipeline_from_description(
+            description=request.description,
+            file_ids=request.file_ids,
+            db=db,
+            request_id=getattr(request_context.state, "request_id", None),
+        )
     )
+    disconnect_task = asyncio.create_task(_raise_if_disconnected(request_context))
+    try:
+        done, pending = await asyncio.wait(
+            {gen_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for p in pending:
+            p.cancel()
+        if disconnect_task in done:
+            # The ClientDisconnected exception will propagate; the
+            # global middleware converts it to a 499 response.
+            await disconnect_task
+        result = await gen_task
+    finally:
+        for t in (gen_task, disconnect_task):
+            if not t.done():
+                t.cancel()
 
     return GeneratePipelineResponse(
         yaml=result.yaml,
@@ -209,15 +243,34 @@ async def repair_failed_run(
     except Exception:
         pass
 
-    result = await repair_pipeline_from_error(
-        original_yaml=run.yaml_config,
-        failed_step=failed_step,
-        error_type=error_type,
-        error_message=error_message,
-        file_ids=file_ids,
-        db=db,
-        request_id=getattr(request.state, "request_id", None),
+    # Race the AI call against client disconnect so we don't burn
+    # Gemini quota on requests the user has already abandoned.
+    repair_task = asyncio.create_task(
+        repair_pipeline_from_error(
+            original_yaml=run.yaml_config,
+            failed_step=failed_step,
+            error_type=error_type,
+            error_message=error_message,
+            file_ids=file_ids,
+            db=db,
+            request_id=getattr(request.state, "request_id", None),
+        )
     )
+    disconnect_task = asyncio.create_task(_raise_if_disconnected(request))
+    try:
+        done, pending = await asyncio.wait(
+            {repair_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for p in pending:
+            p.cancel()
+        if disconnect_task in done:
+            await disconnect_task
+        result = await repair_task
+    finally:
+        for t in (repair_task, disconnect_task):
+            if not t.done():
+                t.cancel()
 
     return RepairPipelineResponse(
         corrected_yaml=result.corrected_yaml,

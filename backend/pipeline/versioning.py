@@ -62,14 +62,24 @@ def diff_pipelines(
     names_a = set(steps_a.keys())
     names_b = set(steps_b.keys())
 
-    steps_added = sorted(names_b - names_a)
-    steps_removed = sorted(names_a - names_b)
+    steps_added = sorted(names_b - names_a, key=str)
+    steps_removed = sorted(names_a - names_b, key=str)
     steps_modified = []
 
-    for name in sorted(names_a & names_b):
+    for name in sorted(names_a & names_b, key=str):
         if steps_a[name] != steps_b[name]:
+            # YAML 1.1 parses bare `on`, `off`, `yes`, `no` as booleans, so
+            # step dicts can end up with mixed-type keys (`True`, `False`,
+            # strings). Force a string sort key to avoid
+            # `TypeError: '<' not supported between instances of 'str' and 'bool'`
+            # when computing the union of keys, and coerce to str for
+            # `changed_fields` so callers always see opaque string identifiers.
             changed_fields = [
-                k for k in sorted(set(steps_a[name]) | set(steps_b[name]))
+                str(k)
+                for k in sorted(
+                    set(steps_a[name]) | set(steps_b[name]),
+                    key=str,
+                )
                 if steps_a[name].get(k) != steps_b[name].get(k)
             ]
             steps_modified.append(StepDiff(

@@ -205,11 +205,21 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_secret_key_strength(self) -> "Settings":
-        """Prevent startup with default or weak signing keys."""
+        """Prevent startup with default or weak signing keys.
+
+        Production environments MUST have a strong, non-default SECRET_KEY.
+        Non-production environments (development, CI, test) auto-generate
+        a strong ephemeral key when one is not provided, so ephemeral
+        local/CI runs work without manual secret setup while production
+        still gets a hard fail.
+        """
         if self.SECRET_KEY in WEAK_SECRET_VALUES or len(self.SECRET_KEY) < 32:
-            raise ValueError(
-                "SECRET_KEY must be a non-default random value with at least 32 characters."
-            )
+            if self.ENVIRONMENT == "production":
+                raise ValueError(
+                    "SECRET_KEY must be a non-default random value with at least 32 characters."
+                )
+            import secrets as _secrets
+            self.SECRET_KEY = _secrets.token_urlsafe(48)
         return self
 
     @model_validator(mode="after")

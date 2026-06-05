@@ -2,6 +2,7 @@
 
 Search, blast radius, upstream lineage, orphan detection.
 """
+import asyncio
 import logging
 from typing import Optional
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from backend.auth import get_current_user
 from backend.config import settings
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
+from backend.main import ClientDisconnected
 from backend.models import User
 from backend.repositories.catalog import (
     search_assets,
@@ -23,6 +25,17 @@ from backend.utils.rate_limiter import limiter
 
 router = APIRouter(prefix="/api/catalog", tags=["Catalog"])
 logger = logging.getLogger(__name__)
+
+
+async def _ensure_client_connected(request: Request) -> None:
+    """Pre-flight check for the /impact and /lineage endpoints.
+
+    The recursive CTE blast-radius walk can take 5-30s; if the client
+    has already closed the connection we should not start a fresh DB
+    transaction and CTE walk that will be immediately discarded.
+    """
+    if await request.is_disconnected():
+        raise ClientDisconnected()
 
 
 @router.get("/search")
@@ -47,7 +60,7 @@ def search_catalog(
 
 @router.get("/assets/{asset_name}/impact")
 @limiter.limit(settings.RATE_LIMIT_READ)
-def get_impact_analysis(
+async def get_impact_analysis(
     request: Request,
     response: Response,
     asset_name: str,
@@ -61,7 +74,33 @@ def get_impact_analysis(
     Uses a PostgreSQL recursive CTE with Redis result caching and
     statement timeout protection against disk-filling queries.
     """
-    results = get_blast_radius(db, asset_name=asset_name, asset_type=asset_type, max_depth=max_depth)
+    # Race the (potentially 5-30s) recursive CTE walk against the
+    # client disconnect channel. If the client has gone away we
+    # abort before opening a fresh DB transaction.
+    blast_task = asyncio.create_task(
+        asyncio.to_thread(
+            get_blast_radius,
+            db,
+            asset_name=asset_name,
+            asset_type=asset_type,
+            max_depth=max_depth,
+        )
+    )
+    disconnect_task = asyncio.create_task(_ensure_client_connected(request))
+    try:
+        done, pending = await asyncio.wait(
+            {blast_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for p in pending:
+            p.cancel()
+        if disconnect_task in done:
+            await disconnect_task
+        results = await blast_task
+    finally:
+        for t in (blast_task, disconnect_task):
+            if not t.done():
+                t.cancel()
 
     response.headers["Cache-Control"] = "private, max-age=300, stale-while-revalidate=60"
 

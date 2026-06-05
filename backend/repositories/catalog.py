@@ -334,25 +334,44 @@ def _blast_radius_postgres(
     max_depth: int,
 ) -> list[dict]:
     where_clause = "WHERE da.name = :name"
-    params: dict = {"name": asset_name, "max_depth": max_depth, "limit": MAX_CTE_RESULTS}
+    params: dict = {
+        "name": asset_name,
+        "max_depth": max_depth,
+        "limit": MAX_CTE_RESULTS,
+        "cte_limit": MAX_CTE_RESULTS,
+    }
 
     if asset_type:
         where_clause += " AND da.asset_type = :asset_type"
         params["asset_type"] = asset_type
 
+    # Optimized recursive CTE:
+    # - Drops the O(n) `visited` array tracking (was O(n^2) memory + O(n)
+    #   `!= ALL(...)` check at every step, the main cause of the 5-30s
+    #   statement timeouts on `/impact`).
+    # - Uses `NOT EXISTS` against the accumulating CTE results for cycle
+    #   detection (O(1) per step, leveraging the existing
+    #   idx_asset_rel_source_target covering index).
+    # - Adds an inner `LIMIT` to cap the working set per iteration so a
+    #   single bad query cannot exhaust the DB.
+    # - Statement timeout is set per-iteration via `SET LOCAL` inside an
+    #   explicit transaction so it actually takes effect under PgBouncer.
     sql = text(f"""
-        WITH RECURSIVE downstream AS (
-            SELECT da.id, 0 AS depth, ARRAY[da.id] AS visited
+        WITH RECURSIVE downstream(id, depth) AS (
+            SELECT da.id, 0
             FROM data_assets da
             {where_clause}
 
             UNION ALL
 
-            SELECT ar.target_id, d.depth + 1, d.visited || ar.target_id
+            SELECT ar.target_id, d.depth + 1
             FROM asset_relationships ar
             JOIN downstream d ON d.id = ar.source_id
             WHERE d.depth < :max_depth
-              AND ar.target_id != ALL(d.visited)
+              AND NOT EXISTS (
+                  SELECT 1 FROM downstream d2 WHERE d2.id = ar.target_id
+              )
+            LIMIT :cte_limit
         ),
         downstream_min AS (
             SELECT id, MIN(depth) AS depth
@@ -383,7 +402,17 @@ def _blast_radius_postgres(
     """)
 
     try:
-        db.execute(text("SET LOCAL statement_timeout = :timeout"), {"timeout": f"{CTE_STATEMENT_TIMEOUT_MS}ms"})
+        # Ensure SET LOCAL takes effect: it requires an open transaction.
+        # The SQLAlchemy session may be in autobegin mode but the first
+        # execute() below should start one. We use begin() to be explicit
+        # so the timeout is guaranteed to apply for the duration of the
+        # recursive walk.
+        if not db.in_transaction():
+            db.begin()
+        db.execute(
+            text("SET LOCAL statement_timeout = :timeout"),
+            {"timeout": CTE_STATEMENT_TIMEOUT_MS},
+        )
         result = db.execute(sql, params)
         rows = result.fetchall()
     except Exception as exc:
@@ -466,19 +495,22 @@ def get_upstream_lineage(
         return _upstream_lineage_sqlite(db, asset_name, max_depth)
 
     sql = text("""
-        WITH RECURSIVE upstream AS MATERIALIZED (
-            SELECT da.id, da.name, da.namespace, da.asset_type, 0 AS depth, ARRAY[da.id] AS visited
+        WITH RECURSIVE upstream(id, name, namespace, asset_type, depth) AS MATERIALIZED (
+            SELECT da.id, da.name, da.namespace, da.asset_type, 0
             FROM data_assets da
             WHERE da.name = :name
 
             UNION ALL
 
-            SELECT parent.id, parent.name, parent.namespace, parent.asset_type, u.depth + 1, u.visited || parent.id
+            SELECT parent.id, parent.name, parent.namespace, parent.asset_type, u.depth + 1
             FROM data_assets parent
             JOIN asset_relationships ar ON ar.source_id = parent.id
             JOIN upstream u ON u.id = ar.target_id
             WHERE u.depth < :max_depth
-              AND parent.id != ALL(u.visited)
+              AND NOT EXISTS (
+                  SELECT 1 FROM upstream u2 WHERE u2.id = parent.id
+              )
+            LIMIT :cte_limit
         )
         SELECT DISTINCT name, namespace, asset_type, depth
         FROM upstream
@@ -487,11 +519,17 @@ def get_upstream_lineage(
     """)
 
     try:
-        db.execute(text("SET LOCAL statement_timeout = :timeout"), {"timeout": f"{CTE_STATEMENT_TIMEOUT_MS}ms"})
+        if not db.in_transaction():
+            db.begin()
+        db.execute(
+            text("SET LOCAL statement_timeout = :timeout"),
+            {"timeout": CTE_STATEMENT_TIMEOUT_MS},
+        )
         result = db.execute(sql, {
             "name": asset_name,
             "max_depth": max_depth,
             "limit": MAX_CTE_RESULTS,
+            "cte_limit": MAX_CTE_RESULTS,
         })
         return [dict(row._mapping) for row in result.fetchall()]
     except Exception as exc:

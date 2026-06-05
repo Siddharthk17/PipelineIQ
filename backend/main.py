@@ -19,6 +19,7 @@ from typing import AsyncGenerator
 
 import sentry_sdk
 import structlog
+import orjson
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,6 +54,17 @@ logger = logging.getLogger(__name__)
 # OTel is initialized inside instrument_all() during lifespan startup.
 # Module-level setup_telemetry() is intentionally deferred to avoid
 # double-initialization conflicts with the pre-fork model.
+
+
+class ClientDisconnected(Exception):
+    """Raised by an endpoint when the HTTP client has gone away.
+
+    Routers raise this internally during long-running work (recursive
+    CTEs, AI generation) to abort the call instead of burning resources
+    on a request the user has already abandoned. The middleware below
+    converts the exception into a 499 response with no body.
+    """
+
 
 # Silence health check and metrics access log noise
 class _HealthCheckFilter(logging.Filter):
@@ -240,6 +252,19 @@ if settings.ENVIRONMENT != "production":
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+@app.exception_handler(ClientDisconnected)
+async def client_disconnected_handler(
+    request: Request, exc: ClientDisconnected
+) -> Response:
+    """Convert a `ClientDisconnected` raised inside an endpoint into a 499.
+
+    499 is the conventional nginx status for "client closed request".
+    Returning an empty body is intentional — the client is no longer
+    listening, so any payload is wasted.
+    """
+    return Response(status_code=499)
+
 # Prometheus metrics — imported from centralized module to avoid circular
 # imports
 
@@ -277,7 +302,11 @@ async def pipelineiq_error_handler(
 async def validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """Handle Pydantic validation errors with field-level details."""
+    """Handle Pydantic validation errors with field-level details.
+
+    Logs the offending request body, query params, path params, and the
+    field-level error so 422s are no longer a black box in production.
+    """
     request_id = getattr(request.state, "request_id", "unknown")
     # Sanitize errors: Pydantic V2 may include non-serializable ctx values
     safe_errors = []
@@ -286,11 +315,44 @@ async def validation_error_handler(
         if "ctx" in err:
             safe_err["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
         safe_errors.append(safe_err)
+
+    # Capture the request body (best-effort; re-emit a fresh stream so
+    # the rest of the stack can still read it). Skip binary bodies and
+    # bodies larger than 16 KB to keep logs bounded.
+    body_summary: dict = {}
+    try:
+        raw = await request.body()
+        if raw and len(raw) <= 16 * 1024:
+            try:
+                body_summary["json"] = orjson.loads(raw)
+            except Exception:
+                body_summary["text_preview"] = raw[:512].decode(
+                    "utf-8", errors="replace"
+                )
+        elif raw:
+            body_summary["truncated_bytes"] = len(raw)
+    except Exception as body_err:
+        body_summary["unavailable_reason"] = str(body_err)
+
+    # Path, query, headers (sanitized for Authorization)
+    location = {
+        "path_params": dict(request.path_params),
+        "query_params": dict(request.query_params),
+        "body": body_summary,
+    }
+    headers_sanitized = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in {"authorization", "cookie"}
+    }
+
     logger = structlog.get_logger()
     logger.error(
         "validation_error",
         method=request.method,
         url=str(request.url),
+        headers=headers_sanitized,
+        location=location,
         errors=safe_errors,
     )
     # Also log to standard logger for Docker log visibility

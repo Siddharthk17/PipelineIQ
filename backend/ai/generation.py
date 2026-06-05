@@ -439,6 +439,22 @@ async def _call_gemini_async(
             lambda: task.get(timeout=120),
         )
     except Exception as e:
+        from backend.tasks.gemini_tasks import (
+            GeminiQuotaExhaustedError,
+            GeminiClientError,
+        )
+
+        # Surface terminal task failures with user-friendly messages. The
+        # worker now raises real exceptions instead of returning sentinel
+        # strings, so Celery state correctly reports FAILURE and downstream
+        # systems can rely on the result payload.
+        if isinstance(e, GeminiQuotaExhaustedError):
+            raise Exception(
+                "Google Gemini AI quota exhausted. Please try again later."
+            ) from e
+        if isinstance(e, GeminiClientError):
+            raise Exception(f"Gemini AI service error: {e}") from e
+
         error_str = str(e)
         service_error = _detect_ai_service_error(error_str)
         if service_error:
@@ -446,9 +462,10 @@ async def _call_gemini_async(
         # Re-raise other errors
         raise
 
-    # Handle sentinel error values from the task to avoid worker-side
-    # tracebacks
-    if result == "GEMINI_QUOTA_EXHAUSTED":
+    # Defensive: still handle legacy sentinel values from older worker
+    # builds (or in-process tests that mock the task). New workers raise
+    # proper exceptions and never return these strings.
+    if isinstance(result, str) and result == "GEMINI_QUOTA_EXHAUSTED":
         raise Exception(
             "Google Gemini AI quota exhausted. Please try again later.")
 
