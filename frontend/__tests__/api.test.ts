@@ -39,9 +39,9 @@ describe("Token management", () => {
     expect(getToken()).toBeNull();
   });
 
-  it("setToken stores and getToken retrieves", () => {
+  it("setToken does not persist browser-readable tokens", () => {
     setToken("abc123");
-    expect(getToken()).toBe("abc123");
+    expect(getToken()).toBeNull();
   });
 
   it("clearToken removes the token", () => {
@@ -67,7 +67,7 @@ describe("fetchApi (via public functions)", () => {
     localStorage.clear();
   });
 
-  it("getFiles sends auth header and parses response", async () => {
+  it("getFiles uses cookie credentials and parses response", async () => {
     setToken("test-token");
     const mockFiles = [
       { id: "1", original_filename: "test.csv", row_count: 10, column_count: 3, columns: ["a", "b", "c"], dtypes: {}, file_size_bytes: 1024, schema_drift: null },
@@ -82,7 +82,8 @@ describe("fetchApi (via public functions)", () => {
 
     const call = vi.mocked(fetch).mock.calls[0];
     expect(call[0]).toBe("/api/v1/files/");
-    expect((call[1]?.headers as Record<string, string>)["Authorization"]).toBe("Bearer test-token");
+    expect(call[1]?.credentials).toBe("include");
+    expect((call[1]?.headers as Record<string, string>)["Authorization"]).toBeUndefined();
   });
 
   it("throws ApiError on non-ok response", async () => {
@@ -501,7 +502,7 @@ describe("Auth API functions", () => {
     expect(user.username).toBe("newuser");
   });
 
-  it("getMe sends GET to /auth/me with auth", async () => {
+  it("getMe sends GET to /auth/me with cookie credentials", async () => {
     setToken("my-token");
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,
@@ -511,7 +512,9 @@ describe("Auth API functions", () => {
 
     const me = await getMe();
     expect(me.email).toBe("me@test.com");
-    expect((vi.mocked(fetch).mock.calls[0][1]?.headers as Record<string, string>)["Authorization"]).toBe("Bearer my-token");
+    const options = vi.mocked(fetch).mock.calls[0][1];
+    expect(options?.credentials).toBe("include");
+    expect((options?.headers as Record<string, string>)["Authorization"]).toBeUndefined();
   });
 
   it("logout revokes server session and clears the token", async () => {

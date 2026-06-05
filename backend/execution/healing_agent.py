@@ -6,7 +6,6 @@ import logging
 from dataclasses import dataclass, field
 
 import orjson
-from celery.result import allow_join_result
 from sqlalchemy.orm import Session
 
 from backend.ai.generation import compute_yaml_diff
@@ -15,7 +14,6 @@ from backend.execution.patch_applier import apply_patch
 from backend.execution.sandbox import run_patch_in_sandbox
 from backend.execution.schema_diff import compute_schema_diff
 from backend.models import FileProfile, HealingAttempt, HealingAttemptStatus, SchemaSnapshot, UploadedFile
-from backend.tasks.gemini_tasks import call_gemini_task
 from backend.utils.time_utils import utcnow
 from backend.utils.uuid_utils import as_uuid
 
@@ -286,13 +284,33 @@ def attempt_heal(
 
 
 def _call_gemini_for_healing(prompt: str) -> str:
-    task = call_gemini_task.apply_async(
-        args=[prompt],
-        kwargs={"temperature": 0.0, "max_output_tokens": 1000},
-        queue="gemini",
-    )
-    with allow_join_result():
-        return task.get(timeout=120)
+    import asyncio
+    from backend.clients.gemini_client import get_gemini_model
+
+    model = get_gemini_model()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                model.generate_content,
+                prompt,
+                generation_config={"temperature": 0.0, "max_output_tokens": 1000},
+            )
+            try:
+                response = future.result(timeout=60)
+            except concurrent.futures.TimeoutError:
+                raise TimeoutError("Gemini healing call timed out after 60s")
+    else:
+        response = model.generate_content(
+            prompt,
+            generation_config={"temperature": 0.0, "max_output_tokens": 1000},
+        )
+    return response.text.strip()
 
 
 def _parse_gemini_patch(raw_response: str) -> dict:

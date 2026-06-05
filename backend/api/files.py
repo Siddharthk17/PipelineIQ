@@ -109,6 +109,20 @@ def _clear_pending_upload(file_id: str) -> None:
             file_id)
 
 
+def _validated_pending_stored_path(file_id: str, pending: dict) -> str:
+    filename = os.path.basename(str(pending.get("filename") or ""))
+    _validate_file_extension(filename)
+    extension = Path(filename).suffix.lower()
+    expected_name = f"{file_id}{extension}"
+    actual_name = os.path.basename(str(pending.get("stored_path") or ""))
+    if actual_name != expected_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pending upload storage path is invalid",
+        )
+    return str(settings.UPLOAD_DIR / expected_name)
+
+
 @router.post(
     "/request-upload-url",
     response_model=UploadUrlResponse,
@@ -213,7 +227,7 @@ async def direct_upload_file(
             detail="File not found or not pending confirmation",
         )
 
-    stored_path = Path(pending["stored_path"])
+    stored_path = Path(_validated_pending_stored_path(file_id, pending))
     expected_size = int(pending["expected_size"])
     try:
         written = await storage_service.upload_stream(
@@ -257,7 +271,7 @@ async def confirm_direct_upload(
             detail="File not found or not pending confirmation",
         )
 
-    stored_path = pending["stored_path"]
+    stored_path = _validated_pending_stored_path(file_id, pending)
     if not storage_service.exists(stored_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -492,7 +506,7 @@ def preview_file(
 
     with storage_service.download(stored_path) as handle:
         df = _parse_file_preview(
-            uploaded_file.original_filename, handle, min(rows, 100)
+            uploaded_file.original_filename, handle, max(1, min(rows, 100))
         )
 
     try:
@@ -507,8 +521,12 @@ def preview_file(
         )
         if policies:
             df = apply_column_policies(df, current_user.role, policies)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Column policy enforcement failed for file_id=%s: %s", file_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Column security policies could not be applied",
+        )
 
     return {
         "file_id": file_id,
@@ -531,6 +549,50 @@ def _validate_file_extension(filename: str) -> None:
                 f"Allowed: {sorted(settings.ALLOWED_EXTENSIONS)}"
             ),
         )
+
+
+def _validate_file_content(filename: str, stored_path: str) -> None:
+    """Perform lightweight content checks before metadata extraction."""
+    extension = Path(filename).suffix.lower()
+    try:
+        if extension == ".csv":
+            with storage_service.download(stored_path) as handle:
+                sample = handle.read(4096)
+            text = sample.decode("utf-8-sig")
+            if not next(csv.reader(text.splitlines()), None):
+                raise ValueError("CSV file has no header row")
+        elif extension == ".json":
+            with storage_service.download(stored_path) as handle:
+                sample = handle.read(1_048_576)
+            stripped = sample.lstrip()
+            if not stripped.startswith((b"{", b"[")):
+                raise ValueError("JSON file does not start with an object or array")
+            if stripped.startswith(b"{"):
+                first_line = next(
+                    (line.strip() for line in sample.splitlines() if line.strip()),
+                    b"",
+                )
+                orjson.loads(first_line)
+            else:
+                orjson.loads(sample)
+        elif extension == ".parquet":
+            with storage_service.download(stored_path) as handle:
+                if handle.read(4) != b"PAR1":
+                    raise ValueError("Parquet magic header is missing")
+        elif extension == ".xlsx":
+            with storage_service.download(stored_path) as handle:
+                if handle.read(4) != b"PK\x03\x04":
+                    raise ValueError("XLSX ZIP header is missing")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"File content does not match extension '{extension}'",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
 
 
 def _resolve_upload_request_payload(
@@ -558,6 +620,10 @@ def _extract_file_metadata(
         return _extract_csv_metadata(stored_path)
     if extension == ".json":
         return _extract_json_metadata(filename, stored_path)
+    if extension == ".parquet":
+        return _extract_parquet_metadata(stored_path)
+    if extension == ".xlsx":
+        return _extract_xlsx_metadata(filename, stored_path)
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Cannot parse file with extension '{extension}'",
@@ -665,6 +731,37 @@ def _extract_json_metadata(
         ) from exc
 
 
+def _extract_parquet_metadata(stored_path: str) -> tuple[int, list[str], dict[str, str]]:
+    try:
+        import pyarrow.parquet as pq
+
+        with storage_service.download(stored_path) as handle:
+            parquet_file = pq.ParquetFile(handle)
+            schema = parquet_file.schema_arrow
+            columns = list(schema.names)
+            dtypes = {field.name: str(field.type) for field in schema}
+            return parquet_file.metadata.num_rows, columns, dtypes
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse parquet file '{stored_path}': {exc}",
+        ) from exc
+
+
+def _extract_xlsx_metadata(filename: str, stored_path: str) -> tuple[int, list[str], dict[str, str]]:
+    try:
+        with storage_service.download(stored_path) as handle:
+            df = pd.read_excel(handle, nrows=1000)
+        columns = [str(column) for column in df.columns]
+        dtypes = {column: str(dtype) for column, dtype in df.dtypes.items()}
+        return len(df), columns, dtypes
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': {exc}",
+        ) from exc
+
+
 def _build_schema_drift_response(
     db: Session,
     file_id,
@@ -759,6 +856,7 @@ def _finalize_uploaded_file(
     current_user: User,
 ) -> FileUploadResponse:
     """Persist uploaded file metadata, snapshot, and optional drift report."""
+    _validate_file_content(original_filename, stored_path)
     row_count, columns, dtypes = _extract_file_metadata(
         original_filename, stored_path)
     if row_count > settings.MAX_ROWS_PER_FILE:
@@ -846,6 +944,11 @@ def _parse_file_preview(
         elif extension == ".json":
             df = pd.read_json(handle)
             return df.head(nrows)
+        elif extension == ".parquet":
+            df = pd.read_parquet(handle)
+            return df.head(nrows)
+        elif extension == ".xlsx":
+            return pd.read_excel(handle, nrows=nrows)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

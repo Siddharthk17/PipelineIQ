@@ -15,6 +15,7 @@ from backend.auth import get_current_user_sse
 from backend.db.redis_pools import get_cache_redis_async, get_pubsub_redis_async
 from backend.dependencies import get_read_db_dependency
 from backend.models import PipelineRun, PipelineStatus, User
+from backend.utils.sse_security import public_sse_payload, verify_sse_payload
 from backend.utils.uuid_utils import as_uuid as _as_uuid, validate_uuid_format as _validate_uuid_format
 
 logger = logging.getLogger(__name__)
@@ -239,7 +240,12 @@ async def _get_cached_event(cache_client, run_id: str) -> Optional[dict]:
             run_id)
         return None
 
-    return parsed if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        return None
+    if not verify_sse_payload(parsed):
+        logger.warning("SSE cache payload failed signature verification for run_id=%s", run_id)
+        return None
+    return parsed
 
 
 def _parse_message_payload(data) -> Optional[dict]:
@@ -252,7 +258,12 @@ def _parse_message_payload(data) -> Optional[dict]:
         parsed = orjson.loads(data)
     except orjson.JSONDecodeError:
         return None
-    return parsed if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        return None
+    if not verify_sse_payload(parsed):
+        logger.warning("Dropped unsigned or invalid SSE Redis payload")
+        return None
+    return parsed
 
 
 def _extract_event_type(payload: dict) -> str:
@@ -293,7 +304,7 @@ def _terminal_event_type(status_value: PipelineStatus) -> str:
 
 def _format_sse_event(event_type: str, payload: dict) -> str:
     """Format an SSE message with event and data lines."""
-    serialized = orjson.dumps(payload).decode("utf-8")
+    serialized = orjson.dumps(public_sse_payload(payload)).decode("utf-8")
     return f"event: {event_type}\ndata: {serialized}\n\n"
 
 

@@ -5,15 +5,13 @@ const apiUrl = process.env.E2E_API_URL ?? baseUrl;
 const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
 const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
-async function login(page: import("@playwright/test").Page): Promise<string> {
+async function login(page: import("@playwright/test").Page): Promise<void> {
   test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
   await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
   await page.getByTestId("email-input").fill(email);
   await page.getByTestId("password-input").fill(password);
   await page.getByTestId("login-btn").click();
   await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 15_000 });
-  const token = await page.evaluate(() => localStorage.getItem("pipelineiq_token"));
-  return token ?? "";
 }
 
 function buildPipelineYAML(fileId: string, pipelineName: string): string {
@@ -40,12 +38,11 @@ function buildPipelineYAML(fileId: string, pipelineName: string): string {
 
 test.describe("Pipeline Run Lifecycle", () => {
   test("Submit pipeline run and see it reach success", async ({ page }) => {
-    const token = await login(page);
+    await login(page);
 
     const csvContent = "id,region,amount,status\n1,North,150,completed\n2,South,320,completed";
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "run_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
-      headers: { Authorization: `Bearer ${token}` },
     });
     const { file_id: fileId } = await uploadResp.json();
 
@@ -54,7 +51,7 @@ test.describe("Pipeline Run Lifecycle", () => {
 
     const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
     });
     expect(runResp.ok()).toBeTruthy();
     const { run_id: runId } = await runResp.json();
@@ -62,9 +59,7 @@ test.describe("Pipeline Run Lifecycle", () => {
 
     const start = Date.now();
     while (Date.now() - start < 120_000) {
-      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`);
       const { status } = await statusResp.json();
       if (status === "COMPLETED" || status === "HEALED") return;
       if (status === "FAILED" || status === "TIMEOUT") {
@@ -76,12 +71,11 @@ test.describe("Pipeline Run Lifecycle", () => {
   }, 150_000);
 
   test("Run detail page shows status and Gantt chart", async ({ page }) => {
-    const token = await login(page);
+    await login(page);
 
     const csvContent = "id,amount\n1,100\n2,200";
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "gantt_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
-      headers: { Authorization: `Bearer ${token}` },
     });
     const { file_id: fileId } = await uploadResp.json();
 
@@ -90,15 +84,13 @@ test.describe("Pipeline Run Lifecycle", () => {
 
     const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
     });
     const { run_id: runId } = await runResp.json();
 
     const start = Date.now();
     while (Date.now() - start < 120_000) {
-      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`);
       const statusData = await statusResp.json();
       if (statusData.status === "COMPLETED" || statusData.status === "HEALED") break;
       if (statusData.status === "FAILED" || statusData.status === "TIMEOUT") {
@@ -114,12 +106,11 @@ test.describe("Pipeline Run Lifecycle", () => {
   }, 150_000);
 
   test("Run detail page shows SSE step-by-step progress events", async ({ page }) => {
-    const token = await login(page);
+    await login(page);
 
     const csvContent = "id,amount\n1,100\n2,200";
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "sse_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
-      headers: { Authorization: `Bearer ${token}` },
     });
     const { file_id: fileId } = await uploadResp.json();
 
@@ -128,7 +119,7 @@ test.describe("Pipeline Run Lifecycle", () => {
 
     const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
     });
     const { run_id: runId } = await runResp.json();
     expect(runId).toBeTruthy();
@@ -159,12 +150,11 @@ test.describe("Pipeline Run Lifecycle", () => {
   });
 
   test("Completed run shows download button", async ({ page }) => {
-    const token = await login(page);
+    await login(page);
 
     const csvContent = "id,amount\n1,100\n2,200";
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "dl_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
-      headers: { Authorization: `Bearer ${token}` },
     });
     const { file_id: fileId } = await uploadResp.json();
 
@@ -173,15 +163,13 @@ test.describe("Pipeline Run Lifecycle", () => {
 
     const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
     });
     const { run_id: runId } = await runResp.json();
 
     const start = Date.now();
     while (Date.now() - start < 120_000) {
-      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`);
       const statusData = await statusResp.json();
       if (statusData.status === "COMPLETED" || statusData.status === "HEALED") break;
       if (statusData.status === "FAILED" || statusData.status === "TIMEOUT") {

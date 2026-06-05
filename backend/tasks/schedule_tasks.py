@@ -6,20 +6,45 @@ Also creates ScheduleRun records and updates schedule statistics.
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone
 
 from croniter import croniter
 
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
+from backend.db.redis_pools import get_cache_redis
 from backend.models import PipelineRun, PipelineSchedule, PipelineStatus, ScheduleRun
 
 logger = logging.getLogger(__name__)
+
+SCHEDULE_CHECK_LOCK_KEY = "locks:schedules:check"
+SCHEDULE_CHECK_LOCK_TTL_SECONDS = 55
+SCHEDULE_CHECK_BATCH_LIMIT = 100
 
 
 @celery_app.task(name="schedules.check", ignore_result=True)
 def check_schedules() -> dict:
     """Find due schedules and trigger pipeline execution for each."""
+    lock_token = str(uuid.uuid4())
+    lock_acquired = False
+    try:
+        redis = get_cache_redis()
+        lock_acquired = bool(
+            redis.set(
+                SCHEDULE_CHECK_LOCK_KEY,
+                lock_token,
+                nx=True,
+                ex=SCHEDULE_CHECK_LOCK_TTL_SECONDS,
+            )
+        )
+    except Exception as exc:
+        logger.warning("Schedule lock unavailable; continuing unlocked: %s", exc)
+
+    if not lock_acquired:
+        logger.info("Schedule check skipped; another worker holds the lock")
+        return {"triggered": 0, "locked": True}
+
     db = SessionLocal()
     triggered = 0
     try:
@@ -30,6 +55,8 @@ def check_schedules() -> dict:
                 PipelineSchedule.is_active == True,  # noqa: E712
                 PipelineSchedule.next_run_at <= now,
             )
+            .order_by(PipelineSchedule.next_run_at.asc())
+            .limit(SCHEDULE_CHECK_BATCH_LIMIT)
             .all()
         )
 
@@ -89,6 +116,15 @@ def check_schedules() -> dict:
     except Exception as exc:
         logger.error("Error checking schedules: %s", exc)
     finally:
+        try:
+            redis = get_cache_redis()
+            current_token = redis.get(SCHEDULE_CHECK_LOCK_KEY)
+            if isinstance(current_token, bytes):
+                current_token = current_token.decode("utf-8")
+            if current_token == lock_token:
+                redis.delete(SCHEDULE_CHECK_LOCK_KEY)
+        except Exception:
+            logger.debug("Schedule lock release skipped", exc_info=True)
         db.close()
 
-    return {"triggered": triggered}
+    return {"triggered": triggered, "locked": False}

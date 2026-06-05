@@ -10,12 +10,12 @@ Design principles:
 """
 import json
 import logging
-import pickle
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
 import networkx as nx
+import orjson
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -702,7 +702,7 @@ def get_cached_run_lineage(run_id: str, db: Session) -> nx.DiGraph:
     try:
         cached = redis.get(cache_key)
         if cached:
-            G = pickle.loads(cached)
+            G = nx.node_link_graph(orjson.loads(cached))
             logger.debug("Lineage cache HIT: %s", run_id)
             return G
     except Exception as e:
@@ -711,7 +711,7 @@ def get_cached_run_lineage(run_id: str, db: Session) -> nx.DiGraph:
     G = _build_lineage_from_db(run_id, db)
 
     try:
-        redis.setex(cache_key, LINEAGE_CACHE_TTL, pickle.dumps(G))
+        redis.setex(cache_key, LINEAGE_CACHE_TTL, orjson.dumps(nx.node_link_data(G)))
         logger.debug("Lineage cache MISS, stored: %s", run_id)
     except Exception as e:
         logger.warning("Lineage cache write failed: %s", e)

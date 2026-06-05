@@ -6,6 +6,7 @@ Used to cache expensive lineage computations and stats.
 
 import logging
 import os
+import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -17,6 +18,7 @@ from backend.db.redis_pools import get_cache_redis
 
 logger = logging.getLogger(__name__)
 _REDIS_CACHE_DISABLED = False
+_REDIS_CACHE_DISABLED_UNTIL = 0.0
 _DOCKER_SERVICE_HOSTS = {
     "redis",
     "redis-cache",
@@ -35,6 +37,9 @@ def _should_use_redis_cache() -> bool:
     if getattr(_get_client, "__module__", __name__) != __name__:
         return True
 
+    global _REDIS_CACHE_DISABLED
+    if _REDIS_CACHE_DISABLED and time.monotonic() >= _REDIS_CACHE_DISABLED_UNTIL:
+        _REDIS_CACHE_DISABLED = False
     if _REDIS_CACHE_DISABLED:
         return False
 
@@ -52,7 +57,7 @@ def _get_client() -> redis.Redis:
 
 def cache_get(key: str) -> Optional[Any]:
     """Get a cached value by key. Returns None on miss."""
-    global _REDIS_CACHE_DISABLED
+    global _REDIS_CACHE_DISABLED, _REDIS_CACHE_DISABLED_UNTIL
     if not _should_use_redis_cache():
         return None
     try:
@@ -60,6 +65,7 @@ def cache_get(key: str) -> Optional[Any]:
     except redis.RedisError:
         logger.warning("Redis cache_get failed for key: %s", key)
         _REDIS_CACHE_DISABLED = True
+        _REDIS_CACHE_DISABLED_UNTIL = time.monotonic() + 5
         return None
     if value is None:
         logger.debug("Cache MISS: %s", key)
@@ -70,7 +76,7 @@ def cache_get(key: str) -> Optional[Any]:
 
 def cache_set(key: str, value: Any, ttl: Optional[int] = None) -> None:
     """Set a cached value. If ttl is given (seconds), key expires after ttl."""
-    global _REDIS_CACHE_DISABLED
+    global _REDIS_CACHE_DISABLED, _REDIS_CACHE_DISABLED_UNTIL
     if not _should_use_redis_cache():
         return
     try:
@@ -83,11 +89,12 @@ def cache_set(key: str, value: Any, ttl: Optional[int] = None) -> None:
     except redis.RedisError:
         logger.warning("Redis cache_set failed for key: %s", key)
         _REDIS_CACHE_DISABLED = True
+        _REDIS_CACHE_DISABLED_UNTIL = time.monotonic() + 5
 
 
 def cache_delete(key: str) -> None:
     """Delete a single cached key."""
-    global _REDIS_CACHE_DISABLED
+    global _REDIS_CACHE_DISABLED, _REDIS_CACHE_DISABLED_UNTIL
     if not _should_use_redis_cache():
         return
     try:
@@ -95,11 +102,12 @@ def cache_delete(key: str) -> None:
     except redis.RedisError:
         logger.warning("Redis cache_delete failed for key: %s", key)
         _REDIS_CACHE_DISABLED = True
+        _REDIS_CACHE_DISABLED_UNTIL = time.monotonic() + 5
 
 
 def cache_delete_pattern(pattern: str) -> None:
     """Delete all keys matching a glob pattern using SCAN (non-blocking)."""
-    global _REDIS_CACHE_DISABLED
+    global _REDIS_CACHE_DISABLED, _REDIS_CACHE_DISABLED_UNTIL
     if not _should_use_redis_cache():
         return
     try:
@@ -123,3 +131,4 @@ def cache_delete_pattern(pattern: str) -> None:
             "Redis cache_delete_pattern failed for pattern: %s",
             pattern)
         _REDIS_CACHE_DISABLED = True
+        _REDIS_CACHE_DISABLED_UNTIL = time.monotonic() + 5

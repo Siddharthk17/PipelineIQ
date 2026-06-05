@@ -15,6 +15,7 @@ import orjson
 
 from backend.database import SessionLocal
 from backend.models import Webhook, WebhookDelivery
+from backend.utils.url_security import UnsafeURL, validate_public_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ def deliver_webhook_sync(
     )
 
     try:
+        validate_public_http_url(webhook.url)
         import httpx
 
         with httpx.Client(timeout=10) as client:
@@ -66,6 +68,9 @@ def deliver_webhook_sync(
         else:
             delivery.failed_at = datetime.now(timezone.utc)
             delivery.error_message = f"HTTP {resp.status_code}"
+    except UnsafeURL:
+        delivery.failed_at = datetime.now(timezone.utc)
+        delivery.error_message = "Webhook URL is not allowed"
     except Exception as e:
         delivery.failed_at = datetime.now(timezone.utc)
         delivery.error_message = str(e)[:500]

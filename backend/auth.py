@@ -10,12 +10,13 @@ contexts (scripts, tests).
 
 import asyncio
 import logging
+import uuid
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
-from jose import JWTError, jwt
+import jwt
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.requests import Request
@@ -106,8 +107,43 @@ def create_access_token(
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "jti": str(uuid.uuid4())})
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+
+def _revoked_token_key(jti: str) -> str:
+    return f"auth:revoked:{jti}"
+
+
+def _is_token_revoked(jti: str | None) -> bool:
+    if not jti:
+        return False
+    try:
+        from backend.db.redis_pools import get_cache_redis
+
+        return bool(get_cache_redis().exists(_revoked_token_key(jti)))
+    except Exception:
+        logger.warning("Token revocation check failed; allowing request")
+        return False
+
+
+def revoke_token(token: str) -> None:
+    """Best-effort Redis-backed JWT revocation until token expiry."""
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+        if not jti or not exp:
+            return
+        expires_at = datetime.fromtimestamp(int(exp), tz=timezone.utc)
+        ttl = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+        if ttl <= 0:
+            return
+        from backend.db.redis_pools import get_cache_redis
+
+        get_cache_redis().setex(_revoked_token_key(str(jti)), ttl, "1")
+    except Exception:
+        logger.warning("Token revocation failed", exc_info=True)
 
 
 def verify_token(token: str) -> Optional[dict]:
@@ -116,8 +152,10 @@ def verify_token(token: str) -> Optional[dict]:
             token,
             settings.SECRET_KEY,
             algorithms=[ALGORITHM])
+        if _is_token_revoked(payload.get("jti")):
+            return None
         return payload
-    except JWTError:
+    except jwt.PyJWTError:
         return None
 
 

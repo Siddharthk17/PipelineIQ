@@ -47,11 +47,9 @@ test.describe("AI Pipeline Generation", () => {
 
   test("AI validate YAML endpoint returns structured response", async ({ page }) => {
     await login(page);
-    const token = await page.evaluate(() => localStorage.getItem("pipelineiq_token"));
-    expect(token).toBeTruthy();
 
     const response = await page.request.post(`${apiUrl}/api/ai/validate-yaml`, {
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       data: {
         yaml_text: [
           "pipeline:",

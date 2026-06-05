@@ -1,7 +1,7 @@
 """Tests for JWT authentication endpoints."""
 
 
-from jose import jwt
+import jwt
 
 from backend.auth import ALGORITHM, get_password_hash, verify_password
 

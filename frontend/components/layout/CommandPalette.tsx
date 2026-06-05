@@ -137,10 +137,11 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
             onChange={(e) => handleQueryChange(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type a command..."
+            aria-label="Search commands"
             className="flex-1 bg-transparent border-none outline-none text-sm"
             style={{ color: 'var(--text-primary)' }}
           />
-          <button onClick={onClose} className="p-1 rounded hover:opacity-80">
+          <button onClick={onClose} className="p-1 rounded hover:opacity-80" aria-label="Close command palette">
             <X className="w-4 h-4" style={{ color: 'var(--text-secondary)' }} />
           </button>
         </div>

@@ -2,21 +2,41 @@ const { WebSocketServer } = require('ws')
 const { setupWSConnection, setPersistence } = require('y-websocket/bin/utils')
 const jwt = require('jsonwebtoken')
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production'
+const JWT_SECRET = process.env.JWT_SECRET
 const REDIS_YJS_URL = process.env.REDIS_YJS_URL || 'redis://redis-yjs:6382'
 const PORT = parseInt(process.env.PORT || '1234', 10)
+
+if (!JWT_SECRET || JWT_SECRET.length < 32 || JWT_SECRET.startsWith('change-me-')) {
+  console.error('JWT_SECRET must be a non-default secret with at least 32 characters')
+  process.exit(1)
+}
 
 try {
   const { RedisPersistence } = require('y-redis')
   const redisUrl = new URL(REDIS_YJS_URL)
+  const redisDb = redisUrl.pathname && redisUrl.pathname.length > 1
+    ? parseInt(redisUrl.pathname.slice(1), 10)
+    : 0
+  const redisOpts = {
+    host: redisUrl.hostname,
+    port: parseInt(redisUrl.port || '6379', 10),
+    db: Number.isNaN(redisDb) ? 0 : redisDb,
+  }
+  if (redisUrl.password) {
+    redisOpts.password = decodeURIComponent(redisUrl.password)
+  }
+  if (redisUrl.protocol === 'rediss:') {
+    redisOpts.tls = {}
+  }
+  const redactedRedisUrl = new URL(REDIS_YJS_URL)
+  if (redactedRedisUrl.password) {
+    redactedRedisUrl.password = 'REDACTED'
+  }
   const redisPersistence = new RedisPersistence({
-    redisOpts: {
-      host: redisUrl.hostname,
-      port: parseInt(redisUrl.port || '6379', 10),
-    },
+    redisOpts,
   })
   setPersistence(redisPersistence)
-  console.log(`Y-Redis persistence connected: ${REDIS_YJS_URL}`)
+  console.log(`Y-Redis persistence connected: ${redactedRedisUrl.toString()}`)
 } catch (e) {
   console.warn(`Redis persistence unavailable: ${e.message}`)
   console.warn('Documents will not persist across server restarts.')
@@ -29,6 +49,17 @@ function verifyJWT(token) {
   } catch (e) {
     return null
   }
+}
+
+function tokenFromCookie(cookieHeader) {
+  if (!cookieHeader) return null
+  for (const part of cookieHeader.split(';')) {
+    const [name, ...valueParts] = part.trim().split('=')
+    if (name === 'pipelineiq_token') {
+      return decodeURIComponent(valueParts.join('='))
+    }
+  }
+  return null
 }
 
 const AUTH_REJECTION_LOG_INTERVAL_MS = 5000
@@ -58,7 +89,7 @@ wss.on('connection', (ws, req) => {
   try {
     const url = new URL(req.url, `ws://localhost:${PORT}`)
     roomName = decodeURIComponent(url.pathname.slice(1))
-    token = url.searchParams.get('token')
+    token = url.searchParams.get('token') || tokenFromCookie(req.headers.cookie)
   } catch (e) {
     console.warn(`Invalid WebSocket URL: ${req.url}`)
     ws.close(1002, 'Invalid URL')
@@ -114,8 +145,7 @@ wss.on('error', (err) => {
 
 wss.on('listening', () => {
   console.log(`Y-WebSocket server running on port ${PORT}`)
-  console.log(`Redis persistence: ${REDIS_YJS_URL}`)
-  console.log(`JWT auth: ${JWT_SECRET !== 'change-me-in-production' ? 'configured' : 'WARNING: default secret'}`)
+  console.log('JWT auth: configured')
 })
 
 process.on('SIGTERM', () => {

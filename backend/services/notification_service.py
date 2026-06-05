@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.models import NotificationConfig, NotificationType
+from backend.utils.url_security import UnsafeURL, validate_public_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ def send_slack_notification(webhook_url: str, message: str) -> bool:
         logger.info("Slack notification skipped: webhook URL not configured")
         return False
     try:
+        validate_public_http_url(webhook_url)
         response = httpx.post(
             webhook_url,
             json={"text": message},
@@ -43,6 +45,9 @@ def send_slack_notification(webhook_url: str, message: str) -> bool:
                 response.text[:200],
             )
             return False
+    except UnsafeURL:
+        logger.warning("Slack notification blocked: unsafe webhook URL")
+        return False
     except httpx.HTTPError as exc:
         logger.error("Slack notification error: %s", exc)
         return False

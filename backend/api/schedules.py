@@ -32,7 +32,7 @@ router = APIRouter(prefix="/schedules", tags=["schedules"])
 class CreateScheduleRequest(BaseModel):
     pipeline_name: str = Field(..., max_length=255,
                                description="Name for the scheduled pipeline")
-    yaml_config: str = Field(..., min_length=10,
+    yaml_config: str = Field(..., min_length=10, max_length=50_000,
                              description="YAML pipeline configuration")
     cron_expression: str = Field(..., description="Cron expression (e.g. '0 6 * * 1')")
 

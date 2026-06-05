@@ -2,7 +2,6 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import networkx as nx
-import pickle
 
 from backend.repositories.catalog import (
     LINEAGE_CACHE_TTL,

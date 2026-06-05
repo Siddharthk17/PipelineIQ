@@ -23,6 +23,61 @@ TOKEN_BUDGET_WINDOW_SECONDS = 60
 
 # Cache TTL for responses: 1 hour
 RESPONSE_CACHE_TTL = 3600
+_TOKEN_BUDGET_LUA = """
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local requested = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+if current + requested > limit then
+  return -1
+end
+local updated = redis.call('INCRBY', KEYS[1], requested)
+redis.call('EXPIRE', KEYS[1], ttl)
+return updated
+"""
+
+
+def _reserve_token_budget(task, redis, estimated_total_tokens: int, slog) -> str:
+    budget_key = f"gemini:tokens:{int(time.time() // TOKEN_BUDGET_WINDOW_SECONDS)}"
+    reserved_usage = int(redis.eval(
+        _TOKEN_BUDGET_LUA,
+        1,
+        budget_key,
+        estimated_total_tokens,
+        TOKEN_BUDGET_PER_MINUTE,
+        TOKEN_BUDGET_WINDOW_SECONDS * 2,
+    ))
+
+    if reserved_usage < 0:
+        backoff = _compute_retry_delay(task.request.retries)
+        slog.warning(
+            "gemini_token_budget_exhausted",
+            current_usage=int(redis.get(budget_key) or 0),
+            estimated_total_tokens=estimated_total_tokens,
+            retry_in_seconds=backoff,
+        )
+        raise task.retry(
+            exc=Exception("Token budget exhausted"),
+            countdown=backoff,
+        )
+    return budget_key
+
+
+def _release_token_budget(redis, budget_key: str, estimated_total_tokens: int) -> None:
+    redis.incrby(budget_key, -estimated_total_tokens)
+    redis.expire(budget_key, TOKEN_BUDGET_WINDOW_SECONDS * 2)
+
+
+def _adjust_token_budget(
+    redis,
+    budget_key: str,
+    actual_tokens: int,
+    estimated_total_tokens: int,
+) -> None:
+    adjustment = int(actual_tokens) - estimated_total_tokens
+    if adjustment:
+        redis.incrby(budget_key, adjustment)
+    redis.expire(budget_key, TOKEN_BUDGET_WINDOW_SECONDS * 2)
 
 
 def _is_transient_server_error(error_str: str) -> bool:
@@ -81,6 +136,7 @@ def call_gemini_task(
     max_output_tokens: int = 2000,
     generation_config_overrides: dict[str, Any] | None = None,
     request_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> str:
     """
     Single entry point for all Gemini API calls.
@@ -103,6 +159,7 @@ def call_gemini_task(
     config_overrides = generation_config_overrides or {}
     cache_input = orjson.dumps(
         {
+            "tenant_id": tenant_id or "global",
             "prompt": prompt,
             "temperature": temperature,
             "max_output_tokens": max_output_tokens,
@@ -122,21 +179,9 @@ def call_gemini_task(
     estimated_input_tokens = len(prompt) // 4
     estimated_total_tokens = estimated_input_tokens + max_output_tokens
 
-    budget_key = f"gemini:tokens:{int(time.time() // TOKEN_BUDGET_WINDOW_SECONDS)}"
-    current_usage = int(redis.get(budget_key) or 0)
-
-    if current_usage + estimated_total_tokens > TOKEN_BUDGET_PER_MINUTE:
-        backoff = _compute_retry_delay(self.request.retries)
-        slog.warning(
-            "gemini_token_budget_exhausted",
-            current_usage=current_usage,
-            estimated_total_tokens=estimated_total_tokens,
-            retry_in_seconds=backoff,
-        )
-        raise self.retry(
-            exc=Exception("Token budget exhausted"),
-            countdown=backoff,
-        )
+    budget_reserved = False
+    budget_key = _reserve_token_budget(self, redis, estimated_total_tokens, slog)
+    budget_reserved = True
 
     # Step 3: Call Gemini
     try:
@@ -156,10 +201,18 @@ def call_gemini_task(
         result_text = response.text.strip()
 
         # Step 4: Update token budget
-        actual_tokens = getattr(response.usage_metadata, "total_token_count",
-                                estimated_total_tokens)
-        redis.incrby(budget_key, actual_tokens)
-        redis.expire(budget_key, TOKEN_BUDGET_WINDOW_SECONDS * 2)
+        usage_metadata = getattr(response, "usage_metadata", None)
+        actual_tokens = getattr(
+            usage_metadata,
+            "total_token_count",
+            estimated_total_tokens,
+        )
+        _adjust_token_budget(
+            redis,
+            budget_key,
+            actual_tokens,
+            estimated_total_tokens,
+        )
 
         # Step 5: Cache the response
         redis.setex(cache_key, RESPONSE_CACHE_TTL, result_text)
@@ -172,6 +225,8 @@ def call_gemini_task(
         return result_text
 
     except Exception as e:
+        if budget_reserved:
+            _release_token_budget(redis, budget_key, estimated_total_tokens)
         error_str = str(e)
 
         if _is_free_tier_hard_quota(error_str):
@@ -203,5 +258,103 @@ def call_gemini_task(
 
         slog.error("gemini_client_error", error=error_str[:500])
         return f"GEMINI_ERROR: {error_str[:500]}"
+    finally:
+        structlog.contextvars.clear_contextvars()
+
+
+@celery_app.task(
+    name="tasks.generate_pipeline_description",
+    queue="gemini",
+    bind=True,
+    max_retries=3,
+    rate_limit="50/m",
+    soft_time_limit=60,
+    time_limit=90,
+)
+def generate_pipeline_description_task(
+    self,
+    cache_key: str,
+    prompt: str,
+    tenant_id: str | None = None,
+) -> str:
+    """Generate and cache a short catalog description without blocking API threads."""
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(
+        task_id=self.request.id,
+        queue="gemini",
+        tenant_id=tenant_id or "global",
+        purpose="pipeline_description",
+    )
+    slog = structlog.get_logger()
+    redis = get_cache_redis()
+
+    cache_input = orjson.dumps(
+        {
+            "tenant_id": tenant_id or "global",
+            "prompt": prompt,
+            "temperature": 0.1,
+            "max_output_tokens": 100,
+            "purpose": "pipeline_description",
+        },
+        option=orjson.OPT_SORT_KEYS,
+    ).decode()
+    response_cache_key = (
+        f"gemini:resp:{hashlib.sha256(cache_input.encode()).hexdigest()}"
+    )
+
+    cached = redis.get(response_cache_key)
+    if cached:
+        result_text = cached.decode("utf-8") if isinstance(cached, bytes) else cached
+        redis.setex(cache_key, RESPONSE_CACHE_TTL * 24, result_text)
+        return result_text
+
+    estimated_total_tokens = len(prompt) // 4 + 100
+    budget_reserved = False
+    budget_key = _reserve_token_budget(self, redis, estimated_total_tokens, slog)
+    budget_reserved = True
+
+    try:
+        from backend.clients.gemini_client import get_gemini_model
+
+        model = get_gemini_model()
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "temperature": 0.1,
+                "max_output_tokens": 100,
+            },
+        )
+        result_text = response.text.strip()
+        usage_metadata = getattr(response, "usage_metadata", None)
+        actual_tokens = getattr(
+            usage_metadata,
+            "total_token_count",
+            estimated_total_tokens,
+        )
+        _adjust_token_budget(
+            redis,
+            budget_key,
+            actual_tokens,
+            estimated_total_tokens,
+        )
+        if result_text:
+            redis.setex(response_cache_key, RESPONSE_CACHE_TTL, result_text)
+            redis.setex(cache_key, RESPONSE_CACHE_TTL * 24, result_text)
+        return result_text
+
+    except Exception as exc:
+        if budget_reserved:
+            _release_token_budget(redis, budget_key, estimated_total_tokens)
+        error_str = str(exc)
+        if _should_retry_rate_limit(error_str) or _is_transient_server_error(error_str):
+            backoff = _compute_retry_delay(self.request.retries)
+            slog.warning(
+                "pipeline_description_retry",
+                retry_in_seconds=backoff,
+                error=error_str[:200],
+            )
+            raise self.retry(exc=exc, countdown=backoff)
+        slog.warning("pipeline_description_failed", error=error_str[:200])
+        return ""
     finally:
         structlog.contextvars.clear_contextvars()

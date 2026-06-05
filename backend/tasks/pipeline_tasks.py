@@ -46,9 +46,20 @@ from backend.pipeline.runner import (
 from backend.pipeline.runner import PipelineStatus as RunnerPipelineStatus
 from backend.pipeline.versioning import save_version
 from backend.services.audit_service import log_action
+from backend.utils.sse_security import sign_sse_payload
 from backend.utils.time_utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_error_message(error: object | None) -> str | None:
+    """Return a stable user-facing error without paths, secrets, or SQL details."""
+    if error is None:
+        return None
+    return (
+        "Pipeline execution failed. Review the run configuration or contact "
+        "an administrator with the run ID."
+    )
 
 
 def _status_cache_key(run_id: str) -> str:
@@ -57,12 +68,13 @@ def _status_cache_key(run_id: str) -> str:
 
 def _cache_progress_payload(run_id: str, payload: dict) -> None:
     """Cache latest progress payload for reconnecting SSE clients."""
+    signed_payload = sign_sse_payload(payload)
     try:
         cache_client = get_cache_redis()
         cache_client.setex(
             _status_cache_key(run_id),
             3600,
-            orjson.dumps(payload))
+            orjson.dumps(signed_payload))
     except RedisError:
         logger.warning(
             "Failed to cache SSE progress payload for run_id=%s",
@@ -71,15 +83,16 @@ def _cache_progress_payload(run_id: str, payload: dict) -> None:
 
 def _publish_progress_payload(run_id: str, payload: dict) -> None:
     """Publish a non-terminal progress payload to Redis and cache it."""
+    signed_payload = sign_sse_payload(payload)
     try:
         redis_client = get_pubsub_redis()
         channel = f"pipeline_progress:{run_id}"
-        redis_client.publish(channel, orjson.dumps(payload))
+        redis_client.publish(channel, orjson.dumps(signed_payload))
     except RedisError:
         logger.warning(
             "Failed to publish progress payload for run_id=%s",
             run_id)
-    _cache_progress_payload(run_id, payload)
+    _cache_progress_payload(run_id, signed_payload)
 
 
 def make_redis_progress_callback(run_id: str) -> ProgressCallback:
@@ -99,7 +112,7 @@ def make_redis_progress_callback(run_id: str) -> ProgressCallback:
             "rows_in": event.rows_in,
             "rows_out": event.rows_out,
             "duration_ms": event.duration_ms,
-            "error_message": event.error_message,
+            "error_message": _sanitize_error_message(event.error_message),
             "contract_violations": event.contract_violations,
         }
         _publish_progress_payload(run_id, payload)
@@ -123,8 +136,9 @@ def _publish_terminal_event(
             "error_message": error_message,
             "status": status_value,
         }
-        redis_client.publish(channel, orjson.dumps(payload))
-        _cache_progress_payload(run_id, payload)
+        signed_payload = sign_sse_payload(payload)
+        redis_client.publish(channel, orjson.dumps(signed_payload))
+        _cache_progress_payload(run_id, signed_payload)
     except RedisError:
         logger.warning(
             "Failed to publish terminal event for run_id=%s",
@@ -281,12 +295,13 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
             exc,
             exc_info=True,
         )
-        _mark_failed(db, run_id, str(exc))
+        safe_error = _sanitize_error_message(exc) or ""
+        _mark_failed(db, run_id, safe_error)
         _publish_terminal_event(
             run_id,
             "pipeline_failed",
             PipelineStatus.FAILED.value,
-            str(exc),
+            safe_error,
         )
         raise
     finally:
@@ -335,13 +350,14 @@ def _mark_running(db, pipeline_run: PipelineRun) -> None:
 
 def _mark_failed(db, run_id: str, error_message: str) -> None:
     """Mark a pipeline run as FAILED in the database."""
+    safe_error = _sanitize_error_message(error_message) or ""
     try:
         pipeline_run = db.query(PipelineRun).filter(
             PipelineRun.id == run_id).first()
         if pipeline_run:
             pipeline_run.status = PipelineStatus.FAILED
             pipeline_run.completed_at = utcnow()
-            pipeline_run.error_message = error_message
+            pipeline_run.error_message = safe_error
             db.commit()
             _cache_progress_payload(
                 run_id,
@@ -349,7 +365,7 @@ def _mark_failed(db, run_id: str, error_message: str) -> None:
                     "run_id": run_id,
                     "event_type": "pipeline_failed",
                     "status": PipelineStatus.FAILED.value,
-                    "error_message": error_message,
+                    "error_message": safe_error,
                 },
             )
     except Exception as exc:
@@ -510,7 +526,7 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
             status=HealingAttemptStatus.NON_HEALABLE,
             failed_step=failed_step_name or None,
             error_type=summary.error.__class__.__name__,
-            error_message=str(summary.error),
+            error_message=_sanitize_error_message(summary.error),
             classification_reason=get_healing_scenario(summary.error)
             or "Error is not healable automatically",
             applied=False,
@@ -542,7 +558,7 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
             "status": PipelineStatus.HEALING.value,
             "failed_step": failed_step_name,
             "error_type": summary.error.__class__.__name__,
-            "error_message": str(summary.error),
+            "error_message": _sanitize_error_message(summary.error),
         },
     )
     _publish_progress_payload(
@@ -575,7 +591,7 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
                 "status": PipelineStatus.FAILED.value,
                 "attempts": healing_result.attempts,
                 "failed_step": failed_step_name,
-                "error_message": healing_result.error,
+                "error_message": _sanitize_error_message(healing_result.error),
                 "error_reason": error_reason,
             },
         )
@@ -641,8 +657,7 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
                 retry_summary.error,
                 "step_name",
                 failed_step_name),
-            "error_message": str(
-                retry_summary.error) if retry_summary.error else None,
+            "error_message": _sanitize_error_message(retry_summary.error),
             "error_reason": "retry_after_heal_failed",
         },
     )
@@ -657,8 +672,7 @@ def _execute_with_autonomous_healing(db, pipeline_run: PipelineRun):
                 retry_summary.error,
                 "step_name",
                 failed_step_name),
-            "error_message": str(
-                retry_summary.error) if retry_summary.error else None,
+            "error_message": _sanitize_error_message(retry_summary.error),
         },
     )
     return retry_summary
@@ -794,8 +808,7 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         event_type = "pipeline_completed"
     else:
         pipeline_run.status = PipelineStatus.FAILED
-        pipeline_run.error_message = str(
-            summary.error) if summary.error else None
+        pipeline_run.error_message = _sanitize_error_message(summary.error)
         PIPELINE_RUNS_TOTAL.labels(status="failed").inc()
         event_type = "pipeline_failed"
 
@@ -894,7 +907,7 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
         str(pipeline_run.id),
         event_type,
         pipeline_run.status.value,
-        str(summary.error) if summary.error else "",
+        _sanitize_error_message(summary.error) or "",
     )
 
     try:
@@ -979,7 +992,7 @@ def _publish_contract_violation_event(
             "actual": violation.get("actual"),
             "expected": violation.get("expected"),
         }
-        redis_client.publish(channel, orjson.dumps(payload))
+        redis_client.publish(channel, orjson.dumps(sign_sse_payload(payload)))
     except RedisError:
         logger.warning(
             "Failed to publish contract_violation event for run_id=%s",

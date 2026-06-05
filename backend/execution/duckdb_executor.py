@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from typing import Callable, Optional
 
@@ -57,10 +58,18 @@ def _configure_connection(
 
     conn.sql("PRAGMA enable_object_cache=true")
 
+    if os.environ.get("DUCKDB_ENABLE_HTTPFS", "").lower() != "true":
+        logger.info("DuckDB httpfs extension disabled by default")
+        return
+
     try:
         minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
         minio_access_key = os.environ.get("MINIO_ROOT_USER", "minio")
         minio_secret_key = os.environ.get("MINIO_ROOT_PASSWORD", "minio123")
+        minio_region = os.environ.get("MINIO_REGION", "us-east-1")
+
+        if not minio_access_key or not minio_secret_key:
+            raise ValueError("S3 credentials not configured — set MINIO_ROOT_USER and MINIO_ROOT_PASSWORD")
 
         conn.execute("INSTALL httpfs")
         conn.execute("LOAD httpfs")
@@ -69,7 +78,9 @@ def _configure_connection(
         conn.execute("SET s3_url_style='path'")
         conn.execute(f"SET s3_access_key_id='{minio_access_key}'")
         conn.execute(f"SET s3_secret_access_key='{minio_secret_key}'")
-        logger.info("DuckDB httpfs extension loaded for MinIO access")
+        conn.execute(f"SET s3_region='{minio_region}'")
+        conn.execute(f"SET s3_allowed_structural_columns=0")
+        logger.info("DuckDB httpfs extension loaded for MinIO access (tenant-scoped)")
     except Exception as exc:
         logger.warning(
             "DuckDB httpfs setup failed (MinIO queries will use download fallback): %s",
@@ -211,21 +222,41 @@ class DuckDBExecutor:
         *,
         extra_tables: Optional[dict[str, pa.Table]] = None,
     ) -> pa.Table:
+        from backend.config import settings as _settings
+
         conn = self._get_connection()
         table_names = ["__input__"]
         conn.register("__input__", input_table)
 
+        safe_names = {"__input__"}
         if extra_tables:
             for name, table in extra_tables.items():
-                conn.register(name, table)
-                table_names.append(name)
+                safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+                if safe_name in safe_names:
+                    safe_name = f"{safe_name}_{len(safe_names)}"
+                safe_names.add(safe_name)
+                conn.register(safe_name, table)
+                table_names.append(safe_name)
+                sql = sql.replace(f"{{{name}}}", safe_name)
 
+        old_max_rows = None
         try:
+            try:
+                old_max_rows = conn.execute("SELECT current_setting('max_rows_to_scan')").fetchone()[0]
+            except Exception:
+                pass
+            conn.execute(f"SET max_rows_to_scan={_settings.WORKER_MAX_ROWS_TO_SCAN}")
+
             arrow_result = conn.execute(sql).arrow()
             if isinstance(arrow_result, pa.Table):
                 return arrow_result
             return arrow_result.read_all()
         finally:
+            if old_max_rows is not None:
+                try:
+                    conn.execute(f"SET max_rows_to_scan={old_max_rows}")
+                except Exception:
+                    pass
             for name in table_names:
                 try:
                     conn.unregister(name)

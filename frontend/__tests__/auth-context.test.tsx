@@ -24,17 +24,24 @@ describe("AuthProvider", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     localStorage.clear();
-    document.cookie = "piq_auth=; max-age=0";
+    document.cookie = "pipelineiq_token=; max-age=0";
   });
 
   it("initially has no user and is loading", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+      json: () => Promise.resolve({ detail: "Not authenticated" }),
+    } as Response);
+
     render(
       <AuthProvider>
         <AuthConsumer />
       </AuthProvider>
     );
 
-    // After mount with no token, loading becomes false quickly
+    // After mount with no valid cookie, loading becomes false quickly
     await waitFor(() => expect(screen.getByTestId("loading").textContent).toBe("ready"));
     expect(screen.getByTestId("user").textContent).toBe("none");
   });
@@ -42,9 +49,14 @@ describe("AuthProvider", () => {
   it("login sets user on success", async () => {
     const user = userEvent.setup();
 
-    // No token on mount → useEffect skips getMe
-    // login() calls apiLogin then getMe — 2 fetches
     vi.spyOn(globalThis, "fetch")
+      // initial getMe call
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+        json: () => Promise.resolve({ detail: "Not authenticated" }),
+      } as Response)
       // apiLogin call
       .mockResolvedValueOnce({
         ok: true,
@@ -55,12 +67,6 @@ describe("AuthProvider", () => {
             expires_in: 3600,
             user: { id: "u1", email: "test@test.com", username: "tester", role: "admin", is_active: true, created_at: "" },
           }),
-      } as Response)
-      // getMe call after login
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({ id: "u1", email: "test@test.com", username: "tester", role: "admin", is_active: true, created_at: "" }),
       } as Response);
 
     render(
@@ -83,6 +89,13 @@ describe("AuthProvider", () => {
     const user = userEvent.setup();
 
     vi.spyOn(globalThis, "fetch")
+      // initial getMe call
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+        json: () => Promise.resolve({ detail: "Not authenticated" }),
+      } as Response)
       // apiLogin (demo)
       .mockResolvedValueOnce({
         ok: true,
@@ -93,12 +106,6 @@ describe("AuthProvider", () => {
             expires_in: 3600,
             user: { id: "demo", email: "demo@pipelineiq.app", username: "demo", role: "viewer", is_active: true, created_at: "" },
           }),
-      } as Response)
-      // getMe after demo login
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({ id: "demo", email: "demo@pipelineiq.app", username: "demo", role: "viewer", is_active: true, created_at: "" }),
       } as Response);
 
     render(
@@ -121,6 +128,13 @@ describe("AuthProvider", () => {
     const user = userEvent.setup();
 
     vi.spyOn(globalThis, "fetch")
+      // initial getMe call
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+        json: () => Promise.resolve({ detail: "Not authenticated" }),
+      } as Response)
       // apiLogin
       .mockResolvedValueOnce({
         ok: true,
@@ -132,11 +146,11 @@ describe("AuthProvider", () => {
             user: { id: "u1", email: "t@t.com", username: "tester", role: "admin", is_active: true, created_at: "" },
           }),
       } as Response)
-      // getMe after login
+      // apiLogout
       .mockResolvedValueOnce({
         ok: true,
         json: () =>
-          Promise.resolve({ id: "u1", email: "t@t.com", username: "tester", role: "admin", is_active: true, created_at: "" }),
+          Promise.resolve({ message: "Logged out successfully" }),
       } as Response);
 
     render(
@@ -152,6 +166,6 @@ describe("AuthProvider", () => {
 
     await user.click(screen.getByTestId("logout"));
     await waitFor(() => expect(screen.getByTestId("user").textContent).toBe("none"));
-    expect(localStorage.getItem("pipelineiq_token")).toBeNull();
+    expect(screen.getByTestId("loading").textContent).toBe("ready");
   });
 });

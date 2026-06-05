@@ -37,12 +37,8 @@ test.describe("Data Catalog", () => {
 
   test("Blast radius API returns structured response", async ({ page }) => {
     await login(page);
-    const token = await page.evaluate(() => localStorage.getItem("pipelineiq_token"));
-    expect(token).toBeTruthy();
 
-    const resp = await page.request.get(`${apiUrl}/api/catalog/assets/customer_id/impact`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const resp = await page.request.get(`${apiUrl}/api/catalog/assets/customer_id/impact`);
     if (!resp.ok()) {
       test.skip(true, "Blast radius API not available");
       return;

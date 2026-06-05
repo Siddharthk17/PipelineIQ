@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_user
+from backend.auth import get_current_admin, get_current_user
 from backend.celery_app import celery_app
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import PipelineRun, StreamingStats, User
@@ -143,7 +143,7 @@ async def list_topics(current_user: User = Depends(get_current_user)):
 async def create_topic(
     topic: str,
     partitions: int = 8,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ):
     try:
         topic = validate_topic_name(topic)
@@ -156,7 +156,7 @@ async def create_topic(
 @router.delete("/topics/{topic}")
 async def delete_topic(
     topic: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ):
     try:
         topic = validate_topic_name(topic)
@@ -221,7 +221,7 @@ async def inspect_dlq(
 async def replay_dlq(
     topic: str,
     limit: int = 100,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ):
     """Replay DLQ messages back to the original topic for reprocessing."""
     dlq_topic = f"{topic}.dlq"

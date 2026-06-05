@@ -26,10 +26,6 @@ interface BlastRadiusResult {
   times_used: number;
 }
 
-function getAuthToken(): string {
-  return localStorage.getItem("pipelineiq_token") || "";
-}
-
 const ASSET_ICONS: Record<string, string> = {
   file: "📄",
   column: "⬡",
@@ -71,7 +67,7 @@ export default function CatalogPage() {
         if (typeFilter) params.append("asset_type", typeFilter);
         const resp = await fetch(`/api/catalog/search?${params}`, {
           signal: controller.signal,
-          headers: { Authorization: `Bearer ${getAuthToken()}` },
+          credentials: "include",
         });
         const data = await resp.json();
         setResults(data.results || []);
@@ -95,7 +91,7 @@ export default function CatalogPage() {
     try {
       const resp = await fetch(
         `/api/catalog/assets/${encodeURIComponent(asset.name)}/impact${asset.asset_type ? `?asset_type=${encodeURIComponent(asset.asset_type)}` : ""}`,
-        { signal: controller.signal, headers: { Authorization: `Bearer ${getAuthToken()}` } },
+        { signal: controller.signal, credentials: "include" },
       );
       if (controller.signal.aborted) return;
       const data = await resp.json();
@@ -145,6 +141,7 @@ export default function CatalogPage() {
             setQuery(e.target.value);
           }}
           placeholder="Search: customer_id, orders.csv, revenue_pipeline..."
+          aria-label="Search catalog assets"
           data-testid="catalog-search-input"
         />
         <div className="flex gap-2 mt-2">

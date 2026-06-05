@@ -6,9 +6,10 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.database import get_read_db, get_write_db
-from backend.models import FileProfile, User
+from backend.models import FileProfile, UploadedFile, User
 from backend.models.column_policy import ColumnPolicy
 from backend.security.column_security import detect_pii_columns, invalidate_policy_cache
+from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 router = APIRouter(prefix="/api/column-policies", tags=["Column Security"])
 
@@ -27,6 +28,17 @@ def create_column_policy(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db),
 ):
+    validate_uuid_format(request.file_id)
+    file_record = (
+        db.query(UploadedFile)
+        .filter(UploadedFile.id == as_uuid(request.file_id))
+        .first()
+    )
+    if not file_record:
+        raise HTTPException(404, "File not found")
+    if current_user.role != "admin" and str(file_record.user_id) != str(current_user.id):
+        raise HTTPException(403, "Not authorized for this file")
+
     existing = (
         db.query(ColumnPolicy)
         .filter(
@@ -63,6 +75,13 @@ def list_file_policies(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_read_db),
 ):
+    validate_uuid_format(file_id)
+    file_record = db.query(UploadedFile).filter(UploadedFile.id == as_uuid(file_id)).first()
+    if not file_record:
+        raise HTTPException(404, "File not found")
+    if current_user.role != "admin" and str(file_record.user_id) != str(current_user.id):
+        raise HTTPException(403, "Not authorized for this file")
+
     policies = (
         db.query(ColumnPolicy).filter(ColumnPolicy.file_id == file_id).all()
     )
@@ -105,6 +124,11 @@ def delete_column_policy(
     )
     if not policy:
         raise HTTPException(404, "Policy not found")
+    file_record = db.query(UploadedFile).filter(UploadedFile.id == policy.file_id).first()
+    if not file_record:
+        raise HTTPException(404, "File not found")
+    if current_user.role != "admin" and str(file_record.user_id) != str(current_user.id):
+        raise HTTPException(403, "Not authorized for this file")
 
     file_id = str(policy.file_id)
     db.delete(policy)

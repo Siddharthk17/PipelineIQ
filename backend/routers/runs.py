@@ -26,6 +26,8 @@ def get_run_timing(
     run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
     if not run:
         raise HTTPException(404, "Run not found")
+    if current_user.role != "admin" and str(run.user_id) != str(current_user.id):
+        raise HTTPException(403, "Not authorized for this run")
 
     steps = (
         db.query(StepResult)
@@ -44,8 +46,8 @@ def get_run_timing(
                 "start_at": s.started_at.isoformat() if s.started_at else None,
                 "end_at": s.completed_at.isoformat() if s.completed_at else None,
                 "duration_ms": s.duration_ms or 0,
-                "row_in": s.row_in,
-                "row_out": s.row_out,
+                "row_in": s.rows_in,
+                "row_out": s.rows_out,
                 "span_id": s.span_id,
                 "trace_id": s.trace_id,
             }

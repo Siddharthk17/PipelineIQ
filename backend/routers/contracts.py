@@ -18,8 +18,10 @@ from backend.database import get_db
 from backend.models import (
     ContractViolationRecord,
     PipelineContract,
+    PipelineRun,
     User,
 )
+from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,10 @@ def create_contract(
 ):
     existing = (
         db.query(PipelineContract)
-        .filter(PipelineContract.pipeline_name == request.pipeline_name)
+        .filter(
+            PipelineContract.pipeline_name == request.pipeline_name,
+            PipelineContract.user_id == str(current_user.id),
+        )
         .first()
     )
     if existing:
@@ -136,9 +141,13 @@ def list_contract_breaches(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    validate_uuid_format(contract_id)
     contract = (
         db.query(PipelineContract)
-        .filter(PipelineContract.id == contract_id)
+        .filter(
+            PipelineContract.id == as_uuid(contract_id),
+            PipelineContract.user_id == str(current_user.id),
+        )
         .first()
     )
     if not contract:
@@ -146,11 +155,10 @@ def list_contract_breaches(
 
     violations = (
         db.query(ContractViolationRecord)
+        .join(PipelineRun, ContractViolationRecord.run_id == PipelineRun.id)
         .filter(
-            ContractViolationRecord.run_id.in_(
-                db.query(ContractViolationRecord.run_id)
-                .filter(ContractViolationRecord.step_index == 0)
-            )
+            PipelineRun.name == contract.pipeline_name,
+            PipelineRun.user_id == current_user.id,
         )
         .order_by(ContractViolationRecord.created_at.desc())
         .limit(limit)
@@ -181,10 +189,11 @@ def delete_contract(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    validate_uuid_format(contract_id)
     contract = (
         db.query(PipelineContract)
         .filter(
-            PipelineContract.id == contract_id,
+            PipelineContract.id == as_uuid(contract_id),
             PipelineContract.user_id == str(current_user.id),
         )
         .first()

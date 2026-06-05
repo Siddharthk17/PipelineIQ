@@ -11,11 +11,11 @@ Policies are cached in Redis for 60 seconds to avoid repeated DB lookups.
 """
 
 import logging
-import pickle
 import re
 from dataclasses import dataclass
 from typing import Optional
 
+import orjson
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,26 @@ class ColumnPolicyRecord:
     policy: str
     mask_pattern: Optional[str]
     allowed_roles: list[str]
+
+
+def _serialize_policy_records(records: list[ColumnPolicyRecord]) -> bytes:
+    return orjson.dumps([record.__dict__ for record in records])
+
+
+def _deserialize_policy_records(payload: bytes) -> list[ColumnPolicyRecord]:
+    raw_records = orjson.loads(payload)
+    if not isinstance(raw_records, list):
+        return []
+    return [
+        ColumnPolicyRecord(
+            column_name=str(record.get("column_name", "")),
+            policy=str(record.get("policy", "")),
+            mask_pattern=record.get("mask_pattern"),
+            allowed_roles=list(record.get("allowed_roles") or []),
+        )
+        for record in raw_records
+        if isinstance(record, dict)
+    ]
 
 
 def apply_column_policies(
@@ -141,7 +161,7 @@ def get_column_policies_for_file(
         redis = get_cache_redis_binary()
         cached = redis.get(cache_key)
         if cached:
-            return pickle.loads(cached)
+            return _deserialize_policy_records(cached)
     except Exception:
         pass
 
@@ -159,7 +179,7 @@ def get_column_policies_for_file(
 
     try:
         redis = get_cache_redis_binary()
-        redis.setex(cache_key, POLICY_CACHE_TTL, pickle.dumps(records))
+        redis.setex(cache_key, POLICY_CACHE_TTL, _serialize_policy_records(records))
     except Exception:
         pass
 

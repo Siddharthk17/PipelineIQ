@@ -53,6 +53,7 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, on
           onClick={() => router.push("/catalog")}
           className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--interactive-hover)] transition-colors"
           title="Data Catalog"
+          aria-label="Open data catalog"
         >
           <Database className="w-3.5 h-3.5" />
           Catalog
@@ -61,6 +62,7 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, on
           onClick={() => router.push("/catalog/pipelines")}
           className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--interactive-hover)] transition-colors"
           title="Pipeline Catalog"
+          aria-label="Open pipeline catalog"
         >
           <Zap className="w-3.5 h-3.5" />
           Pipelines
@@ -69,6 +71,7 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, on
           onClick={() => router.push("/runs")}
           className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--interactive-hover)] transition-colors"
           title="Run History"
+          aria-label="Open run history"
         >
           <Activity className="w-3.5 h-3.5" />
           Runs
@@ -77,6 +80,7 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, on
           onClick={() => router.push("/storage")}
           className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--interactive-hover)] transition-colors"
           title="Storage Analytics"
+          aria-label="Open storage analytics"
         >
           <HardDrive className="w-3.5 h-3.5" />
           Storage
@@ -105,8 +109,10 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, on
                     ? "bg-[var(--accent-primary)] text-white"
                     : hasWindows
                       ? "bg-[var(--widget-border)] text-[var(--text-primary)] hover:bg-[var(--accent-primary)] hover:text-white"
-                      : "bg-[var(--widget-bg)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    : "bg-[var(--widget-bg)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                 }`}
+                aria-label={`Switch to workspace ${id}`}
+                aria-pressed={activeWorkspaceId === id}
               >
                 {id}
               </button>
@@ -138,7 +144,7 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, on
               )}
             </div>
             {onLogout && (
-              <button onClick={onLogout} className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--accent-error)] transition-colors" title="Logout">
+              <button onClick={onLogout} className="flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--accent-error)] transition-colors" title="Logout" aria-label="Log out">
                 <LogOut className="w-3 h-3" />
                 Logout
               </button>
@@ -155,16 +161,16 @@ export function TopBar({ onOpenTheme, onOpenCommand, onOpenKeybindings, user, on
           <Clock className="w-4 h-4" />
           {time ? time.toLocaleTimeString() : "..."}
         </div>
-        <button onClick={onOpenKeybindings} className="p-1.5 rounded hover:bg-[var(--interactive-hover)] hover:text-[var(--text-primary)] transition-colors" title={`Keybindings${getShortcut("keybindings:open")}`}>
+        <button onClick={onOpenKeybindings} className="p-1.5 rounded hover:bg-[var(--interactive-hover)] hover:text-[var(--text-primary)] transition-colors" title={`Keybindings${getShortcut("keybindings:open")}`} aria-label="Open keybindings">
           <Keyboard className="w-4 h-4" />
         </button>
-        <button onClick={onOpenTheme} className="p-1.5 rounded hover:bg-[var(--interactive-hover)] hover:text-[var(--text-primary)] transition-colors" title={`Theme${getShortcut("theme:open")}`}>
+        <button onClick={onOpenTheme} className="p-1.5 rounded hover:bg-[var(--interactive-hover)] hover:text-[var(--text-primary)] transition-colors" title={`Theme${getShortcut("theme:open")}`} aria-label="Open theme settings">
           <Palette className="w-4 h-4" />
         </button>
-        <button onClick={onOpenCommand} className="p-1.5 rounded hover:bg-[var(--interactive-hover)] hover:text-[var(--text-primary)] transition-colors" title={`Command Palette${getShortcut("command:open")}`}>
+        <button onClick={onOpenCommand} className="p-1.5 rounded hover:bg-[var(--interactive-hover)] hover:text-[var(--text-primary)] transition-colors" title={`Command Palette${getShortcut("command:open")}`} aria-label="Open command palette">
           <Command className="w-4 h-4" />
         </button>
-        <button onClick={resetLayout} className="p-1.5 rounded hover:bg-[var(--interactive-hover)] hover:text-[var(--text-primary)] transition-colors" title={`Reset Layout${getShortcut("layout:reset")}`}>
+        <button onClick={resetLayout} className="p-1.5 rounded hover:bg-[var(--interactive-hover)] hover:text-[var(--text-primary)] transition-colors" title={`Reset Layout${getShortcut("layout:reset")}`} aria-label="Reset layout">
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>

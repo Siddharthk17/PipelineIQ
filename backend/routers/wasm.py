@@ -73,7 +73,10 @@ def _inspect_wasm(wasm_bytes: bytes) -> tuple[list[dict], list[str]]:
 
 
 @router.post("/validate", response_model=WasmModuleValidateResponse)
-async def validate_wasm_module(file: UploadFile = File(...)):
+async def validate_wasm_module(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
     """Validate a Wasm module without registering it.
 
     Checks: valid binary, no imports (sandbox), at least one export,

@@ -57,7 +57,10 @@ def write(
 ) -> tuple[Path, int]:
     path = shm_path_for(run_id, key, shm_dir=shm_dir)
     ipc_bytes = _table_to_ipc_bytes(table)
-    path.write_bytes(ipc_bytes)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(ipc_bytes)
+    os.chmod(path, 0o600)
     logger.debug("shm write: key=%s size=%.0fKB", key, len(ipc_bytes) / 1024)
     return path, len(ipc_bytes)
 

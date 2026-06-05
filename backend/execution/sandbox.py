@@ -9,6 +9,11 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 import pyarrow as pa
+from pandas.api.types import (
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    is_numeric_dtype,
+)
 from sqlalchemy.orm import Session
 
 from backend.execution.duckdb_executor import DuckDBExecutor
@@ -87,6 +92,7 @@ def _run_pipeline_in_sandbox(*,
                              sampled_tables: dict[str,
                                                   pa.Table]) -> pa.Table:
     table_registry: dict[str, pa.Table] = {}
+    downstream_counts = _dependency_counts(config.steps)
     last_result: pa.Table | None = None
 
     for step in config.steps:
@@ -103,6 +109,7 @@ def _run_pipeline_in_sandbox(*,
 
         if step_type == "save":
             last_result = table_registry.get(step.input, last_result)
+            _release_dependencies(step, downstream_counts, table_registry)
             continue
 
         if step_type == "rename":
@@ -121,6 +128,7 @@ def _run_pipeline_in_sandbox(*,
             )
             table_registry[step.name] = renamed_table
             last_result = renamed_table
+            _release_dependencies(step, downstream_counts, table_registry)
             continue
 
         if step_type == "validate":
@@ -128,6 +136,7 @@ def _run_pipeline_in_sandbox(*,
                 step.name, getattr(step, "input", ""), table_registry)
             table_registry[step.name] = validated_table
             last_result = validated_table
+            _release_dependencies(step, downstream_counts, table_registry)
             continue
 
         if step_type == "join":
@@ -140,6 +149,7 @@ def _run_pipeline_in_sandbox(*,
                     "__left__": left_table, "__right__": right_table}, )
             table_registry[step.name] = result_table
             last_result = result_table
+            _release_dependencies(step, downstream_counts, table_registry)
             continue
 
         input_name = getattr(step, "input", "")
@@ -148,11 +158,42 @@ def _run_pipeline_in_sandbox(*,
         result_table = executor.execute_step(step, input_table)
         table_registry[step.name] = result_table
         last_result = result_table
+        _release_dependencies(step, downstream_counts, table_registry)
 
     if last_result is None:
         raise ValueError("Sandbox pipeline produced no output")
 
     return last_result
+
+
+def _step_dependencies(step) -> list[str]:
+    step_type = getattr(step.step_type, "value", step.step_type)
+    if step_type == "load":
+        return []
+    if step_type == "join":
+        return [
+            dep for dep in [getattr(step, "left", ""), getattr(step, "right", "")]
+            if dep
+        ]
+    input_name = getattr(step, "input", "")
+    return [input_name] if input_name else []
+
+
+def _dependency_counts(steps) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for step in steps:
+        for dependency in _step_dependencies(step):
+            counts[dependency] = counts.get(dependency, 0) + 1
+    return counts
+
+
+def _release_dependencies(step, counts: dict[str, int], registry: dict[str, pa.Table]) -> None:
+    for dependency in _step_dependencies(step):
+        if dependency not in counts:
+            continue
+        counts[dependency] -= 1
+        if counts[dependency] <= 0:
+            registry.pop(dependency, None)
 
 
 def _require_input_table(step_name: str,
@@ -172,14 +213,23 @@ def _load_sample_tables(*,
                         sample_rows: int) -> dict[str,
                                                   pa.Table]:
     sampled_tables: dict[str, pa.Table] = {}
-    for file_id in file_ids:
-        file_record = db.query(UploadedFile).filter(
-            UploadedFile.id == as_uuid(file_id)).first()
+    unique_file_ids = list(dict.fromkeys(file_ids))
+    uuid_ids = [as_uuid(file_id) for file_id in unique_file_ids]
+    records = (
+        db.query(UploadedFile)
+        .filter(UploadedFile.id.in_(uuid_ids))
+        .all()
+    )
+    records_by_id = {str(record.id): record for record in records}
+
+    for file_id in unique_file_ids:
+        file_record = records_by_id.get(str(as_uuid(file_id)))
         if file_record is None:
             raise ValueError(f"File '{file_id}' not found")
 
         sampled_frame = _load_sample_frame(
             file_record=file_record, sample_rows=sample_rows)
+        sampled_frame = _sanitize_sample_frame(sampled_frame)
         sampled_tables[str(file_record.id)] = pa.Table.from_pandas(
             sampled_frame,
             preserve_index=False,
@@ -197,3 +247,23 @@ def _load_sample_frame(*, file_record: UploadedFile,
             return pd.read_json(handle).head(sample_rows)
     raise ValueError(
         f"Sandbox only supports CSV and JSON inputs, got '{extension}' for '{file_record.original_filename}'")
+
+
+def _sanitize_sample_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep only schema and type shape for sandbox execution."""
+    sanitized = pd.DataFrame(index=frame.index)
+    for column in frame.columns:
+        series = frame[column]
+        if is_bool_dtype(series):
+            sanitized[column] = [i % 2 == 0 for i in range(len(series))]
+        elif is_numeric_dtype(series):
+            sanitized[column] = range(1, len(series) + 1)
+        elif is_datetime64_any_dtype(series):
+            sanitized[column] = pd.date_range(
+                "2000-01-01",
+                periods=len(series),
+                freq="D",
+            )
+        else:
+            sanitized[column] = [f"value_{i + 1}" for i in range(len(series))]
+    return sanitized

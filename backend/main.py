@@ -10,6 +10,7 @@ from backend.routers.wasm import router as wasm_router
 from backend.routers.streaming import router as streaming_router
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -222,6 +223,7 @@ app = FastAPI(
     },
     docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
     redoc_url=None,
+    openapi_url="/openapi.json" if settings.ENVIRONMENT != "production" else None,
 )
 
 if settings.ENVIRONMENT != "production":
@@ -345,8 +347,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 
@@ -371,7 +373,14 @@ async def request_id_middleware(request: Request, call_next):
     Propagates the ID into structlog context so every log line
     emitted during this request carries the correlation ID.
     """
-    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    header_request_id = request.headers.get("x-request-id")
+    if header_request_id and re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_\-]{0,127}",
+        header_request_id,
+    ):
+        request_id = header_request_id
+    else:
+        request_id = str(uuid.uuid4())
     request.state.request_id = request_id
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(

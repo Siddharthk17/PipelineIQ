@@ -13,6 +13,7 @@ from backend.auth import get_current_user
 from backend.database import get_db
 from backend.models import (
     ContractViolationRecord,
+    PipelinePermission,
     PipelineContract,
     PipelineRun,
     User,
@@ -30,6 +31,58 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contracts", tags=["contracts"])
 
 
+def _ensure_pipeline_contract_access(
+    db: Session,
+    current_user: User,
+    pipeline_name: str,
+    required_levels: set[str],
+    *,
+    allow_new: bool = False,
+) -> None:
+    if current_user.role == "admin":
+        return
+    if (
+        db.query(PipelineRun)
+        .filter(PipelineRun.name == pipeline_name, PipelineRun.user_id == current_user.id)
+        .first()
+    ):
+        return
+    if (
+        db.query(PipelineContract)
+        .filter(
+            PipelineContract.pipeline_name == pipeline_name,
+            PipelineContract.user_id == str(current_user.id),
+        )
+        .first()
+    ):
+        return
+    permission = (
+        db.query(PipelinePermission)
+        .filter(
+            PipelinePermission.pipeline_name == pipeline_name,
+            PipelinePermission.user_id == current_user.id,
+        )
+        .first()
+    )
+    if permission and permission.permission_level in required_levels:
+        return
+    if allow_new and not (
+        db.query(PipelineRun).filter(PipelineRun.name == pipeline_name).first()
+        or db.query(PipelineContract)
+        .filter(PipelineContract.pipeline_name == pipeline_name)
+        .first()
+    ):
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this pipeline")
+
+
+def _contract_query(db: Session, current_user: User):
+    query = db.query(PipelineContract)
+    if current_user.role != "admin":
+        query = query.filter(PipelineContract.user_id == str(current_user.id))
+    return query
+
+
 # ── Contract definition CRUD ────────────────────────────────────────────────
 
 
@@ -37,11 +90,14 @@ router = APIRouter(prefix="/contracts", tags=["contracts"])
 def list_contracts(
     pipeline_name: str,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """List all contract definitions for a pipeline."""
+    _ensure_pipeline_contract_access(
+        db, current_user, pipeline_name, {"owner", "runner", "viewer"}
+    )
     contracts = (
-        db.query(PipelineContract)
+        _contract_query(db, current_user)
         .filter(PipelineContract.pipeline_name == pipeline_name)
         .order_by(PipelineContract.version.desc())
         .all()
@@ -78,8 +134,11 @@ def create_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Create a new data contract definition for a pipeline."""
+    _ensure_pipeline_contract_access(
+        db, current_user, pipeline_name, {"owner"}, allow_new=True
+    )
     latest = (
-        db.query(PipelineContract)
+        _contract_query(db, current_user)
         .filter(PipelineContract.pipeline_name == pipeline_name)
         .order_by(PipelineContract.version.desc())
         .first()
@@ -119,11 +178,14 @@ def get_contract(
     pipeline_name: str,
     contract_id: str,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Get a specific contract definition by ID."""
+    _ensure_pipeline_contract_access(
+        db, current_user, pipeline_name, {"owner", "runner", "viewer"}
+    )
     contract = (
-        db.query(PipelineContract)
+        _contract_query(db, current_user)
         .filter(
             PipelineContract.id == contract_id,
             PipelineContract.pipeline_name == pipeline_name,
@@ -160,8 +222,9 @@ def update_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Update an existing contract definition (creates a new version)."""
+    _ensure_pipeline_contract_access(db, current_user, pipeline_name, {"owner"})
     existing = (
-        db.query(PipelineContract)
+        _contract_query(db, current_user)
         .filter(
             PipelineContract.id == contract_id,
             PipelineContract.pipeline_name == pipeline_name,
@@ -212,11 +275,12 @@ def delete_contract(
     pipeline_name: str,
     contract_id: str,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Delete a contract definition."""
+    _ensure_pipeline_contract_access(db, current_user, pipeline_name, {"owner"})
     contract = (
-        db.query(PipelineContract)
+        _contract_query(db, current_user)
         .filter(
             PipelineContract.id == contract_id,
             PipelineContract.pipeline_name == pipeline_name,
@@ -240,11 +304,14 @@ def delete_contract(
 def get_contract_status(
     pipeline_name: str,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """Get the status of a pipeline's active contract against its latest run."""
+    _ensure_pipeline_contract_access(
+        db, current_user, pipeline_name, {"owner", "runner", "viewer"}
+    )
     active = (
-        db.query(PipelineContract)
+        _contract_query(db, current_user)
         .filter(
             PipelineContract.pipeline_name == pipeline_name,
             PipelineContract.is_active.is_(True),
@@ -252,12 +319,10 @@ def get_contract_status(
         .first()
     )
 
-    last_run = (
-        db.query(PipelineRun)
-        .filter(PipelineRun.name == pipeline_name)
-        .order_by(PipelineRun.created_at.desc())
-        .first()
-    )
+    last_run_query = db.query(PipelineRun).filter(PipelineRun.name == pipeline_name)
+    if current_user.role != "admin":
+        last_run_query = last_run_query.filter(PipelineRun.user_id == current_user.id)
+    last_run = last_run_query.order_by(PipelineRun.created_at.desc()).first()
 
     total_violations = 0
     if active and last_run:
@@ -282,15 +347,16 @@ def get_contract_status(
 def list_pipeline_breaches(
     pipeline_name: str,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """List contract violations for the latest run of a pipeline."""
-    last_run = (
-        db.query(PipelineRun)
-        .filter(PipelineRun.name == pipeline_name)
-        .order_by(PipelineRun.created_at.desc())
-        .first()
+    _ensure_pipeline_contract_access(
+        db, current_user, pipeline_name, {"owner", "runner", "viewer"}
     )
+    last_run_query = db.query(PipelineRun).filter(PipelineRun.name == pipeline_name)
+    if current_user.role != "admin":
+        last_run_query = last_run_query.filter(PipelineRun.user_id == current_user.id)
+    last_run = last_run_query.order_by(PipelineRun.created_at.desc()).first()
     if not last_run:
         return {"run_id": None, "total_violations": 0, "violations": []}
 
@@ -343,6 +409,10 @@ def list_run_violations(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline run {run_id} not found",
         )
+    if current_user.role != "admin" and str(run.user_id) != str(current_user.id):
+        _ensure_pipeline_contract_access(
+            db, current_user, run.name, {"owner", "runner", "viewer"}
+        )
 
     violations = (
         db.query(ContractViolationRecord)
@@ -384,6 +454,16 @@ def list_step_violations(
     current_user: User = Depends(get_current_user),
 ):
     """List contract violations for a specific step within a run."""
+    run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline run {run_id} not found",
+        )
+    if current_user.role != "admin" and str(run.user_id) != str(current_user.id):
+        _ensure_pipeline_contract_access(
+            db, current_user, run.name, {"owner", "runner", "viewer"}
+        )
     violations = (
         db.query(ContractViolationRecord)
         .filter(

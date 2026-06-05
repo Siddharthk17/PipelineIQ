@@ -90,21 +90,27 @@ export default function PipelineCatalogPage() {
     loadPipelines();
   }, [isLoading, user, router, loadPipelines]);
 
+  useEffect(() => {
+    if (!user) return;
+    const timer = window.setTimeout(() => {
+      loadPipelines(query || undefined, statusFilter || undefined);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [query, statusFilter, user, loadPipelines]);
+
   const handleSearch = useCallback(
     (value: string) => {
       setQuery(value);
-      loadPipelines(value || undefined, statusFilter || undefined);
     },
-    [statusFilter, loadPipelines]
+    []
   );
 
   const handleStatusFilter = useCallback(
     (status: string | null) => {
       const newStatus = statusFilter === status ? null : status;
       setStatusFilter(newStatus);
-      loadPipelines(query || undefined, newStatus || undefined);
     },
-    [query, statusFilter, loadPipelines]
+    [statusFilter]
   );
 
   const handleLoadDescription = useCallback(
@@ -170,6 +176,7 @@ export default function PipelineCatalogPage() {
             value={query}
             onChange={(e) => handleSearch(e.target.value)}
             placeholder="Search pipelines by name..."
+            aria-label="Search pipelines by name"
             className="w-full rounded border border-[var(--widget-border)] bg-[var(--widget-bg)] py-2 pl-9 pr-3 text-xs text-[var(--text-primary)] placeholder-[var(--text-muted)]"
             data-testid="pipeline-catalog-search"
           />

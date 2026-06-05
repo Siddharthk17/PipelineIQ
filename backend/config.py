@@ -16,6 +16,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+WEAK_SECRET_VALUES = frozenset(
+    {
+        "",
+        "change-me",
+        "change-me-in-production",
+        "change-me-in-development",
+        "ci_test_secret_key_not_for_production",
+        "pipelineiq-dev-secret-key-change-in-production-2024-minimum-32chars",
+        "pipelineiq-dev-jwt-secret-change-in-production-2024",
+    }
+)
+MAX_SCHEDULE_CONFIG_BYTES = 51200
 
 
 class Settings(BaseSettings):
@@ -46,7 +58,7 @@ class Settings(BaseSettings):
     DATABASE_WRITE_URL: str = ""
     DATABASE_READ_URL: str = ""
     READ_REPLICA_HOST: str = "localhost"
-    SECRET_KEY: str = "change-me-in-production"
+    SECRET_KEY: str = ""
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
     REDIS_BROKER_URL: str = "redis://localhost:6379/0"
@@ -69,6 +81,7 @@ class Settings(BaseSettings):
     MAX_ROWS_PER_FILE: int = 1_000_000
     STEP_TIMEOUT_SECONDS: int = 300
     WORKER_MEMORY_LIMIT_GB: int = 2
+    WORKER_MAX_ROWS_TO_SCAN: int = 10_000_000
 
     API_PREFIX: str = "/api/v1"
     CORS_ORIGINS: List[str] = [
@@ -104,11 +117,11 @@ class Settings(BaseSettings):
 
     # Flower (Celery monitoring)
     FLOWER_USER: str = "admin"
-    FLOWER_PASSWORD: str = "change-me-in-production"
+    FLOWER_PASSWORD: str = ""
 
     # Grafana
     GRAFANA_USER: str = "admin"
-    GRAFANA_PASSWORD: str = "change-me-in-production"
+    GRAFANA_PASSWORD: str = ""
 
     # S3 / MinIO Storage
     STORAGE_TYPE: str = "local"  # "local" or "s3"
@@ -191,15 +204,26 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def validate_secret_key_in_production(self) -> "Settings":
-        """Prevent startup with default SECRET_KEY in production."""
-        if (
-            self.ENVIRONMENT == "production"
-            and self.SECRET_KEY == "change-me-in-production"
-        ):
+    def validate_secret_key_strength(self) -> "Settings":
+        """Prevent startup with default or weak signing keys."""
+        if self.SECRET_KEY in WEAK_SECRET_VALUES or len(self.SECRET_KEY) < 32:
             raise ValueError(
-                "SECRET_KEY must be changed from the default value in production. "
-                "Set the SECRET_KEY environment variable to a strong random string.")
+                "SECRET_KEY must be a non-default random value with at least 32 characters."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_production_operational_secrets(self) -> "Settings":
+        """Prevent public monitoring services from using blank or weak passwords."""
+        if self.ENVIRONMENT != "production":
+            return self
+        weak_values = {
+            "FLOWER_PASSWORD": self.FLOWER_PASSWORD,
+            "GRAFANA_PASSWORD": self.GRAFANA_PASSWORD,
+        }
+        for name, value in weak_values.items():
+            if value in WEAK_SECRET_VALUES or len(value) < 16:
+                raise ValueError(f"{name} must be set to a strong production password.")
         return self
 
 

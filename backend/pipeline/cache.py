@@ -5,7 +5,7 @@ Why this matters:
   PyYAML parsing a 200-line pipeline takes ~5ms.
   At 500 run submissions per minute, that is 2.5 CPU-seconds/minute just parsing.
   The same YAML always parses to the same object.
-  Cache it: SHA256 → pickle of parsed PipelineConfig object.
+  Cache it: SHA256 → raw YAML string, rebuilt through the trusted parser.
 
 Cache key: SHA256 of the raw YAML string.
   - Same YAML content = same hash = same cached result
@@ -19,6 +19,7 @@ Cache backend: redis-cache (not redis-broker)
 import hashlib
 import logging
 import os
+import time
 from urllib.parse import urlparse
 from collections import OrderedDict
 
@@ -41,7 +42,8 @@ _DOCKER_INTERNAL_REDIS_HOSTS = {
 # Module-level parser instance — stateless, safe to reuse
 _parser = PipelineParser()
 _local_parsed_cache: "OrderedDict[str, object]" = OrderedDict()
-_redis_cache_disabled = False
+_redis_cache_disabled_until = 0.0
+_REDIS_RETRY_BACKOFF_SECONDS = 5.0
 
 
 def _local_cache_get(cache_key: str):
@@ -75,16 +77,20 @@ def _should_use_redis_cache() -> bool:
 
 
 def _redis_call(redis_client, operation: str, *args, **kwargs):
-    global _redis_cache_disabled
-    if _redis_cache_disabled:
+    global _redis_cache_disabled_until
+    now = time.monotonic()
+    if now < _redis_cache_disabled_until:
         return None
     try:
-        return getattr(redis_client, operation)(*args, **kwargs)
+        result = getattr(redis_client, operation)(*args, **kwargs)
+        _redis_cache_disabled_until = 0.0
+        return result
     except Exception as exc:
-        _redis_cache_disabled = True
+        _redis_cache_disabled_until = now + _REDIS_RETRY_BACKOFF_SECONDS
         logger.warning(
-            "YAML cache %s failed; disabling Redis cache for this process: %s",
+            "YAML cache %s failed; retrying Redis after %.1fs: %s",
             operation,
+            _REDIS_RETRY_BACKOFF_SECONDS,
             exc,
         )
         return None

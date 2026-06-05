@@ -17,17 +17,24 @@ spec:
     spec:
       containers:
         - name: y-websocket
-          image: yjs/y-websocket:latest
+          image: ghcr.io/siddharthk17/pipelineiq-y-websocket:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 1234
               name: ws
           env:
-            - name: YPERSISTENCE
-              value: redis
-            - name: YREDIS_HOST
-              value: redis-yjs
-            - name: YREDIS_PORT
-              value: "6382"
+            - name: PORT
+              value: "1234"
+            - name: REDIS_YJS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pipelineiq-secrets
+                  key: REDIS_YJS_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pipelineiq-secrets
+                  key: SECRET_KEY
           envFrom:
             - configMapRef:
                 name: pipelineiq-config

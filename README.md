@@ -113,7 +113,7 @@ YAML Config → Parser → Validator → Runner → Step Executor → Lineage Re
 | Data Processing | Pandas + NumPy | 2.1.4 / 1.26.3 |
 | Lineage Graphs | NetworkX | 3.2.1 |
 | Task Queue | Celery + Redis | 5.3.6 / 5.0.1 |
-| Auth | JWT (python-jose) + bcrypt | HS256 |
+| Auth | JWT (PyJWT) + bcrypt | HS256 |
 | Rate Limiting | SlowAPI | 0.1.9 |
 | Metrics | Prometheus + Grafana | 2.48.0 / 10.2.0 |
 | Error Tracking | Sentry | 1.39.1 |

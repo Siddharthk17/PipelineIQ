@@ -35,6 +35,7 @@ from backend.streaming.redpanda_client import (
     try_drain_fallback,
     validate_topic_name,
 )
+from backend.utils.sse_security import sign_sse_payload
 from backend.utils.time_utils import utcnow
 
 logger = get_task_logger(__name__)
@@ -43,6 +44,8 @@ STATS_UPDATE_INTERVAL = 5
 BACKPRESSURE_LAG_THRESHOLD = 50_000  # Pause consumer if lag exceeds 50K messages
 BACKPRESSURE_COOLDOWN_SEC = 10       # Wait 10s before resuming after backpressure
 IDEMPOTENT_CACHE_TTL = 10_000        # Keep last 10K processed offsets in memory
+MAX_STREAMING_BATCH_SIZE = 50_000
+MAX_CONSECUTIVE_ERRORS = 50          # Shut down after 50 consecutive batch errors
 
 
 
@@ -91,7 +94,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         topic = _step_field(consume_step, "topic")
         consumer_group = _step_field(
             consume_step, "consumer_group") or f"piq-{run_id[:8]}"
-        batch_size = int(_step_field(consume_step, "batch_size") or 1000)
+        batch_size = max(1, min(int(_step_field(consume_step, "batch_size") or 1000), MAX_STREAMING_BATCH_SIZE))
         timeout_ms = int(_step_field(consume_step, "batch_timeout_ms") or 5000)
         timeout_s = timeout_ms / 1000.0
         deserialize_fmt = _step_field(consume_step, "deserialize") or "json"
@@ -119,6 +122,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             "dlq": 0,
             "start": time.monotonic(),
         }
+        consecutive_errors = 0
 
         # Idempotent processing: track processed offsets to avoid duplicates
         processed_offsets: set = set()
@@ -182,15 +186,13 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
 
             t0 = time.monotonic()
 
-            try:
-                df = _deserialize(deduped, deserialize_fmt)
-            except Exception as exc:
-                logger.error("Deserialization error: %s", exc)
-                _send_dlq(dlq_producer, deduped, topic, str(exc))
-                stats["dlq"] += len(deduped)
-                continue
+            df, malformed = _deserialize(deduped, deserialize_fmt)
+            if malformed:
+                _send_dlq(dlq_producer, [m for m, _ in malformed], topic, "deserialization failed")
+                stats["dlq"] += len(malformed)
 
             if df.empty:
+                consumer.commit(message=deduped[-1], asynchronous=False)
                 continue
 
             try:
@@ -213,6 +215,14 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
                 _send_dlq(dlq_producer, deduped, topic, str(exc))
                 stats["failed"] += len(deduped)
                 stats["dlq"] += len(deduped)
+                consecutive_errors += 1
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    logger.critical(
+                        "Streaming pipeline exceeded max consecutive errors (%d), shutting down",
+                        MAX_CONSECUTIVE_ERRORS,
+                    )
+                    break
+                consumer.commit(message=deduped[-1], asynchronous=False)
                 continue
 
             if publish_step and producer and not df.empty:
@@ -224,12 +234,14 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             batch_ms = (time.monotonic() - t0) * 1000
             stats["batches"] += 1
             stats["messages"] += len(deduped)
+            consecutive_errors = 0
             elapsed = time.monotonic() - stats["start"]
             throughput = stats["messages"] / elapsed if elapsed > 0 else 0
 
             if stats["batches"] % STATS_UPDATE_INTERVAL == 0:
                 _update_stats(db, run_id, stats, throughput, batch_ms, consumer)
                 _sse_progress(run_id, stats, throughput)
+            consumer.commit(message=deduped[-1], asynchronous=False)
 
         _set_status(db, run_id, PipelineStatus.STREAMING_STOPPED)
         logger.info(
@@ -268,8 +280,9 @@ def _step_field(step, field: str):
     return getattr(step, field, None)
 
 
-def _deserialize(messages, fmt: str) -> pd.DataFrame:
+def _deserialize(messages, fmt: str) -> tuple[pd.DataFrame, list[tuple[object, str]]]:
     records = []
+    malformed = []
     for msg in messages:
         v = msg.value()
         if v is None:
@@ -279,9 +292,9 @@ def _deserialize(messages, fmt: str) -> pd.DataFrame:
                 records.append(orjson.loads(v))
             else:
                 records.append({"raw": v.decode("utf-8", errors="replace")})
-        except Exception:
-            continue
-    return pd.DataFrame(records) if records else pd.DataFrame()
+        except Exception as exc:
+            malformed.append((msg, str(exc)))
+    return (pd.DataFrame(records) if records else pd.DataFrame()), malformed
 
 
 def _publish(producer, df: pd.DataFrame, publish_step) -> None:
@@ -417,13 +430,14 @@ def _sse_progress(run_id: str, stats: dict, throughput: float) -> None:
     try:
         redis = get_pubsub_redis()
         channel = f"pipeline_progress:{run_id}"
-        redis.publish(channel, orjson.dumps({
+        payload = {
             "event": "streaming_stats",
             "run_id": str(run_id),
             "batches": stats["batches"],
             "messages": stats["messages"],
             "dlq": stats["dlq"],
             "throughput": round(throughput, 2),
-        }))
+        }
+        redis.publish(channel, orjson.dumps(sign_sse_payload(payload)))
     except Exception:
         pass

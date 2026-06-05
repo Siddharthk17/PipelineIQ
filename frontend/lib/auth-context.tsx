@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { ApiError, getToken, setToken, clearToken, login as apiLogin, logout as apiLogout, getMe, AuthUser as ApiAuthUser } from "./api";
+import { ApiError, clearToken, login as apiLogin, logout as apiLogout, getMe, AuthUser as ApiAuthUser } from "./api";
 
 export interface AuthUser {
   id: string;
@@ -35,36 +35,24 @@ function toAuthUser(apiUser: ApiAuthUser, isDemo: boolean): AuthUser {
 const DEMO_EMAIL = "demo@pipelineiq.app";
 const DEMO_PASSWORD = "Demo1234!";
 
-/** SameSite=None requires Secure, which only works over HTTPS.
- *  In local development (HTTP) the cookie would be silently rejected. */
-const SECURE_COOKIE = typeof window !== "undefined" && window.location.protocol === "https:";
-
-function setAuthCookie(value: string, maxAge: number) {
-  const secure = SECURE_COOKIE ? "; Secure" : "";
-  document.cookie = `piq_auth=${value}; path=/; max-age=${maxAge}; SameSite=Lax${secure}`;
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setTokenState] = useState<string | null>(() => getToken());
-  const [isLoading, setIsLoading] = useState(() => Boolean(getToken()));
+  const [token, setTokenState] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (!token) return;
     let cancelled = false;
     getMe()
       .then((me) => {
         if (cancelled) return;
         const isDemo = me.email === DEMO_EMAIL;
         setUser(toAuthUser(me, isDemo));
-        setAuthCookie("1", 86400);
       })
       .catch((err) => {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 401) {
           clearToken();
           setTokenState(null);
-          setAuthCookie("", 0);
         }
       })
       .finally(() => {
@@ -73,16 +61,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, []);
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await apiLogin(email, password);
-    setToken(res.access_token);
     setTokenState(res.access_token);
-    setAuthCookie("1", 86400);
-    const me = await getMe();
-    const isDemo = me.email === DEMO_EMAIL;
-    setUser(toAuthUser(me, isDemo));
+    const isDemo = res.user.email === DEMO_EMAIL;
+    setUser(toAuthUser(res.user, isDemo));
   }, []);
 
   const loginAsDemo = useCallback(async () => {
@@ -93,7 +78,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearToken();
     setTokenState(null);
     setUser(null);
-    setAuthCookie("", 0);
     void apiLogout();
   }, []);
 

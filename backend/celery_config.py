@@ -22,6 +22,7 @@ task_routes = {
     "schedules.check": {"queue": "bulk"},
     "tasks.profile_file": {"queue": "bulk"},
     "tasks.call_gemini": {"queue": "gemini"},
+    "tasks.generate_pipeline_description": {"queue": "gemini"},
     "tasks.generate_pipeline_ai": {"queue": "gemini"},
     "tasks.repair_pipeline_ai": {"queue": "gemini"},
     "tasks.execute_scheduled_pipeline": {"queue": "bulk"},

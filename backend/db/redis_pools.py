@@ -28,7 +28,7 @@ def _pool_kwargs(
         "health_check_interval": _HEALTH_CHECK_INTERVAL_SECONDS,
     }
     if url.startswith("rediss://"):
-        kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+        kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
     return kwargs
 
 

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { usePipelineStore } from "@/store/pipelineStore";
 import { useQueryClient } from "@tanstack/react-query";
-import { getPipelineRun, getToken, ApiError } from "@/lib/api";
+import { getPipelineRun, ApiError } from "@/lib/api";
 import { API_V1 } from "@/lib/constants";
 import type { PipelineRun, StepResult, ContractViolation } from "@/lib/types";
 
@@ -90,10 +90,7 @@ export function usePipelineRun(runId: string | null) {
     function connectSSE() {
       if (cancelled) return;
 
-      const token = getToken();
-      const streamUrl = token
-        ? `${API_V1}/pipelines/${runId}/stream?token=${encodeURIComponent(token)}`
-        : `${API_V1}/pipelines/${runId}/stream`;
+      const streamUrl = `${API_V1}/pipelines/${runId}/stream`;
       const eventSource = new EventSource(streamUrl);
       currentEventSource = eventSource;
 

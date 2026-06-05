@@ -46,6 +46,7 @@ from backend.utils.uuid_utils import (
     validate_uuid_format as _validate_uuid_format,
     as_uuid as _as_uuid,
 )
+from backend.utils.sse_security import sign_sse_payload
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,33 @@ def _check_pipeline_permission(
         )
 
 
+def _check_run_permission(
+    db: Session,
+    user: User,
+    pipeline_run: PipelineRun,
+    required_levels: list[str],
+) -> None:
+    """Verify access to a concrete run before falling back to pipeline-name grants."""
+    if user.role == "admin":
+        return
+    if str(pipeline_run.user_id) == str(user.id):
+        return
+    _check_pipeline_permission(db, user, pipeline_run.name, required_levels)
+
+
+def _safe_output_pattern(output_dir, pattern: str):
+    from pathlib import Path
+
+    safe_name = os.path.basename(str(pattern).strip())
+    if not safe_name or safe_name in {".", ".."}:
+        return None
+    root = Path(output_dir).resolve()
+    candidate = (root / safe_name).resolve()
+    if candidate != root and root not in candidate.parents:
+        return None
+    return candidate
+
+
 @router.post("/run",
              response_model=RunPipelineResponse,
              status_code=status.HTTP_202_ACCEPTED,
@@ -422,9 +450,33 @@ async def run_pipeline_legacy(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="'name' must be a string when provided",
         )
+    config = get_parsed_pipeline(yaml_config)
+    pipeline_name = name or config.name
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
+    )
+    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    validation_result = _pipeline_parser.validate(config, registered_ids)
+    if not validation_result.is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "Pipeline configuration is invalid",
+                "errors": [
+                    {
+                        "step_name": e.step_name,
+                        "field": e.field,
+                        "message": e.message,
+                        "suggestion": e.suggestion,
+                    }
+                    for e in validation_result.errors
+                ],
+            },
+        )
     return _create_and_queue_pipeline_run(
         yaml_config=yaml_config,
         name=name,
+        parsed_config=config,
         request=request,
         db=db,
         current_user=current_user,
@@ -581,8 +633,8 @@ def get_pipeline_run(
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-    _check_pipeline_permission(
-        db, current_user, pipeline_run.name, ["owner", "runner", "viewer"]
+    _check_run_permission(
+        db, current_user, pipeline_run, ["owner", "runner", "viewer"]
     )
 
     return _run_to_response(pipeline_run)
@@ -611,8 +663,8 @@ def list_healing_attempts(
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-    _check_pipeline_permission(
-        db, current_user, pipeline_run.name, ["owner", "runner", "viewer"]
+    _check_run_permission(
+        db, current_user, pipeline_run, ["owner", "runner", "viewer"]
     )
 
     attempts = (
@@ -654,8 +706,8 @@ def get_healing_attempt(
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-    _check_pipeline_permission(
-        db, current_user, pipeline_run.name, ["owner", "runner", "viewer"]
+    _check_run_permission(
+        db, current_user, pipeline_run, ["owner", "runner", "viewer"]
     )
 
     attempt = (
@@ -817,9 +869,7 @@ def cancel_pipeline_run(
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-    _check_pipeline_permission(
-        db, current_user, pipeline_run.name, [
-            "owner", "runner"])
+    _check_run_permission(db, current_user, pipeline_run, ["owner", "runner"])
 
     if pipeline_run.status not in (
             PipelineStatus.PENDING,
@@ -858,13 +908,14 @@ def cancel_pipeline_run(
         "status": PipelineStatus.CANCELLED.value,
         "error_message": "Cancelled by user",
     }
+    signed_cancel_payload = sign_sse_payload(cancel_payload)
     try:
         get_pubsub_redis().publish(
             f"pipeline_progress:{run_id}",
-            orjson.dumps(cancel_payload),
+            orjson.dumps(signed_cancel_payload),
         )
         get_cache_redis().setex(
-            _status_cache_key(run_id), 3600, orjson.dumps(cancel_payload)
+            _status_cache_key(run_id), 3600, orjson.dumps(signed_cancel_payload)
         )
     except RedisError:
         logger.warning(
@@ -957,7 +1008,7 @@ def get_run_download_url(
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-    _check_pipeline_permission(db, current_user, pipeline_run.name, ["owner", "runner"])
+    _check_run_permission(db, current_user, pipeline_run, ["owner", "runner"])
 
     eligible = {PipelineStatus.COMPLETED, PipelineStatus.HEALED}
     if pipeline_run.status not in eligible:
@@ -1028,9 +1079,7 @@ def export_pipeline_output(
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-    _check_pipeline_permission(
-        db, current_user, pipeline_run.name, [
-            "owner", "runner"])
+    _check_run_permission(db, current_user, pipeline_run, ["owner", "runner"])
 
     if pipeline_run.status not in (
             PipelineStatus.COMPLETED,
@@ -1052,6 +1101,7 @@ def export_pipeline_output(
             if getattr(step, "step_type", None) == "save":
                 filename = str(getattr(step, "filename", "")).strip()
                 if filename:
+                    filename = os.path.basename(filename)
                     ext = ".csv"  # Default extension
                     if filename.endswith(".json"):
                         ext = ".json"
@@ -1070,10 +1120,17 @@ def export_pipeline_output(
     seen: set[str] = set()
 
     def _add_matches(pattern: Path) -> None:
+        root = Path(output_dir).resolve()
+        resolved_pattern = Path(pattern).resolve()
+        if resolved_pattern != root and root not in resolved_pattern.parents:
+            return
         for match in glob_module.glob(str(pattern)):
-            if match not in seen:
-                seen.add(match)
-                output_files.append(match)
+            resolved_match = Path(match).resolve()
+            if root not in resolved_match.parents:
+                continue
+            if str(resolved_match) not in seen:
+                seen.add(str(resolved_match))
+                output_files.append(str(resolved_match))
 
     # Older conventions may include run_id in output filenames.
     for pattern in [
@@ -1098,11 +1155,18 @@ def export_pipeline_output(
             filename = str(getattr(step, "filename", "")).strip()
             if not filename:
                 continue
+            filename = os.path.basename(filename)
             for ext in [".csv", ".json"]:
-                _add_matches(output_dir / filename)
-                _add_matches(output_dir / f"{filename}_*{ext}")
+                safe_pattern = _safe_output_pattern(output_dir, filename)
+                if safe_pattern is not None:
+                    _add_matches(safe_pattern)
+                safe_pattern = _safe_output_pattern(output_dir, f"{filename}_*{ext}")
+                if safe_pattern is not None:
+                    _add_matches(safe_pattern)
                 if not filename.endswith(ext):
-                    _add_matches(output_dir / f"{filename}{ext}")
+                    safe_pattern = _safe_output_pattern(output_dir, f"{filename}{ext}")
+                    if safe_pattern is not None:
+                        _add_matches(safe_pattern)
     except Exception:
         logger.warning(
             "Could not parse YAML while locating export file for run_id=%s",
@@ -1188,6 +1252,7 @@ def get_run_timing(
     run = db.query(PipelineRun).filter(PipelineRun.id == _as_uuid(run_id)).first()
     if not run:
         raise HTTPException(status_code=404, detail="Pipeline run not found")
+    _check_run_permission(db, current_user, run, ["owner", "runner", "viewer"])
 
     steps = (
         db.query(StepResult)

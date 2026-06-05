@@ -4,6 +4,7 @@ import React from "react";
 import { useWidgetStore, LayoutNode, getAllWidgets } from "@/store/widgetStore";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { WidgetShell } from "../widgets/WidgetShell";
+import { WidgetErrorBoundary } from "../ErrorBoundary";
 
 import { QuickStatsWidget } from "../widgets/QuickStatsWidget";
 import { FileRegistryWidget } from "../widgets/FileRegistryWidget";
@@ -50,7 +51,9 @@ function DwindleNode({ node }: { node: LayoutNode }) {
         onPointerEnter={() => setActiveWidget(node.id)}
         onPointerMove={() => setActiveWidget(node.id)}
       >
-        <Component />
+        <WidgetErrorBoundary widgetName={config.title}>
+          <Component />
+        </WidgetErrorBoundary>
       </WidgetShell>
     );
   }
@@ -87,7 +90,9 @@ function MobileWidgetList({ node }: { node: LayoutNode }) {
               onPointerEnter={() => setActiveWidget(id)}
               onPointerMove={() => setActiveWidget(id)}
             >
-              <Component />
+              <WidgetErrorBoundary widgetName={config.title}>
+                <Component />
+              </WidgetErrorBoundary>
             </WidgetShell>
           </div>
         );

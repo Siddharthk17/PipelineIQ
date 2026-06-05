@@ -133,30 +133,18 @@ function extractApiErrorMessage(detail: unknown, fallback: string): string {
   return fallback || "Request failed";
 }
 
-// Token management - read from HttpOnly cookie for security
+// Token management: authentication is carried only by the HttpOnly cookie.
 
 export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  // Read from cookie instead of localStorage for XSS protection
-  const cookies = document.cookie.split("; ");
-  const tokenCookie = cookies.find((c) => c.startsWith("pipelineiq_token="));
-  if (tokenCookie) {
-    return tokenCookie.split("=")[1];
-  }
-  // Fallback to localStorage for backwards compatibility during migration
-  return localStorage.getItem("pipelineiq_token");
+  return null;
 }
 
-export function setToken(token: string): void {
-  // Token is now set via HttpOnly cookie on login response
-  // Keep localStorage for backwards compatibility during migration
-  localStorage.setItem("pipelineiq_token", token);
+export function setToken(_token: string): void {
+  // No-op: the backend sets the HttpOnly cookie on login.
 }
 
 export function clearToken(): void {
-  // Token is cleared via HttpOnly cookie on logout response
-  // Keep localStorage for backwards compatibility during migration
-  localStorage.removeItem("pipelineiq_token");
+  // No-op: the backend clears the HttpOnly cookie on logout.
 }
 
 // Auth types
@@ -180,20 +168,17 @@ export interface LoginResponse {
 // Core fetch with auth
 
 async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: RequestInit): Promise<T> {
-  const token = getToken();
   const headers: Record<string, string> = {
     ...(options?.headers as Record<string, string> || {}),
   };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
   const res = await fetch(`${baseUrl}${endpoint}`, {
     ...options,
     headers,
+    credentials: "include",
     cache: "no-store",
   });
   if (!res.ok) {
-    if (res.status === 401 && token) {
+    if (res.status === 401) {
       clearToken();
       if (typeof window !== "undefined" && window.location.pathname !== "/login") {
         window.location.href = "/login";
@@ -245,18 +230,15 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
       negotiated.upload_url &&
       negotiated.confirm_endpoint
     ) {
-      const token = getToken();
       const requiresAppAuth =
         negotiated.upload_url.startsWith("/") ||
         negotiated.upload_url.includes("/files/direct-upload/");
       const directRes = await fetch(negotiated.upload_url, {
         method: "PUT",
         body: file,
+        credentials: requiresAppAuth ? "include" : "same-origin",
         headers: {
           "Content-Type": file.type || "application/octet-stream",
-          ...(requiresAppAuth && token
-            ? { Authorization: `Bearer ${token}` }
-            : {}),
         },
       });
       if (!directRes.ok) {
@@ -310,13 +292,32 @@ export async function runPipeline(yamlConfig: string, name?: string): Promise<{ 
   });
 }
 
+const MAX_DEDUPED_REQUESTS = 100;
+
+function getBoundedPending<K, V>(map: Map<K, Promise<V>>, key: K): Promise<V> | undefined {
+  const pending = map.get(key);
+  if (pending) {
+    map.delete(key);
+    map.set(key, pending);
+  }
+  return pending;
+}
+
+function setBoundedPending<K, V>(map: Map<K, Promise<V>>, key: K, promise: Promise<V>): void {
+  map.set(key, promise);
+  while (map.size > MAX_DEDUPED_REQUESTS) {
+    const oldest = map.keys().next().value;
+    map.delete(oldest);
+  }
+}
+
 const _pendingRun = new Map<string, Promise<PipelineRun>>();
 
 export async function getPipelineRun(runId: string): Promise<PipelineRun> {
-  const pending = _pendingRun.get(runId);
+  const pending = getBoundedPending(_pendingRun, runId);
   if (pending) return pending;
   const promise = fetchApi<PipelineRun>(`/pipelines/${runId}`).finally(() => _pendingRun.delete(runId));
-  _pendingRun.set(runId, promise);
+  setBoundedPending(_pendingRun, runId, promise);
   return promise;
 }
 
@@ -695,13 +696,11 @@ export async function register(email: string, username: string, password: string
 const _pendingMe = new Map<string, Promise<AuthUser>>();
 
 export async function getMe(): Promise<AuthUser> {
-  const token = getToken();
-  if (!token) throw new ApiError(401, "No token available");
-  const key = `me:${token}`;
-  const pending = _pendingMe.get(key);
+  const key = "me:cookie";
+  const pending = getBoundedPending(_pendingMe, key);
   if (pending) return pending;
   const promise = fetchAuth<AuthUser>("/auth/me").finally(() => _pendingMe.delete(key));
-  _pendingMe.set(key, promise);
+  setBoundedPending(_pendingMe, key, promise);
   return promise;
 }
 

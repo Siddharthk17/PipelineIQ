@@ -5,14 +5,13 @@ const apiUrl = process.env.E2E_API_URL ?? baseUrl;
 const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
 const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
-async function login(page: import("@playwright/test").Page): Promise<string> {
+async function login(page: import("@playwright/test").Page): Promise<void> {
   test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
   await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
   await page.getByTestId("email-input").fill(email);
   await page.getByTestId("password-input").fill(password);
   await page.getByTestId("login-btn").click();
   await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 15_000 });
-  return (await page.evaluate(() => localStorage.getItem("pipelineiq_token"))) ?? "";
 }
 
 test.describe("Pipeline Templates", () => {
@@ -25,12 +24,11 @@ test.describe("Pipeline Templates", () => {
   });
 
   test("Fork template via API with correct file mappings", async ({ page }) => {
-    const token = await login(page);
+    await login(page);
 
     const csvContent = "id,amount\n1,100\n2,200";
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "template_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
-      headers: { Authorization: `Bearer ${token}` },
     });
     if (!uploadResp.ok()) {
       test.skip(true, "File upload not available");
@@ -43,7 +41,7 @@ test.describe("Pipeline Templates", () => {
         pipeline_name: `e2e_forked_${Date.now()}`,
         file_mappings: { orders_file_id: fileId },
       },
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
     });
     if (resp.ok()) {
       const data = await resp.json();
@@ -52,14 +50,14 @@ test.describe("Pipeline Templates", () => {
   });
 
   test("Fork template with missing placeholder returns 400", async ({ page }) => {
-    const token = await login(page);
+    await login(page);
 
     const resp = await page.request.post(`${apiUrl}/api/templates/sales_revenue_report/fork`, {
       data: {
         pipeline_name: "bad_fork",
         file_mappings: {},
       },
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
     });
     if (resp.ok()) {
       test.skip(true, "Templates may not enforce placeholders in this environment");

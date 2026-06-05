@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken')
 const { describe, test, before, after } = require('node:test')
 const assert = require('node:assert')
 
-const DEFAULT_SECRET = 'change-me-in-production'
+const DEFAULT_SECRET = 'test-jwt-secret-minimum-32-characters-long'
 const JWT_SECRET = process.env.JWT_SECRET || DEFAULT_SECRET
 const REDIS_YJS_URL = process.env.REDIS_YJS_URL || 'redis://redis-yjs:6382'
 const PORT = parseInt(process.env.PORT || '0', 10)
@@ -94,6 +94,18 @@ describe('Redis URL parsing', () => {
     assert.strictEqual(url.hostname, 'redis-yjs')
     assert.strictEqual(url.port, '')
     assert.strictEqual(parseInt(url.port || '6379', 10), 6379)
+  })
+
+  test('parses authenticated Redis URL database and password', () => {
+    const url = new URL('redis://:s3cr3t@redis-yjs:6382/2')
+    const db = url.pathname && url.pathname.length > 1
+      ? parseInt(url.pathname.slice(1), 10)
+      : 0
+
+    assert.strictEqual(url.hostname, 'redis-yjs')
+    assert.strictEqual(url.port, '6382')
+    assert.strictEqual(decodeURIComponent(url.password), 's3cr3t')
+    assert.strictEqual(db, 2)
   })
 })
 

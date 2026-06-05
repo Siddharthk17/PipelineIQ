@@ -109,8 +109,12 @@ def get_dashboard_stats(
         .all()
     )
 
-    # Total files uploaded (system-wide since files don't have user_id)
-    total_files = db.query(func.count(UploadedFile.id)).scalar() or 0
+    total_files = (
+        db.query(func.count(UploadedFile.id))
+        .filter(UploadedFile.user_id == user_id)
+        .scalar()
+        or 0
+    )
 
     return {
         "total_runs": total_runs,

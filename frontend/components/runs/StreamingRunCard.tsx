@@ -21,7 +21,6 @@ export function StreamingRunCard({ runId, status, pipelineName }: Props) {
 
   useEffect(() => {
     if (!["STREAMING_ACTIVE", "STREAMING_PAUSED"].includes(status)) return;
-    const token = localStorage.getItem("pipelineiq_token") || "";
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let delay = 3000;
@@ -30,7 +29,7 @@ export function StreamingRunCard({ runId, status, pipelineName }: Props) {
     const poll = () => {
       if (cancelled) return;
       fetch(`/api/streaming/runs/${runId}/stats`, {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: "include",
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
@@ -57,10 +56,9 @@ export function StreamingRunCard({ runId, status, pipelineName }: Props) {
   }, [runId, status]);
 
   const action = async (a: "pause" | "resume" | "stop" | "restart") => {
-    const token = localStorage.getItem("pipelineiq_token") || "";
     await fetch(`/api/streaming/runs/${runId}/${a}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      credentials: "include",
     });
     window.location.reload();
   };

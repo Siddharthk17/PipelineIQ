@@ -14,7 +14,7 @@ const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
 const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
 // ── Helper ────────────────────────────────────────────────────────────────────
-async function login(page: import("@playwright/test").Page): Promise<string> {
+async function login(page: import("@playwright/test").Page): Promise<void> {
   test.skip(!baseUrl, "Set E2E_BASE_URL to run trace validation tests.");
 
   await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
@@ -25,11 +25,6 @@ async function login(page: import("@playwright/test").Page): Promise<string> {
     timeout: 20_000,
   });
 
-  const token = await page.evaluate(() =>
-    localStorage.getItem("pipelineiq_token"),
-  );
-  expect(token).toBeTruthy();
-  return token as string;
 }
 
 // ── Suite ─────────────────────────────────────────────────────────────────────
@@ -42,12 +37,11 @@ test.describe("OTel trace field validation", () => {
   test("timing endpoint returns required trace fields on every step", async ({
     page,
   }) => {
-    const token = await login(page);
+    await login(page);
 
     // Fetch the 50 most recent runs to find a completed one
     const runsResp = await page.request.get(
       `${baseUrl}/api/v1/pipelines/runs?limit=50`,
-      { headers: { Authorization: `Bearer ${token}` } },
     );
     expect(runsResp.ok()).toBeTruthy();
     const runs: Array<{ id: string; status: string }> = await runsResp.json();
@@ -57,7 +51,6 @@ test.describe("OTel trace field validation", () => {
 
     const timingResp = await page.request.get(
       `${baseUrl}/api/v1/pipelines/${completedRun!.id}/timing`,
-      { headers: { Authorization: `Bearer ${token}` } },
     );
     expect(timingResp.ok()).toBeTruthy();
 
@@ -98,11 +91,10 @@ test.describe("OTel trace field validation", () => {
    * and the nested step_results must each carry trace_id / span_id keys.
    */
   test("runs list embeds trace_id on step_results", async ({ page }) => {
-    const token = await login(page);
+    await login(page);
 
     const runsResp = await page.request.get(
       `${baseUrl}/api/v1/pipelines/runs?limit=10`,
-      { headers: { Authorization: `Bearer ${token}` } },
     );
     expect(runsResp.ok()).toBeTruthy();
     const runs: Array<{ step_results: unknown[] }> = await runsResp.json();
@@ -140,11 +132,10 @@ test.describe("OTel trace field validation", () => {
       "Set E2E_ASSERT_TRACES=true to enforce non-null trace IDs.",
     );
 
-    const token = await login(page);
+    await login(page);
 
     const runsResp = await page.request.get(
       `${baseUrl}/api/v1/pipelines/runs?limit=50`,
-      { headers: { Authorization: `Bearer ${token}` } },
     );
     const runs: Array<{ id: string; status: string }> = await runsResp.json();
     const completedRun = runs.find((r) => r.status === "COMPLETED");
@@ -152,7 +143,6 @@ test.describe("OTel trace field validation", () => {
 
     const timingResp = await page.request.get(
       `${baseUrl}/api/v1/pipelines/${completedRun!.id}/timing`,
-      { headers: { Authorization: `Bearer ${token}` } },
     );
     const timing = await timingResp.json();
     const steps: Array<{ trace_id: string | null }> = timing.steps ?? [];

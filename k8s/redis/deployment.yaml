@@ -19,6 +19,12 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pipelineiq-secrets
+                  key: REDIS_PASSWORD
           command:
             - redis-server
             - --port
@@ -26,6 +32,8 @@ spec:
             - --save
             - "60"
             - "1"
+            - --requirepass
+            - "$(REDIS_PASSWORD)"
             - --loglevel
             - warning
           ports:
@@ -39,7 +47,7 @@ spec:
               cpu: "200m"
           livenessProbe:
             exec:
-              command: ["redis-cli", "-p", "6379", "ping"]
+              command: ["sh", "-c", "redis-cli -p 6379 -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
             initialDelaySeconds: 10
             periodSeconds: 10
 ---
@@ -76,10 +84,18 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pipelineiq-secrets
+                  key: REDIS_PASSWORD
           command:
             - redis-server
             - --port
             - "6380"
+            - --requirepass
+            - "$(REDIS_PASSWORD)"
             - --loglevel
             - warning
           ports:
@@ -125,6 +141,12 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pipelineiq-secrets
+                  key: REDIS_PASSWORD
           command:
             - redis-server
             - --port
@@ -133,6 +155,8 @@ spec:
             - 1gb
             - --maxmemory-policy
             - allkeys-lru
+            - --requirepass
+            - "$(REDIS_PASSWORD)"
             - --loglevel
             - warning
           ports:
@@ -178,10 +202,18 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pipelineiq-secrets
+                  key: REDIS_PASSWORD
           command:
             - redis-server
             - --port
             - "6382"
+            - --requirepass
+            - "$(REDIS_PASSWORD)"
             - --loglevel
             - warning
           ports:

@@ -2,8 +2,7 @@ services:
   redis-overcommit-fix:
     image: alpine:3.19
     container_name: pipelineiq-redis-overcommit-fix
-    privileged: true
-    command: ["sysctl", "-w", "vm.overcommit_memory=1"]
+    command: ["sh", "-c", "echo 'Set vm.overcommit_memory=1 on the Docker host before production startup'"]
     restart: "no"
     networks:
       - pipelineiq-network
@@ -96,7 +95,7 @@ services:
       PGBOUNCER_SERVER_LOGIN_RETRY: "3"
       PGBOUNCER_LOG_POOLER_ERRORS: "1"
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d pipelineiq"]
       interval: 10s
@@ -132,7 +131,7 @@ services:
       PGBOUNCER_SERVER_LOGIN_RETRY: "3"
       PGBOUNCER_LOG_POOLER_ERRORS: "1"
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d pipelineiq"]
       interval: 10s
@@ -163,13 +162,13 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
-      - REDIS_CACHE_URL=redis://redis-cache:6381/0
-      - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
+      - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6381/0
+      - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - REDPANDA_BROKERS=redpanda:9093
-      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-524288000}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
@@ -204,7 +203,7 @@ services:
       - ./docker-compose.yml:/app/docker-compose.yml:ro
       - ./nginx:/app/nginx:ro
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test:
         [
@@ -240,12 +239,12 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
-      - REDIS_CACHE_URL=redis://redis-cache:6381/0
-      - REDIS_YJS_URL=redis://redis-yjs:6382/0
-      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
+      - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6381/0
+      - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
@@ -271,7 +270,7 @@ services:
       minio:
         condition: service_healthy
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     healthcheck:
       test:
         [
@@ -308,12 +307,12 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
-      - REDIS_CACHE_URL=redis://redis-cache:6381/0
-      - REDIS_YJS_URL=redis://redis-yjs:6382/0
-      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
+      - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6381/0
+      - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
       - OTEL_SAMPLE_RATE=1.0
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
@@ -376,12 +375,12 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
-      - REDIS_CACHE_URL=redis://redis-cache:6381/0
-      - REDIS_YJS_URL=redis://redis-yjs:6382/0
-      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
+      - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6381/0
+      - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
       - OTEL_SAMPLE_RATE=1.0
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
@@ -443,13 +442,13 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
-      - REDIS_CACHE_URL=redis://redis-cache:6381/0
-      - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
+      - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6381/0
+      - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - REDPANDA_BROKERS=redpanda:9093
-      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
       - OTEL_SAMPLE_RATE=1.0
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
@@ -511,13 +510,13 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
-      - REDIS_CACHE_URL=redis://redis-cache:6381/0
-      - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
+      - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6381/0
+      - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - REDPANDA_BROKERS=redpanda:9093
-      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - GEMINI_FALLBACK_MODELS=${GEMINI_FALLBACK_MODELS:-gemini-2.0-flash,gemini-1.5-flash}
@@ -581,12 +580,12 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer-replica:5432/pipelineiq
-      - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_BACKEND_URL=redis://redis-broker:6379/1
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
-      - REDIS_CACHE_URL=redis://redis-cache:6381/0
-      - REDIS_YJS_URL=redis://redis-yjs:6382/0
-      - CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+      - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
+      - REDIS_BACKEND_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
+      - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6381/0
+      - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
       - OTEL_SAMPLE_RATE=1.0
     depends_on:
@@ -613,6 +612,8 @@ services:
   redis-broker:
     image: redis:7.4-alpine
     container_name: pipelineiq-redis-broker
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     sysctls:
       net.core.somaxconn: 511
     command: >
@@ -621,13 +622,14 @@ services:
       --maxmemory-policy allkeys-lru
       --save ""
       --appendonly no
+      --requirepass ${REDIS_PASSWORD}
       --loglevel notice
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_broker_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -638,6 +640,8 @@ services:
   redis-pubsub:
     image: redis:7.4-alpine
     container_name: pipelineiq-redis-pubsub
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     sysctls:
       net.core.somaxconn: 511
     command: >
@@ -647,11 +651,12 @@ services:
       --maxmemory-policy allkeys-lru
       --save ""
       --appendonly no
+      --requirepass ${REDIS_PASSWORD}
       --loglevel notice
     ports:
-      - "6380:6380"
+      - "127.0.0.1:6380:6380"
     healthcheck:
-      test: ["CMD", "redis-cli", "-p", "6380", "ping"]
+      test: ["CMD-SHELL", "redis-cli -p 6380 -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -662,6 +667,8 @@ services:
   redis-cache:
     image: redis:7.4-alpine
     container_name: pipelineiq-redis-cache
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     depends_on:
       redis-overcommit-fix:
         condition: service_completed_successfully
@@ -675,13 +682,14 @@ services:
       --maxmemory-samples 10
       --save ""
       --appendonly no
+      --requirepass ${REDIS_PASSWORD}
       --loglevel notice
     ports:
-      - "6381:6381"
+      - "127.0.0.1:6381:6381"
     volumes:
       - redis_cache_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-p", "6381", "ping"]
+      test: ["CMD-SHELL", "redis-cli -p 6381 -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -697,10 +705,10 @@ services:
     volumes:
       - ./y-websocket:/app
     ports:
-      - "1234:1234"
+      - "127.0.0.1:1234:1234"
     environment:
-      - REDIS_YJS_URL=redis://redis-yjs:6382
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-development}
+      - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382
+      - JWT_SECRET=${SECRET_KEY}
       - PORT=1234
     depends_on:
       redis-yjs:
@@ -719,6 +727,8 @@ services:
   redis-yjs:
     image: redis:7.4-alpine
     container_name: pipelineiq-redis-yjs
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     sysctls:
       net.core.somaxconn: 511
     command: >
@@ -726,13 +736,14 @@ services:
       --port 6382
       --maxmemory 128mb
       --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
       --loglevel notice
     ports:
-      - "6382:6382"
+      - "127.0.0.1:6382:6382"
     volumes:
       - redis_yjs_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-p", "6382", "ping"]
+      test: ["CMD-SHELL", "redis-cli -p 6382 -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -748,8 +759,8 @@ services:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -772,6 +783,7 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=/api/v1
       - NEXT_PUBLIC_APP_VERSION=${APP_VERSION:-12.7.3}
+      - AUTH_JWT_SECRET=${SECRET_KEY}
     depends_on:
       api:
         condition: service_healthy
@@ -795,18 +807,18 @@ services:
     container_name: pipelineiq-flower
     command: >
       sh -c "sleep 5 &&
-      celery --broker=redis://redis-broker:6379/0
+      celery --broker=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
       -A backend.celery_app:celery_app flower
       --port=5555
       --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
       --inspect_timeout=10000"
     ports:
-      - "5555:5555"
+      - "127.0.0.1:5555:5555"
     environment:
-      - REDIS_BROKER_URL=redis://redis-broker:6379/0
-      - REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
-      - REDIS_CACHE_URL=redis://redis-cache:6381/0
-      - REDIS_YJS_URL=redis://redis-yjs:6382/0
+      - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
+      - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
+      - REDIS_CACHE_URL=redis://:${REDIS_PASSWORD}@redis-cache:6381/0
+      - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
       - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
@@ -871,7 +883,7 @@ services:
       - "--storage.tsdb.retention.time=15d"
       - "--web.enable-lifecycle"
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O-", "http://localhost:9090/-/ready"]
       interval: 10s
@@ -892,9 +904,9 @@ services:
       - SPAN_STORAGE_TYPE=memory
       - MEMORY_MAX_TRACES=100000
     ports:
-      - "16686:16686"
-      - "4317:4317"
-      - "4318:4318"
+      - "127.0.0.1:16686:16686"
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:16686"]
       interval: 10s
@@ -908,9 +920,6 @@ services:
   grafana:
     image: grafana/grafana:10.2.0
     container_name: pipelineiq-grafana
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
@@ -922,7 +931,7 @@ services:
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_DATABASE_WAL=true
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       prometheus:
         condition: service_healthy
@@ -992,9 +1001,9 @@ services:
       - --set
       - retention_local_target_bytes=5368709120
     ports:
-      - "9092:9092"
-      - "8082:8082"
-      - "8081:8081"
+      - "127.0.0.1:9092:9092"
+      - "127.0.0.1:8082:8082"
+      - "127.0.0.1:8081:8081"
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     mem_limit: 3g
@@ -1002,11 +1011,6 @@ services:
       nofile:
         soft: 65536
         hard: 65536
-    cap_add:
-      - SYS_ADMIN
-      - SYS_PTRACE
-    security_opt:
-      - seccomp:unconfined
     depends_on:
       redpanda-init:
         condition: service_completed_successfully
@@ -1028,7 +1032,7 @@ services:
     entrypoint: /bin/sh
     command: -c "printf 'kafka:\\n  brokers:\\n    - redpanda:9093\\n' > /tmp/config.yml && /app/console --config.filepath=/tmp/config.yml"
     ports:
-      - "8090:8080"
+      - "127.0.0.1:8090:8080"
     depends_on:
       redpanda:
         condition: service_healthy
@@ -1051,7 +1055,7 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_BROKER_URL=redis://redis-broker:6379/0
+      - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
       - REDPANDA_BROKERS=redpanda:9093
       - CELERY_CONCURRENCY=8
       - OTEL_SERVICE_NAME=pipelineiq-worker

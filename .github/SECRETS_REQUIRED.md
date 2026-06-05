@@ -10,7 +10,7 @@ The following secrets must be configured in your GitHub repository settings
 | `POSTGRES_PASSWORD` | PostgreSQL password for test database | `ci_test_password_2024` |
 | `SECRET_KEY` | Application secret key (32+ chars) | `your-long-random-secret-key-here` |
 
-> **Important:** The application will refuse to start in production (`ENVIRONMENT=production`) if `SECRET_KEY` is left at the default value `change-me-in-production`. Always set a strong, unique key.
+> **Important:** The application refuses to start in every environment if `SECRET_KEY` is missing, shorter than 32 characters, or set to a known default. Always set a strong, unique key.
 
 ## CD Pipeline (`cd.yml`)
 

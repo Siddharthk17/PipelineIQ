@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { X, Save, Download, Upload } from "lucide-react";
 import { useThemeStore } from "@/store/themeStore";
+import { buildThemeCss, sanitizeThemeName, sanitizeThemeVariables } from "@/lib/theme-safety";
 
 export function ThemeBuilder({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { addCustomTheme, setTheme } = useThemeStore();
@@ -37,21 +38,22 @@ export function ThemeBuilder({ isOpen, onClose }: { isOpen: boolean; onClose: ()
   });
 
   const handleSave = () => {
-    const newTheme = { name: themeName, author: "user", variables };
+    const safeThemeName = sanitizeThemeName(themeName);
+    const safeVariables = sanitizeThemeVariables(variables);
+    const newTheme = { name: safeThemeName, author: "user", variables: safeVariables };
     addCustomTheme(newTheme);
     
     // Apply theme dynamically by injecting a style tag
-    let styleEl = document.getElementById(`theme-${themeName}`);
+    let styleEl = document.getElementById(`theme-${safeThemeName}`);
     if (!styleEl) {
       styleEl = document.createElement("style");
-      styleEl.id = `theme-${themeName}`;
+      styleEl.id = `theme-${safeThemeName}`;
       document.head.appendChild(styleEl);
     }
     
-    const cssVars = Object.entries(variables).map(([k, v]) => `${k}: ${v};`).join("\n  ");
-    styleEl.innerHTML = `[data-theme="${themeName}"] {\n  ${cssVars}\n}`;
+    styleEl.textContent = buildThemeCss(safeThemeName, safeVariables);
     
-    setTheme(themeName);
+    setTheme(safeThemeName);
     onClose();
   };
 

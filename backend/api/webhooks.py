@@ -17,6 +17,7 @@ from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User, Webhook, WebhookDelivery
 from backend.utils.uuid_utils import as_uuid as _as_uuid
 from backend.services.audit_service import log_action
+from backend.utils.url_security import UnsafeURL, validate_public_http_url
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
@@ -32,9 +33,10 @@ class WebhookCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url(cls, v: str) -> str:
-        if not v.startswith(("http://", "https://")):
-            raise ValueError("URL must start with http:// or https://")
-        return v
+        try:
+            return validate_public_http_url(v)
+        except UnsafeURL as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class WebhookResponse(BaseModel):
@@ -67,6 +69,16 @@ class TestWebhookResponse(BaseModel):
     error: Optional[str] = None
 
 # Endpoints
+
+
+def _parse_webhook_id(webhook_id: str):
+    try:
+        return _as_uuid(webhook_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid webhook_id",
+        ) from exc
 
 
 @router.post("/", response_model=WebhookResponse,
@@ -138,8 +150,9 @@ def delete_webhook(
     current_user: User = Depends(get_current_user),
 ):
     """Delete a webhook (own only)."""
+    parsed_webhook_id = _parse_webhook_id(webhook_id)
     webhook = db.query(Webhook).filter(
-        Webhook.id == _as_uuid(webhook_id)
+        Webhook.id == parsed_webhook_id
     ).first()
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
@@ -164,8 +177,9 @@ def list_deliveries(
     current_user: User = Depends(get_current_user),
 ):
     """List delivery attempts for a webhook."""
+    parsed_webhook_id = _parse_webhook_id(webhook_id)
     webhook = db.query(Webhook).filter(
-        Webhook.id == _as_uuid(webhook_id)
+        Webhook.id == parsed_webhook_id
     ).first()
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
@@ -174,7 +188,7 @@ def list_deliveries(
 
     deliveries = (
         db.query(WebhookDelivery)
-        .filter(WebhookDelivery.webhook_id == _as_uuid(webhook_id))
+        .filter(WebhookDelivery.webhook_id == parsed_webhook_id)
         .order_by(WebhookDelivery.created_at.desc())
         .limit(50)
         .all()
@@ -198,13 +212,21 @@ def test_webhook(
     current_user: User = Depends(get_current_user),
 ):
     """Send a test payload to a webhook URL."""
+    parsed_webhook_id = _parse_webhook_id(webhook_id)
     webhook = db.query(Webhook).filter(
-        Webhook.id == _as_uuid(webhook_id)
+        Webhook.id == parsed_webhook_id
     ).first()
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
     if str(webhook.user_id) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not your webhook")
+    try:
+        validate_public_http_url(webhook.url)
+    except UnsafeURL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Webhook URL is not allowed",
+        )
 
     payload = {
         "event": "test",
@@ -230,5 +252,6 @@ def test_webhook(
             delivered=200 <= resp.status_code < 300,
             response_status=resp.status_code,
         )
-    except Exception as e:
-        return TestWebhookResponse(delivered=False, error=str(e))
+    except Exception:
+        logger.warning("Webhook test delivery failed", exc_info=True)
+        return TestWebhookResponse(delivered=False, error="Failed to connect to webhook URL")

@@ -89,7 +89,8 @@ def get_pipeline_description(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_read_db),
 ):
-    cache_key = f"pipeline_desc:{hashlib.md5(pipeline_name.encode()).hexdigest()}"
+    cache_input = f"{current_user.id}:{pipeline_name}".encode()
+    cache_key = f"pipeline_desc:{hashlib.sha256(cache_input).hexdigest()}"
     redis = get_cache_redis()
 
     try:
@@ -126,22 +127,23 @@ def get_pipeline_description(
     )
 
     try:
-        from backend.tasks.gemini_tasks import call_gemini_task
+        queued_key = f"{cache_key}:queued"
+        should_queue = bool(redis.set(queued_key, b"1", ex=300, nx=True))
+        if should_queue:
+            from backend.tasks.gemini_tasks import generate_pipeline_description_task
 
-        task = call_gemini_task.apply_async(
-            args=[prompt],
-            kwargs={"temperature": 0.1, "max_output_tokens": 100},
-            queue="gemini",
-        )
-        description = task.get(timeout=30)
-        description = description.strip()
-
-        redis.setex(cache_key, 86400, description.encode("utf-8"))
+            generate_pipeline_description_task.apply_async(
+                args=[cache_key, prompt],
+                kwargs={"tenant_id": str(current_user.id)},
+                queue="gemini",
+            )
     except Exception:
-        step_count = yaml_text.count("type:")
-        description = (
-            f"A pipeline named '{pipeline_name}' "
-            f"with {step_count} processing steps."
-        )
+        pass
+
+    step_count = yaml_text.count("type:")
+    description = (
+        f"A pipeline named '{pipeline_name}' "
+        f"with {step_count} processing steps."
+    )
 
     return {"pipeline_name": pipeline_name, "description": description}

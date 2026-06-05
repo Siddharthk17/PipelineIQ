@@ -23,10 +23,7 @@ test.describe("Streaming Pipeline", () => {
 
   test("Topics API returns data from Redpanda", async ({ page }) => {
     await login(page);
-    const token = await page.evaluate(() => localStorage.getItem("access_token") ?? "");
-    const resp = await page.request.get(`${baseUrl}/api/streaming/topics`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const resp = await page.request.get(`${baseUrl}/api/streaming/topics`);
     expect([200, 503]).toContain(resp.status());
     if (resp.status() === 200) {
       const data = await resp.json();

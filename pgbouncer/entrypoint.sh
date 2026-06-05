@@ -19,6 +19,7 @@ SERVER_IDLE_TIMEOUT="${PGBOUNCER_SERVER_IDLE_TIMEOUT:-600}"
 CLIENT_IDLE_TIMEOUT="${PGBOUNCER_CLIENT_IDLE_TIMEOUT:-0}"
 LOG_POOLER_ERRORS="${PGBOUNCER_LOG_POOLER_ERRORS:-1}"
 SERVER_LOGIN_RETRY="${PGBOUNCER_SERVER_LOGIN_RETRY:-3}"
+AUTH_TYPE="${PGBOUNCER_AUTH_TYPE:-scram-sha-256}"
 
 if [ "${DB_CLIENT_ALIAS_USER}" != "${DB_USER}" ]; then
   ADMIN_USERS="${DB_USER},${DB_CLIENT_ALIAS_USER}"
@@ -34,7 +35,7 @@ ${DB_NAME} = host=${DB_HOST} port=${DB_PORT} dbname=${DB_NAME} user=${DB_USER} p
 [pgbouncer]
 listen_addr = 0.0.0.0
 listen_port = ${LISTEN_PORT}
-auth_type = trust
+auth_type = ${AUTH_TYPE}
 auth_file = /etc/pgbouncer/userlist.txt
 pool_mode = ${POOL_MODE}
 max_client_conn = ${MAX_CLIENT_CONN}

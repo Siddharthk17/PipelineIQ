@@ -23,15 +23,23 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import signal
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import pyarrow as pa
+from fastapi import HTTPException
 from wasmtime import Config, Engine, Store, Module, Instance, Linker, Trap
 
 logger = logging.getLogger(__name__)
 
 FUEL_PER_STEP = 10_000_000
 FUEL_PER_ROW = 1_000
+VALIDATION_FUEL = 100_000
+MAX_CACHED_MODULES = 100
+MAX_WASM_MEMORY_BYTES = 16 * 1024 * 1024
+MAX_WASM_TABLE_ELEMENTS = 10_000
+WASM_EXECUTION_TIMEOUT_SECONDS = 30
 
 
 @dataclass
@@ -41,6 +49,14 @@ class WasmValidationResult:
     error: str | None = None
 
 
+class _WasmTimeout(Exception):
+    pass
+
+
+def _timeout_handler(signum, frame):
+    raise _WasmTimeout("WASM execution exceeded timeout")
+
+
 class WasmExecutor:
     """Executes Wasm UDFs against Arrow Tables."""
 
@@ -48,7 +64,7 @@ class WasmExecutor:
         config = Config()
         config.consume_fuel = True
         self._engine = Engine(config)
-        self._module_cache: dict[str, Module] = {}
+        self._module_cache: OrderedDict[str, Module] = OrderedDict()
         logger.info("WasmExecutor initialized with fuel-enabled Engine")
 
     def execute(
@@ -84,6 +100,13 @@ class WasmExecutor:
         module = self._get_or_compile(wasm_bytes)
 
         store = Store(self._engine)
+        store.set_limits(
+            memory_size=MAX_WASM_MEMORY_BYTES,
+            table_elements=MAX_WASM_TABLE_ELEMENTS,
+            instances=1,
+            tables=1,
+            memories=1,
+        )
         store.set_fuel(FUEL_PER_STEP)
 
         linker = Linker(self._engine)
@@ -98,43 +121,90 @@ class WasmExecutor:
                 f"Exported functions: {available}"
             )
 
-        df = table.to_pandas()
-        results: list[float | None] = []
+        columns = list(input_columns) + [output_column]
+        result_arrays: dict[str, list] = {c: [] for c in columns}
+        error_count = 0
+        max_errors = max(10, len(table) // 10)
 
-        for _, row in df[input_columns].iterrows():
+        try:
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(WASM_EXECUTION_TIMEOUT_SECONDS)
             try:
-                args = [float(row[col]) for col in input_columns]
-            except (TypeError, ValueError) as e:
-                logger.debug("Row conversion error: %s", e)
-                results.append(None)
-                continue
+                for _, row in df[input_columns].iterrows():
+                    try:
+                        args = [float(row[col]) for col in input_columns]
+                    except (TypeError, ValueError) as e:
+                        logger.debug("Row conversion error: %s", e)
+                        for col in input_columns:
+                            result_arrays[col].append(None)
+                        result_arrays[output_column].append(None)
+                        continue
 
-            try:
-                current_fuel = store.get_fuel()
-                if current_fuel < FUEL_PER_ROW:
-                    results.append(None)
-                    continue
-                store.set_fuel(current_fuel - FUEL_PER_ROW)
-                result = wasm_func(store, *args)
-                results.append(float(result) if result is not None else None)
-            except Trap:
-                logger.debug("Wasm trap on row (fuel exhausted or invalid operation)")
-                results.append(None)
-            except Exception as e:
-                logger.debug("Wasm execution error on row: %s", e)
-                results.append(None)
+                    try:
+                        current_fuel = store.get_fuel()
+                        if current_fuel < FUEL_PER_ROW:
+                            raise _WasmTimeout("WASM fuel exhausted")
+                        store.set_fuel(current_fuel - FUEL_PER_ROW)
+                        result = wasm_func(store, *args)
+                        val = float(result) if result is not None else None
+                        for col in input_columns:
+                            result_arrays[col].append(row[col])
+                        result_arrays[output_column].append(val)
+                    except Trap as trap:
+                        error_count += 1
+                        if error_count > max_errors:
+                            raise RuntimeError(
+                                f"WASM execution failed on too many rows ({error_count}). "
+                                f"Last trap: {trap}"
+                            ) from trap
+                        logger.debug("Wasm trap on row (fuel exhausted or invalid operation)")
+                        for col in input_columns:
+                            result_arrays[col].append(None)
+                        result_arrays[output_column].append(None)
+                    except _WasmTimeout:
+                        raise
+                    except Exception as e:
+                        error_count += 1
+                        if error_count > max_errors:
+                            raise RuntimeError(
+                                f"WASM execution failed on too many rows ({error_count}). "
+                                f"Last error: {e}"
+                            ) from e
+                        logger.debug("Wasm execution error on row: %s", e)
+                        for col in input_columns:
+                            result_arrays[col].append(None)
+                        result_arrays[output_column].append(None)
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+        except _WasmTimeout:
+            logger.warning("WASM execution timed out after %d seconds", WASM_EXECUTION_TIMEOUT_SECONDS)
+            raise HTTPException(
+                status_code=408,
+                detail=f"WASM execution timed out after {WASM_EXECUTION_TIMEOUT_SECONDS}s",
+            )
 
-        df[output_column] = results
-        return pa.Table.from_pandas(df, preserve_index=False)
+        result_table = pa.table(result_arrays)
+        return result_table
 
     def validate(
         self, wasm_bytes: bytes | bytearray, function_name: str | None = None
     ) -> WasmValidationResult:
         """Validate a Wasm module binary and optionally check for a specific function."""
         try:
-            validation_engine = Engine()
+            validation_config = Config()
+            validation_config.consume_fuel = True
+            validation_engine = Engine(validation_config)
             module = Module(validation_engine, wasm_bytes)
             store = Store(validation_engine)
+            store.set_limits(
+                memory_size=MAX_WASM_MEMORY_BYTES,
+                table_elements=MAX_WASM_TABLE_ELEMENTS,
+                instances=1,
+                tables=1,
+                memories=1,
+            )
+            store.set_fuel(VALIDATION_FUEL)
             linker = Linker(validation_engine)
             instance = linker.instantiate(store, module)
             exports = instance.exports(store)
@@ -171,8 +241,13 @@ class WasmExecutor:
             logger.info("Compiling new Wasm module: %s...", module_key[:16])
             module = Module(self._engine, wasm_bytes)
             self._module_cache[module_key] = module
+            self._module_cache.move_to_end(module_key)
+            if len(self._module_cache) > MAX_CACHED_MODULES:
+                evicted_key, _ = self._module_cache.popitem(last=False)
+                logger.info("Evicted Wasm module cache entry: %s", evicted_key[:16])
             logger.info("Wasm module compiled and cached: %s", module_key[:16])
         else:
+            self._module_cache.move_to_end(module_key)
             logger.debug("Wasm module cache HIT: %s", module_key[:16])
 
         return self._module_cache[module_key]

@@ -13,13 +13,21 @@ import re
 from typing import Any
 
 _FORBIDDEN_SQL_KEYWORDS = re.compile(
-    r"\b(insert|update|delete|drop|alter|create|truncate|attach|detach|copy|export|import|call|pragma)\b",
+    r"\b(insert|update|delete|drop|alter|create|truncate|attach|detach|copy|export|import|call|pragma|prepare|execute|deallocate|explain|analyze|set|install|load|use|checkpoint|force|show|describe|summarize)\b",
     re.IGNORECASE,
+)
+_FORBIDDEN_SQL_FUNCTIONS = re.compile(
+    r"\b(read_csv|read_csv_auto|read_json|read_json_auto|read_parquet|read_blob|read_text|sqlite_scan|postgres_scan|httpfs)\s*\(",
+    re.IGNORECASE,
+)
+_FORBIDDEN_EXTERNAL_URI = re.compile(
+    r"(?i)(?:s3|http|https|file|ftp|gcs|azure)://"
 )
 _LEADING_COMMENT = re.compile(
     r"^\s*(?:--[^\n]*\n|/\*.*?\*/\s*)*",
     re.IGNORECASE | re.DOTALL,
 )
+_DOLLAR_QUOTE_START = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$")
 
 
 def _strip_literals_and_comments(sql: str) -> str:
@@ -27,6 +35,7 @@ def _strip_literals_and_comments(sql: str) -> str:
     result: list[str] = []
     i = 0
     state = "code"
+    dollar_delimiter = ""
     length = len(sql)
 
     while i < length:
@@ -34,7 +43,16 @@ def _strip_literals_and_comments(sql: str) -> str:
         nxt = sql[i + 1] if i + 1 < length else ""
 
         if state == "code":
-            if ch == "'" and state == "code":
+            if ch == "$":
+                match = _DOLLAR_QUOTE_START.match(sql, i)
+                if match:
+                    dollar_delimiter = match.group(0)
+                    state = "dollar_quote"
+                    result.extend(" " * len(dollar_delimiter))
+                    i += len(dollar_delimiter) - 1
+                else:
+                    result.append(ch)
+            elif ch == "'" and state == "code":
                 state = "single_quote"
                 result.append(" ")
             elif ch == '"' and state == "code":
@@ -81,8 +99,19 @@ def _strip_literals_and_comments(sql: str) -> str:
                 i += 1
             else:
                 result.append(" ")
+        elif state == "dollar_quote":
+            if dollar_delimiter and sql.startswith(dollar_delimiter, i):
+                result.extend(" " * len(dollar_delimiter))
+                i += len(dollar_delimiter) - 1
+                dollar_delimiter = ""
+                state = "code"
+            else:
+                result.append(" ")
 
         i += 1
+
+    if state in {"single_quote", "double_quote", "block_comment", "dollar_quote"}:
+        raise ValueError("SQL query contains an unterminated literal or comment")
 
     return "".join(result)
 
@@ -156,6 +185,8 @@ def validate_sql_step_query(
         normalized = normalized[:-1].strip()
     if ";" in normalized:
         raise ValueError("Only a single SQL statement is allowed")
+    if _FORBIDDEN_EXTERNAL_URI.search(normalized):
+        raise ValueError("SQL query cannot reference external URLs or object storage paths")
 
     if require_input_placeholder and "{{input}}" not in normalized:
         raise ValueError("SQL query must reference the input via {{input}}")
@@ -171,6 +202,8 @@ def validate_sql_step_query(
     keyword_scan_sql = _strip_literals_and_comments(sql_for_scan)
     if _FORBIDDEN_SQL_KEYWORDS.search(keyword_scan_sql):
         raise ValueError("SQL query contains disallowed write/admin keywords")
+    if _FORBIDDEN_SQL_FUNCTIONS.search(keyword_scan_sql):
+        raise ValueError("SQL query contains disallowed external file access functions")
 
     return normalized.replace("{{input}}", "__input__")
 

@@ -17,8 +17,6 @@ async function login(page: import("@playwright/test").Page) {
 test.describe("File Upload and Profiling", () => {
   test("Upload CSV via API and see it in files list", async ({ page }) => {
     await login(page);
-    const token = await page.evaluate(() => localStorage.getItem("pipelineiq_token"));
-    expect(token).toBeTruthy();
 
     const csvContent = [
       "customer_id,region,amount,status,order_date",
@@ -28,7 +26,6 @@ test.describe("File Upload and Profiling", () => {
 
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "sample_orders.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
-      headers: { Authorization: `Bearer ${token}` },
     });
     expect(uploadResp.ok()).toBeTruthy();
 
@@ -39,13 +36,10 @@ test.describe("File Upload and Profiling", () => {
 
   test("Uploaded file detail page shows profiling status", async ({ page }) => {
     await login(page);
-    const token = await page.evaluate(() => localStorage.getItem("pipelineiq_token"));
-    expect(token).toBeTruthy();
 
     const csvContent = "id,name,value\n1,Alice,100\n2,Bob,200";
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "profiling_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
-      headers: { Authorization: `Bearer ${token}` },
     });
     const { id: fileId } = await uploadResp.json();
 

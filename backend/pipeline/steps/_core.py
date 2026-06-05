@@ -233,7 +233,10 @@ class StepExecutor:
                     valid_role,
                 )
         except Exception as exc:
-            logger.warning("Column policy enforcement skipped: %s", exc)
+            logger.error("Column policy enforcement failed: %s", exc)
+            raise RuntimeError(
+                "Column security policy enforcement failed; pipeline execution stopped."
+            ) from exc
 
         columns = list(df.columns)
         dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}

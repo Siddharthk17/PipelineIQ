@@ -22,6 +22,7 @@ import httpx
 from celery import Task
 
 from backend.celery_app import celery_app
+from backend.utils.url_security import UnsafeURL, validate_public_http_url
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,12 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
     if not webhook.is_active:
         logger.debug("Webhook %s is inactive — skipping delivery", webhook_id)
         return {"success": True, "skipped": True}
+
+    try:
+        validate_public_http_url(webhook.url)
+    except UnsafeURL:
+        logger.warning("Webhook delivery blocked for unsafe URL: id=%s", webhook_id)
+        return {"success": False, "error": "Webhook URL is not allowed"}
 
     payload_bytes = orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)
     signature = hmac.new(

@@ -59,11 +59,6 @@ export const test = base.extend<AuthFixtures>({
     await page.click('[data-testid="login-btn"]')
     await page.waitForURL((url) => !url.pathname.endsWith('/login'), { timeout: 10_000 })
 
-    await page.evaluate(
-      (token) => localStorage.setItem('access_token', token),
-      user.token,
-    )
-
     await use(page)
     await context.close()
   },

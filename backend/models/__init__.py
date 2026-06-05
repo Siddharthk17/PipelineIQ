@@ -132,6 +132,7 @@ class PipelineRun(Base):
 
     __table_args__ = (
         Index("ix_pipeline_runs_user_created", "user_id", "created_at"),
+        Index("ix_pipeline_runs_status_created", "status", "created_at"),
     )
 
     step_results: Mapped[List["StepResult"]] = relationship(
@@ -789,4 +790,3 @@ class AssetRelationship(Base):
             name="ck_asset_rel_relation",
         ),
     )
-

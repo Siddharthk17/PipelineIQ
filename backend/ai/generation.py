@@ -6,6 +6,8 @@ retries once on validation failure.
 import asyncio
 import json
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import yaml
@@ -25,6 +27,10 @@ from backend.ai.prompts import (
 
 logger = logging.getLogger(__name__)
 _pipeline_parser = PipelineParser()
+_AI_GENERATION_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(1, int(os.getenv("AI_GENERATION_MAX_WORKERS", "4"))),
+    thread_name_prefix="ai-generation",
+)
 
 _PIPELINE_STEP_TYPES = [
     "load",
@@ -429,7 +435,8 @@ async def _call_gemini_async(
     # Wait for result with timeout (Celery task, not coroutine)
     try:
         result = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: task.get(timeout=120)
+            _AI_GENERATION_EXECUTOR,
+            lambda: task.get(timeout=120),
         )
     except Exception as e:
         error_str = str(e)

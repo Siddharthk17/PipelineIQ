@@ -21,6 +21,7 @@ from backend.templates.loader import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/templates", tags=["templates"])
+TEMPLATE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 class ForkTemplateRequest(BaseModel):
@@ -29,6 +30,14 @@ class ForkTemplateRequest(BaseModel):
         ...,
         description="Map placeholder names to actual file UUIDs",
     )
+
+
+def _validate_template_id(template_id: str) -> None:
+    if not TEMPLATE_ID_RE.fullmatch(template_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid template_id",
+        )
 
 
 @router.get(
@@ -61,6 +70,7 @@ def list_templates() -> dict:
 )
 def get_template(template_id: str) -> dict:
     """Get a specific pipeline template by ID."""
+    _validate_template_id(template_id)
     try:
         pipeline_yaml, meta = get_pipeline_yaml_from_template(template_id)
     except FileNotFoundError:
@@ -92,6 +102,7 @@ def fork_pipeline_template(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Fork a template by filling file ID placeholders."""
+    _validate_template_id(template_id)
     try:
         pipeline_yaml = fork_template(
             template_id=template_id,

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_user
+from backend.auth import get_current_admin, get_current_user
 from backend.dependencies import get_read_db_dependency
 from backend.execution.arrow_bus import get_arrow_bus
 from backend.models import User
@@ -134,7 +134,7 @@ def get_tier_health(
 
 @router.post("/evict")
 def trigger_eviction(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ):
     bus = get_arrow_bus()
     evicted = bus.maybe_evict_hot_to_warm()
@@ -143,7 +143,7 @@ def trigger_eviction(
 
 @router.post("/cleanup-stale-shm")
 def cleanup_stale_shm(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ):
     from backend.execution.shm_store import cleanup_stale
     deleted = cleanup_stale()

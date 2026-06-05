@@ -30,9 +30,9 @@ celery_app.config_from_object("backend.celery_config")
 
 # Upstash Redis requires TLS — configure SSL for both broker and backend
 if settings.CELERY_BROKER_URL.startswith("rediss://"):
-    celery_app.conf.broker_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+    celery_app.conf.broker_use_ssl = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 if settings.CELERY_RESULT_BACKEND.startswith("rediss://"):
-    celery_app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_NONE}
+    celery_app.conf.redis_backend_use_ssl = {"ssl_cert_reqs": ssl.CERT_REQUIRED}
 
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="pipeline_tasks")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="webhook_tasks")
@@ -52,7 +52,10 @@ celery_app.autodiscover_tasks(
     ["backend.tasks"],
     related_name="storage_maintenance")
 
-if settings.SENTRY_DSN:
+def _init_sentry_for_worker() -> None:
+    """Initialize Sentry after Celery forks the worker process."""
+    if not settings.SENTRY_DSN:
+        return
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         integrations=[CeleryIntegration()],
@@ -83,6 +86,7 @@ def _init_worker_process(**kwargs) -> None:
         setup_telemetry,
     )
 
+    _init_sentry_for_worker()
     reset_telemetry()
     setup_telemetry()
     setup_celery_telemetry()

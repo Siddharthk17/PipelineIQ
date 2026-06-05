@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useThemeStore } from "@/store/themeStore";
 import { AuthProvider } from "@/lib/auth-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { buildThemeCss, sanitizeThemeName } from "@/lib/theme-safety";
 
 export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
   const status =
@@ -40,19 +41,21 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (mounted) {
-      document.documentElement.setAttribute("data-theme", activeTheme);
-      
       // Inject custom theme styles if active theme is a custom one
       const customTheme = customThemes.find(t => t.name === activeTheme);
+      document.documentElement.setAttribute(
+        "data-theme",
+        customTheme ? sanitizeThemeName(activeTheme) : activeTheme,
+      );
       if (customTheme) {
-        let styleEl = document.getElementById(`theme-${activeTheme}`);
+        const safeThemeName = sanitizeThemeName(activeTheme);
+        let styleEl = document.getElementById(`theme-${safeThemeName}`);
         if (!styleEl) {
           styleEl = document.createElement("style");
-          styleEl.id = `theme-${activeTheme}`;
+          styleEl.id = `theme-${safeThemeName}`;
           document.head.appendChild(styleEl);
         }
-        const cssVars = Object.entries(customTheme.variables).map(([k, v]) => `${k}: ${v};`).join("\n  ");
-        styleEl.innerHTML = `[data-theme="${activeTheme}"] {\n  ${cssVars}\n}`;
+        styleEl.textContent = buildThemeCss(safeThemeName, customTheme.variables);
       }
     }
   }, [activeTheme, mounted, customThemes]);

@@ -24,10 +24,10 @@ from backend.utils.uuid_utils import as_uuid
 logger = logging.getLogger(__name__)
 
 SUPPORTED_FORMATS = {
-    ".csv": lambda handle: pd.read_csv(handle),
-    ".json": lambda handle: pd.read_json(handle),
-    ".parquet": lambda handle: pd.read_parquet(handle),
-    ".xlsx": lambda handle: pd.read_excel(handle, engine="openpyxl"),
+    ".csv",
+    ".json",
+    ".parquet",
+    ".xlsx",
 }
 
 
@@ -51,12 +51,7 @@ def profile_file(self, file_id: str) -> dict:
         df = _load_file_from_disk(file_id)
         _update_profile_status(db, file_id, "running")
 
-        was_sampled = False
-        if len(df) > settings.PROFILE_MAX_ROWS:
-            df = df.sample(n=settings.PROFILE_SAMPLE_ROWS, random_state=42)
-            was_sampled = True
-            logger.info(
-                f"Sampled to {settings.PROFILE_SAMPLE_ROWS} rows for file_id={file_id}")
+        was_sampled = bool(df.attrs.get("_pipelineiq_sampled"))
 
         profile = profile_dataframe(df)
         completeness = compute_completeness(df)
@@ -130,12 +125,16 @@ def _load_file_from_disk(file_id: str) -> pd.DataFrame:
                 f"File not found at path: {stored_path}")
 
         extension = Path(stored_path).suffix.lower()
-        loader = SUPPORTED_FORMATS.get(extension)
-        if loader is None:
+        if extension not in SUPPORTED_FORMATS:
             raise ValueError(f"Unsupported file format: {extension}")
 
+        should_sample = bool(
+            uploaded_file.row_count
+            and uploaded_file.row_count > settings.PROFILE_MAX_ROWS
+        )
+        max_rows = settings.PROFILE_SAMPLE_ROWS if should_sample else None
         with closing(storage_service.download(stored_path)) as handle:
-            df = loader(handle)
+            df = _read_profile_dataframe(handle, extension, max_rows=max_rows)
 
         df = df.convert_dtypes(
             convert_string=False,
@@ -143,11 +142,54 @@ def _load_file_from_disk(file_id: str) -> pd.DataFrame:
             convert_floating=True,
             convert_boolean=True,
         )
+        if should_sample:
+            df.attrs["_pipelineiq_sampled"] = True
+            logger.info(
+                "Loaded bounded profile sample: file_id=%s rows=%d/%d",
+                file_id,
+                len(df),
+                uploaded_file.row_count,
+            )
 
         return df
 
     finally:
         db.close()
+
+
+def _read_profile_dataframe(handle, extension: str, max_rows: int | None) -> pd.DataFrame:
+    if extension == ".csv":
+        return pd.read_csv(handle, nrows=max_rows)
+    if extension == ".json":
+        if max_rows is None:
+            return pd.read_json(handle)
+        try:
+            return pd.read_json(handle, lines=True, nrows=max_rows)
+        except ValueError:
+            handle.seek(0)
+            return pd.read_json(handle).head(max_rows)
+    if extension == ".parquet":
+        if max_rows is None:
+            return pd.read_parquet(handle)
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        parquet_file = pq.ParquetFile(handle)
+        tables = []
+        rows = 0
+        for index in range(parquet_file.num_row_groups):
+            table = parquet_file.read_row_group(index)
+            remaining = max_rows - rows
+            if table.num_rows > remaining:
+                table = table.slice(0, remaining)
+            tables.append(table)
+            rows += table.num_rows
+            if rows >= max_rows:
+                break
+        return pa.concat_tables(tables).to_pandas() if tables else pd.DataFrame()
+    if extension == ".xlsx":
+        return pd.read_excel(handle, engine="openpyxl", nrows=max_rows)
+    raise ValueError(f"Unsupported file format: {extension}")
 
 
 def _update_profile_status(

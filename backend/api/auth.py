@@ -8,18 +8,21 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, field_validator
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User
 from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 from backend.auth import (
-    get_password_hash,
-    verify_password,
+    hash_password_async,
+    revoke_token,
     create_access_token,
     get_current_user,
     get_current_admin,
     ACCESS_TOKEN_EXPIRE_MINUTES,
+    verify_password_async,
 )
 from backend.services.audit_service import log_action
 from backend.utils.rate_limiter import limiter
@@ -120,13 +123,16 @@ def _user_to_response(user: User) -> UserResponse:
 # Endpoints
 @router.post("/register", status_code=201)
 @limiter.limit("5/minute")
-def register(
+async def register(
     request: Request,
     response: Response,
     body: RegisterRequest,
     db: Session = get_write_db_dependency(),
 ):
     """Register a new user. First user becomes admin automatically."""
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("LOCK TABLE users IN EXCLUSIVE MODE"))
+
     # Check uniqueness
     existing = (
         db.query(User)
@@ -147,7 +153,7 @@ def register(
     user = User(
         email=body.email,
         username=body.username,
-        hashed_password=get_password_hash(body.password),
+        hashed_password=await hash_password_async(body.password),
         role=role,
     )
     db.add(user)
@@ -170,7 +176,7 @@ def register(
 
 @router.post("/login")
 @limiter.limit("5/minute")
-def login(
+async def login(
     request: Request,
     response: Response,
     body: LoginRequest,
@@ -178,7 +184,7 @@ def login(
 ):
     """Authenticate and return a JWT access token."""
     user = db.query(User).filter(User.email == body.email).first()
-    if not user or not verify_password(body.password, user.hashed_password):
+    if not user or not await verify_password_async(body.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
@@ -197,7 +203,7 @@ def login(
         key="pipelineiq_token",
         value=token,
         httponly=True,
-        secure=True,
+        secure=settings.ENVIRONMENT == "production",
         samesite="strict",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         path="/",
@@ -228,17 +234,24 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 @router.post("/logout")
 async def logout(
+    request: Request,
     response: Response,
     current_user: User = Depends(get_current_user),
 ):
     """Logout endpoint - clears HttpOnly cookie."""
     logger.info("User logged out: %s", current_user.username)
+    token = request.cookies.get("pipelineiq_token")
+    auth_header = request.headers.get("authorization", "")
+    if not token and auth_header.lower().startswith("bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+    if token:
+        revoke_token(token)
 
     # Clear the HttpOnly cookie
     response.delete_cookie(
         key="pipelineiq_token",
         path="/",
-        secure=True,
+        secure=settings.ENVIRONMENT == "production",
         samesite="strict",
     )
 

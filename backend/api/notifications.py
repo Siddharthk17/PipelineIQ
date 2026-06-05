@@ -17,6 +17,7 @@ from backend.services.notification_service import (
     send_slack_notification,
     send_email_notification,
 )
+from backend.utils.url_security import UnsafeURL, validate_public_http_url
 from backend.utils.uuid_utils import validate_uuid_format, as_uuid
 
 logger = logging.getLogger(__name__)
@@ -87,10 +88,18 @@ def create_notification_config(
         )
 
     if notif_type == NotificationType.SLACK:
-        if not body.config.get("slack_webhook_url"):
+        slack_url = body.config.get("slack_webhook_url")
+        if not slack_url:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Slack config requires 'slack_webhook_url'.",
+            )
+        try:
+            validate_public_http_url(str(slack_url))
+        except UnsafeURL as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
             )
     elif notif_type == NotificationType.EMAIL:
         email_to = body.config.get("email_to")
@@ -221,11 +230,12 @@ def test_notification(
                 detail="No slack_webhook_url configured",
             )
 
-        # Validate webhook URL format
-        if not webhook_url.startswith(("http://", "https://")):
+        try:
+            validate_public_http_url(str(webhook_url))
+        except UnsafeURL as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid Slack webhook URL. Must start with http:// or https://",
+                detail=str(exc),
             )
 
         success = send_slack_notification(
