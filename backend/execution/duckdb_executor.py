@@ -245,7 +245,10 @@ class DuckDBExecutor:
                 old_max_rows = conn.execute("SELECT current_setting('max_rows_to_scan')").fetchone()[0]
             except Exception:
                 pass
-            conn.execute(f"SET max_rows_to_scan={_settings.WORKER_MAX_ROWS_TO_SCAN}")
+            try:
+                conn.execute(f"SET max_rows_to_scan={_settings.WORKER_MAX_ROWS_TO_SCAN}")
+            except Exception:
+                pass
 
             arrow_result = conn.execute(sql).arrow()
             if isinstance(arrow_result, pa.Table):

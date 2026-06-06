@@ -838,7 +838,7 @@ def _enqueue_profile_task(file_id: str) -> None:
 
     try:
         profile_file.apply_async([str(file_id)], queue="bulk")
-    except (KombuOperationalError, RedisError, OSError) as exc:
+    except (KombuOperationalError, RedisError, OSError, RuntimeError) as exc:
         logger.warning(
             "Profile task enqueue failed for file_id=%s; continuing without async profiling: %s",
             file_id,

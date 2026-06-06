@@ -34,8 +34,15 @@ async def _ensure_client_connected(request: Request) -> None:
     has already closed the connection we should not start a fresh DB
     transaction and CTE walk that will be immediately discarded.
     """
-    if await request.is_disconnected():
-        raise ClientDisconnected()
+    while True:
+        try:
+            if await request.is_disconnected():
+                raise ClientDisconnected()
+        except ClientDisconnected:
+            raise
+        except Exception:
+            return
+        await asyncio.sleep(0.1)
 
 
 @router.get("/search")

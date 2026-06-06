@@ -36,7 +36,7 @@ class TestDeserialize:
             m.value.return_value = json.dumps(d).encode()
             m.error.return_value = None
             msgs.append(m)
-        df = _deserialize(msgs, "json")
+        df, _malformed = _deserialize(msgs, "json")
         assert len(df) == 2
         assert "user_id" in df.columns
 
@@ -48,12 +48,13 @@ class TestDeserialize:
             m.value.return_value = raw
             m.error.return_value = None
             msgs.append(m)
-        df = _deserialize(msgs, "json")
+        df, malformed = _deserialize(msgs, "json")
         assert len(df) == 2
+        assert len(malformed) == 1
 
     def test_empty_batch_returns_empty(self):
         from backend.tasks.streaming_pipeline import _deserialize
-        df = _deserialize([], "json")
+        df, _malformed = _deserialize([], "json")
         assert df.empty
 
     def test_null_value_skipped(self):
@@ -67,7 +68,7 @@ class TestDeserialize:
         m2.value.return_value = json.dumps({"ok": True}).encode()
         m2.error.return_value = None
         msgs.append(m2)
-        df = _deserialize(msgs, "json")
+        df, _malformed = _deserialize(msgs, "json")
         assert len(df) == 1
 
 

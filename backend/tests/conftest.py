@@ -34,6 +34,15 @@ from backend.main import app
 import backend.models  # noqa: F401 — ensure ORM models are registered with Base.metadata
 from backend.pipeline.lineage import LineageRecorder
 from backend.utils.rate_limiter import limiter
+from limits.storage import MemoryStorage
+
+# Tests run without Redis. The limiter was created at import time with
+# settings.REDIS_CACHE_URL, so swap its storage (and the strategy's
+# internal reference) to an in-memory backend before any test fixtures
+# fire. This makes rate limiting a no-op in CI / local test runs.
+_memory_storage = MemoryStorage()
+limiter._storage = _memory_storage
+limiter._limiter.storage = _memory_storage
 
 pytest_plugins = ["pytest_asyncio"]
 
@@ -46,7 +55,12 @@ TEST_DATABASE_URL = "sqlite:///:memory:"
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
     """Reset rate limiter storage between ALL tests."""
-    limiter.reset()
+    try:
+        limiter.reset()
+    except Exception:
+        # If the storage backend (e.g. Redis) is unreachable in a particular
+        # test run, don't fail the test setup — the limiter just won't reset.
+        pass
     yield
 
 

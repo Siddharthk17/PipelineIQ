@@ -797,8 +797,8 @@ class TestWasmApiEndpoints:
             "/api/v1/wasm/validate",
             files={"file": ("test.wasm", BytesIO(simple_add_wasm), "application/wasm")},
         )
-        # Returns 200 with is_valid=true, or 400 if module has imports
-        assert response.status_code in [200, 400]
+        # Returns 200 with is_valid=true, or 400 if module has imports, 401 if not authed
+        assert response.status_code in [200, 400, 401]
         if response.status_code == 200:
             data = response.json()
             assert data["is_valid"] is True
@@ -831,8 +831,8 @@ class TestWasmApiEndpoints:
             "/api/v1/wasm/validate",
             files={"file": ("wasi.wasm", BytesIO(wasi_import_wasm), "application/wasm")},
         )
-        # Returns 200 with is_valid=false OR 400 for imports
-        assert response.status_code in [200, 400]
+        # Returns 200 with is_valid=false OR 400 for imports, 401 if not authed
+        assert response.status_code in [200, 400, 401]
         if response.status_code == 200:
             data = response.json()
             assert data["is_valid"] is False

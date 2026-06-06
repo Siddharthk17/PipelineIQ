@@ -123,6 +123,9 @@ class WasmExecutor:
 
         columns = list(input_columns) + [output_column]
         result_arrays: dict[str, list] = {c: [] for c in columns}
+        for col in table.schema.names:
+            if col not in result_arrays:
+                result_arrays[col] = table.column(col).to_pylist()
         error_count = 0
         max_errors = max(10, len(table) // 10)
 
@@ -130,6 +133,7 @@ class WasmExecutor:
             old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
             signal.alarm(WASM_EXECUTION_TIMEOUT_SECONDS)
             try:
+                df = table.to_pandas()
                 for _, row in df[input_columns].iterrows():
                     try:
                         args = [float(row[col]) for col in input_columns]
@@ -141,10 +145,7 @@ class WasmExecutor:
                         continue
 
                     try:
-                        current_fuel = store.get_fuel()
-                        if current_fuel < FUEL_PER_ROW:
-                            raise _WasmTimeout("WASM fuel exhausted")
-                        store.set_fuel(current_fuel - FUEL_PER_ROW)
+                        store.set_fuel(FUEL_PER_ROW)
                         result = wasm_func(store, *args)
                         val = float(result) if result is not None else None
                         for col in input_columns:
@@ -185,7 +186,10 @@ class WasmExecutor:
             )
 
         result_table = pa.table(result_arrays)
-        return result_table
+        ordered_columns = list(table.schema.names)
+        if output_column not in ordered_columns:
+            ordered_columns.append(output_column)
+        return result_table.select(ordered_columns)
 
     def validate(
         self, wasm_bytes: bytes | bytearray, function_name: str | None = None

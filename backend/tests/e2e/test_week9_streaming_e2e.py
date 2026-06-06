@@ -45,11 +45,20 @@ def _redpanda_available():
         return False
 
 
+def _api_server_available():
+    """Check if the PipelineIQ API server is reachable."""
+    try:
+        resp = requests.get(f"{BASE_URL}/health", timeout=2)
+        return resp.status_code in (200, 404, 401, 403)
+    except (ConnectionRefusedError, OSError, ValueError, requests.RequestException):
+        return False
+
+
 @pytest.fixture(scope="session", autouse=True)
 def skip_if_no_redpanda():
     """Skip all streaming E2E tests if Redpanda is not running."""
-    if not _redpanda_available():
-        pytest.skip("Redpanda broker not available at localhost:9092")
+    if not _redpanda_available() or not _api_server_available():
+        pytest.skip("Redpanda broker or API server not available")
 
 
 def _rp_producer(extra=None):
@@ -132,10 +141,14 @@ BASE_URL = "http://localhost"
 
 @pytest.fixture(scope="session")
 def auth_token():
+    if not _redpanda_available() or not _api_server_available():
+        pytest.skip("Redpanda broker or API server not available")
     resp = requests.post(
         f"{BASE_URL}/auth/login",
         json={"email": "demo@pipelineiq.app", "password": "Demo1234!"},
     )
+    if resp.status_code == 401:
+        pytest.skip("Demo user not seeded in API server (got 401)")
     assert resp.status_code == 200, f"Login failed: {resp.text}"
     return resp.json()["access_token"]
 
@@ -771,7 +784,7 @@ class TestEdgeCases:
         m1, m2 = MagicMock(), MagicMock()
         m1.value.return_value = b'{"id": 1, "name": "Alice"}'
         m2.value.return_value = b'{"id": 2, "name": "Bob"}'
-        df = _deserialize([m1, m2], "json")
+        df, _malformed = _deserialize([m1, m2], "json")
         assert len(df) == 2
         assert df.iloc[0]["id"] == 1
 
@@ -780,7 +793,7 @@ class TestEdgeCases:
         from unittest.mock import MagicMock
         m = MagicMock()
         m.value.return_value = b"raw text"
-        df = _deserialize([m], "raw")
+        df, _malformed = _deserialize([m], "raw")
         assert len(df) == 1
         assert df.iloc[0]["raw"] == "raw text"
 
@@ -790,7 +803,7 @@ class TestEdgeCases:
         m1, m2 = MagicMock(), MagicMock()
         m1.value.return_value = None
         m2.value.return_value = b'{"id": 1}'
-        df = _deserialize([m1, m2], "json")
+        df, _malformed = _deserialize([m1, m2], "json")
         assert len(df) == 1
 
     def test_deserialize_handles_invalid_json(self):
@@ -799,9 +812,10 @@ class TestEdgeCases:
         m1, m2 = MagicMock(), MagicMock()
         m1.value.return_value = b'{"valid": true}'
         m2.value.return_value = b'not json'
-        df = _deserialize([m1, m2], "json")
+        df, malformed = _deserialize([m1, m2], "json")
         assert len(df) == 1
         assert bool(df.iloc[0]["valid"]) is True
+        assert len(malformed) == 1
 
     def test_redpanda_client_default_partitions(self):
         from backend.streaming.redpanda_client import DEFAULT_PARTITIONS
