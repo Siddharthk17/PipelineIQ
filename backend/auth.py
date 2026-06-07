@@ -34,8 +34,6 @@ security = HTTPBearer(auto_error=False)
 
 logger = logging.getLogger(__name__)
 
-_bcrypt_pool = ProcessPoolExecutor(max_workers=2)
-
 
 def _bcrypt_check_sync(plain_bytes: bytes, hashed_bytes: bytes) -> bool:
     return bcrypt.checkpw(plain_bytes, hashed_bytes)
@@ -65,6 +63,35 @@ def get_password_hash(password: str) -> str:
     ).decode("utf-8")
 
 
+# Bcrypt ops are CPU-bound; run them in a worker pool so the event loop stays
+# responsive. The pool must be created *after* the gunicorn worker fork, so we
+# initialise it lazily on first use. Gunicorn is configured with
+# preload_app=True, which means module-level objects (including any
+# ProcessPoolExecutor created at import time) are duplicated across forks and
+# their worker processes become invalid as soon as the parent reaps them,
+# causing "A process in the process pool was terminated abruptly" errors.
+_BCRYPT_POOL: Optional[ProcessPoolExecutor] = None
+
+
+def _get_bcrypt_pool() -> ProcessPoolExecutor:
+    global _BCRYPT_POOL
+    if _BCRYPT_POOL is None or getattr(_BCRYPT_POOL, "_broken", False):
+        _BCRYPT_POOL = ProcessPoolExecutor(max_workers=2)
+    return _BCRYPT_POOL
+
+
+def _reset_bcrypt_pool() -> ProcessPoolExecutor:
+    """Tear down the existing pool (best-effort) and start a fresh one."""
+    global _BCRYPT_POOL
+    try:
+        if _BCRYPT_POOL is not None:
+            _BCRYPT_POOL.shutdown(wait=False)
+    except Exception:
+        pass
+    _BCRYPT_POOL = ProcessPoolExecutor(max_workers=2)
+    return _BCRYPT_POOL
+
+
 async def verify_password_async(plain: str, hashed: str) -> bool:
     if not hashed.startswith(("$2a$", "$2b$", "$2y$")):
         return False
@@ -72,13 +99,29 @@ async def verify_password_async(plain: str, hashed: str) -> bool:
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            _bcrypt_pool,
+            _get_bcrypt_pool(),
             _bcrypt_check_sync,
             plain.encode("utf-8"),
             hashed.encode("utf-8"),
         )
         return result
     except Exception as e:
+        msg = str(e)
+        if "terminated abruptly" in msg or "broken" in msg:
+            logger.warning("bcrypt pool was broken, recreating")
+            try:
+                pool = _reset_bcrypt_pool()
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    pool,
+                    _bcrypt_check_sync,
+                    plain.encode("utf-8"),
+                    hashed.encode("utf-8"),
+                )
+                return result
+            except Exception as e2:
+                logger.error("Password verification retry error: %s", e2)
+                return False
         logger.error("Password verification error: %s", e)
         return False
 
@@ -86,18 +129,39 @@ async def verify_password_async(plain: str, hashed: str) -> bool:
 async def hash_password_async(plain: str) -> str:
     loop = asyncio.get_event_loop()
     salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
-    hashed_bytes = await loop.run_in_executor(
-        _bcrypt_pool,
-        _bcrypt_hash_sync,
-        plain.encode("utf-8"),
-        salt,
-    )
-    return hashed_bytes.decode("utf-8")
+    pool = _get_bcrypt_pool()
+    try:
+        hashed_bytes = await loop.run_in_executor(
+            pool,
+            _bcrypt_hash_sync,
+            plain.encode("utf-8"),
+            salt,
+        )
+        return hashed_bytes.decode("utf-8")
+    except Exception as e:
+        msg = str(e)
+        if "terminated abruptly" in msg or "broken" in msg:
+            logger.warning("bcrypt pool was broken during hash, recreating")
+            pool = _reset_bcrypt_pool()
+            hashed_bytes = await loop.run_in_executor(
+                pool,
+                _bcrypt_hash_sync,
+                plain.encode("utf-8"),
+                salt,
+            )
+            return hashed_bytes.decode("utf-8")
+        raise
 
 
 def close_bcrypt_pool() -> None:
-    _bcrypt_pool.shutdown(wait=False)
-    logger.info("bcrypt ProcessPoolExecutor shut down")
+    global _BCRYPT_POOL
+    if _BCRYPT_POOL is not None:
+        try:
+            _BCRYPT_POOL.shutdown(wait=False)
+        except Exception:
+            pass
+        _BCRYPT_POOL = None
+        logger.info("bcrypt ProcessPoolExecutor shut down")
 
 
 def create_access_token(
