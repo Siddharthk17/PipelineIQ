@@ -2,7 +2,10 @@ import http from 'k6/http'
 import { check } from 'k6'
 import { Rate, Trend } from 'k6/metrics'
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000'
+const BASE_URL = __ENV.BASE_URL
+if (!BASE_URL) {
+  throw new Error('BASE_URL environment variable is required')
+}
 const TOKEN = __ENV.AUTH_TOKEN || ''
 
 const validateSuccess = new Rate('validate_success')

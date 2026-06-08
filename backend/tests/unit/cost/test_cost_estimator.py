@@ -138,7 +138,8 @@ class TestBcryptFix:
     def test_pool_has_2_workers(self):
         import backend.auth as pw_module
 
-        assert pw_module._bcrypt_pool._max_workers == 2
+        pool = pw_module._get_bcrypt_pool()
+        assert pool._max_workers == 2
 
     def test_bcrypt_check_sync_is_module_level(self):
         import backend.auth as pw_module

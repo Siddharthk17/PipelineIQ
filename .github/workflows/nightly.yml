@@ -13,6 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate configuration
+        run: |
+          if [ -z "${{ secrets.PRODUCTION_API_URL }}" ]; then
+            echo "::error::PRODUCTION_API_URL secret is not set. Configure it in Settings > Secrets > Actions."
+            exit 1
+          fi
+
       - name: Install k6
         run: |
           sudo mkdir -p /root/.gnupg && sudo chmod 700 /root/.gnupg
@@ -24,6 +31,9 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | \
             sudo tee /etc/apt/sources.list.d/k6.list
           sudo apt-get update && sudo apt-get install -y k6
+
+      - name: Prepare output directory
+        run: mkdir -p k6-results
 
       - name: Run auth load test
         env:
