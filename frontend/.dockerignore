@@ -1,5 +1,7 @@
 .next
+.next-build
 node_modules
+test-results
 .env*.local
 npm-debug.log*
 Dockerfile

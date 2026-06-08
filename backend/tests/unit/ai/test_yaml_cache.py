@@ -15,11 +15,11 @@ def reset_cache_state():
     during module import or first test execution in CI (no Redis available),
     causing subsequent tests to fail.
     """
-    cache_module._redis_cache_disabled = False
+    cache_module._redis_cache_disabled_until = 0.0
     cache_module._local_parsed_cache.clear()
     yield
     # Clean up after test as well
-    cache_module._redis_cache_disabled = False
+    cache_module._redis_cache_disabled_until = 0.0
     cache_module._local_parsed_cache.clear()
 
 

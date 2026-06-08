@@ -780,6 +780,8 @@ def _build_lineage_from_db(run_id: str, db: Session) -> nx.DiGraph:
 def build_bounded_lineage_graph(step_results: list) -> nx.DiGraph:
     """Build per-run lineage graph from step results, with size limits."""
     G = nx.DiGraph()
+    seen_nodes: set = set()
+    edge_count = 0
 
     for step in step_results:
         step_name = getattr(step, "step_name", None) or step.get("step_name", "unknown")
@@ -788,7 +790,7 @@ def build_bounded_lineage_graph(step_results: list) -> nx.DiGraph:
 
         for src_col in (columns_in or []):
             for tgt_col in (columns_out or []):
-                if G.number_of_nodes() > MAX_LINEAGE_NODES:
+                if len(seen_nodes) > MAX_LINEAGE_NODES:
                     if "__truncated__" not in G.nodes:
                         G.add_node("__truncated__", truncated=True)
                         logger.warning(
@@ -797,7 +799,7 @@ def build_bounded_lineage_graph(step_results: list) -> nx.DiGraph:
                         )
                     break
 
-                if G.number_of_edges() > MAX_LINEAGE_EDGES:
+                if edge_count > MAX_LINEAGE_EDGES:
                     logger.warning(
                         "Lineage edge limit reached at %d (step: %s)",
                         MAX_LINEAGE_EDGES, step_name,
@@ -805,8 +807,11 @@ def build_bounded_lineage_graph(step_results: list) -> nx.DiGraph:
                     break
 
                 G.add_edge(src_col, tgt_col, step=step_name, relation="transforms")
+                edge_count += 1
+                seen_nodes.add(src_col)
+                seen_nodes.add(tgt_col)
 
-            if G.number_of_nodes() > MAX_LINEAGE_NODES:
+            if len(seen_nodes) > MAX_LINEAGE_NODES:
                 break
 
     return G
