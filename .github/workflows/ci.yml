@@ -160,6 +160,7 @@ jobs:
           MINIO_IMAGE_TAG=latest
           MINIO_ROOT_USER=minioadmin
           MINIO_ROOT_PASSWORD=minioadmin123
+          REDIS_PASSWORD=ci_redis_password
           REDIS_BROKER_URL=redis://redis-broker:6379/0
           REDIS_BACKEND_URL=redis://redis-broker:6379/1
           REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
@@ -372,6 +373,7 @@ jobs:
           MINIO_IMAGE_TAG=latest
           MINIO_ROOT_USER=minioadmin
           MINIO_ROOT_PASSWORD=minioadmin123
+          REDIS_PASSWORD=ci_redis_password
           REDIS_BROKER_URL=redis://redis-broker:6379/0
           REDIS_BACKEND_URL=redis://redis-broker:6379/1
           REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0

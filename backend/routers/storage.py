@@ -15,7 +15,7 @@ from backend.execution.arrow_bus import get_arrow_bus
 from backend.models import User
 from backend.storage.lifecycle import get_bucket_storage_stats, get_lifecycle_policies
 
-router = APIRouter(prefix="/api/storage", tags=["Storage"])
+router = APIRouter(prefix="/api/v1/storage", tags=["Storage"])
 logger = logging.getLogger(__name__)
 
 

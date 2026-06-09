@@ -35,7 +35,15 @@ try {
   const redisPersistence = new RedisPersistence({
     redisOpts,
   })
-  setPersistence(redisPersistence)
+  // y-websocket expects a persistence object with writeState(docName, doc),
+  // bindState(docName, doc), and provider properties.
+  // y-redis handles persistence in real-time via Redis pub/sub, so
+  // writeState is a no-op (no need to flush on disconnect).
+  setPersistence({
+    provider: redisPersistence,
+    bindState: (docName, doc) => redisPersistence.bindState(docName, doc),
+    writeState: async (docName, doc) => {},
+  })
   console.log(`Y-Redis persistence connected: ${redactedRedisUrl.toString()}`)
 } catch (e) {
   console.warn(`Redis persistence unavailable: ${e.message}`)

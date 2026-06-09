@@ -371,7 +371,6 @@ def _blast_radius_postgres(
               AND NOT EXISTS (
                   SELECT 1 FROM downstream d2 WHERE d2.id = ar.target_id
               )
-            LIMIT :cte_limit
         ),
         downstream_min AS (
             SELECT id, MIN(depth) AS depth
