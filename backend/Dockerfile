@@ -14,9 +14,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application source (context is backend/, copy into /app/backend/)
 COPY . ./backend/
 
-# Copy alembic.ini to project root for migration commands
-COPY alembic.ini /app/alembic.ini
-
 # Create upload/data/gunicorn-log directories and expose tests at /app/tests for compose exec parity
 RUN mkdir -p /tmp/uploads /app/data /app/uploads /tmp/gunicorn && \
     ln -sfn /app/backend/benchmark /app/benchmark && \

@@ -25,7 +25,7 @@ def test_permission_enum_persists_lowercase_values():
 def test_healing_attempt_migration_uses_non_duplicating_postgres_enum():
     """Healing attempt migration must avoid implicit enum recreation in create_table."""
     migration_path = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[3]
         / "alembic"
         / "versions"
         / "9f3c1b2a4d5e_add_healing_attempts.py"

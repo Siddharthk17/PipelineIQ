@@ -2,21 +2,33 @@ import requests
 import time
 import uuid
 
+import pytest
+
 BASE_URL = "http://localhost/api/v1"
 AUTH_URL = "http://localhost/auth"
 
 
-def auth_request_with_retry(session, path, payload, attempts=5):
+def _server_reachable():
+    try:
+        requests.get("http://localhost/healthz", timeout=2)
+        return True
+    except requests.ConnectionError:
+        return False
+
+
+def auth_request_with_retry(session, path, payload, attempts=8):
     for attempt in range(1, attempts + 1):
         resp = session.post(f"{AUTH_URL}/{path}", json=payload)
         if resp.status_code != 429:
             return resp
         if attempt < attempts:
-            backoff = attempt * 2
+            backoff = min(2 ** attempt, 30)
             print(f"{path} rate-limited, retrying in {backoff}s...")
             time.sleep(backoff)
     return resp
 
+
+@pytest.mark.skipif(not _server_reachable(), reason="Requires running Docker stack")
 def test_permissions():
     admin_session = requests.Session()
     viewer_session = requests.Session()
