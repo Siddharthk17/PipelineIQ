@@ -2,8 +2,18 @@ import json
 import requests
 import time
 
+import pytest
+
 BASE_URL = "http://localhost/api/v1"
 AUTH_URL = "http://localhost/auth"
+
+
+def _server_reachable():
+    try:
+        requests.get("http://localhost/healthz", timeout=2)
+        return True
+    except requests.ConnectionError:
+        return False
 
 
 def auth_request_with_retry(session, path, payload, attempts=5):
@@ -18,6 +28,7 @@ def auth_request_with_retry(session, path, payload, attempts=5):
             time.sleep(backoff)
     return resp
 
+@pytest.mark.skipif(not _server_reachable(), reason="Requires running Docker stack")
 def test_drift():
     session = requests.Session()
     login_data = {"email": "demo@pipelineiq.app", "password": "Demo1234!"}

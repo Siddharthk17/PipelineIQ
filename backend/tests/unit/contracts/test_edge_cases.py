@@ -3,8 +3,18 @@ import uuid
 import time
 import json
 
+import pytest
+
 BASE_URL = "http://localhost/api/v1"
 AUTH_URL = "http://localhost/auth"
+
+
+def _server_reachable():
+    try:
+        requests.get("http://localhost/healthz", timeout=2)
+        return True
+    except requests.ConnectionError:
+        return False
 
 def auth_request_with_retry(path, payload, attempts=5):
     for attempt in range(1, attempts + 1):
@@ -33,6 +43,7 @@ def register_and_login(username, email, password):
     )
     return login_resp.json().get("access_token")
 
+@pytest.mark.skipif(not _server_reachable(), reason="Requires running Docker stack")
 def test_circular_dependency():
     print("Testing circular dependency...")
     unique = uuid.uuid4().hex[:8]
@@ -67,6 +78,7 @@ pipeline:
     assert resp.status_code == 200
     assert resp.json()["is_valid"] is False
 
+@pytest.mark.skipif(not _server_reachable(), reason="Requires running Docker stack")
 def test_non_existent_file():
     print("\nTesting non-existent file ID...")
     unique = uuid.uuid4().hex[:8]
