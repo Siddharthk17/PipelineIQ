@@ -34,9 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 # Project root — works on any machine (local or CI)
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
-# ============================================================
 # FIXTURES: Wasm module binaries compiled from WAT
-# ============================================================
 
 @pytest.fixture
 def simple_add_wasm() -> bytes:
@@ -156,9 +154,7 @@ def wasi_import_wasm() -> bytes:
     """)
 
 
-# ============================================================
 # SECTION 1: WasmExecutor — Execution Correctness
-# ============================================================
 
 class TestWasmExecutorExecutionCorrectness:
     """E2E: WasmExecutor executes Wasm functions correctly against Arrow Tables."""
@@ -249,9 +245,7 @@ class TestWasmExecutorExecutionCorrectness:
         assert all(v is None for v in values)
 
 
-# ============================================================
 # SECTION 2: WasmExecutor — Module Caching (SHA256)
-# ============================================================
 
 class TestWasmExecutorModuleCaching:
     """E2E: SHA256 module cache works correctly."""
@@ -300,9 +294,7 @@ class TestWasmExecutorModuleCaching:
         assert expected_key in executor._module_cache
 
 
-# ============================================================
 # SECTION 3: WasmExecutor — Fuel Budget Enforcement
-# ============================================================
 
 class TestWasmExecutorFuelBudget:
     """E2E: Fuel budget kills infinite loops and is properly configured."""
@@ -336,9 +328,7 @@ class TestWasmExecutorFuelBudget:
         assert "consume_fuel = True" in source
 
 
-# ============================================================
 # SECTION 4: WasmExecutor — Validation
-# ============================================================
 
 class TestWasmExecutorValidation:
     """E2E: WasmExecutor.validate() correctly identifies valid/invalid modules."""
@@ -372,9 +362,7 @@ class TestWasmExecutorValidation:
         assert set(result.exported_functions) >= {"double", "square", "negate"}
 
 
-# ============================================================
 # SECTION 5: WasmExecutor — Multiple Exports
-# ============================================================
 
 class TestWasmExecutorMultipleExports:
     """E2E: Any exported function can be called."""
@@ -397,9 +385,7 @@ class TestWasmExecutorMultipleExports:
                 assert got == pytest.approx(exp), f"{fn_name}: expected {exp}, got {got}"
 
 
-# ============================================================
 # SECTION 6: Security — Sandbox Isolation
-# ============================================================
 
 class TestWasmSandboxSecurity:
     """E2E: Wasm modules cannot escape sandbox."""
@@ -449,9 +435,7 @@ class TestWasmSandboxSecurity:
             func(store, 1.0)
 
 
-# ============================================================
 # SECTION 7: Parser — wasm_compute Step Config
-# ============================================================
 
 class TestParserWasmComputeStepConfig:
     """E2E: Parser correctly handles wasm_compute step type."""
@@ -571,9 +555,7 @@ pipeline:
         assert StepType.WASM_COMPUTE.value == "wasm_compute"
 
 
-# ============================================================
 # SECTION 8: StepExecutor — execute_wasm_compute Dispatch
-# ============================================================
 
 class TestStepExecutorWasmComputeDispatch:
     """E2E: StepExecutor correctly dispatches wasm_compute steps."""
@@ -647,9 +629,7 @@ class TestStepExecutorWasmComputeDispatch:
             )
 
 
-# ============================================================
 # SECTION 9: LineageRecorder — record_wasm_compute
-# ============================================================
 
 class TestLineageRecorderWasmCompute:
     """E2E: LineageRecorder correctly records wasm_compute step lineage."""
@@ -735,9 +715,7 @@ class TestLineageRecorderWasmCompute:
         assert "Wasm UDF" in step_node["label"]
 
 
-# ============================================================
 # SECTION 10: SmartExecutor — ALWAYS_PANDAS_STEPS Routing
-# ============================================================
 
 class TestSmartExecutorWasmComputeRouting:
     """E2E: SmartExecutor always routes wasm_compute to Pandas executor."""
@@ -774,9 +752,7 @@ class TestSmartExecutorWasmComputeRouting:
         assert "sum" in result.output_table.schema.names
 
 
-# ============================================================
 # SECTION 11: API Endpoints — Wasm Module Management
-# ============================================================
 
 class TestWasmApiEndpoints:
     """E2E: Wasm module API endpoints work correctly."""
@@ -875,9 +851,7 @@ class TestWasmApiEndpoints:
             assert "total" in data
 
 
-# ============================================================
 # SECTION 12: pipeline_tasks — _load_wasm_modules from MinIO
-# ============================================================
 
 class TestPipelineTasksWasmLoading:
     """E2E: _load_wasm_modules correctly loads from MinIO."""
@@ -920,9 +894,7 @@ class TestPipelineTasksWasmLoading:
         assert result[str(mock_module.id)] == simple_add_wasm
 
 
-# ============================================================
 # SECTION 13: Definitions — wasm_compute registered
-# ============================================================
 
 class TestWasmComputeStepDefinition:
     """E2E: wasm_compute is properly registered in step definitions."""
@@ -945,9 +917,7 @@ class TestWasmComputeStepDefinition:
         assert STEP_DEFINITIONS["wasm_compute"]["category"] == "advanced"
 
 
-# ============================================================
 # SECTION 14: ORM Model — WasmModule
-# ============================================================
 
 class TestWasmModuleORM:
     """E2E: WasmModule ORM model has all required fields."""
@@ -973,9 +943,7 @@ class TestWasmModuleORM:
         assert name_col.unique is True
 
 
-# ============================================================
 # SECTION 15: Schemas — Wasm Module Response Schemas
-# ============================================================
 
 class TestWasmModuleSchemas:
     """E2E: Wasm module Pydantic schemas are correctly defined."""
@@ -1021,9 +989,7 @@ class TestWasmModuleSchemas:
         assert len(response.exports) == 1
 
 
-# ============================================================
 # SECTION 16: Frontend — API Client Functions
-# ============================================================
 
 class TestFrontendApiClient:
     """E2E: Frontend API client functions exist and have correct signatures."""
@@ -1048,9 +1014,7 @@ class TestFrontendApiClient:
         assert "export async function deleteWasmModule" in content
 
 
-# ============================================================
 # SECTION 17: Frontend — Types
-# ============================================================
 
 class TestFrontendTypes:
     """E2E: Frontend TypeScript types exist for Wasm modules."""
@@ -1069,9 +1033,7 @@ class TestFrontendTypes:
         assert "result: string | null" in content
 
 
-# ============================================================
 # SECTION 18: Frontend — /wasm-modules Page
-# ============================================================
 
 class TestFrontendWasmModulesPage:
     """E2E: /wasm-modules page exists and has required components."""
@@ -1104,9 +1066,7 @@ class TestFrontendWasmModulesPage:
         assert "Validate a .wasm file before uploading" in content
 
 
-# ============================================================
 # SECTION 19: Frontend — ConfigPanel Integration
-# ============================================================
 
 class TestFrontendConfigPanelIntegration:
     """E2E: ConfigPanel has wasm_compute integration."""
@@ -1141,9 +1101,7 @@ class TestFrontendConfigPanelIntegration:
         assert 'href="/wasm-modules"' in content
 
 
-# ============================================================
 # SECTION 20: End-to-End — Full Pipeline with wasm_compute
-# ============================================================
 
 class TestFullPipelineWasmCompute:
     """E2E: Complete pipeline execution with wasm_compute step."""
@@ -1261,9 +1219,7 @@ class TestFullPipelineWasmCompute:
                     os.remove(os.path.join(upload_dir, f))
 
 
-# ============================================================
 # SECTION 21: Migration — 0010_add_wasm_modules_table
-# ============================================================
 
 class TestMigration0010:
     """E2E: Migration 0010 creates wasm_modules table correctly."""
@@ -1294,9 +1250,7 @@ class TestMigration0010:
             assert f'"{col}"' in content or f"'{col}'" in content, f"Missing column: {col}"
 
 
-# ============================================================
 # SECTION 22: Config — WASM_BUCKET setting
-# ============================================================
 
 class TestWasmConfig:
     """E2E: Configuration has WASM_BUCKET setting."""
@@ -1313,9 +1267,7 @@ class TestWasmConfig:
         assert hasattr(settings, "S3_SECRET_KEY")
 
 
-# ============================================================
 # SECTION 23: Router Registration
-# ============================================================
 
 class TestWasmRouterRegistration:
     """E2E: Wasm router is registered in main.py."""
@@ -1333,9 +1285,7 @@ class TestWasmRouterRegistration:
         assert router.prefix == "/api/v1/wasm"
 
 
-# ============================================================
 # SECTION 24: Error Handling — Edge Cases
-# ============================================================
 
 class TestWasmErrorHandling:
     """E2E: Error handling for edge cases."""
@@ -1414,9 +1364,7 @@ class TestWasmErrorHandling:
             executor.execute(table, MockStep(), simple_add_wasm)
 
 
-# ============================================================
 # SECTION 25: Frontend Page Accessibility
-# ============================================================
 
 class TestFrontendPageAccessibility:
     """E2E: Frontend pages are accessible via HTTP."""

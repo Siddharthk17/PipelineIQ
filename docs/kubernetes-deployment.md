@@ -38,7 +38,7 @@ PipelineIQ deploys to a Civo k3s cluster (g4s.kube.small — 2 vCPU, 4GB RAM, ~$
 | cert-manager | Automatic TLS certificates | Let's Encrypt HTTP-01 ACME challenge |
 | TLS Secret | `pipelineiq-tls` | Auto-renews 30 days before expiry |
 
-Routes `api.pipelineiq.YOURDOMAIN.com` → `pipelineiq-api` service (ClusterIP).
+Routes `pipelineiq-api.onrender.com` → `pipelineiq-api` service (ClusterIP).
 
 ### API Tier
 
@@ -155,7 +155,7 @@ main container: gunicorn -w 4 -b 0.0.0.0:8000
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | Vercel | Global CDN | Next.js frontend (static site) |
-| DNS | Route53/Cloudflare | `api.pipelineiq.YOURDOMAIN.com` |
+| DNS | Route53/Cloudflare | `pipelineiq-api.onrender.com` |
 | GHCR | GitHub Container Registry | Docker image storage |
 
 Frontend is deployed separately on Vercel (global CDN). Backend API is on Civo k3s. DNS routes traffic to the ingress controller.

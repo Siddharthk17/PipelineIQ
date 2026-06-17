@@ -95,14 +95,12 @@ _GEMINI_PLACEHOLDER_MARKERS = (
     "would apply transformations if gemini api was available",
 )
 
-
 @dataclass
 class GenerationResult:
     yaml: str
     valid: bool
     attempts: int
     error: str | None = None
-
 
 @dataclass
 class RepairResult:
@@ -112,13 +110,11 @@ class RepairResult:
     valid: bool
     error: str | None = None
 
-
 def _structured_output_config() -> dict:
     return {
         "response_mime_type": "application/json",
         "response_schema": _STRUCTURED_PIPELINE_RESPONSE_SCHEMA,
     }
-
 
 def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
     """
@@ -193,7 +189,6 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
                 f"File {i}: [file_id: {file_id}] — error loading schema")
 
     return "\n\n".join(sections)
-
 
 async def generate_pipeline_from_description(
     description: str,
@@ -285,7 +280,6 @@ async def generate_pipeline_from_description(
             error=str(e2),
         )
 
-
 async def repair_pipeline_from_error(
     original_yaml: str,
     failed_step: str,
@@ -371,7 +365,6 @@ async def repair_pipeline_from_error(
         error=validation_error,
     )
 
-
 def compute_yaml_diff(original: str, corrected: str) -> list[dict]:
     """
     Compute a line-by-line diff between the original and corrected YAML.
@@ -401,7 +394,6 @@ def compute_yaml_diff(original: str, corrected: str) -> list[dict]:
 
     return diff
 
-
 def _detect_ai_service_error(text: str) -> str | None:
     lowered = text.lower()
     if any(marker in lowered for marker in _GEMINI_QUOTA_MARKERS):
@@ -409,7 +401,6 @@ def _detect_ai_service_error(text: str) -> str | None:
     if any(marker in lowered for marker in _GEMINI_PLACEHOLDER_MARKERS):
         return "AI repair service is temporarily unavailable. Please try again later."
     return None
-
 
 async def _call_gemini_async(
         prompt: str,
@@ -474,7 +465,6 @@ async def _call_gemini_async(
 
     return result
 
-
 def _clean_yaml_response(raw: str) -> str:
     """
     Strip common Gemini formatting artifacts from the response.
@@ -499,7 +489,6 @@ def _clean_yaml_response(raw: str) -> str:
         text = text[pipeline_start:]
 
     return text.strip()
-
 
 def _structured_pipeline_to_yaml(raw_response: str) -> str:
     """Convert Gemini structured JSON output into canonical PipelineIQ YAML."""
@@ -544,7 +533,6 @@ def _structured_pipeline_to_yaml(raw_response: str) -> str:
         sort_keys=False,
         allow_unicode=False,
     ).strip()
-
 
 def _validate_generated_yaml(
     yaml_text: str,

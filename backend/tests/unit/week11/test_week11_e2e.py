@@ -28,8 +28,7 @@ from backend.pipeline.parser import (
 from backend.telemetry import get_tracer, current_span_context
 
 
-# ── Fixtures ────────────────────────────────────────────────────────────────
-
+# Fixtures
 
 @pytest.fixture()
 def smart_executor() -> SmartExecutor:
@@ -55,8 +54,7 @@ def sample_table():
     })
 
 
-# ── OTel Trace/Span Persistence Tests ──────────────────────────────────────
-
+# OTel Trace/Span Persistence Tests
 
 class TestOTelPersistence:
     """Verify that OTel trace_id, span_id, engine, started_at, completed_at
@@ -176,8 +174,7 @@ class TestOTelPersistence:
         assert all(c in "0123456789abcdef" for c in result.span_id)
 
 
-# ── Contract Validation Tests ──────────────────────────────────────────────
-
+# Contract Validation Tests
 
 class TestContractValidation:
     """End-to-end tests for data contract validation."""
@@ -389,8 +386,7 @@ null_thresholds:
         assert len(type_violations) == 0, "int32 should match integer category"
 
 
-# ── SmartExecutor Return Path Tests ────────────────────────────────────────
-
+# SmartExecutor Return Path Tests
 
 class TestSmartExecutorReturnPaths:
     """Every return path in SmartExecutor.execute must produce
@@ -445,7 +441,7 @@ class TestSmartExecutorReturnPaths:
         assert result.started_at <= result.completed_at, "started_at must be <= completed_at"
 
 
-# ── Severity Routing Tests ──────────────────────────────────────────────────
+# Severity Routing Tests
 
 
 class TestSeverityRouting:
@@ -471,7 +467,7 @@ class TestSeverityRouting:
         assert len(values) == 2
 
 
-# ── Downstream Blocking Tests ───────────────────────────────────────────────
+# Downstream Blocking Tests
 
 
 class TestDownstreamBlocking:
@@ -489,7 +485,7 @@ class TestDownstreamBlocking:
         assert _block_downstream_schedules.__doc__ is not None or True
 
 
-# ── SSE Event Publishing Tests ──────────────────────────────────────────────
+# SSE Event Publishing Tests
 
 
 class TestSSEContractViolationEvents:
@@ -520,8 +516,7 @@ class TestSSEContractViolationEvents:
         assert "severity" in params
 
 
-# ── OTel Configuration Tests ────────────────────────────────────────────────
-
+# OTel Configuration Tests
 
 class TestOTelConfiguration:
     """Verify OTel configuration is properly exposed in Settings."""
@@ -552,8 +547,7 @@ class TestOTelConfiguration:
         assert _is_otel_enabled() is True
 
 
-# ── Timestamp Correctness Tests ─────────────────────────────────────────────
-
+# Timestamp Correctness Tests
 
 class TestTimestampCorrectness:
     """Verify started_at and completed_at are distinct after execution."""
@@ -610,8 +604,7 @@ class TestTimestampCorrectness:
             pass  # Expected for nonexistent file
 
 
-# ── Contract Validation Engine Edge Cases ────────────────────────────────────
-
+# Contract Validation Engine Edge Cases
 
 class TestContractValidationEdgeCases:
     """Edge cases for the post-execution contract validation engine."""
@@ -700,8 +693,7 @@ null_thresholds:
             assert v.severity == "warning", "unexpected_column must always be warning"
 
 
-# ── SmartExecutor Engine Routing Tests ──────────────────────────────────────
-
+# SmartExecutor Engine Routing Tests
 
 class TestSmartExecutorEngineRouting:
     """Verify SmartExecutor routes to correct engine based on size."""
@@ -752,8 +744,7 @@ class TestSmartExecutorEngineRouting:
         assert result.engine == "pandas"
 
 
-# ── BreachReport / build_breach_report Tests ───────────────────────────────
-
+# BreachReport / build_breach_report Tests
 
 class TestBreachReport:
     """Verify BreachReport dataclass and build_breach_report function."""
@@ -856,8 +847,7 @@ class TestBreachReport:
         assert report.summary == ""
 
 
-# ── check_and_enforce_contract Tests ──────────────────────────────────────
-
+# check_and_enforce_contract Tests 
 
 class TestCheckAndEnforceContract:
     """Verify check_and_enforce_contract orchestrator never raises & handles edge cases."""
@@ -908,8 +898,7 @@ class TestCheckAndEnforceContract:
         db_mock.add.assert_not_called()
 
 
-# ── OTel Telemetry Function Tests ─────────────────────────────────────────
-
+# OTel Telemetry Function Tests
 
 class TestTelemetryFunctions:
     """Verify all telemetry utility functions work correctly."""
@@ -1009,8 +998,7 @@ class TestTelemetryFunctions:
         assert all(c in "0123456789abcdef" for c in result)
 
 
-# ── SmartExecutor Span Attribute Tests ─────────────────────────────────────
-
+# SmartExecutor Span Attribute Tests 
 
 class TestSmartExecutorSpanAttributes:
     """Verify SmartExecutor sets correct span attributes on OTel spans."""
@@ -1084,8 +1072,7 @@ class TestSmartExecutorSpanAttributes:
         assert enriched.started_at <= enriched.completed_at
 
 
-# ── DataContract Model Tests ────────────────────────────────────────────────
-
+# DataContract Model Tests 
 
 class TestDataContractModel:
     """Verify DataContract model has all required columns."""
@@ -1121,8 +1108,7 @@ class TestDataContractModel:
         assert "updated_at" in col_names
 
 
-# ── Data Contract API Structure Tests ──────────────────────────────────────
-
+# Data Contract API Structure Tests
 
 class TestDataContractAPI:
     """Verify contract API endpoints exist with correct HTTP methods."""

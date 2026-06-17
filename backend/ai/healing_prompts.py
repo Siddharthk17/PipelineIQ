@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import orjson
 
-
 HEALING_SYSTEM_PROMPT = """You are an autonomous data pipeline repair agent for PipelineIQ.
 A data pipeline failed because the source data schema changed.
 Return the minimal JSON patch needed to repair the YAML.
@@ -56,7 +55,6 @@ Schema diff:
 
 Patch every step that references the renamed or missing column, not only the failed step."""
 
-
 def build_healing_prompt(
     *,
     broken_yaml: str,
@@ -105,7 +103,6 @@ def build_healing_prompt(
                 [])).decode("utf-8"),
         renamed_candidates_formatted=formatted_candidates,
     )
-
 
 def validate_healing_patch(patch: dict) -> tuple[bool, str]:
     """Validate the JSON patch schema returned by Gemini."""

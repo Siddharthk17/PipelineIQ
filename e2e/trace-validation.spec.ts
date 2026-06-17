@@ -13,7 +13,7 @@ const baseUrl = process.env.E2E_BASE_URL;
 const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
 const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
-// ── Helper ────────────────────────────────────────────────────────────────────
+// Helper
 async function login(page: import("@playwright/test").Page): Promise<void> {
   test.skip(!baseUrl, "Set E2E_BASE_URL to run trace validation tests.");
 
@@ -27,7 +27,7 @@ async function login(page: import("@playwright/test").Page): Promise<void> {
 
 }
 
-// ── Suite ─────────────────────────────────────────────────────────────────────
+// Suite 
 test.describe("OTel trace field validation", () => {
   /**
    * The /timing endpoint is the primary surface where step-level trace IDs

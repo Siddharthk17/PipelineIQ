@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 NAMESPACE="pipelineiq"
-BASE_URL="${BASE_URL:-https://api.pipelineiq.YOURDOMAIN.com}"
+BASE_URL="${BASE_URL:-https://pipelineiq-api.onrender.com}"
 
 check_api_health() {
   local max_attempts=$1
@@ -28,9 +28,7 @@ run_scenario() {
   local max_recovery="${4:-60}"
 
   echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "CHAOS SCENARIO: $name"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   local start
   start=$(date +%s)
@@ -65,9 +63,7 @@ run_scenario "Kill all API pods" \
   "60"
 
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "CHAOS SCENARIO: Kill PostgreSQL pod"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 kubectl delete pod -n $NAMESPACE -l app=postgres --grace-period=0 --force 2>/dev/null || true
 sleep 5
@@ -90,9 +86,7 @@ run_scenario "Kill Redis cache pod" \
   "30"
 
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "CHAOS SCENARIO: Kill one Celery bulk worker"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 kubectl delete pod -n $NAMESPACE -l app=worker-bulk --field-selector=status.phase=Running -o name 2>/dev/null | head -1 | xargs -r kubectl delete -n $NAMESPACE --grace-period=30
 echo "Bulk worker killed. Waiting for Kubernetes to restart it..."
@@ -100,9 +94,7 @@ kubectl rollout status deployment/worker-bulk -n $NAMESPACE --timeout=60s 2>/dev
 echo "Bulk worker restarted by Kubernetes"
 
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "CHAOS SCENARIO: Kill Gemini AI worker"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 kubectl delete pod -n $NAMESPACE -l app=worker-gemini --grace-period=0 --force 2>/dev/null || true
 sleep 5
@@ -122,9 +114,7 @@ kubectl rollout status deployment/worker-gemini -n $NAMESPACE --timeout=60s 2>/d
 echo "Gemini worker restarted"
 
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "CHAOS SCENARIO: Fill /dev/shm on a worker"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 WORKER_POD=$(kubectl get pods -n $NAMESPACE -l app=worker-bulk -o name 2>/dev/null | head -1 | cut -d'/' -f2)
 if [ -n "$WORKER_POD" ]; then
@@ -142,9 +132,7 @@ else
 fi
 
 echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "FINAL HEALTH CHECK AFTER ALL CHAOS SCENARIOS"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 kubectl get pods -n $NAMESPACE 2>/dev/null || true
 echo ""

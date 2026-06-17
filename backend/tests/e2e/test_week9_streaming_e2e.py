@@ -132,9 +132,7 @@ def cleanup_all_test_topics():
     print("[CLEANUP] All test topics deleted.")
 
 
-# ---------------------------------------------------------------------------
 # Fixtures
-# ---------------------------------------------------------------------------
 
 BASE_URL = "http://localhost"
 
@@ -189,9 +187,7 @@ def dlq_producer():
     p.flush(timeout=5)
 
 
-# ---------------------------------------------------------------------------
 # 1. Redpanda Infrastructure Tests
-# ---------------------------------------------------------------------------
 
 class TestRedpandaInfrastructure:
 
@@ -306,9 +302,7 @@ class TestRedpandaInfrastructure:
         assert all(not t["name"].startswith("_") for t in topics)
 
 
-# ---------------------------------------------------------------------------
 # 2. Streaming API Endpoint Tests
-# ---------------------------------------------------------------------------
 
 class TestStreamingAPIEndpoints:
 
@@ -384,9 +378,7 @@ class TestStreamingAPIEndpoints:
             assert resp.status_code != 404, f"Route {method} {path} not found"
 
 
-# ---------------------------------------------------------------------------
 # 3. Streaming Celery Task Tests
-# ---------------------------------------------------------------------------
 
 class TestStreamingCeleryTask:
 
@@ -424,9 +416,7 @@ class TestStreamingCeleryTask:
         assert "True" in result.stdout
 
 
-# ---------------------------------------------------------------------------
 # 4. Streaming Step Type Tests
-# ---------------------------------------------------------------------------
 
 class TestStreamingStepTypes:
 
@@ -457,9 +447,7 @@ class TestStreamingStepTypes:
         assert STEP_DEFINITIONS["stream_publish"]["category"] == "sink"
 
 
-# ---------------------------------------------------------------------------
 # 5. Frontend Step Definition Tests
-# ---------------------------------------------------------------------------
 
 class TestFrontendStepDefinitions:
 
@@ -497,9 +485,7 @@ class TestFrontendStepDefinitions:
         assert "backendSupported: true" in c
 
 
-# ---------------------------------------------------------------------------
 # 6. StreamingStats Model Tests
-# ---------------------------------------------------------------------------
 
 class TestStreamingStatsModel:
 
@@ -554,9 +540,7 @@ class TestStreamingStatsModel:
                    for fk in fks)
 
 
-# ---------------------------------------------------------------------------
 # 7. Frontend Integration Tests
-# ---------------------------------------------------------------------------
 
 class TestFrontendIntegration:
 
@@ -609,9 +593,7 @@ class TestFrontendIntegration:
         assert "batchRuns" in c
 
 
-# ---------------------------------------------------------------------------
 # 8. Full End-to-End Streaming Pipeline Lifecycle
-# ---------------------------------------------------------------------------
 
 class TestEndToEndStreamingLifecycle:
 
@@ -668,9 +650,7 @@ class TestEndToEndStreamingLifecycle:
             assert len([m for m in msgs if m and not m.error()]) >= 1
 
 
-# ---------------------------------------------------------------------------
 # 9. Edge Cases and Error Handling
-# ---------------------------------------------------------------------------
 
 class TestEdgeCases:
 

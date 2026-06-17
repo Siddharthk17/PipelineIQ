@@ -140,7 +140,7 @@ class SmartExecutor:
                 engine = "duckdb"
                 row_count_in = input_table.num_rows
 
-        # ── Start the step span ───────────────────────────────────────────
+        # Start the step span
         with tracer.start_as_current_span(
             name=f"step:{step.name}",
             attributes={

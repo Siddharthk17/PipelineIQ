@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-BASE_URL="${BASE_URL:-https://api.pipelineiq.YOURDOMAIN.com}"
+BASE_URL="${BASE_URL:-https://pipelineiq-api.onrender.com}"
 AUTH_TOKEN="${AUTH_TOKEN:-}"
 RESULTS_DIR="k6-results"
 

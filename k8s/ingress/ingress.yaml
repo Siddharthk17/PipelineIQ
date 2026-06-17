@@ -11,10 +11,10 @@ metadata:
 spec:
   tls:
     - hosts:
-        - api.pipelineiq.YOURDOMAIN.com
+        - pipelineiq-api.onrender.com
       secretName: pipelineiq-tls
   rules:
-    - host: api.pipelineiq.YOURDOMAIN.com
+    - host: pipelineiq-api.onrender.com
       http:
         paths:
           - path: /

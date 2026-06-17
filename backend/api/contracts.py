@@ -83,7 +83,7 @@ def _contract_query(db: Session, current_user: User):
     return query
 
 
-# ── Contract definition CRUD ────────────────────────────────────────────────
+# Contract definition CRUD
 
 
 @router.get("/pipelines/{pipeline_name}", response_model=ContractListResponse)
@@ -392,7 +392,7 @@ def list_pipeline_breaches(
     }
 
 
-# ── Contract violation read endpoints ───────────────────────────────────────
+# Contract violation read endpoints
 
 
 @router.get("/runs/{run_id}")

@@ -3,7 +3,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// ── Motion stub ──────────────────────────────────────────────────────────────
+// Motion stub
 vi.mock("motion/react", () => {
   const MotionDiv = React.forwardRef(({ children, ...props }: any, ref: any) => (
     <div ref={ref} {...props}>
@@ -17,12 +17,12 @@ vi.mock("motion/react", () => {
   };
 });
 
-// ── API stub ─────────────────────────────────────────────────────────────────
+// API stub
 vi.mock("@/lib/api", () => ({
   fetchApi: vi.fn(),
 }));
 
-// ── usePipelineRun stub (SSE not needed in unit tests) ────────────────────
+// usePipelineRun stub (SSE not needed in unit tests)
 vi.mock("@/hooks/usePipelineRun", () => ({
   usePipelineRun: vi.fn(),
 }));
@@ -32,7 +32,7 @@ import { ExecutionTimelineWidget } from "@/components/widgets/ExecutionTimelineW
 import { usePipelineStore } from "@/store/pipelineStore";
 import type { RunTimingResponse, StepResult } from "@/lib/types";
 
-// ── Test wrapper ─────────────────────────────────────────────────────────────
+// Test wrapper
 function wrapper({ children }: { children: React.ReactNode }) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -40,7 +40,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
-// ── Fixtures ──────────────────────────────────────────────────────────────────
+// Fixtures
 const TRACE_ID = "aabbccddeeff00112233445566778899";
 
 const MOCK_TIMING: RunTimingResponse = {
@@ -96,7 +96,7 @@ function makeStep(overrides: Partial<StepResult> = {}): StepResult {
   };
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// Tests
 describe("ExecutionTimelineWidget", () => {
   beforeEach(() => {
     vi.mocked(fetchApi).mockResolvedValue(MOCK_TIMING);
@@ -108,7 +108,7 @@ describe("ExecutionTimelineWidget", () => {
     vi.clearAllMocks();
   });
 
-  // ── Empty / no-selection state ──────────────────────────────────────────────
+  // Empty / no-selection state
   it("shows 'No Run Selected' empty state when no run is active", () => {
     render(<ExecutionTimelineWidget />, { wrapper });
     expect(screen.getByText("No Run Selected")).toBeInTheDocument();
@@ -119,7 +119,7 @@ describe("ExecutionTimelineWidget", () => {
     expect(vi.mocked(fetchApi)).not.toHaveBeenCalled();
   });
 
-  // ── Happy path ──────────────────────────────────────────────────────────────
+  // Happy path 
   it("fetches timing data when a run is selected", async () => {
     usePipelineStore.setState({ activeRunId: "run-abc", activeRun: null } as any);
     render(<ExecutionTimelineWidget />, { wrapper });
@@ -159,7 +159,7 @@ describe("ExecutionTimelineWidget", () => {
     );
   });
 
-  // ── Trace ID display ────────────────────────────────────────────────────────
+  // Trace ID display 
   it("shows trace IDs truncated to 12 chars + ellipsis in each step row", async () => {
     usePipelineStore.setState({ activeRunId: "run-abc", activeRun: null } as any);
     render(<ExecutionTimelineWidget />, { wrapper });
@@ -187,7 +187,7 @@ describe("ExecutionTimelineWidget", () => {
     expect(screen.queryByText(/…$/)).not.toBeInTheDocument();
   });
 
-  // ── Empty steps ─────────────────────────────────────────────────────────────
+  // Empty steps 
   it("shows 'No timing data available yet.' when steps array is empty", async () => {
     vi.mocked(fetchApi).mockResolvedValue({ ...MOCK_TIMING, steps: [] });
     usePipelineStore.setState({ activeRunId: "run-abc", activeRun: null } as any);
@@ -200,7 +200,7 @@ describe("ExecutionTimelineWidget", () => {
     );
   });
 
-  // ── Error state ─────────────────────────────────────────────────────────────
+  // Error state 
   it("shows error message when the API call fails", async () => {
     vi.mocked(fetchApi).mockRejectedValue(new Error("Network error"));
     usePipelineStore.setState({ activeRunId: "run-abc", activeRun: null } as any);
@@ -221,7 +221,7 @@ describe("ExecutionTimelineWidget", () => {
     );
   });
 
-  // ── SSE-driven refetch (Gap 4 contract) ────────────────────────────────────
+  // SSE-driven refetch (Gap 4 contract)
   it("refetches timing when a new step completes via SSE (stepsDone increments)", async () => {
     usePipelineStore.setState({
       activeRunId: "run-abc",
@@ -302,7 +302,7 @@ describe("ExecutionTimelineWidget", () => {
     );
   });
 
-  // ── Run change ───────────────────────────────────────────────────────────────
+  // Run change
   it("clears timing and re-fetches when the active run changes", async () => {
     usePipelineStore.setState({ activeRunId: "run-abc", activeRun: null } as any);
     render(<ExecutionTimelineWidget />, { wrapper });
@@ -320,7 +320,7 @@ describe("ExecutionTimelineWidget", () => {
     );
   });
 
-  // ── Engine display tests ────────────────────────────────────────────────────
+  // Engine display tests
   it("shows engine badge when engine is present", async () => {
     const engineTiming: RunTimingResponse = {
       ...MOCK_TIMING,

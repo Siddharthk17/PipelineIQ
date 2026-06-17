@@ -11,7 +11,7 @@
 
 | Service | URL | Access |
 |---|---|---|
-| API | https://api.pipelineiq.YOURDOMAIN.com | Public (TLS) |
+| API | https://pipelineiq-api.onrender.com | Public (TLS) |
 | Frontend | https://pipelineiq.vercel.app | Vercel (external) |
 | MinIO Console | Internal | kubectl port-forward |
 | Jaeger UI | Internal | kubectl port-forward |
@@ -158,7 +158,7 @@ kubectl get secret pipelineiq-secrets -n pipelineiq -o jsonpath='{.data}' | pyth
 2. If crashed pod is hung, force delete: `kubectl delete pod <pod-name> -n pipelineiq --grace-period=0 --force`
 3. The Deployment controller will recreate the pod automatically
 4. Verify DB recovered: `kubectl logs -n pipelineiq -l app=postgres --tail=50`
-5. Verify API can connect: `curl -s https://api.pipelineiq.YOURDOMAIN.com/readyz | python3 -m json.tool`
+5. Verify API can connect: `curl -s https://pipelineiq-api.onrender.com/readyz | python3 -m json.tool`
 
 ### MinIO data corruption
 
@@ -235,8 +235,8 @@ kubectl get pods -n pipelineiq
 ### Verify deployment
 
 ```bash
-curl -sf https://api.pipelineiq.YOURDOMAIN.com/healthz | python3 -m json.tool
-curl -sf https://api.pipelineiq.YOURDOMAIN.com/readyz | python3 -m json.tool
+curl -sf https://pipelineiq-api.onrender.com/healthz | python3 -m json.tool
+curl -sf https://pipelineiq-api.onrender.com/readyz | python3 -m json.tool
 kubectl get pods -n pipelineiq
 ```
 

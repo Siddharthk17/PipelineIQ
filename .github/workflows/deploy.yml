@@ -65,7 +65,7 @@ jobs:
 
     environment:
       name: production
-      url: https://api.pipelineiq.YOURDOMAIN.com
+      url: https://pipelineiq-api.onrender.com
 
     steps:
       - uses: actions/checkout@v4
@@ -160,7 +160,7 @@ jobs:
           sleep 30
 
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            https://api.pipelineiq.YOURDOMAIN.com/healthz)
+            https://pipelineiq-api.onrender.com/healthz)
           if [ "$HTTP_STATUS" != "200" ]; then
             echo "ERROR: /healthz returned $HTTP_STATUS"
             exit 1
@@ -168,13 +168,13 @@ jobs:
           echo "PASS: /healthz returned 200"
 
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            https://api.pipelineiq.YOURDOMAIN.com/readyz)
+            https://pipelineiq-api.onrender.com/readyz)
           if [ "$HTTP_STATUS" != "200" ]; then
             echo "WARN: /readyz returned $HTTP_STATUS (dependencies may still be starting)"
           fi
 
           echo "Deployment successful!"
-          echo "API: https://api.pipelineiq.YOURDOMAIN.com"
+          echo "API: https://pipelineiq-api.onrender.com"
 
       - name: Dry-run deploy (no KUBE_CONFIG — skipping k3s)
         if: steps.check-kube.outputs.dry-run == 'true'

@@ -10,12 +10,10 @@ Jaro-Winkler was chosen over simple Levenshtein because:
 """
 import jellyfish
 
-
 # Minimum similarity to offer a suggestion
 # 0.85 avoids false positives — "name" should NOT suggest "amount" (too different)
 # But "reveue" SHOULD suggest "revenue" (transposed letters, high similarity)
 SIMILARITY_THRESHOLD = 0.85
-
 
 def suggest_column(typed: str, available_columns: list[str]) -> str | None:
     """
@@ -64,7 +62,6 @@ def suggest_column(typed: str, available_columns: list[str]) -> str | None:
         return best_col
 
     return None
-
 
 def suggest_columns_batch(
     queries: list[str], available_columns: list[str]

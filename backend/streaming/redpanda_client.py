@@ -55,9 +55,7 @@ DEFAULT_RETENTION_MS = "86400000"  # 24 hours
 DEFAULT_SEGMENT_BYTES = "104857600"  # 100MB
 
 
-# ---------------------------------------------------------------------------
 # Circuit Breaker — prevents hammering a failing Redpanda broker
-# ---------------------------------------------------------------------------
 
 class CircuitState(str, Enum):
     CLOSED = "closed"       # Normal operation
@@ -140,9 +138,7 @@ class CircuitBreaker:
         self._last_failure_time = 0.0
 
 
-# ---------------------------------------------------------------------------
 # Redis Fallback Queue — zero data loss during broker outages
-# ---------------------------------------------------------------------------
 
 _FALLBACK_QUEUE_KEY = "redpanda:fallback_queue"
 _FALLBACK_MAX_SIZE = 100_000  # Max messages in fallback before dropping oldest
@@ -235,9 +231,7 @@ def fallback_queue_size() -> int:
         return 0
 
 
-# ---------------------------------------------------------------------------
 # Admin Client
-# ---------------------------------------------------------------------------
 
 class RedpandaAdminClient:
     """Manages Redpanda topics — create, list, delete."""
@@ -372,9 +366,7 @@ def make_dlq_producer() -> Producer:
     })
 
 
-# ---------------------------------------------------------------------------
 # Global circuit breaker instance — shared across all producer calls
-# ---------------------------------------------------------------------------
 
 _producer_cb = CircuitBreaker(failure_threshold=3, recovery_timeout=30)
 

@@ -79,7 +79,7 @@ def seeded_data(test_db):
 class TestWeek10E2E:
     """End-to-end Week 10 lifecycle — ordered via single shared fixture."""
 
-    # ─── Step 1: Catalog Search ───────────────────────
+    # Step 1: Catalog Search
 
     def test_01_catalog_search(self, client: TestClient, seeded_data):
         resp = client.get("/api/catalog/search?q=output")
@@ -103,7 +103,7 @@ class TestWeek10E2E:
         resp = client.get("/api/catalog/search?q=x")
         assert resp.status_code in (200, 422)
 
-    # ─── Step 2: Blast Radius ─────────────────────────
+    # Step 2: Blast Radius
 
     def test_02_blast_radius(self, client: TestClient, seeded_data):
         resp = client.get("/api/catalog/assets/col::load_data::amount/impact")
@@ -121,7 +121,7 @@ class TestWeek10E2E:
         assert resp.json()["downstream"] == []
         assert resp.json()["depth_reached"] == 0
 
-    # ─── Step 3: Upstream Lineage ─────────────────────
+    # Step 3: Upstream Lineage
 
     def test_03_upstream_lineage(self, client: TestClient, seeded_data):
         resp = client.get("/api/catalog/assets/output::output.csv/lineage")
@@ -134,7 +134,7 @@ class TestWeek10E2E:
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
 
-    # ─── Step 4: OpenLineage Single Export ────────────
+    # Step 4: OpenLineage Single Export
 
     def test_04_openlineage_single(self, client: TestClient, seeded_data):
         run_id = seeded_data["run_id"]
@@ -156,7 +156,7 @@ class TestWeek10E2E:
         assert event["inputs"][0]["namespace"] != ""
         assert event["inputs"][0]["name"] != ""
 
-    # ─── Step 5: OpenLineage Bulk NDJSON Export ───────
+    # Step 5: OpenLineage Bulk NDJSON Export
 
     def test_05_openlineage_bulk(self, client: TestClient, seeded_data):
         resp = client.get("/api/lineage/export?limit=100")
@@ -177,7 +177,7 @@ class TestWeek10E2E:
             assert "inputs" in event
             assert "outputs" in event
 
-    # ─── Step 6: Orphan Detection ─────────────────────
+    # Step 6: Orphan Detection
 
     def test_06_orphans(self, client: TestClient, seeded_data):
         # Assets just registered → not orphaned with days_inactive=0
@@ -194,7 +194,7 @@ class TestWeek10E2E:
             assert "namespace" in orphan
             assert "asset_type" in orphan
 
-    # ─── Step 7: Catalog Stats ────────────────────────
+    # Step 7: Catalog Stats
 
     def test_07_stats(self, client: TestClient, seeded_data):
         resp = client.get("/api/catalog/stats")
@@ -205,7 +205,7 @@ class TestWeek10E2E:
         total = sum(data["assets_by_type"].values())
         assert total > 0
 
-    # ─── Step 8: Re-registration Idempotency ──────────
+    # Step 8: Re-registration Idempotency
 
     def test_08_re_registration(self, test_db, seeded_data):
         run_id = seeded_data["run_id"]
@@ -227,7 +227,7 @@ class TestWeek10E2E:
         count2 = test_db.query(func.count(DataAsset.id)).scalar()
         assert count2 == count1, "Re-registration created duplicate assets"
 
-    # ─── Step 9: Edge Cases ───────────────────────────
+    # Step 9: Edge Cases
 
     def test_09_edge_cases(self, client: TestClient, seeded_data):
         # Missing run → 404
@@ -240,7 +240,7 @@ class TestWeek10E2E:
         assert resp.json()["count"] == 0
 
 
-# ─── Helpers (module-level for fixture access) ────────
+# Helpers (module-level for fixture access)
 
 def _build_pipeline_yaml() -> str:
     return """pipeline:

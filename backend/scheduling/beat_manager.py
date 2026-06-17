@@ -44,7 +44,7 @@ def _build_beat_schedule() -> dict:
     return beat_schedule
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# Public API
 
 def register_schedules() -> dict:
     """
