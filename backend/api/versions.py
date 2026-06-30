@@ -43,6 +43,15 @@ def _check_pipeline_permission(
         )
 
 
+def _version_query(db: Session, user: User, pipeline_name: str):
+    query = db.query(PipelineVersion).filter(
+        PipelineVersion.pipeline_name == pipeline_name
+    )
+    if user.role != "admin":
+        query = query.filter(PipelineVersion.user_id == user.id)
+    return query
+
+
 @router.get("/{pipeline_name}")
 def list_versions(
     pipeline_name: str,
@@ -54,8 +63,7 @@ def list_versions(
         db, current_user, pipeline_name, ["owner", "runner", "viewer"]
     )
     versions = (
-        db.query(PipelineVersion)
-        .filter(PipelineVersion.pipeline_name == pipeline_name)
+        _version_query(db, current_user, pipeline_name)
         .order_by(PipelineVersion.version_number.desc())
         .all()
     )
@@ -84,9 +92,8 @@ def get_version(
         db, current_user, pipeline_name, ["owner", "runner", "viewer"]
     )
     version = (
-        db.query(PipelineVersion)
+        _version_query(db, current_user, pipeline_name)
         .filter(
-            PipelineVersion.pipeline_name == pipeline_name,
             PipelineVersion.version_number == version_number,
         )
         .first()
@@ -118,17 +125,15 @@ def diff_versions(
         db, current_user, pipeline_name, ["owner", "runner", "viewer"]
     )
     va = (
-        db.query(PipelineVersion)
+        _version_query(db, current_user, pipeline_name)
         .filter(
-            PipelineVersion.pipeline_name == pipeline_name,
             PipelineVersion.version_number == version_a,
         )
         .first()
     )
     vb = (
-        db.query(PipelineVersion)
+        _version_query(db, current_user, pipeline_name)
         .filter(
-            PipelineVersion.pipeline_name == pipeline_name,
             PipelineVersion.version_number == version_b,
         )
         .first()
@@ -171,9 +176,8 @@ def restore_version(
         db, current_user, pipeline_name, [
             "owner", "runner"])
     old_version = (
-        db.query(PipelineVersion)
+        _version_query(db, current_user, pipeline_name)
         .filter(
-            PipelineVersion.pipeline_name == pipeline_name,
             PipelineVersion.version_number == version_number,
         )
         .first()
@@ -186,6 +190,7 @@ def restore_version(
         yaml_config=old_version.yaml_config,
         run_id=None,
         db=db,
+        user_id=str(current_user.id),
     )
 
     return {

@@ -13,6 +13,13 @@ from dataclasses import dataclass
 import yaml
 from sqlalchemy.orm import Session
 
+from backend.ai.redaction import (
+    clamp_prompt,
+    sanitize_error_for_ai,
+    sanitize_text_for_ai,
+    sanitize_yaml_for_ai,
+)
+from backend.config import settings
 from backend.models import FileProfile, UploadedFile
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.parser import PipelineParser
@@ -116,7 +123,12 @@ def _structured_output_config() -> dict:
         "response_schema": _STRUCTURED_PIPELINE_RESPONSE_SCHEMA,
     }
 
-def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
+def build_file_schemas_section(
+    file_ids: list[str],
+    db: Session,
+    *,
+    user_id: str | None = None,
+) -> str:
     """
     Build the file schemas section injected into generation/repair prompts.
 
@@ -131,8 +143,10 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
     for i, file_id in enumerate(file_ids, 1):
         try:
             # Get file record
-            file_record = db.query(UploadedFile).filter(
-                UploadedFile.id == file_id).first()
+            file_query = db.query(UploadedFile).filter(UploadedFile.id == file_id)
+            if user_id is not None:
+                file_query = file_query.filter(UploadedFile.user_id == user_id)
+            file_record = file_query.first()
 
             if not file_record:
                 sections.append(
@@ -156,8 +170,13 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
                 # Otherwise leave as empty dict
 
             if not profile_record or profile_record.status != "complete":
+                file_label = (
+                    sanitize_text_for_ai(file_record.original_filename, max_chars=160)
+                    if settings.AI_INCLUDE_FILENAMES_IN_PROMPTS
+                    else "uploaded file"
+                )
                 sections.append(
-                    f"File {i}: {file_record.original_filename} (file_id: {file_id})\n"
+                    f"File {i}: {file_label} (file_id: {file_id})\n"
                     f"  Profile not yet available — upload and wait for profiling to complete"
                 )
                 continue
@@ -168,16 +187,25 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
                 # Safely extract profile data
                 if not isinstance(col_data, dict):
                     col_data = {"semantic_type": "unknown"}
-                semantic_type = col_data.get("semantic_type", "text")
+                safe_col_name = sanitize_text_for_ai(col_name, max_chars=160)
+                semantic_type = sanitize_text_for_ai(
+                    col_data.get("semantic_type", "text"),
+                    max_chars=80,
+                )
                 null_pct = col_data.get("null_pct", 0.0)
-                desc = f"{col_name} ({semantic_type}"
-                if null_pct > 20:
+                desc = f"{safe_col_name} ({semantic_type}"
+                if isinstance(null_pct, (int, float)) and null_pct > 20:
                     desc += f", {null_pct:.0f}% null"
                 desc += ")"
                 column_descriptions.append(desc)
 
+            file_label = (
+                sanitize_text_for_ai(file_record.original_filename, max_chars=160)
+                if settings.AI_INCLUDE_FILENAMES_IN_PROMPTS
+                else "uploaded file"
+            )
             sections.append(
-                f"File {i}: {file_record.original_filename} "
+                f"File {i}: {file_label} "
                 f"(file_id: {file_id})\n"
                 f"  Rows: {profile_record.row_count:,}\n"
                 f"  Columns: {', '.join(column_descriptions)}"
@@ -195,18 +223,19 @@ async def generate_pipeline_from_description(
     file_ids: list[str],
     db: Session,
     request_id: str | None = None,
+    user_id: str | None = None,
 ) -> GenerationResult:
     """
     Generate a PipelineIQ pipeline YAML from a natural language description.
     """
     # Build the file schemas section
-    file_schemas_section = build_file_schemas_section(file_ids, db)
+    file_schemas_section = build_file_schemas_section(file_ids, db, user_id=user_id)
 
     # Build the full prompt
     prompt = GENERATION_SYSTEM_PROMPT.format(
         step_type_reference=STEP_TYPE_REFERENCE,
         file_schemas_section=file_schemas_section,
-        user_request=description,
+        user_request=sanitize_text_for_ai(description),
     )
 
     # Attempt 1: Generate
@@ -231,7 +260,12 @@ async def generate_pipeline_from_description(
 
     # Validate Attempt 1
     try:
-        validation_error = _validate_generated_yaml(raw_yaml, file_ids, db)
+        validation_error = _validate_generated_yaml(
+            raw_yaml,
+            file_ids,
+            db,
+            user_id=user_id,
+        )
         if validation_error is None:
             return GenerationResult(yaml=raw_yaml, valid=True, attempts=1)
     except Exception as e:
@@ -240,8 +274,8 @@ async def generate_pipeline_from_description(
 
     # Attempt 2: Self-fix
     fix_prompt = SELF_FIX_PROMPT.format(
-        validation_error=validation_error,
-        invalid_yaml=raw_yaml,
+        validation_error=sanitize_error_for_ai(validation_error),
+        invalid_yaml=sanitize_yaml_for_ai(raw_yaml),
     )
 
     try:
@@ -263,7 +297,12 @@ async def generate_pipeline_from_description(
 
     # Validate Attempt 2
     try:
-        validation_error = _validate_generated_yaml(corrected_yaml, file_ids, db)
+        validation_error = _validate_generated_yaml(
+            corrected_yaml,
+            file_ids,
+            db,
+            user_id=user_id,
+        )
         if validation_error is None:
             return GenerationResult(yaml=corrected_yaml, valid=True, attempts=2)
         return GenerationResult(
@@ -288,17 +327,18 @@ async def repair_pipeline_from_error(
     file_ids: list[str],
     db: Session,
     request_id: str | None = None,
+    user_id: str | None = None,
 ) -> RepairResult:
     """
     Generate a corrected YAML for a failed pipeline run.
     """
-    file_schemas_section = build_file_schemas_section(file_ids, db)
+    file_schemas_section = build_file_schemas_section(file_ids, db, user_id=user_id)
 
     prompt = REPAIR_SYSTEM_PROMPT.format(
-        original_yaml=original_yaml,
+        original_yaml=sanitize_yaml_for_ai(original_yaml),
         failed_step=failed_step,
-        error_type=error_type,
-        error_message=error_message,
+        error_type=sanitize_text_for_ai(error_type, max_chars=160),
+        error_message=sanitize_error_for_ai(error_message),
         file_schemas_section=file_schemas_section,
     )
 
@@ -341,7 +381,12 @@ async def repair_pipeline_from_error(
     valid = True
     validation_error = None
     try:
-        validation_error = _validate_generated_yaml(corrected_yaml, file_ids, db)
+        validation_error = _validate_generated_yaml(
+            corrected_yaml,
+            file_ids,
+            db,
+            user_id=user_id,
+        )
         valid = validation_error is None
     except Exception as e:
         valid = False
@@ -413,6 +458,7 @@ async def _call_gemini_async(
     Uses Celery task async to respect the gemini queue's rate limits.
     Raises Exception with user-friendly message when quota exhausted.
     """
+    prompt = clamp_prompt(prompt)
     task = call_gemini_task.apply_async(
         args=[prompt],
         kwargs={
@@ -538,6 +584,8 @@ def _validate_generated_yaml(
     yaml_text: str,
     file_ids: list[str],
     db: Session,
+    *,
+    user_id: str | None = None,
 ) -> str | None:
     """Return the first semantic validation error, or None if the YAML is runnable."""
     config = get_parsed_pipeline(yaml_text)
@@ -545,7 +593,7 @@ def _validate_generated_yaml(
     if result.errors:
         return result.errors[0].message
 
-    schema_errors = collect_schema_validation_errors(config, db)
+    schema_errors = collect_schema_validation_errors(config, db, user_id=user_id)
     if schema_errors:
         return schema_errors[0].message
 

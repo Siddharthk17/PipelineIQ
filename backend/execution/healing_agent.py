@@ -8,6 +8,11 @@ from dataclasses import dataclass, field
 import orjson
 from sqlalchemy.orm import Session
 
+from backend.ai.redaction import (
+    sanitize_error_for_ai,
+    sanitize_schema_for_ai,
+    sanitize_yaml_for_ai,
+)
 from backend.ai.generation import compute_yaml_diff
 from backend.ai.healing_prompts import build_healing_prompt, validate_healing_patch
 from backend.execution.patch_applier import apply_patch
@@ -63,7 +68,7 @@ def _get_user_friendly_error(error: Exception) -> str:
         return "Network error connecting to AI service"
 
     # Default: return truncated original error
-    return f"AI error: {str(error)[:100]}"
+    return f"AI error: {sanitize_error_for_ai(error)[:100]}"
 
 
 @dataclass
@@ -210,7 +215,7 @@ def attempt_heal(
                 schema_diff=schema_diff,
                 ai_error=f"Patch application failed: {exc}",
                 gemini_patch=patch,
-                validation_errors=[str(exc)],
+                validation_errors=[sanitize_error_for_ai(exc)],
             )
             continue
 
@@ -240,7 +245,8 @@ def attempt_heal(
                 parser_valid=True,
                 sandbox_passed=False,
                 validation_errors=[
-                    sandbox_result.error] if sandbox_result.error else None,
+                    sanitize_error_for_ai(sandbox_result.error)
+                ] if sandbox_result.error else None,
             )
             continue
 
@@ -284,33 +290,18 @@ def attempt_heal(
 
 
 def _call_gemini_for_healing(prompt: str) -> str:
-    import asyncio
-    from backend.clients.gemini_client import get_gemini_model
+    from backend.tasks.gemini_tasks import call_gemini_task
 
-    model = get_gemini_model()
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(
-                model.generate_content,
-                prompt,
-                generation_config={"temperature": 0.0, "max_output_tokens": 1000},
-            )
-            try:
-                response = future.result(timeout=60)
-            except concurrent.futures.TimeoutError:
-                raise TimeoutError("Gemini healing call timed out after 60s")
-    else:
-        response = model.generate_content(
-            prompt,
-            generation_config={"temperature": 0.0, "max_output_tokens": 1000},
-        )
-    return response.text.strip()
+    task = call_gemini_task.apply_async(
+        args=[prompt],
+        kwargs={
+            "temperature": 0.0,
+            "max_output_tokens": 1000,
+            "request_id": "healing",
+        },
+        queue="gemini",
+    )
+    return task.get(timeout=120, disable_sync_subtasks=False)
 
 
 def _parse_gemini_patch(raw_response: str) -> dict:
@@ -353,9 +344,9 @@ def _record_attempt(
         status=status,
         failed_step=failed_step or None,
         error_type=type(error).__name__,
-        error_message=str(error),
-        old_schema=old_schema,
-        new_schema=new_schema,
+        error_message=sanitize_error_for_ai(error),
+        old_schema=sanitize_schema_for_ai(old_schema),
+        new_schema=sanitize_schema_for_ai(new_schema),
         removed_columns=schema_diff.get("removed_columns", []),
         added_columns=schema_diff.get("added_columns", []),
         renamed_candidates=schema_diff.get("renamed_candidates", []),
@@ -365,8 +356,14 @@ def _record_attempt(
         confidence=confidence,
         healed_at=healed_at,
         classification_reason=schema_diff.get("summary"),
-        proposed_yaml=proposed_yaml,
-        diff_lines=diff_lines,
+        proposed_yaml=sanitize_yaml_for_ai(proposed_yaml) if proposed_yaml else None,
+        diff_lines=[
+            {
+                **line,
+                "content": sanitize_error_for_ai(line.get("content", "")),
+            }
+            for line in diff_lines
+        ] if diff_lines else None,
         ai_valid=gemini_patch is not None and ai_error is None,
         ai_error=ai_error,
         parser_valid=parser_valid,
@@ -383,7 +380,7 @@ def _sandbox_payload(sandbox_result) -> dict:
         "success": sandbox_result.success,
         "output_rows": sandbox_result.output_rows,
         "output_columns": sandbox_result.output_columns,
-        "error": sandbox_result.error,
+        "error": sanitize_error_for_ai(sandbox_result.error) if sandbox_result.error else None,
         "duration_ms": sandbox_result.duration_ms,
     }
 
@@ -502,7 +499,6 @@ def _normalize_current_schema(
                 "semantic_type": profile_entry.get("semantic_type", "unknown"),
                 "null_pct": profile_entry.get("null_pct"),
             }
-        return normalized
         return normalized
 
     return {

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import PermissionLevel, PipelinePermission, User
+from backend.models import PermissionLevel, PipelinePermission, PipelineRun, User
 from backend.services.audit_service import log_action
 from backend.utils.uuid_utils import validate_uuid_format, as_uuid
 
@@ -75,6 +75,38 @@ def _require_owner(db: Session, pipeline_name: str, user: User) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only pipeline owners or admins can manage permissions",
         )
+
+
+def _split_collaboration_room(room_name: str) -> tuple[str | None, str]:
+    if ":" not in room_name:
+        return None, room_name
+    owner_id, pipeline_name = room_name.split(":", 1)
+    return (owner_id or None), pipeline_name
+
+
+def _has_pipeline_access(
+    db: Session,
+    pipeline_name: str,
+    user: User,
+    allowed: set[PermissionLevel],
+) -> bool:
+    if user.role == "admin":
+        return True
+    if (
+        db.query(PipelineRun)
+        .filter(PipelineRun.name == pipeline_name, PipelineRun.user_id == user.id)
+        .first()
+    ):
+        return True
+    perm = (
+        db.query(PipelinePermission)
+        .filter(
+            PipelinePermission.pipeline_name == pipeline_name,
+            PipelinePermission.user_id == user.id,
+        )
+        .first()
+    )
+    return bool(perm and perm.permission_level in allowed)
 
 
 @router.post(
@@ -149,6 +181,35 @@ def grant_permission(
     )
 
     return _permission_to_response(perm)
+
+
+@router.get(
+    "/{room_name}/collaboration-authorize",
+    response_model=None,
+    summary="Authorize Yjs collaboration room access",
+)
+def authorize_collaboration_room(
+    room_name: str,
+    db: Session = get_read_db_dependency(),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return whether the current user may join a collaboration room."""
+    owner_id, pipeline_name = _split_collaboration_room(room_name)
+    if owner_id and owner_id == str(current_user.id):
+        return {"allowed": True, "permission": "owner"}
+
+    allowed = {
+        PermissionLevel.OWNER,
+        PermissionLevel.RUNNER,
+        PermissionLevel.VIEWER,
+    }
+    if _has_pipeline_access(db, pipeline_name, current_user, allowed):
+        return {"allowed": True, "permission": "viewer"}
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Not authorized for this collaboration room",
+    )
 
 
 @router.get(

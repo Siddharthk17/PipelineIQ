@@ -10,28 +10,58 @@ Supports both PostgreSQL (production) and SQLite (testing).
 from typing import Generator
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from backend.config import settings
 
 
 def _build_engine(url: str):
-    """Build a SQLAlchemy engine for a provided URL."""
+    """Build a SQLAlchemy engine for a provided URL.
+
+    CRIT-08: pool sizes lowered to avoid oversubscribing Postgres'
+    max_connections=100 across many Gunicorn + Celery workers. Under
+    PgBouncer transaction pooling, app-side connections are multiplexed
+    anyway — a small pool per process is the correct posture.
+
+    When PgBouncer transaction pooling is active we additionally disable
+    prepared-statement caching (CRIT-15) so RLS session authorization
+    vars cannot bleed across handoffs.
+    """
     if url.startswith("sqlite"):
         return create_engine(
             url,
             echo=settings.DEBUG,
             connect_args={"check_same_thread": False},
         )
-    return create_engine(
-        url,
+
+    parsed_url = make_url(url)
+    is_pg = parsed_url.get_backend_name() == "postgresql"
+    driver = parsed_url.get_driver_name()
+    pool_size = 2
+    max_overflow = 3
+
+    engine_kwargs = dict(
         echo=settings.DEBUG,
-        pool_size=10,
-        max_overflow=20,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
         pool_pre_ping=True,
         pool_recycle=1800,
         pool_timeout=30,
     )
+    if is_pg and driver in {"psycopg", "asyncpg"}:
+        # CRIT-15: under PgBouncer transaction pooling, server-side prepared
+        # statements (and the SET session.authorization DDL built on top of
+        # them) bleed across handoffs. Only drivers that expose an automatic
+        # prepared-statement cache receive driver-specific disable flags;
+        # psycopg2 does not support these connect_args and would fail startup.
+        engine_kwargs.setdefault("connect_args", {})
+        if driver == "psycopg":
+            engine_kwargs["connect_args"].setdefault("prepare_threshold", None)
+        elif driver == "asyncpg":
+            engine_kwargs["connect_args"].setdefault("statement_cache_size", 0)
+
+    return create_engine(url, **engine_kwargs)
 
 
 write_engine = _build_engine(settings.DATABASE_WRITE_URL)

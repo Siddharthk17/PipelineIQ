@@ -379,6 +379,12 @@ class PipelineVersion(Base):
         Uuid, primary_key=True, default=_generate_uuid)
     pipeline_name: Mapped[str] = mapped_column(
         String(255), nullable=False, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     yaml_config: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -389,7 +395,14 @@ class PipelineVersion(Base):
     )
     change_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    __table_args__ = (UniqueConstraint("pipeline_name", "version_number"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "pipeline_name",
+            "version_number",
+            name="uq_pipeline_versions_user_pipeline_version",
+        ),
+    )
 
 
 class User(Base):

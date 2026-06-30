@@ -9,6 +9,7 @@ import csv
 import logging
 import os
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Optional, BinaryIO
 
@@ -229,6 +230,22 @@ async def direct_upload_file(
 
     stored_path = Path(_validated_pending_stored_path(file_id, pending))
     expected_size = int(pending["expected_size"])
+    content_length = request.headers.get("content-length")
+    if not content_length or not content_length.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_411_LENGTH_REQUIRED,
+            detail="Content-Length is required for direct uploads",
+        )
+    if int(content_length) != expected_size:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Content-Length must match the negotiated upload size",
+        )
+    if expected_size > MAX_DIRECT_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum ({MAX_DIRECT_UPLOAD_SIZE // (1024 * 1024)} MB)",
+        )
     try:
         written = await storage_service.upload_stream(
             request.stream(), str(stored_path), MAX_DIRECT_UPLOAD_SIZE
@@ -322,7 +339,11 @@ async def upload_file(
     stored_path = f"{file_id}{extension}"
 
     try:
-        storage_service.upload(file.file, stored_path)
+        storage_service.upload(
+            file.file,
+            stored_path,
+            max_size=settings.MAX_UPLOAD_SIZE,
+        )
         written = storage_service.get_size(stored_path)
         if written == 0:
             storage_service.delete(stored_path)
@@ -557,10 +578,19 @@ def _validate_file_content(filename: str, stored_path: str) -> None:
     try:
         if extension == ".csv":
             with storage_service.download(stored_path) as handle:
-                sample = handle.read(4096)
+                sample = handle.read(64 * 1024)
             text = sample.decode("utf-8-sig")
-            if not next(csv.reader(text.splitlines()), None):
+            rows = list(csv.reader(text.splitlines()))
+            if not rows or not rows[0]:
                 raise ValueError("CSV file has no header row")
+            if text.lstrip().lower().startswith(("<html", "<!doctype html", "<script")):
+                raise ValueError("CSV file appears to contain HTML/script content")
+            expected_cols = len(rows[0])
+            if expected_cols == 0:
+                raise ValueError("CSV file has no columns")
+            for row in rows[1:51]:
+                if row and len(row) != expected_cols:
+                    raise ValueError("CSV rows do not have a consistent column count")
         elif extension == ".json":
             with storage_service.download(stored_path) as handle:
                 sample = handle.read(1_048_576)
@@ -583,6 +613,14 @@ def _validate_file_content(filename: str, stored_path: str) -> None:
             with storage_service.download(stored_path) as handle:
                 if handle.read(4) != b"PK\x03\x04":
                     raise ValueError("XLSX ZIP header is missing")
+                handle.seek(0)
+                with zipfile.ZipFile(handle) as archive:
+                    names = set(archive.namelist())
+                    if (
+                        "[Content_Types].xml" not in names
+                        or "xl/workbook.xml" not in names
+                    ):
+                        raise ValueError("XLSX file is not a valid OpenXML workbook")
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -768,6 +806,7 @@ def _build_schema_drift_response(
     original_filename: str,
     columns: list[str],
     dtypes: dict,
+    user_id,
 ) -> Optional[SchemaDriftResponse]:
     drift_report = None
     previous_snapshot = (
@@ -775,6 +814,7 @@ def _build_schema_drift_response(
         .join(UploadedFile, SchemaSnapshot.file_id == UploadedFile.id)
         .filter(
             UploadedFile.original_filename == original_filename,
+            UploadedFile.user_id == user_id,
             SchemaSnapshot.file_id != _as_uuid(file_id),
         )
         .order_by(SchemaSnapshot.captured_at.desc())
@@ -856,15 +896,22 @@ def _finalize_uploaded_file(
     current_user: User,
 ) -> FileUploadResponse:
     """Persist uploaded file metadata, snapshot, and optional drift report."""
-    _validate_file_content(original_filename, stored_path)
-    row_count, columns, dtypes = _extract_file_metadata(
-        original_filename, stored_path)
-    if row_count > settings.MAX_ROWS_PER_FILE:
+    try:
+        _validate_file_content(original_filename, stored_path)
+        row_count, columns, dtypes = _extract_file_metadata(
+            original_filename, stored_path)
+        if row_count > settings.MAX_ROWS_PER_FILE:
+            storage_service.delete(stored_path)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
+            )
+    except HTTPException:
         storage_service.delete(stored_path)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
-        )
+        raise
+    except Exception:
+        storage_service.delete(stored_path)
+        raise
 
     uploaded_file = UploadedFile(
         id=file_id,
@@ -895,6 +942,7 @@ def _finalize_uploaded_file(
         original_filename=original_filename,
         columns=columns,
         dtypes=dtypes,
+        user_id=current_user.id,
     )
 
     logger.info(

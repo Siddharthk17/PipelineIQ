@@ -30,7 +30,7 @@ spec:
                 secretKeyRef:
                   name: pipelineiq-secrets
                   key: REDIS_YJS_URL
-            - name: JWT_SECRET
+            - name: SECRET_KEY
               valueFrom:
                 secretKeyRef:
                   name: pipelineiq-secrets

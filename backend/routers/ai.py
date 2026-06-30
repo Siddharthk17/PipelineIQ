@@ -159,6 +159,7 @@ async def generate_pipeline(
             file_ids=request.file_ids,
             db=db,
             request_id=getattr(request_context.state, "request_id", None),
+            user_id=str(current_user.id),
         )
     )
     disconnect_task = asyncio.create_task(_raise_if_disconnected(request_context))
@@ -254,6 +255,7 @@ async def repair_failed_run(
             file_ids=file_ids,
             db=db,
             request_id=getattr(request.state, "request_id", None),
+            user_id=str(current_user.id),
         )
     )
     disconnect_task = asyncio.create_task(_raise_if_disconnected(request))

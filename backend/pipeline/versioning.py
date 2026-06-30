@@ -126,6 +126,7 @@ def save_version(
     run_id: Optional[str],
     db: Session,
     *,
+    user_id: Optional[str] = None,
     max_retries: int = 5,
 ) -> PipelineVersion:
     """Save a new pipeline version, retrying on version-number races.
@@ -139,12 +140,17 @@ def save_version(
 
     normalized_run_id = _uuid.UUID(
         run_id) if isinstance(run_id, str) else run_id
+    normalized_user_id = _uuid.UUID(
+        user_id) if isinstance(user_id, str) else user_id
     last_error: Optional[Exception] = None
 
     for attempt in range(max_retries):
         latest = (
             db.query(PipelineVersion)
-            .filter(PipelineVersion.pipeline_name == pipeline_name)
+            .filter(
+                PipelineVersion.pipeline_name == pipeline_name,
+                PipelineVersion.user_id == normalized_user_id,
+            )
             .order_by(PipelineVersion.version_number.desc())
             .first()
         )
@@ -162,6 +168,7 @@ def save_version(
 
         version = PipelineVersion(
             pipeline_name=pipeline_name,
+            user_id=normalized_user_id,
             version_number=next_version,
             yaml_config=yaml_config,
             run_id=normalized_run_id,

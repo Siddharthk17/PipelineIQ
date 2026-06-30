@@ -15,20 +15,29 @@ import hmac
 import orjson
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 import httpx
 from celery import Task
 
 from backend.celery_app import celery_app
-from backend.utils.url_security import UnsafeURL, validate_public_http_url
+from backend.config import settings
+from backend.utils.url_security import UnsafeURL, prepare_public_httpx_request
 
 logger = logging.getLogger(__name__)
+
+# HIGH-18: webhook signatures include a Unix timestamp; recipients must reject
+# deliveries outside this window. Combined with HMAC, this defeats replay.
+WEBHOOK_REPLAY_WINDOW_SECONDS = 300
 
 
 class WebhookTask(Task):
     _client: httpx.AsyncClient | None = None
+    # LOW-20: max retention for delivery records (days). Older rows are
+    # pruned by the storage-maintenance beat task to prevent unbounded
+    # database growth from high-volume webhook traffic.
+    DELIVERY_RETENTION_DAYS = 30
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -44,8 +53,12 @@ class WebhookTask(Task):
                     max_connections=100,
                     max_keepalive_connections=20,
                 ),
-                follow_redirects=True,
-                max_redirects=3,
+                # CRIT-01: do NOT follow redirects. validate_public_http_url
+                # pins the IP at config time; following redirects would let
+                # a server pivot the request to internal/private targets
+                # (SSRF). Outbound clients resolve to the pinned IP only.
+                follow_redirects=False,
+                trust_env=False,
             )
         return self._client
 
@@ -89,15 +102,27 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
         return {"success": True, "skipped": True}
 
     try:
-        validate_public_http_url(webhook.url)
+        # CRIT-01: validate/re-resolve at delivery time. HTTP destinations
+        # are rewritten to the pinned IP with the original Host header;
+        # redirects remain disabled on the client to stop private pivots.
+        prepared_request = prepare_public_httpx_request(webhook.url)
     except UnsafeURL:
         logger.warning("Webhook delivery blocked for unsafe URL: id=%s", webhook_id)
         return {"success": False, "error": "Webhook URL is not allowed"}
 
+    # MED-13: always sign a sorted-keys canonical body for cross-implementation parity.
     payload_bytes = orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)
+    # HIGH-18: include an explicit Unix timestamp in the signed material so
+    # recipients can reject replayed deliveries older than the replay window.
+    ts = str(int(time.time()))
+    secret_bytes = (
+        webhook.secret.encode("utf-8")
+        if webhook.secret
+        else settings.WEBHOOK_SIGNING_SECRET.encode("utf-8")
+    )
     signature = hmac.new(
-        webhook.secret.encode("utf-8") if webhook.secret else b"",
-        payload_bytes,
+        secret_bytes,
+        ts.encode("ascii") + b"." + payload_bytes,
         hashlib.sha256,
     ).hexdigest()
 
@@ -108,16 +133,21 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
         "Content-Type": "application/json",
         "X-PipelineIQ-Event": payload.get("event_type", "unknown"),
         "X-PipelineIQ-Delivery-ID": str(task.request.id),
+        "X-PipelineIQ-Timestamp": ts,
         "User-Agent": "PipelineIQ/2.12.0",
     }
-    if webhook.secret:
+    if webhook.secret or settings.WEBHOOK_SIGNING_SECRET:
         headers["X-PipelineIQ-Signature"] = f"sha256={signature}"
+        headers["X-PipelineIQ-Signature-Timestamp"] = ts
+    headers.update(prepared_request.headers)
 
     try:
-        resp = await task.client.post(
-            webhook.url,
+        resp = await task.client.request(
+            "POST",
+            prepared_request.url,
             content=payload_bytes,
             headers=headers,
+            extensions=prepared_request.extensions,
         )
         duration_ms = int(time.time() * 1000) - start_ms
         success = 200 <= resp.status_code < 300

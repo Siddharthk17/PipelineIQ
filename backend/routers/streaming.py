@@ -170,9 +170,13 @@ async def delete_topic(
 async def inspect_dlq(
     topic: str,
     limit: int = 50,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ):
-    """Read messages from the Dead Letter Queue topic for inspection."""
+    """Read messages from the Dead Letter Queue topic for inspection.
+
+    MED-23: restricted to admins — DLQ contents are failed user payloads
+    that may include other tenants' data.
+    """
     dlq_topic = f"{topic}.dlq"
     admin = get_admin_client()
     if not admin.topic_exists(dlq_topic):
@@ -242,10 +246,20 @@ async def replay_dlq(
             num_messages=min(limit - replayed, 100), timeout=2.0)
         if not batch:
             break
+        last_msg = None
         for msg in batch:
             if not msg.error():
                 producer.produce(topic=topic, value=msg.value(), key=msg.key())
                 replayed += 1
+                last_msg = msg
+        # CRIT-11: commit partition offsets after each produced batch so
+        # replayed messages do not stay on the queue (and re-execute on
+        # subsequent calls, generating duplicates).
+        if last_msg is not None:
+            try:
+                consumer.commit(message=last_msg, asynchronous=False)
+            except Exception as exc:
+                logger.warning("DLQ replay commit failed: %s", exc)
     producer.flush(timeout=10)
     consumer.close()
     return {"replayed": replayed, "from": dlq_topic, "to": topic}

@@ -13,6 +13,16 @@ from backend.config import settings
 SSE_SIGNATURE_FIELD = "__sig"
 
 
+def _sse_secret() -> bytes:
+    """CRIT-02: isolated SSE signing key (HKDF-derived from SECRET_KEY).
+
+    Falls back to SECRET_KEY only when SSE_SECRET_KEY was not configured,
+    preserving backward compatibility with already-signed streams.
+    """
+    secret = getattr(settings, "SSE_SECRET_KEY", "") or settings.SECRET_KEY
+    return secret.encode("utf-8")
+
+
 def _signature_payload(payload: dict[str, Any]) -> bytes:
     unsigned = {
         key: value for key, value in payload.items()
@@ -24,7 +34,7 @@ def _signature_payload(payload: dict[str, Any]) -> bytes:
 def sign_sse_payload(payload: dict[str, Any]) -> dict[str, Any]:
     signed = dict(payload)
     signature = hmac.new(
-        settings.SECRET_KEY.encode("utf-8"),
+        _sse_secret(),
         _signature_payload(signed),
         hashlib.sha256,
     ).hexdigest()
@@ -37,7 +47,7 @@ def verify_sse_payload(payload: dict[str, Any]) -> bool:
     if not isinstance(signature, str) or not signature:
         return settings.ENVIRONMENT == "test"
     expected = hmac.new(
-        settings.SECRET_KEY.encode("utf-8"),
+        _sse_secret(),
         _signature_payload(payload),
         hashlib.sha256,
     ).hexdigest()

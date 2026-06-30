@@ -1,17 +1,46 @@
 const jwt = require('jsonwebtoken')
 const { describe, test, before, after } = require('node:test')
 const assert = require('node:assert')
+const crypto = require('crypto')
 
 const DEFAULT_SECRET = 'test-jwt-secret-minimum-32-characters-long'
-const JWT_SECRET = process.env.JWT_SECRET || DEFAULT_SECRET
+const ACCESS_TOKEN_SIGNING_SECRET = process.env.ACCESS_TOKEN_SECRET || hkdfHex(process.env.SECRET_KEY || DEFAULT_SECRET, 'pipelineiq-jwt-signing-v1')
+const JWT_ISSUER = process.env.JWT_ISSUER || 'pipelineiq'
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'pipelineiq-api'
 const REDIS_YJS_URL = process.env.REDIS_YJS_URL || 'redis://redis-yjs:6382'
 const PORT = parseInt(process.env.PORT || '0', 10)
+
+function hkdfHex(master, info) {
+  return Buffer.from(crypto.hkdfSync(
+    'sha256',
+    Buffer.from(master, 'utf8'),
+    Buffer.from('pipelineiq-salt', 'utf8'),
+    Buffer.from(info, 'utf8'),
+    32,
+  )).toString('hex')
+}
+
+function signToken(payload, options = {}) {
+  return jwt.sign(
+    payload,
+    ACCESS_TOKEN_SIGNING_SECRET,
+    {
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      ...options,
+    },
+  )
+}
 
 // Basic JWT verification function (duplicated from server for unit testing)
 function verifyJWT(token) {
   if (!token) return null
   try {
-    return jwt.verify(token, JWT_SECRET)
+    return jwt.verify(token, ACCESS_TOKEN_SIGNING_SECRET, {
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      algorithms: ['HS256'],
+    })
   } catch (e) {
     return null
   }
@@ -32,7 +61,7 @@ describe('JWT authentication', () => {
   })
 
   test('returns payload for valid token', () => {
-    const token = jwt.sign({ sub: 'user-1', name: 'Alice' }, JWT_SECRET)
+    const token = signToken({ sub: 'user-1', name: 'Alice' })
     const payload = verifyJWT(token)
     assert.ok(payload)
     assert.strictEqual(payload.sub, 'user-1')
@@ -45,7 +74,7 @@ describe('JWT authentication', () => {
   })
 
   test('rejects expired token', () => {
-    const token = jwt.sign({ sub: 'user-1' }, JWT_SECRET, { expiresIn: '0s' })
+    const token = signToken({ sub: 'user-1' }, { expiresIn: '0s' })
     assert.strictEqual(verifyJWT(token), null)
   })
 })
@@ -135,14 +164,14 @@ describe('Auth failure close codes', () => {
   })
 
   test('server detects expired JWT via decode', () => {
-    const token = jwt.sign({ sub: 'user-1' }, JWT_SECRET, { expiresIn: '0s' })
+    const token = signToken({ sub: 'user-1' }, { expiresIn: '0s' })
     const decoded = jwt.decode(token)
     assert.ok(decoded)
     assert.ok(decoded.exp * 1000 < Date.now())
   })
 
   test('server detects valid JWT via decode', () => {
-    const token = jwt.sign({ sub: 'user-1' }, JWT_SECRET, { expiresIn: '1h' })
+    const token = signToken({ sub: 'user-1' }, { expiresIn: '1h' })
     const decoded = jwt.decode(token)
     assert.ok(decoded)
     assert.ok(decoded.exp * 1000 > Date.now())

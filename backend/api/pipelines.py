@@ -80,7 +80,9 @@ def _create_and_queue_pipeline_run(
     _create_run_schema_snapshots(
         db=db,
         run_id=pipeline_run.id,
-        parsed_config=config)
+        parsed_config=config,
+        user_id=current_user.id if current_user else None,
+    )
 
     has_stream_consume = any(
         getattr(s, "step_type", None) in ("stream_consume", StepType.STREAM_CONSUME)
@@ -120,7 +122,9 @@ def _create_run_schema_snapshots(
     *,
     db: Session,
     run_id,
-        parsed_config) -> None:
+    parsed_config,
+    user_id,
+) -> None:
     """Capture the source file schema at run submission time for healing diffing."""
     referenced_file_ids = []
     seen_file_ids: set[str] = set()
@@ -137,7 +141,10 @@ def _create_run_schema_snapshots(
 
     uploaded_files = (
         db.query(UploadedFile)
-        .filter(UploadedFile.id.in_(referenced_file_ids))
+        .filter(
+            UploadedFile.id.in_(referenced_file_ids),
+            UploadedFile.user_id == user_id,
+        )
         .all()
     )
     for uploaded_file in uploaded_files:
@@ -170,10 +177,21 @@ def validate_pipeline(
     """Validate a pipeline configuration against registered files."""
     config = get_parsed_pipeline(body.yaml_config)
 
-    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    registered_ids = {
+        str(row[0])
+        for row in db.query(UploadedFile.id)
+        .filter(UploadedFile.user_id == current_user.id)
+        .all()
+    }
     result = _pipeline_parser.validate(config, registered_ids)
     if result.is_valid:
-        result.errors.extend(collect_schema_validation_errors(config, db))
+        result.errors.extend(
+            collect_schema_validation_errors(
+                config,
+                db,
+                user_id=str(current_user.id),
+            )
+        )
         result.is_valid = len(result.errors) == 0
 
     return ValidatePipelineResponse(
@@ -351,7 +369,12 @@ def run_pipeline(
 
     # Verify all referenced file IDs exist in the database and general config
     # is valid
-    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    registered_ids = {
+        str(row[0])
+        for row in db.query(UploadedFile.id)
+        .filter(UploadedFile.user_id == current_user.id)
+        .all()
+    }
     validation_result = _pipeline_parser.validate(config, registered_ids)
 
     if not validation_result.is_valid:
@@ -391,7 +414,11 @@ def run_pipeline(
         )
 
     # Pre-flight schema check: simulate column flow to catch mismatches early
-    schema_errors = collect_schema_validation_errors(config, db)
+    schema_errors = collect_schema_validation_errors(
+        config,
+        db,
+        user_id=str(current_user.id),
+    )
     if schema_errors:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -428,6 +455,11 @@ async def run_pipeline_legacy(
     """Legacy endpoint for prompt compatibility: POST /api/runs."""
     payload: dict = {}
     raw_body = await request.body()
+    if len(raw_body) > settings.MAX_PIPELINE_YAML_BYTES + 4096:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Request body is too large",
+        )
     if raw_body:
         try:
             parsed = orjson.loads(raw_body)
@@ -455,7 +487,12 @@ async def run_pipeline_legacy(
     _check_pipeline_permission(
         db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
     )
-    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    registered_ids = {
+        str(row[0])
+        for row in db.query(UploadedFile.id)
+        .filter(UploadedFile.user_id == current_user.id)
+        .all()
+    }
     validation_result = _pipeline_parser.validate(config, registered_ids)
     if not validation_result.is_valid:
         raise HTTPException(
@@ -985,7 +1022,7 @@ def preview_pipeline_step(
     "/{run_id}/download",
     summary="Get download URL for pipeline run output",
     description=(
-        "Returns a fresh presigned download URL (valid 48 hours) for the "
+        "Returns a fresh presigned download URL (valid 1 hour) for the "
         "output file produced by a successful pipeline run."
     ),
 )
@@ -1047,7 +1084,7 @@ def get_run_download_url(
         "size_bytes": step_result.output_size_bytes,
         "row_count": step_result.row_count_out,
         "download_url": fresh_url,
-        "expires_in_hours": 48,
+        "expires_in_hours": 1,
     }
 
 

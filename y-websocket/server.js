@@ -1,13 +1,29 @@
 const { WebSocketServer } = require('ws')
 const { setupWSConnection, setPersistence } = require('y-websocket/bin/utils')
 const jwt = require('jsonwebtoken')
+const crypto = require('crypto')
 
-const JWT_SECRET = process.env.JWT_SECRET
+function hkdfHex(master, info) {
+  return Buffer.from(crypto.hkdfSync(
+    'sha256',
+    Buffer.from(master, 'utf8'),
+    Buffer.from('pipelineiq-salt', 'utf8'),
+    Buffer.from(info, 'utf8'),
+    32,
+  )).toString('hex')
+}
+
+const ACCESS_TOKEN_SIGNING_SECRET = process.env.ACCESS_TOKEN_SECRET ||
+  (process.env.SECRET_KEY ? hkdfHex(process.env.SECRET_KEY, 'pipelineiq-jwt-signing-v1') : '')
+const JWT_ISSUER = process.env.JWT_ISSUER || 'pipelineiq'
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'pipelineiq-api'
 const REDIS_YJS_URL = process.env.REDIS_YJS_URL || 'redis://redis-yjs:6382'
+const BACKEND_INTERNAL_URL = (process.env.BACKEND_INTERNAL_URL || 'http://api:8000').replace(/\/$/, '')
 const PORT = parseInt(process.env.PORT || '1234', 10)
+const MAX_CONNECTIONS_PER_IP = parseInt(process.env.MAX_CONNECTIONS_PER_IP || '20', 10)
 
-if (!JWT_SECRET || JWT_SECRET.length < 32 || JWT_SECRET.startsWith('change-me-')) {
-  console.error('JWT_SECRET must be a non-default secret with at least 32 characters')
+if (!ACCESS_TOKEN_SIGNING_SECRET || ACCESS_TOKEN_SIGNING_SECRET.length < 32 || ACCESS_TOKEN_SIGNING_SECRET.startsWith('change-me-')) {
+  console.error('ACCESS_TOKEN_SECRET or SECRET_KEY must be a non-default secret with at least 32 characters')
   process.exit(1)
 }
 
@@ -53,10 +69,26 @@ try {
 function verifyJWT(token) {
   if (!token) return null
   try {
-    return jwt.verify(token, JWT_SECRET)
+    return jwt.verify(token, ACCESS_TOKEN_SIGNING_SECRET, {
+      issuer: JWT_ISSUER,
+      audience: JWT_AUDIENCE,
+      algorithms: ['HS256'],
+    })
   } catch (e) {
     return null
   }
+}
+
+async function authorizeRoom(roomName, token) {
+  const url = `${BACKEND_INTERNAL_URL}/api/v1/pipelines/${encodeURIComponent(roomName)}/collaboration-authorize`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+    },
+  })
+  return response.ok
 }
 
 function tokenFromCookie(cookieHeader) {
@@ -84,15 +116,31 @@ setInterval(() => {
 
 const wss = new WebSocketServer({
   port: PORT,
-  maxPayload: 100 * 1024 * 1024,
+  maxPayload: 5 * 1024 * 1024,
 })
 
 const CLOSE_CODE_AUTH_FAILURE = 4001
+const CLOSE_CODE_AUTHZ_FAILURE = 4003
+const CLOSE_CODE_RATE_LIMIT = 4008
 const CLOSE_REASON_INVALID_TOKEN = 'Invalid or missing JWT token'
 const CLOSE_REASON_TOKEN_EXPIRED = 'JWT token expired'
+const activeConnectionsByIp = new Map()
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', async (ws, req) => {
   let roomName, token
+  const ip = req.socket.remoteAddress || 'unknown'
+  const activeForIp = activeConnectionsByIp.get(ip) || 0
+  if (activeForIp >= MAX_CONNECTIONS_PER_IP) {
+    ws.close(CLOSE_CODE_RATE_LIMIT, 'Too many WebSocket connections')
+    return
+  }
+  activeConnectionsByIp.set(ip, activeForIp + 1)
+
+  ws.on('close', () => {
+    const count = activeConnectionsByIp.get(ip) || 1
+    if (count <= 1) activeConnectionsByIp.delete(ip)
+    else activeConnectionsByIp.set(ip, count - 1)
+  })
 
   try {
     const url = new URL(req.url, `ws://localhost:${PORT}`)
@@ -130,6 +178,19 @@ wss.on('connection', (ws, req) => {
 
   const userId = payload.sub || payload.user_id || 'unknown'
   const userName = payload.name || payload.email || userId
+
+  try {
+    if (!(await authorizeRoom(roomName, token))) {
+      const count = authRejectionCounts.get(roomName) || 0
+      authRejectionCounts.set(roomName, count + 1)
+      ws.close(CLOSE_CODE_AUTHZ_FAILURE, 'Not authorized for collaboration room')
+      return
+    }
+  } catch (e) {
+    console.warn(`Collaboration authorization check failed for room "${roomName}": ${e.message}`)
+    ws.close(CLOSE_CODE_AUTHZ_FAILURE, 'Collaboration authorization unavailable')
+    return
+  }
 
   console.log(`User "${userName}" joined room: "${roomName}"`)
 

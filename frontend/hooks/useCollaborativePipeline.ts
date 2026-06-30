@@ -60,8 +60,6 @@ export function useCollaborativePipeline({
   const [doc] = useState(() => new Y.Doc())
 
   const providerRef = useRef<WebsocketProvider | null>(null)
-  const authTokenRef = useRef(authToken)
-  authTokenRef.current = authToken
 
   const authFailedRef = useRef(false)
   const authFailedForRoomRef = useRef<string | null>(null)
@@ -72,7 +70,7 @@ export function useCollaborativePipeline({
   const [yYaml] = useState(() => doc.getText('yaml'))
 
   useEffect(() => {
-    if (!authToken || !pipelineName) {
+    if (!pipelineName) {
       if (providerRef.current) {
         providerRef.current.destroy()
         providerRef.current = null
@@ -81,7 +79,9 @@ export function useCollaborativePipeline({
       return
     }
 
-    if (authFailedRef.current && authFailedForRoomRef.current === pipelineName) {
+    const roomName = currentUser?.id ? `${currentUser.id}:${pipelineName}` : pipelineName
+
+    if (authFailedRef.current && authFailedForRoomRef.current === roomName) {
       return
     }
 
@@ -92,10 +92,10 @@ export function useCollaborativePipeline({
 
     const wsProvider = new WebsocketProvider(
       YJS_SERVER_URL,
-      pipelineName,
+      roomName,
       doc,
       {
-        params: { token: authToken },
+        params: authToken ? { token: authToken } : {},
         maxBackoffTime: MAX_BACKOFF_TIME,
         connect: true,
       },
@@ -105,9 +105,9 @@ export function useCollaborativePipeline({
       const closeEvent = event as CloseEvent | null
       if (closeEvent && closeEvent.code === AUTH_FAILURE_CLOSE_CODE) {
         authFailedRef.current = true
-        authFailedForRoomRef.current = pipelineName
+        authFailedForRoomRef.current = roomName
         console.error(
-          `[YJS] Authentication failed for room "${pipelineName}". ` +
+          `[YJS] Authentication failed for room "${roomName}". ` +
           `Reason: ${closeEvent.reason || 'Unknown'}. Stopping reconnection.`
         )
         wsProvider.disconnect()
@@ -129,14 +129,15 @@ export function useCollaborativePipeline({
       }
       setProvider(null)
     }
-  }, [authToken, pipelineName, doc])
+  }, [authToken, pipelineName, currentUser?.id, doc])
 
   useEffect(() => {
-    if (authFailedRef.current && authFailedForRoomRef.current === pipelineName) {
+    const roomName = currentUser?.id ? `${currentUser.id}:${pipelineName}` : pipelineName
+    if (authFailedRef.current && authFailedForRoomRef.current === roomName) {
       authFailedRef.current = false
       authFailedForRoomRef.current = null
     }
-  }, [authToken, pipelineName])
+  }, [authToken, pipelineName, currentUser?.id])
 
   const awareness = provider?.awareness ?? null
 

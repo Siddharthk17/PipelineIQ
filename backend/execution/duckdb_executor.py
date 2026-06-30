@@ -49,6 +49,7 @@ def _configure_connection(
     conn: duckdb.DuckDBPyConnection,
     *,
     threads: int = 4,
+    enable_httpfs: bool = False,
 ) -> None:
     conn.sql(f"PRAGMA threads={max(1, int(threads))}")
     conn.sql(f"PRAGMA memory_limit='{settings.WORKER_MEMORY_LIMIT_GB}GB'")
@@ -58,18 +59,24 @@ def _configure_connection(
 
     conn.sql("PRAGMA enable_object_cache=true")
 
+    if not enable_httpfs:
+        logger.info("DuckDB httpfs extension disabled for pipeline execution")
+        return
+
     if os.environ.get("DUCKDB_ENABLE_HTTPFS", "").lower() != "true":
         logger.info("DuckDB httpfs extension disabled by default")
         return
 
     try:
-        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
-        minio_access_key = os.environ.get("MINIO_ROOT_USER", "minio")
-        minio_secret_key = os.environ.get("MINIO_ROOT_PASSWORD", "minio123")
+        minio_endpoint = os.environ.get("MINIO_ENDPOINT") or (
+            settings.S3_ENDPOINT_URL or ""
+        ).replace("http://", "").replace("https://", "")
+        minio_access_key = settings.S3_ACCESS_KEY
+        minio_secret_key = settings.S3_SECRET_KEY
         minio_region = os.environ.get("MINIO_REGION", "us-east-1")
 
-        if not minio_access_key or not minio_secret_key:
-            raise ValueError("S3 credentials not configured — set MINIO_ROOT_USER and MINIO_ROOT_PASSWORD")
+        if not minio_endpoint or not minio_access_key or not minio_secret_key:
+            raise ValueError("S3 credentials not fully configured")
 
         conn.execute("INSTALL httpfs")
         conn.execute("LOAD httpfs")

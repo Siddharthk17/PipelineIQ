@@ -1,19 +1,22 @@
-"""Production save step: writes DataFrame output to MinIO.
+"""Production save step: writes Arrow output to object storage.
 
 Supported formats: CSV, JSON, Parquet
 Output location: {S3_BUCKET}/outputs/{run_id}/{filename}
-Download URL: presigned GET URL valid for 48 hours.
+Download URL: presigned GET URL valid for 1 hour.
 """
 
 import io
 import logging
 import math
+import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 
 import orjson
 import pyarrow as pa
+import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 
 from backend.config import settings
@@ -21,7 +24,7 @@ from backend.config import settings
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {"csv", "json", "parquet"}
-DOWNLOAD_URL_EXPIRY = timedelta(hours=48)
+DOWNLOAD_URL_EXPIRY = timedelta(hours=1)
 DEFAULT_CONTENT_TYPES = {
     "csv": "text/csv",
     "json": "application/json",
@@ -65,28 +68,35 @@ def execute_save_step(
         run_id = uuid.uuid4().hex
         logger.debug("Empty run_id, using generated: %s", run_id)
 
-    content, content_type = _serialize(table, ext)
+    temp_path, content_type, size_bytes = _serialize_to_tempfile(table, ext)
 
     object_name = f"outputs/{run_id}/{filename}"
     minio = _get_minio_client()
 
     bucket = settings.S3_BUCKET
-    minio.put_object(
-        Bucket=bucket,
-        Key=object_name,
-        Body=io.BytesIO(content),
-        ContentLength=len(content),
-        ContentType=content_type,
-        Metadata={
-            "run-id": run_id,
-            "row-count": str(table.num_rows),
-            "format": ext,
-        },
-    )
+    try:
+        with open(temp_path, "rb") as body:
+            minio.put_object(
+                Bucket=bucket,
+                Key=object_name,
+                Body=body,
+                ContentLength=size_bytes,
+                ContentType=content_type,
+                Metadata={
+                    "run-id": run_id,
+                    "row-count": str(table.num_rows),
+                    "format": ext,
+                },
+            )
+    finally:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
 
     logger.info(
         "Saved pipeline output: run_id=%s, filename=%s, size=%.1fKB, rows=%d",
-        run_id, filename, len(content) / 1024, table.num_rows)
+        run_id, filename, size_bytes / 1024, table.num_rows)
 
     download_url = minio.generate_presigned_url(
         "get_object",
@@ -100,7 +110,7 @@ def execute_save_step(
     return SaveResult(
         filename=filename,
         download_url=download_url,
-        size_bytes=len(content),
+        size_bytes=size_bytes,
         row_count=table.num_rows,
         format=ext,
         object_name=object_name,
@@ -152,41 +162,102 @@ def _serialize(table: pa.Table, ext: str) -> tuple[bytes, str]:
     raise ValueError(f"Unsupported format: {ext}")
 
 
-def _serialize_csv(table: pa.Table) -> tuple[bytes, str]:
-    df = table.to_pandas()
-    csv_str = df.to_csv(index=False)
-    return csv_str.encode("utf-8"), "text/csv"
+def _serialize_to_tempfile(table: pa.Table, ext: str) -> tuple[str, str, int]:
+    suffix = f".{ext}"
+    fd, temp_path = tempfile.mkstemp(prefix="pipelineiq-save-", suffix=suffix)
+    os.close(fd)
+    try:
+        if ext == "csv":
+            _write_csv_file(table, temp_path)
+        elif ext == "json":
+            _write_json_file(table, temp_path)
+        elif ext == "parquet":
+            _write_parquet_file(table, temp_path)
+        else:
+            raise ValueError(f"Unsupported format: {ext}")
+        size_bytes = os.path.getsize(temp_path)
+        return temp_path, DEFAULT_CONTENT_TYPES[ext], size_bytes
+    except Exception:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 
-def _serialize_json(table: pa.Table) -> tuple[bytes, str]:
-    df = table.to_pandas()
-    records = df.to_dict(orient="records")
+def _write_csv_file(table: pa.Table, path: str) -> None:
+    pacsv.write_csv(table, path)
 
-    def sanitize(obj):
-        if isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
+
+def _sanitize_json_value(obj):
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
         return obj
-
-    sanitized = [
-        {k: sanitize(v) for k, v in record.items()}
-        for record in records
-    ]
-
-    content = orjson.dumps(sanitized, option=orjson.OPT_NON_STR_KEYS)
-    return content, "application/json"
+    if isinstance(obj, dict):
+        return {key: _sanitize_json_value(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_json_value(value) for value in obj]
+    return obj
 
 
-def _serialize_parquet(table: pa.Table) -> tuple[bytes, str]:
-    buf = pa.BufferOutputStream()
+def _write_json_file(table: pa.Table, path: str) -> None:
+    first = True
+    with open(path, "wb") as output:
+        output.write(b"[")
+        for batch in table.to_batches(max_chunksize=8192):
+            for record in batch.to_pylist():
+                if not first:
+                    output.write(b",")
+                output.write(orjson.dumps(_sanitize_json_value(record), option=orjson.OPT_NON_STR_KEYS))
+                first = False
+        output.write(b"]")
+
+
+def _write_parquet_file(table: pa.Table, path: str) -> None:
     pq.write_table(
         table,
-        buf,
+        path,
         compression="snappy",
         use_dictionary=True,
         write_statistics=True,
     )
-    return buf.getvalue().to_pybytes(), "application/octet-stream"
+
+
+def _serialize_csv(table: pa.Table) -> tuple[bytes, str]:
+    temp_path, content_type, _ = _serialize_to_tempfile(table, "csv")
+    try:
+        with open(temp_path, "rb") as handle:
+            return handle.read(), content_type
+    finally:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+
+
+def _serialize_json(table: pa.Table) -> tuple[bytes, str]:
+    temp_path, content_type, _ = _serialize_to_tempfile(table, "json")
+    try:
+        with open(temp_path, "rb") as handle:
+            return handle.read(), content_type
+    finally:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+
+
+def _serialize_parquet(table: pa.Table) -> tuple[bytes, str]:
+    temp_path, content_type, _ = _serialize_to_tempfile(table, "parquet")
+    try:
+        with open(temp_path, "rb") as handle:
+            return handle.read(), content_type
+    finally:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
 
 
 _bucket_ensured = False

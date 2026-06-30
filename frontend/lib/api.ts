@@ -167,10 +167,34 @@ export interface LoginResponse {
 
 // Core fetch with auth
 
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = `${name}=`;
+  const value = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+  return value ? decodeURIComponent(value.slice(prefix.length)) : null;
+}
+
+function isUnsafeMethod(method: string | undefined): boolean {
+  const normalized = (method || "GET").toUpperCase();
+  return !["GET", "HEAD", "OPTIONS", "TRACE"].includes(normalized);
+}
+
+export function csrfHeaders(method = "POST"): Record<string, string> {
+  if (!isUnsafeMethod(method)) {
+    return {};
+  }
+  const csrfToken = getCookie("pipelineiq_csrf_token");
+  return csrfToken ? { "X-CSRF-Token": csrfToken } : {};
+}
+
 async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     ...(options?.headers as Record<string, string> || {}),
   };
+  Object.assign(headers, csrfHeaders(options?.method));
   const res = await fetch(`${baseUrl}${endpoint}`, {
     ...options,
     headers,
@@ -239,6 +263,7 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
         credentials: requiresAppAuth ? "include" : "same-origin",
         headers: {
           "Content-Type": file.type || "application/octet-stream",
+          ...(requiresAppAuth ? csrfHeaders("PUT") : {}),
         },
       });
       if (!directRes.ok) {
@@ -856,7 +881,7 @@ export async function cleanupStaleShm(): Promise<{ deleted: number }> {
 }
 
 export async function getCostEstimate(pipelineYaml: string, fileIds: string[]): Promise<CostEstimate> {
-  return fetchWithAuth<CostEstimate>(API_BASE_URL, "/runs/estimate", {
+  return fetchApi<CostEstimate>("/runs/estimate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pipeline_yaml: pipelineYaml, file_ids: fileIds }),

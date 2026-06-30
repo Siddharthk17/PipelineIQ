@@ -12,6 +12,7 @@ from typing import Any
 import structlog
 from celery.utils.log import get_task_logger
 
+from backend.ai.redaction import clamp_prompt
 from backend.celery_app import celery_app
 from backend.db.redis_pools import get_cache_redis
 
@@ -159,6 +160,7 @@ def call_gemini_task(
     """
     Single entry point for all Gemini API calls.
     """
+    prompt = clamp_prompt(prompt)
     # Celery overrides root logger to WARNING; restore configured level
     # so structlog INFO messages are not silently dropped.
     import logging
@@ -318,6 +320,7 @@ def generate_pipeline_description_task(
     tenant_id: str | None = None,
 ) -> str:
     """Generate and cache a short catalog description without blocking API threads."""
+    prompt = clamp_prompt(prompt)
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(
         task_id=self.request.id,

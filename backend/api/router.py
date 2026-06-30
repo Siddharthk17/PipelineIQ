@@ -29,6 +29,7 @@ api_router.include_router(templates_router)
 api_router.include_router(notifications_router)
 api_router.include_router(dashboard_router)
 api_router.include_router(permissions_router)
+api_router.include_router(legacy_runs_router)
 
 # Week-1 compatibility contract from prompt.md
 legacy_api_router.include_router(files_legacy_router)

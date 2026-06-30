@@ -1,0 +1,8 @@
+User-agent: *
+Disallow: /api/
+Disallow: /auth/
+Disallow: /webhooks/
+Disallow: /audit/
+Disallow: /metrics
+Disallow: /grafana/
+Allow: /

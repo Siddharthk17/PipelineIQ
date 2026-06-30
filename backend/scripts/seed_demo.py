@@ -21,6 +21,9 @@ DEMO_PASSWORD = "Demo1234!"
 
 
 def seed_demo():
+    if os.environ.get("ENVIRONMENT") == "production":
+        print("Demo seed skipped: ENVIRONMENT=production")
+        return
     db = SessionLocal()
     try:
         existing = db.query(User).filter(User.email == DEMO_EMAIL).first()

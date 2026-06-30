@@ -14,7 +14,12 @@ class StorageProvider(ABC):
     """Abstract base class for file storage providers."""
 
     @abstractmethod
-    def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
+    def upload(
+        self,
+        file_obj: BinaryIO,
+        destination_path: str,
+        max_size: int | None = None,
+    ) -> str:
         """Upload a file and return the stored path/key."""
 
     @abstractmethod
@@ -66,10 +71,28 @@ class LocalStorageProvider(StorageProvider):
         filename = os.path.basename(path)
         return self.base_dir / filename
 
-    def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
+    def upload(
+        self,
+        file_obj: BinaryIO,
+        destination_path: str,
+        max_size: int | None = None,
+    ) -> str:
         full_path = self._get_full_path(destination_path)
-        with open(full_path, "wb") as f:
-            shutil.copyfileobj(file_obj, f)
+        total = 0
+        try:
+            with open(full_path, "wb") as f:
+                while True:
+                    chunk = file_obj.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if max_size is not None and total > max_size:
+                        raise ValueError(
+                            f"File size exceeds maximum ({max_size} bytes)")
+                    f.write(chunk)
+        except Exception:
+            full_path.unlink(missing_ok=True)
+            raise
         return str(full_path)
 
     async def upload_stream(
@@ -135,10 +158,32 @@ class S3StorageProvider(StorageProvider):
         )
         self.bucket = settings.S3_BUCKET
 
-    def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
+    def upload(
+        self,
+        file_obj: BinaryIO,
+        destination_path: str,
+        max_size: int | None = None,
+    ) -> str:
         key = os.path.basename(destination_path)
-        self.s3.upload_fileobj(file_obj, self.bucket, key)
-        return key
+        temp_file_path: Optional[str] = None
+        total = 0
+        try:
+            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                temp_file_path = temp_file.name
+                while True:
+                    chunk = file_obj.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if max_size is not None and total > max_size:
+                        raise ValueError(
+                            f"File size exceeds maximum ({max_size} bytes)")
+                    temp_file.write(chunk)
+            self.s3.upload_file(temp_file_path, self.bucket, key)
+            return key
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
 
     async def upload_stream(
             self,
@@ -199,15 +244,11 @@ class S3StorageProvider(StorageProvider):
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
     ) -> Optional[str]:
-        key = os.path.basename(destination_path)
-        try:
-            return self.s3.generate_presigned_url(
-                ClientMethod="put_object",
-                Params={"Bucket": self.bucket, "Key": key},
-                ExpiresIn=expiration,
-            )
-        except ClientError:
-            return None
+        # HIGH-15/LOW-15: generic presigned PUT URLs cannot enforce exact
+        # content length and content type with boto3's put_object presign flow.
+        # Return None so callers use the authenticated API streaming endpoint,
+        # where size and content validation are enforced before confirmation.
+        return None
 
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
@@ -232,8 +273,13 @@ class StorageService:
         else:
             self.provider = LocalStorageProvider(Path(settings.UPLOAD_DIR))
 
-    def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
-        return self.provider.upload(file_obj, destination_path)
+    def upload(
+        self,
+        file_obj: BinaryIO,
+        destination_path: str,
+        max_size: int | None = None,
+    ) -> str:
+        return self.provider.upload(file_obj, destination_path, max_size=max_size)
 
     async def upload_stream(
             self,

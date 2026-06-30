@@ -4,6 +4,14 @@ from __future__ import annotations
 
 import orjson
 
+from backend.ai.redaction import (
+    clamp_prompt,
+    sanitize_error_for_ai,
+    sanitize_schema_for_ai,
+    sanitize_text_for_ai,
+    sanitize_yaml_for_ai,
+)
+
 HEALING_SYSTEM_PROMPT = """You are an autonomous data pipeline repair agent for PipelineIQ.
 A data pipeline failed because the source data schema changed.
 Return the minimal JSON patch needed to repair the YAML.
@@ -66,7 +74,26 @@ def build_healing_prompt(
     schema_diff: dict,
 ) -> str:
     """Build the deterministic healing prompt sent to Gemini."""
-    renamed_candidates = schema_diff.get("renamed_candidates", [])
+    safe_schema_diff = {
+        "removed_columns": [
+            sanitize_text_for_ai(column, max_chars=160)
+            for column in schema_diff.get("removed_columns", [])
+        ],
+        "added_columns": [
+            sanitize_text_for_ai(column, max_chars=160)
+            for column in schema_diff.get("added_columns", [])
+        ],
+        "renamed_candidates": [
+            {
+                **candidate,
+                "old_name": sanitize_text_for_ai(candidate.get("old_name", ""), max_chars=160),
+                "new_name": sanitize_text_for_ai(candidate.get("new_name", ""), max_chars=160),
+            }
+            for candidate in schema_diff.get("renamed_candidates", [])
+            if isinstance(candidate, dict)
+        ],
+    }
+    renamed_candidates = safe_schema_diff.get("renamed_candidates", [])
     if renamed_candidates:
         formatted_candidates = "\n".join(
             (
@@ -80,29 +107,30 @@ def build_healing_prompt(
     else:
         formatted_candidates = "  - none"
 
-    return HEALING_SYSTEM_PROMPT.format(
-        broken_yaml=broken_yaml,
-        error_type=error_type,
-        error_message=error_message,
-        failed_step_name=failed_step_name,
+    prompt = HEALING_SYSTEM_PROMPT.format(
+        broken_yaml=sanitize_yaml_for_ai(broken_yaml),
+        error_type=sanitize_text_for_ai(error_type, max_chars=160),
+        error_message=sanitize_error_for_ai(error_message),
+        failed_step_name=sanitize_text_for_ai(failed_step_name, max_chars=160),
         old_schema_json=orjson.dumps(
-            old_schema,
+            sanitize_schema_for_ai(old_schema),
             option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS,
         ).decode("utf-8"),
         new_schema_json=orjson.dumps(
-            new_schema,
+            sanitize_schema_for_ai(new_schema),
             option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS,
         ).decode("utf-8"),
         removed_columns=orjson.dumps(
-            schema_diff.get(
+            safe_schema_diff.get(
                 "removed_columns",
                 [])).decode("utf-8"),
         added_columns=orjson.dumps(
-            schema_diff.get(
+            safe_schema_diff.get(
                 "added_columns",
                 [])).decode("utf-8"),
         renamed_candidates_formatted=formatted_candidates,
     )
+    return clamp_prompt(prompt)
 
 def validate_healing_patch(patch: dict) -> tuple[bool, str]:
     """Validate the JSON patch schema returned by Gemini."""

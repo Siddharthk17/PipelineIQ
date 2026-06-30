@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { csrfHeaders } from "@/lib/api";
+
 interface StreamingStats {
   batches_processed: number;
   messages_processed: number;
@@ -59,6 +61,7 @@ export function StreamingRunCard({ runId, status, pipelineName }: Props) {
     await fetch(`/api/streaming/runs/${runId}/${a}`, {
       method: "POST",
       credentials: "include",
+      headers: csrfHeaders("POST"),
     });
     window.location.reload();
   };

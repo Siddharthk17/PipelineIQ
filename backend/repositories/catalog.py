@@ -291,6 +291,7 @@ def get_blast_radius(
     asset_name: str,
     asset_type: Optional[str] = None,
     max_depth: int = MAX_CTE_DEPTH,
+    owner_id: Optional[str] = None,
 ) -> list[dict]:
     """Find all downstream assets that depend on the given asset.
 
@@ -298,7 +299,7 @@ def get_blast_radius(
     Falls back to Python BFS on SQLite for tests.
     Results are cached in Redis for BLAST_RADIUS_CACHE_TTL seconds.
     """
-    cache_key = f"blast_radius:{asset_name}:{asset_type or 'all'}:{max_depth}"
+    cache_key = f"blast_radius:{owner_id or 'admin'}:{asset_name}:{asset_type or 'all'}:{max_depth}"
     redis = get_cache_redis_binary()
 
     try:
@@ -310,9 +311,9 @@ def get_blast_radius(
         logger.warning("Blast radius cache read failed: %s", e)
 
     if not _is_postgres(db):
-        result = _blast_radius_sqlite(db, asset_name, asset_type, max_depth)
+        result = _blast_radius_sqlite(db, asset_name, asset_type, max_depth, owner_id)
     else:
-        result = _blast_radius_postgres(db, asset_name, asset_type, max_depth)
+        result = _blast_radius_postgres(db, asset_name, asset_type, max_depth, owner_id)
 
     try:
         payload = json.dumps(result).encode()
@@ -332,6 +333,7 @@ def _blast_radius_postgres(
     asset_name: str,
     asset_type: Optional[str],
     max_depth: int,
+    owner_id: Optional[str],
 ) -> list[dict]:
     where_clause = "WHERE da.name = :name"
     params: dict = {
@@ -344,6 +346,13 @@ def _blast_radius_postgres(
     if asset_type:
         where_clause += " AND da.asset_type = :asset_type"
         params["asset_type"] = asset_type
+    owner_filter = ""
+    target_owner_filter = ""
+    if owner_id:
+        where_clause += " AND da.owner_id = :owner_id"
+        owner_filter = "AND da.owner_id = :owner_id"
+        target_owner_filter = "JOIN data_assets target_da ON target_da.id = ar.target_id AND target_da.owner_id = :owner_id"
+        params["owner_id"] = owner_id
 
     # Optimized recursive CTE:
     # - Drops the O(n) `visited` array tracking (was O(n^2) memory + O(n)
@@ -367,6 +376,7 @@ def _blast_radius_postgres(
             SELECT ar.target_id, d.depth + 1
             FROM asset_relationships ar
             JOIN downstream d ON d.id = ar.source_id
+            {target_owner_filter}
             WHERE d.depth < :max_depth
               AND NOT EXISTS (
                   SELECT 1 FROM downstream d2 WHERE d2.id = ar.target_id
@@ -396,6 +406,8 @@ def _blast_radius_postgres(
         FROM downstream_min dm
         JOIN data_assets da ON da.id = dm.id
         LEFT JOIN pipeline_stats ps ON ps.target_id = dm.id
+        WHERE 1 = 1
+          {owner_filter}
         ORDER BY dm.depth ASC, da.name ASC
         LIMIT :limit
     """)
@@ -439,11 +451,14 @@ def _blast_radius_sqlite(
     asset_name: str,
     asset_type: Optional[str],
     max_depth: int,
+    owner_id: Optional[str],
 ) -> list[dict]:
     """SQLite-compatible BFS blast radius implementation."""
     base_query = db.query(DataAsset).filter(DataAsset.name == asset_name)
     if asset_type:
         base_query = base_query.filter(DataAsset.asset_type == asset_type)
+    if owner_id:
+        base_query = base_query.filter(DataAsset.owner_id == uuid.UUID(owner_id))
 
     start_assets = base_query.all()
     if not start_assets:
@@ -474,9 +489,10 @@ def _blast_radius_sqlite(
 
         if depth < max_depth:
             for rel in rels:
-                target = db.query(DataAsset).filter(
-                    DataAsset.id == rel.target_id
-                ).first()
+                target_query = db.query(DataAsset).filter(DataAsset.id == rel.target_id)
+                if owner_id:
+                    target_query = target_query.filter(DataAsset.owner_id == uuid.UUID(owner_id))
+                target = target_query.first()
                 if target and target.id not in visited:
                     queue.append((target, depth + 1))
 
@@ -488,16 +504,33 @@ def get_upstream_lineage(
     db: Session,
     asset_name: str,
     max_depth: int = MAX_CTE_DEPTH,
+    owner_id: Optional[str] = None,
 ) -> list[dict]:
     """Find all upstream assets that the given asset depends on."""
     if not _is_postgres(db):
-        return _upstream_lineage_sqlite(db, asset_name, max_depth)
+        return _upstream_lineage_sqlite(db, asset_name, max_depth, owner_id)
 
-    sql = text("""
+    owner_root_filter = ""
+    parent_owner_filter = ""
+    final_owner_filter = ""
+    params = {
+        "name": asset_name,
+        "max_depth": max_depth,
+        "limit": MAX_CTE_RESULTS,
+        "cte_limit": MAX_CTE_RESULTS,
+    }
+    if owner_id:
+        owner_root_filter = "AND da.owner_id = :owner_id"
+        parent_owner_filter = "AND parent.owner_id = :owner_id"
+        final_owner_filter = "WHERE da.owner_id = :owner_id"
+        params["owner_id"] = owner_id
+
+    sql = text(f"""
         WITH RECURSIVE upstream(id, name, namespace, asset_type, depth) AS MATERIALIZED (
             SELECT da.id, da.name, da.namespace, da.asset_type, 0
             FROM data_assets da
             WHERE da.name = :name
+              {owner_root_filter}
 
             UNION ALL
 
@@ -506,13 +539,16 @@ def get_upstream_lineage(
             JOIN asset_relationships ar ON ar.source_id = parent.id
             JOIN upstream u ON u.id = ar.target_id
             WHERE u.depth < :max_depth
+              {parent_owner_filter}
               AND NOT EXISTS (
                   SELECT 1 FROM upstream u2 WHERE u2.id = parent.id
               )
             LIMIT :cte_limit
         )
-        SELECT DISTINCT name, namespace, asset_type, depth
-        FROM upstream
+        SELECT DISTINCT u.name, u.namespace, u.asset_type, u.depth
+        FROM upstream u
+        JOIN data_assets da ON da.id = u.id
+        {final_owner_filter}
         ORDER BY depth ASC, name ASC
         LIMIT :limit
     """)
@@ -524,12 +560,7 @@ def get_upstream_lineage(
             text("SET LOCAL statement_timeout = :timeout"),
             {"timeout": CTE_STATEMENT_TIMEOUT_MS},
         )
-        result = db.execute(sql, {
-            "name": asset_name,
-            "max_depth": max_depth,
-            "limit": MAX_CTE_RESULTS,
-            "cte_limit": MAX_CTE_RESULTS,
-        })
+        result = db.execute(sql, params)
         return [dict(row._mapping) for row in result.fetchall()]
     except Exception as exc:
         logger.error("Upstream lineage query failed for '%s': %s", asset_name, exc)
@@ -544,9 +575,13 @@ def _upstream_lineage_sqlite(
     db: Session,
     asset_name: str,
     max_depth: int,
+    owner_id: Optional[str],
 ) -> list[dict]:
     """SQLite-compatible BFS upstream lineage implementation."""
-    start = db.query(DataAsset).filter(DataAsset.name == asset_name).first()
+    start_query = db.query(DataAsset).filter(DataAsset.name == asset_name)
+    if owner_id:
+        start_query = start_query.filter(DataAsset.owner_id == uuid.UUID(owner_id))
+    start = start_query.first()
     if not start:
         return []
 
@@ -573,9 +608,10 @@ def _upstream_lineage_sqlite(
 
         if depth < max_depth:
             for rel in rels:
-                source = db.query(DataAsset).filter(
-                    DataAsset.id == rel.source_id
-                ).first()
+                source_query = db.query(DataAsset).filter(DataAsset.id == rel.source_id)
+                if owner_id:
+                    source_query = source_query.filter(DataAsset.owner_id == uuid.UUID(owner_id))
+                source = source_query.first()
                 if source and source.id not in visited:
                     queue.append((source, depth + 1))
 
@@ -588,6 +624,7 @@ def search_assets(
     query: str,
     asset_type: Optional[str] = None,
     limit: int = 20,
+    owner_id: Optional[str] = None,
 ) -> list[dict]:
     """Full-text search over asset names using PostgreSQL trigram similarity.
     Falls back to LIKE on SQLite for tests.
@@ -596,9 +633,9 @@ def search_assets(
         return []
 
     if _is_postgres(db):
-        return _search_assets_postgres(db, query, asset_type, limit)
+        return _search_assets_postgres(db, query, asset_type, limit, owner_id)
     else:
-        return _search_assets_sqlite(db, query, asset_type, limit)
+        return _search_assets_sqlite(db, query, asset_type, limit, owner_id)
 
 
 def _search_assets_postgres(
@@ -606,6 +643,7 @@ def _search_assets_postgres(
     query: str,
     asset_type: Optional[str],
     limit: int,
+    owner_id: Optional[str],
 ) -> list[dict]:
     """PostgreSQL search with trigram similarity."""
     params: dict = {"query": query.strip(), "limit": limit}
@@ -613,6 +651,10 @@ def _search_assets_postgres(
     if asset_type:
         type_filter = "AND asset_type = :asset_type"
         params["asset_type"] = asset_type
+    owner_filter = ""
+    if owner_id:
+        owner_filter = "AND owner_id = :owner_id"
+        params["owner_id"] = owner_id
 
     sql = text(f"""
         SELECT id, name, namespace, asset_type, metadata, last_seen_at,
@@ -620,6 +662,7 @@ def _search_assets_postgres(
         FROM data_assets
         WHERE name ILIKE '%' || :query || '%'
           {type_filter}
+          {owner_filter}
         ORDER BY sim_score DESC, name ASC
         LIMIT :limit
     """)
@@ -644,6 +687,7 @@ def _search_assets_sqlite(
     query: str,
     asset_type: Optional[str],
     limit: int,
+    owner_id: Optional[str],
 ) -> list[dict]:
     """SQLite search using LIKE."""
     q = db.query(DataAsset).filter(
@@ -651,6 +695,8 @@ def _search_assets_sqlite(
     )
     if asset_type:
         q = q.filter(DataAsset.asset_type == asset_type)
+    if owner_id:
+        q = q.filter(DataAsset.owner_id == uuid.UUID(owner_id))
 
     results = q.limit(limit).all()
     return [
@@ -670,29 +716,37 @@ def _search_assets_sqlite(
 def list_orphan_assets(
     db: Session,
     days_inactive: int = 90,
+    owner_id: Optional[str] = None,
 ) -> list[dict]:
     """Find assets not seen in any pipeline run in the last N days."""
     if _is_postgres(db):
-        return _list_orphans_postgres(db, days_inactive)
+        return _list_orphans_postgres(db, days_inactive, owner_id)
     else:
-        return _list_orphans_sqlite(db, days_inactive)
+        return _list_orphans_sqlite(db, days_inactive, owner_id)
 
 
 def _list_orphans_postgres(
     db: Session,
     days_inactive: int,
+    owner_id: Optional[str],
 ) -> list[dict]:
     """PostgreSQL orphan listing with INTERVAL syntax."""
-    sql = text("""
+    owner_filter = ""
+    params = {"days": days_inactive}
+    if owner_id:
+        owner_filter = "AND owner_id = :owner_id"
+        params["owner_id"] = owner_id
+    sql = text(f"""
         SELECT id, name, namespace, asset_type, last_seen_at
         FROM data_assets
         WHERE last_seen_at < NOW() - (:days || ' days')::INTERVAL
           AND asset_type IN ('file', 'column')
+          {owner_filter}
         ORDER BY last_seen_at ASC
         LIMIT 100
     """)
 
-    result = db.execute(sql, {"days": days_inactive})
+    result = db.execute(sql, params)
     return [
         {
             "id": str(row.id),
@@ -708,16 +762,20 @@ def _list_orphans_postgres(
 def _list_orphans_sqlite(
     db: Session,
     days_inactive: int,
+    owner_id: Optional[str],
 ) -> list[dict]:
     """SQLite orphan listing using datetime comparison."""
     from datetime import timedelta
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_inactive)
 
-    results = db.query(DataAsset).filter(
+    q = db.query(DataAsset).filter(
         DataAsset.last_seen_at < cutoff,
         DataAsset.asset_type.in_(["file", "column"]),
-    ).order_by(DataAsset.last_seen_at.asc()).limit(100).all()
+    )
+    if owner_id:
+        q = q.filter(DataAsset.owner_id == uuid.UUID(owner_id))
+    results = q.order_by(DataAsset.last_seen_at.asc()).limit(100).all()
 
     return [
         {

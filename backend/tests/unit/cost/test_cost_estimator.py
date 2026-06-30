@@ -122,30 +122,27 @@ class TestWebhookDelivery:
 
 
 class TestBcryptFix:
-    def test_bcrypt_uses_process_pool_not_thread_pool(self):
+    def test_bcrypt_uses_bounded_thread_pool(self):
         import inspect
 
         import backend.auth as pw_module
 
         source = inspect.getsource(pw_module)
-        assert "ProcessPoolExecutor" in source, (
-            "bcrypt must run in ProcessPoolExecutor"
-        )
-        assert "ThreadPoolExecutor" not in source, (
-            "ThreadPoolExecutor cannot bypass the GIL for CPU-bound bcrypt"
+        assert "ThreadPoolExecutor" in source, (
+            "bcrypt must run off the event loop in a bounded executor"
         )
 
-    def test_pool_has_2_workers(self):
+    def test_pool_has_4_workers(self):
         import backend.auth as pw_module
 
         pool = pw_module._get_bcrypt_pool()
-        assert pool._max_workers == 2
+        assert pool._max_workers == 4
 
     def test_bcrypt_check_sync_is_module_level(self):
         import backend.auth as pw_module
 
         assert hasattr(pw_module, "_bcrypt_check_sync"), (
-            "_bcrypt_check_sync must be module-level to be picklable"
+            "_bcrypt_check_sync must be module-level for executor reuse"
         )
         assert hasattr(pw_module, "_bcrypt_hash_sync"), (
             "_bcrypt_hash_sync must be module-level"

@@ -129,6 +129,7 @@ class PipelineRunner:
         recorder = LineageRecorder()
         bus = get_arrow_bus()
         table_registry: Dict[str, pa.Table] = {}
+        downstream_counts = _dependency_counts(config.steps)
         step_results: List[StepExecutionResult] = []
         total_rows_processed: int = 0
         pipeline_start = time.perf_counter()
@@ -159,6 +160,7 @@ class PipelineRunner:
                 )
                 step_results.append(result)
                 table_registry[step.name] = result.output_table
+                _release_dependencies(step, downstream_counts, table_registry)
                 total_rows_processed += result.rows_in
 
         except StepExecutionError as exc:
@@ -327,3 +329,38 @@ class PipelineRunner:
             total_rows_processed=total_rows_processed,
             error=error,
         )
+
+
+def _step_dependencies(step: StepConfig) -> list[str]:
+    step_type = getattr(step.step_type, "value", step.step_type)
+    if step_type == "load":
+        return []
+    if step_type == "join":
+        return [
+            dependency
+            for dependency in [getattr(step, "left", ""), getattr(step, "right", "")]
+            if dependency
+        ]
+    input_name = getattr(step, "input", "")
+    return [input_name] if input_name else []
+
+
+def _dependency_counts(steps: list[StepConfig]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for step in steps:
+        for dependency in _step_dependencies(step):
+            counts[dependency] = counts.get(dependency, 0) + 1
+    return counts
+
+
+def _release_dependencies(
+    step: StepConfig,
+    counts: dict[str, int],
+    registry: dict[str, pa.Table],
+) -> None:
+    for dependency in _step_dependencies(step):
+        if dependency not in counts:
+            continue
+        counts[dependency] -= 1
+        if counts[dependency] <= 0:
+            registry.pop(dependency, None)

@@ -7,6 +7,7 @@ httpx.AsyncClient. The webhook_deliveries table records every attempt.
 import hashlib
 import hmac
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -15,16 +16,30 @@ import orjson
 
 from backend.database import SessionLocal
 from backend.models import Webhook, WebhookDelivery
-from backend.utils.url_security import UnsafeURL, validate_public_http_url
+from backend.config import settings
+from backend.utils.url_security import UnsafeURL, prepare_public_httpx_request
 
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 RETRY_DELAYS = (0, 30, 120)
 
-def _sign_payload(secret: str, body: str | bytes) -> str:
+
+def _sign_payload(secret: str, body: str | bytes, timestamp: str | None = None) -> str:
+    """HMAC-SHA256 over `<timestamp>.<body>`.
+
+    MED-13: body is canonicalized with sorted keys before signing so the
+    sync and async paths produce identical signatures.
+    HIGH-18: callers should pass `timestamp` and include it in the response
+    headers so recipients can reject replays outside a 5-minute window.
+    """
     body_bytes = body if isinstance(body, bytes) else body.encode()
-    return hmac.new(secret.encode(), body_bytes, hashlib.sha256).hexdigest()
+    ts = timestamp or str(int(time.time()))
+    return hmac.new(
+        secret.encode(),
+        ts.encode("ascii") + b"." + body_bytes,
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def deliver_webhook_sync(
@@ -38,14 +53,19 @@ def deliver_webhook_sync(
     if own_session:
         db = SessionLocal()
 
-    body = orjson.dumps(payload)
+    # MED-13: sort keys in both async and sync paths so signatures match.
+    body = orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)
+    # HIGH-18: timestamp included in HMAC to defeat replay.
+    ts = str(int(time.time()))
     headers = {
         "Content-Type": "application/json",
         "X-PipelineIQ-Event": event_type,
+        "X-PipelineIQ-Timestamp": ts,
     }
     if webhook.secret:
-        sig = _sign_payload(webhook.secret, body)
+        sig = _sign_payload(webhook.secret, body, timestamp=ts)
         headers["X-PipelineIQ-Signature"] = f"sha256={sig}"
+        headers["X-PipelineIQ-Signature-Timestamp"] = ts
 
     delivery = WebhookDelivery(
         webhook_id=webhook.id,
@@ -56,11 +76,20 @@ def deliver_webhook_sync(
     )
 
     try:
-        validate_public_http_url(webhook.url)
+        prepared_request = prepare_public_httpx_request(webhook.url)
         import httpx
 
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(webhook.url, content=body, headers=headers)
+        # CRIT-01: do not follow redirects so a webhook cannot pivot the
+        # request to internal targets.
+        headers.update(prepared_request.headers)
+        with httpx.Client(timeout=10, follow_redirects=False, trust_env=False) as client:
+            resp = client.request(
+                "POST",
+                prepared_request.url,
+                content=body,
+                headers=headers,
+                extensions=prepared_request.extensions,
+            )
         delivery.response_status = resp.status_code
         delivery.response_body = resp.text[:1000] if resp.text else None
         if 200 <= resp.status_code < 300:

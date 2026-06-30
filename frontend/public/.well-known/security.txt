@@ -1,0 +1,4 @@
+Contact: mailto:security@pipelineiq.app
+Preferred-Languages: en
+Policy: https://pipelineiq.app/security
+Expires: 2027-06-29T00:00:00Z

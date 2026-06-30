@@ -23,6 +23,7 @@ from typing import Any
 from minio import Minio
 from minio.commonconfig import Filter
 from minio.lifecycleconfig import Expiration, LifecycleConfig, Rule
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +36,17 @@ BUCKETS = [
 
 
 def _minio_client() -> Minio:
+    endpoint = (
+        os.environ.get("MINIO_ENDPOINT")
+        or (settings.S3_ENDPOINT_URL or "").replace("http://", "").replace("https://", "")
+    )
+    if not endpoint or not settings.S3_ACCESS_KEY or not settings.S3_SECRET_KEY:
+        raise RuntimeError("MinIO/S3 credentials are not configured")
     return Minio(
-        os.environ.get("MINIO_ENDPOINT", "minio:9000"),
-        access_key=os.environ.get("MINIO_ROOT_USER", "minio"),
-        secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minio123"),
-        secure=False,
+        endpoint,
+        access_key=settings.S3_ACCESS_KEY,
+        secret_key=settings.S3_SECRET_KEY,
+        secure=bool(settings.S3_ENDPOINT_URL and settings.S3_ENDPOINT_URL.startswith("https://")),
     )
 
 

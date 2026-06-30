@@ -11,6 +11,7 @@ from backend.routers.streaming import router as streaming_router
 import logging
 import os
 import re
+import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -50,6 +51,33 @@ from backend.utils.rate_limiter import limiter
 from backend.telemetry import instrument_all, instrument_fastapi, setup_telemetry, force_flush
 
 logger = logging.getLogger(__name__)
+
+# HIGH-10: keep active JWTs out of log aggregators. SSE EventSource clients
+# cannot set custom headers, so tokens travel via `?token=...` query params.
+# Strip/replace them anywhere we serialize a request URL into a log line.
+_REDACT_QUERY_PARAMS = ("token", "access_token", "jwt", "api_key", "apikey", "secret")
+
+
+def _redact_url_token(url: str) -> str:
+    """Return `url` with sensitive query params replaced by <redacted>."""
+    if not url or "=" not in url:
+        return url
+    try:
+        from urllib.parse import urlparse, parse_qsl, urlencode
+
+        parsed = urlparse(url)
+        if not parsed.query:
+            return url
+        qsl = parse_qsl(parsed.query, keep_blank_values=True)
+        scrubbed = [
+            (k, "<redacted>") if k.lower() in _REDACT_QUERY_PARAMS else (k, v)
+            for k, v in qsl
+        ]
+        return parsed._replace(query=urlencode(scrubbed)).geturl()
+    except Exception:
+        # Never let a logger sanitiser crash logging itself.
+        return url
+
 
 # OTel is initialized inside instrument_all() during lifespan startup.
 # Module-level setup_telemetry() is intentionally deferred to avoid
@@ -330,9 +358,17 @@ async def validation_error_handler(
         body_summary["unavailable_reason"] = str(body_err)
 
     # Path, query, headers (sanitized for Authorization)
+    # HIGH-10: strip known credential-bearing query params (SSE ?token=...) so
+    # active JWTs never leak into log aggregators via the 422 error handler.
+    raw_query_params = dict(request.query_params)
+    _SENSITIVE_QUERY_KEYS = {"token", "access_token", "jwt", "api_key", "apikey", "secret"}
+    sanitized_query_params = {
+        k: (v if k.lower() not in _SENSITIVE_QUERY_KEYS else f"<redacted:len={len(v)}>")
+        for k, v in raw_query_params.items()
+    }
     location = {
         "path_params": dict(request.path_params),
-        "query_params": dict(request.query_params),
+        "query_params": sanitized_query_params,
         "body": body_summary,
     }
     headers_sanitized = {
@@ -345,7 +381,7 @@ async def validation_error_handler(
     logger.error(
         "validation_error",
         method=request.method,
-        url=str(request.url),
+        url=_redact_url_token(str(request.url)),
         headers=headers_sanitized,
         location=location,
         errors=safe_errors,
@@ -353,7 +389,9 @@ async def validation_error_handler(
     # Also log to standard logger for Docker log visibility
     import json as _json
     logging.getLogger("pipelineiq").warning(
-        "❌ 422 UNPROCESSABLE ENTITY on %s %s", request.method, request.url
+        "❌ 422 UNPROCESSABLE ENTITY on %s %s",
+        request.method,
+        _redact_url_token(str(request.url)),
     )
     logging.getLogger("pipelineiq").error(
         "❌ MISSING/INVALID FIELDS: %s", _json.dumps(safe_errors, indent=2)
@@ -385,7 +423,7 @@ async def generic_error_handler(
     logger = structlog.get_logger()
     logger.exception(
         "unhandled_exception",
-        url=str(request.url),
+        url=_redact_url_token(str(request.url)),
         method=request.method,
         error_type=type(exc).__name__,
         error=str(exc),
@@ -405,17 +443,54 @@ app.add_middleware(
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-CSRF-Token"],
 )
 
 
 @app.middleware("http")
+async def csrf_middleware(request: Request, call_next):
+    """Double-submit CSRF guard for cookie-authenticated mutations."""
+    if request.method in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+        return await call_next(request)
+
+    path = request.url.path
+    csrf_exempt_prefixes = (
+        "/auth/login",
+        "/auth/register",
+        "/auth/refresh",
+        "/auth/password-reset",
+    )
+    if path.startswith(csrf_exempt_prefixes):
+        return await call_next(request)
+
+    uses_cookie_auth = bool(request.cookies.get("pipelineiq_token"))
+    has_bearer = request.headers.get("authorization", "").lower().startswith("bearer ")
+    if uses_cookie_auth and not has_bearer:
+        cookie_token = request.cookies.get("pipelineiq_csrf_token") or ""
+        header_token = request.headers.get("x-csrf-token") or ""
+        if (
+            not cookie_token
+            or not header_token
+            or not secrets.compare_digest(cookie_token, header_token)
+        ):
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": "CSRF token missing or invalid"},
+            )
+
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def api_version_middleware(request: Request, call_next):
-    """Add API-Version header to all responses for version awareness."""
+    """Append only the generic API-Version header (LOW-06).
+
+    The specific app version (X-App-Version) was removed from public
+    responses — disclosing it assisted attackers targeting known CVEs.
+    """
     try:
         response = await call_next(request)
         response.headers["X-API-Version"] = "v1"
-        response.headers["X-App-Version"] = settings.APP_VERSION
         return response
     except RuntimeError as exc:
         if str(exc) == "No response returned.":
@@ -431,8 +506,10 @@ async def request_id_middleware(request: Request, call_next):
     emitted during this request carries the correlation ID.
     """
     header_request_id = request.headers.get("x-request-id")
+    # LOW-08: accept standard tracing/correlation ID formats including
+    # dots, colons, slashes (W3C traceparent, b3, Jaeger), up to 255 chars.
     if header_request_id and re.fullmatch(
-        r"[A-Za-z0-9][A-Za-z0-9_\-]{0,127}",
+        r"[A-Za-z0-9][A-Za-z0-9_\-.:/]{0,254}",
         header_request_id,
     ):
         request_id = header_request_id
@@ -549,8 +626,53 @@ if settings.ENVIRONMENT != "production":
     response_model=None,
 )
 def live_check() -> dict:
-    """Lightweight liveness endpoint — no DB or Redis calls."""
-    return {"status": "ok", "version": settings.APP_VERSION}
+    """Liveness probe — quick pings against the most critical dependencies.
+
+    HIGH-13: a static `{"status": "ok"}` masked broken DB/Redis pools,
+    letting unhealthy pods keep receiving traffic. We now do a short-timeout
+    SELECT 1 against Postgres and a PING against the cache Redis.
+    Heavyweight per-service checks remain on /readyz so startup ordering
+    and full dependency introspection is still distinct from "is the
+    process alive and serving?".
+    """
+    db_ok = _quick_db_health(write_engine)
+    cache_ok = _quick_redis_health(get_cache_redis)
+    both_ok = db_ok and cache_ok
+    return {
+        "status": "ok" if both_ok else "degraded",
+        "version": settings.APP_VERSION,
+        "db": "ok" if db_ok else "error",
+        "cache": "ok" if cache_ok else "error",
+    }
+
+
+def _quick_db_health(engine, timeout_seconds: float = 1.0) -> bool:
+    """Single `SELECT 1` with a tight timeout; never blocks the probe loop."""
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+        return True
+    except Exception:
+        # Fall back to a bound SELECT in dialects that ignore exec_driver_sql.
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1")).scalar()
+            return True
+        except Exception as exc:
+            logger.warning("livez DB ping failed: %s", exc)
+            return False
+
+
+def _quick_redis_health(factory) -> bool:
+    """PING the cache Redis; any failure → not ok (HIGH-13)."""
+    try:
+        factory().ping()
+        return True
+    except Exception as exc:
+        logger.warning("livez Redis ping failed: %s", exc)
+        return False
 
 
 @app.get(

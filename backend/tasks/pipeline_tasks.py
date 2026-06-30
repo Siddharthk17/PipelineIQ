@@ -10,7 +10,7 @@ checks the current status and only proceeds if PENDING.
 """
 
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 import orjson
 from redis.exceptions import RedisError
@@ -48,6 +48,7 @@ from backend.pipeline.versioning import save_version
 from backend.services.audit_service import log_action
 from backend.utils.sse_security import sign_sse_payload
 from backend.utils.time_utils import utcnow
+from backend.utils.uuid_utils import as_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -259,30 +260,33 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
     """
     db = SessionLocal()
     try:
-        pipeline_run = db.query(PipelineRun).filter(
-            PipelineRun.id == run_id).first()
-
-        if pipeline_run is None:
-            logger.error("Pipeline run %s not found in database", run_id)
-            return {"run_id": run_id, "status": "NOT_FOUND"}
-
-        if not _should_execute(pipeline_run):
-            return {"run_id": run_id, "status": pipeline_run.status.value}
-
-        pipeline_run.celery_task_id = self.request.id
-
-        # Capture OpenTelemetry trace context for distributed tracing
+        trace_id = None
         try:
             from backend.telemetry import current_span_context
+
             span_ctx = current_span_context()
-            if span_ctx.get("trace_id"):
-                pipeline_run.trace_id = span_ctx["trace_id"]
+            trace_id = span_ctx.get("trace_id")
         except Exception:
             logger.debug("Failed to capture OTel trace context", exc_info=True)
 
-        db.commit()
+        pipeline_run = _claim_pending_run(
+            db,
+            run_id=run_id,
+            task_id=str(self.request.id),
+            trace_id=trace_id,
+        )
+        if pipeline_run is None:
+            existing = db.query(PipelineRun).filter(PipelineRun.id == as_uuid(run_id)).first()
+            if existing is None:
+                logger.error("Pipeline run %s not found in database", run_id)
+                return {"run_id": run_id, "status": "NOT_FOUND"}
+            logger.warning(
+                "Pipeline run %s has status %s, skipping duplicate execution",
+                run_id,
+                existing.status.value,
+            )
+            return {"run_id": run_id, "status": existing.status.value}
 
-        _mark_running(db, pipeline_run)
         summary = _execute_with_autonomous_healing(db, pipeline_run)
         _persist_results(db, pipeline_run, summary)
 
@@ -333,6 +337,39 @@ def _should_execute(pipeline_run: PipelineRun) -> bool:
     return True
 
 
+def _claim_pending_run(
+    db,
+    *,
+    run_id: str,
+    task_id: str,
+    trace_id: str | None,
+) -> PipelineRun | None:
+    """Atomically transition a PENDING run to RUNNING.
+
+    This closes the Celery duplicate-delivery race where two workers could
+    both read PENDING before either committed RUNNING.
+    """
+    updates = {
+        PipelineRun.status: PipelineStatus.RUNNING,
+        PipelineRun.started_at: utcnow(),
+        PipelineRun.celery_task_id: task_id,
+    }
+    if trace_id:
+        updates[PipelineRun.trace_id] = trace_id
+    updated = (
+        db.query(PipelineRun)
+        .filter(
+            PipelineRun.id == as_uuid(run_id),
+            PipelineRun.status == PipelineStatus.PENDING,
+        )
+        .update(updates, synchronize_session=False)
+    )
+    db.commit()
+    if updated != 1:
+        return None
+    return db.query(PipelineRun).filter(PipelineRun.id == as_uuid(run_id)).first()
+
+
 def _mark_running(db, pipeline_run: PipelineRun) -> None:
     """Mark a pipeline run as RUNNING in the database."""
     pipeline_run.status = PipelineStatus.RUNNING
@@ -374,12 +411,16 @@ def _mark_failed(db, run_id: str, error_message: str) -> None:
 
 
 def _load_wasm_modules(
-    db, wasm_ids: set[str]
+    db, wasm_ids: set[str], user_id: Optional[str] = None
 ) -> Dict[str, bytes]:
     """Load Wasm module binaries from MinIO/S3 storage.
 
     Returns a dict mapping wasm_file_id to raw .wasm binary bytes.
     Only loads modules that are active and belong to the query set.
+
+    CRIT-07: when `user_id` is passed the lookup is scopped to the
+    caller's own modules. Without this, any authenticated user could
+    reference other tenants' Wasm modules by ID (cross-tenant IDOR).
     """
     if not wasm_ids:
         return {}
@@ -400,7 +441,12 @@ def _load_wasm_modules(
     modules = db.query(WasmModule).filter(
         WasmModule.id.in_(uuid_ids),
         WasmModule.is_active.is_(True),
-    ).all()
+    )
+    if user_id is not None:
+        # CRIT-07: enforce tenant ownership; the calling run's user must
+        # own the modules they referenced.
+        modules = modules.filter(WasmModule.user_id == user_id)
+    modules = modules.all()
 
     if not modules:
         return {}
@@ -453,7 +499,10 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
             except (ValueError, AttributeError):
                 pass
         uploaded_files = (
-            db.query(UploadedFile).filter(UploadedFile.id.in_(uuid_ids)).all()
+            db.query(UploadedFile)
+            .filter(UploadedFile.id.in_(uuid_ids))
+            .filter(UploadedFile.user_id == pipeline_run.user_id)  # CRIT-07: tenant isolation
+            .all()
             if uuid_ids
             else []
         )
@@ -465,7 +514,9 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
         str(f.id): {"original_filename": f.original_filename} for f in uploaded_files
     }
 
-    wasm_modules = _load_wasm_modules(db, referenced_wasm_ids)
+    wasm_modules = _load_wasm_modules(
+        db, referenced_wasm_ids, user_id=pipeline_run.user_id
+    )
 
     user_role = "viewer"
     if pipeline_run.user_id:
@@ -722,7 +773,10 @@ def _save_version_if_needed(*, db, pipeline_run: PipelineRun) -> None:
     config = get_parsed_pipeline(pipeline_run.yaml_config)
     latest_version = (
         db.query(PipelineVersion)
-        .filter(PipelineVersion.pipeline_name == config.name)
+        .filter(
+            PipelineVersion.pipeline_name == config.name,
+            PipelineVersion.user_id == pipeline_run.user_id,
+        )
         .order_by(PipelineVersion.version_number.desc())
         .first()
     )
@@ -734,6 +788,7 @@ def _save_version_if_needed(*, db, pipeline_run: PipelineRun) -> None:
         yaml_config=pipeline_run.yaml_config,
         run_id=pipeline_run.id,
         db=db,
+        user_id=pipeline_run.user_id,
     )
 
 

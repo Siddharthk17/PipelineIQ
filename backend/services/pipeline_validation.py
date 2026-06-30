@@ -24,7 +24,12 @@ def serialize_validation_errors(errors: list[ValidationError]) -> list[dict[str,
     ]
 
 
-def collect_schema_validation_errors(config: Any, db: Session) -> list[ValidationError]:
+def collect_schema_validation_errors(
+    config: Any,
+    db: Session,
+    *,
+    user_id: str | None = None,
+) -> list[ValidationError]:
     """Simulate step-by-step schema flow to catch column mismatches early."""
     errors: list[ValidationError] = []
     schema: dict[str, list[str]] = {}
@@ -37,9 +42,12 @@ def collect_schema_validation_errors(config: Any, db: Session) -> list[Validatio
             file_id = getattr(step, "file_id", None)
             if file_id:
                 try:
-                    file_record = db.query(UploadedFile).filter(
+                    file_query = db.query(UploadedFile).filter(
                         UploadedFile.id == as_uuid(file_id)
-                    ).first()
+                    )
+                    if user_id is not None:
+                        file_query = file_query.filter(UploadedFile.user_id == user_id)
+                    file_record = file_query.first()
                 except Exception:
                     file_record = None
 

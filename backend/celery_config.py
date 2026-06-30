@@ -41,6 +41,10 @@ task_track_started = True
 task_acks_late = True
 worker_prefetch_multiplier = 1
 broker_connection_retry_on_startup = True
+# HIGH-07: when a worker dies mid-task, requeue the task instead of
+# silently dropping it. Without this, OOM-killed Celery workers lose
+# execution units and pipeline runs hang in PENDING forever.
+task_reject_on_worker_lost = True
 
 # Default execution safety.
 task_soft_time_limit = 300
@@ -49,8 +53,18 @@ task_default_retry_delay = 30
 # Task-level retry policies are defined per-task via decorators.
 task_annotations = {}
 
+# HIGH-07: cap automatic retries so a permanently broken task cannot enter
+# an infinite retry loop and pin worker slots indefinitely. Individual tasks
+# may override via decorator kwargs.
+task_default_max_retries = 5
+
 # Keep result backend short-lived to avoid Redis growth.
 result_expires = 3600
+
+# HIGH-07: dead-letter routing for permanently failed tasks. The queue is
+# created by the worker bootstrap below; tasks marked with `queue="default"`
+# and a delivery failure stay here for inspection instead of being lost.
+task_create_missing_queues = True
 
 beat_schedule = {
     "check-pipeline-schedules": {

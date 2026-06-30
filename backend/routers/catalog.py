@@ -57,7 +57,14 @@ def search_catalog(
     db: Session = get_read_db_dependency(),
 ):
     """Full-text search over the global data asset catalog using trigram similarity."""
-    results = search_assets(db, query=q, asset_type=asset_type, limit=limit)
+    owner_scope = None if current_user.role == "admin" else str(current_user.id)
+    results = search_assets(
+        db,
+        query=q,
+        asset_type=asset_type,
+        limit=limit,
+        owner_id=owner_scope,
+    )
     return {
         "query": q,
         "results": results,
@@ -91,6 +98,7 @@ async def get_impact_analysis(
             asset_name=asset_name,
             asset_type=asset_type,
             max_depth=max_depth,
+            owner_id=None if current_user.role == "admin" else str(current_user.id),
         )
     )
     disconnect_task = asyncio.create_task(_ensure_client_connected(request))
@@ -149,7 +157,12 @@ def get_asset_lineage(
 
     Uses statement timeout protection against long-running CTE queries.
     """
-    results = get_upstream_lineage(db, asset_name=asset_name, max_depth=max_depth)
+    results = get_upstream_lineage(
+        db,
+        asset_name=asset_name,
+        max_depth=max_depth,
+        owner_id=None if current_user.role == "admin" else str(current_user.id),
+    )
     return {
         "asset_name": asset_name,
         "upstream": results,
@@ -167,7 +180,11 @@ def list_orphan_data_assets(
     db: Session = get_read_db_dependency(),
 ):
     """Find assets no pipeline has used in the last N days."""
-    orphans = list_orphan_assets_repo(db, days_inactive=days_inactive)
+    orphans = list_orphan_assets_repo(
+        db,
+        days_inactive=days_inactive,
+        owner_id=None if current_user.role == "admin" else str(current_user.id),
+    )
     return {
         "days_inactive": days_inactive,
         "orphans": orphans,
@@ -184,10 +201,31 @@ def get_catalog_stats(
     db: Session = get_read_db_dependency(),
 ):
     """Overall catalog statistics."""
-    asset_counts = db.execute(
-        text("SELECT asset_type, COUNT(*) AS cnt FROM data_assets GROUP BY asset_type ORDER BY cnt DESC")
-    )
-    rel_count = db.execute(text("SELECT COUNT(*) FROM asset_relationships"))
+    if current_user.role == "admin":
+        asset_counts = db.execute(
+            text("SELECT asset_type, COUNT(*) AS cnt FROM data_assets GROUP BY asset_type ORDER BY cnt DESC")
+        )
+        rel_count = db.execute(text("SELECT COUNT(*) FROM asset_relationships"))
+    else:
+        asset_counts = db.execute(
+            text("""
+                SELECT asset_type, COUNT(*) AS cnt
+                FROM data_assets
+                WHERE owner_id = :owner_id
+                GROUP BY asset_type
+                ORDER BY cnt DESC
+            """),
+            {"owner_id": str(current_user.id)},
+        )
+        rel_count = db.execute(
+            text("""
+                SELECT COUNT(*)
+                FROM asset_relationships ar
+                JOIN data_assets da ON da.id = ar.source_id
+                WHERE da.owner_id = :owner_id
+            """),
+            {"owner_id": str(current_user.id)},
+        )
 
     return {
         "assets_by_type": {row.asset_type: row.cnt for row in asset_counts.fetchall()},

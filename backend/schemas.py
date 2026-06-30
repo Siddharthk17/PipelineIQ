@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 import yaml
 from pydantic import BaseModel, Field, field_validator
 
+from backend.utils.yaml_security import validate_yaml_input
+
 
 class ColumnDriftResponse(BaseModel):
     """A single schema drift item."""
@@ -129,8 +131,9 @@ class RunPipelineRequest(BaseModel):
     def validate_yaml_parseable(cls, value: str) -> str:
         """Ensure the YAML string is syntactically valid."""
         try:
+            validate_yaml_input(value)
             yaml.safe_load(value.strip())
-        except yaml.YAMLError as exc:
+        except (ValueError, yaml.YAMLError) as exc:
             raise ValueError(f"Invalid YAML syntax: {exc}") from exc
         return value
 
@@ -182,8 +185,9 @@ class ValidatePipelineRequest(BaseModel):
     def validate_yaml_parseable(cls, value: str) -> str:
         """Ensure the YAML string is syntactically valid."""
         try:
+            validate_yaml_input(value)
             yaml.safe_load(value.strip())
-        except yaml.YAMLError as exc:
+        except (ValueError, yaml.YAMLError) as exc:
             raise ValueError(f"Invalid YAML syntax: {exc}") from exc
         return value
 

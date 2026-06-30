@@ -54,9 +54,16 @@ def is_valid_identifier(name: str) -> bool:
 def is_safe_filename(filename: str) -> bool:
     """Check if a filename is safe and doesn't contain path traversal attempts.
 
-    Returns False if filename contains '..' or any path separators.
+    Returns False if filename contains '..', any path separators, control
+    characters, or NULL bytes (LOW-01): null bytes can truncate filenames in
+    C-based downstream execution engines, enabling path traversal.
     """
-    if not filename:
+    if not filename or not isinstance(filename, str):
+        return False
+    if "\x00" in filename:
+        return False
+    # Strip control characters other than whitespace/UTF-8 chars.
+    if any(ord(ch) < 0x20 and ch not in "\t\n" for ch in filename):
         return False
     if ".." in filename or "/" in filename or "\\" in filename:
         return False

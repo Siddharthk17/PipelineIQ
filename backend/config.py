@@ -59,7 +59,27 @@ class Settings(BaseSettings):
     DATABASE_READ_URL: str = ""
     READ_REPLICA_HOST: str = "localhost"
     SECRET_KEY: str = ""
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    # CRIT-05: Short-lived access token (15 min) with refresh token rotation.
+    # Older default of 1440 minutes (24h) kept a stolen token live for a full day.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    # MED-05: JWT claims (iss/aud/nbf) — verified on every token decode.
+    JWT_ISSUER: str = "pipelineiq"
+    JWT_AUDIENCE: str = "pipelineiq-api"
+    # CRIT-02 / MED-04: Isolated signing secrets derived via HKDF from SECRET_KEY.
+    # These are auto-derived below (`sse_secret_key`, `webhook_secret_key`)
+    # so the operator only sets SECRET_KEY, but each consumer uses a distinct key.
+    ACCESS_TOKEN_SECRET: str = ""  # if set, overrides JWT signing key
+    SSE_SECRET_KEY: str = ""  # isolated SSE HMAC key (auto-derived if blank)
+    WEBHOOK_SIGNING_SECRET: str = ""  # isolated webhook HMAC key (auto-derived if blank)
+
+    # HIGH-11: Account lockout to mitigate brute-force / credential stuffing.
+    ACCOUNT_LOCKOUT_THRESHOLD: int = 5  # failed attempts before lockout
+    ACCOUNT_LOCKOUT_DURATION_SECONDS: int = 900  # 15-minute lockout window
+
+    # CRIT-02: When Redis is unreachable during revocation check, fail CLOSED.
+    # Set to False only in ephemeral local/CI without Redis (auto-handled below).
+    TOKEN_REVOCATION_FAIL_OPEN: bool = False
 
     REDIS_BROKER_URL: str = "redis://localhost:6379/0"
     REDIS_BACKEND_URL: str = "redis://localhost:6379/1"
@@ -78,15 +98,18 @@ class Settings(BaseSettings):
     ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json", ".parquet", ".xlsx"})
 
     MAX_PIPELINE_STEPS: int = 50
+    MAX_PIPELINE_YAML_BYTES: int = 1 * 1024 * 1024
     MAX_ROWS_PER_FILE: int = 1_000_000
     STEP_TIMEOUT_SECONDS: int = 300
     WORKER_MEMORY_LIMIT_GB: int = 2
     WORKER_MAX_ROWS_TO_SCAN: int = 10_000_000
 
     API_PREFIX: str = "/api/v1"
+    # HIGH-09 / MED-02: strict explicit origins only. The "localhost:*"
+    # wildcard prefix matching was removed so dev ports cannot be spoofed
+    # by malicious pages. Allow an explicit localhost override via env.
     CORS_ORIGINS: List[str] = [
         "http://localhost",
-        "http://localhost:80",
         "http://localhost:3000",
         "https://pipeline-iq0.vercel.app",
         "https://pipelineiq-api.onrender.com",
@@ -134,7 +157,7 @@ class Settings(BaseSettings):
     # Sentry
     SENTRY_DSN: str = ""
     ENVIRONMENT: str = "development"
-    MINIO_IMAGE_TAG: str = "latest"
+    MINIO_IMAGE_TAG: str = "RELEASE.2025-04-22T22-12-26Z"
 
     # OpenTelemetry
     OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://jaeger:4317"
@@ -147,6 +170,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GEMINI_FALLBACK_MODELS: str = "gemini-2.0-flash,gemini-1.5-flash"
+    AI_PROMPT_MAX_CHARS: int = 24_000
+    AI_PROMPT_MAX_TEXT_CHARS: int = 4_000
+    AI_PROMPT_MAX_ERROR_CHARS: int = 1_000
+    AI_PROMPT_MAX_CONFIG_CHARS: int = 12_000
+    AI_INCLUDE_FILENAMES_IN_PROMPTS: bool = False
 
     # Email (SMTP)
     SMTP_HOST: str = ""
@@ -234,6 +262,10 @@ class Settings(BaseSettings):
         """Prevent public monitoring services from using blank or weak passwords."""
         if self.ENVIRONMENT != "production":
             return self
+        if self.ACCESS_TOKEN_EXPIRE_MINUTES > 15:
+            raise ValueError(
+                "ACCESS_TOKEN_EXPIRE_MINUTES must be 15 or lower in production."
+            )
         weak_values = {
             "FLOWER_PASSWORD": self.FLOWER_PASSWORD,
             "GRAFANA_PASSWORD": self.GRAFANA_PASSWORD,
@@ -241,6 +273,48 @@ class Settings(BaseSettings):
         for name, value in weak_values.items():
             if value in WEAK_SECRET_VALUES or len(value) < 16:
                 raise ValueError(f"{name} must be set to a strong production password.")
+        return self
+
+    @model_validator(mode="after")
+    def derive_isolated_signing_keys(self) -> "Settings":
+        """CRIT-02 / MED-04: derive distinct keys per cryptographic consumer.
+
+        If the operator does not supply explicit values, each key is derived
+        from the master SECRET_KEY via HKDF-SHA256 with a per-purpose info
+        label. This guarantees that compromising one consumer (e.g. SSE HMAC)
+        does not expose JWTs or webhook signatures, and avoids secret drift
+        across services — there is exactly one root secret to configure.
+        """
+        import hashlib
+        import hmac as _hmac
+
+        def _hkdf(master: str, info: bytes, length: int = 32) -> str:
+            # RFC 5869 extract-then-expand, single-block output (<= 32 bytes).
+            prk = _hmac.new(b"pipelineiq-salt", master.encode("utf-8"), hashlib.sha256).digest()
+            okm = _hmac.new(prk, info + b"\x01", hashlib.sha256).digest()
+            return okm[:length].hex()
+
+        if not self.SSE_SECRET_KEY:
+            self.SSE_SECRET_KEY = _hkdf(self.SECRET_KEY, b"pipelineiq-sse-signing-v1", 32)
+        if not self.WEBHOOK_SIGNING_SECRET:
+            self.WEBHOOK_SIGNING_SECRET = _hkdf(self.SECRET_KEY, b"pipelineiq-webhook-signing-v1", 32)
+        if not self.ACCESS_TOKEN_SECRET:
+            self.ACCESS_TOKEN_SECRET = _hkdf(self.SECRET_KEY, b"pipelineiq-jwt-signing-v1", 32)
+        return self
+
+    @model_validator(mode="after")
+    def relax_revocation_fail_open_for_ci(self) -> "Settings":
+        """CRIT-05: tolerate fail-open only in clearly non-production contexts.
+
+        Production and staging always fail CLOSED (revoked token treated as
+        revoked when Redis is unreachable) — operators may force-open with
+        TOKEN_REVOCATION_FAIL_OPEN=true only in an emergency. In development,
+        CI, and test, we auto-allow fail-open so the auth flow continues to
+        work without Redis (those environments are not multi-tenant and have
+        no revocation surface to protect).
+        """
+        if self.ENVIRONMENT in {"development", "dev", "test", "ci", "local"}:
+            self.TOKEN_REVOCATION_FAIL_OPEN = True
         return self
 
 

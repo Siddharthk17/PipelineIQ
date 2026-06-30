@@ -17,7 +17,7 @@ _FORBIDDEN_SQL_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 _FORBIDDEN_SQL_FUNCTIONS = re.compile(
-    r"\b(read_csv|read_csv_auto|read_json|read_json_auto|read_parquet|read_blob|read_text|sqlite_scan|postgres_scan|httpfs)\s*\(",
+    r"\b(read_csv|read_csv_auto|read_json|read_json_auto|read_parquet|read_blob|read_text|sqlite_scan|postgres_scan|httpfs|current_setting|duckdb_settings|duckdb_secrets|pragma_database_size)\s*\(",
     re.IGNORECASE,
 )
 _FORBIDDEN_EXTERNAL_URI = re.compile(

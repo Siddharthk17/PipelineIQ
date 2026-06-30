@@ -3,6 +3,7 @@
 import hmac
 import hashlib
 import logging
+import time
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -17,7 +18,12 @@ from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User, Webhook, WebhookDelivery
 from backend.utils.uuid_utils import as_uuid as _as_uuid
 from backend.services.audit_service import log_action
-from backend.utils.url_security import UnsafeURL, validate_public_http_url
+from backend.config import settings
+from backend.utils.url_security import (
+    UnsafeURL,
+    prepare_public_httpx_request,
+    validate_public_http_url,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
@@ -37,6 +43,20 @@ class WebhookCreate(BaseModel):
             return validate_public_http_url(v)
         except UnsafeURL as exc:
             raise ValueError(str(exc)) from exc
+
+    @field_validator("secret")
+    @classmethod
+    def validate_secret_strength(cls, v: Optional[str]) -> Optional[str]:
+        # MED-12: empty secret is permitted (we fall back to the platform
+        # WEBHOOK_SIGNING_SECRET), but if a secret is supplied it must be
+        # at least 16 chars to resist dictionary attacks.
+        if v is None:
+            return v
+        if len(v) < 16:
+            raise ValueError(
+                "Webhook secret must be at least 16 characters when supplied"
+            )
+        return v
 
 
 class WebhookResponse(BaseModel):
@@ -233,21 +253,35 @@ def test_webhook(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "data": {"message": "This is a test webhook from PipelineIQ"},
     }
-    body = orjson.dumps(payload)
+    # MED-13: sort keys for cross-path signature consistency. HIGH-18: include
+    # timestamp in HMAC + headers so the test signature is replay-resistant.
+    body = orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)
+    ts = str(int(time.time()))
     headers = {
         "Content-Type": "application/json",
         "X-PipelineIQ-Event": "test",
+        "X-PipelineIQ-Timestamp": ts,
     }
     if webhook.secret:
         sig = hmac.new(
             webhook.secret.encode(),
-            body,
+            ts.encode("ascii") + b"." + body,
             hashlib.sha256).hexdigest()
         headers["X-PipelineIQ-Signature"] = f"sha256={sig}"
+        headers["X-PipelineIQ-Signature-Timestamp"] = ts
 
     try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(webhook.url, content=body, headers=headers)
+        prepared_request = prepare_public_httpx_request(webhook.url)
+        headers.update(prepared_request.headers)
+        # CRIT-01: never follow redirects from webhook test posts.
+        with httpx.Client(timeout=10, follow_redirects=False, trust_env=False) as client:
+            resp = client.request(
+                "POST",
+                prepared_request.url,
+                content=body,
+                headers=headers,
+                extensions=prepared_request.extensions,
+            )
         return TestWebhookResponse(
             delivered=200 <= resp.status_code < 300,
             response_status=resp.status_code,

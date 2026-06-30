@@ -55,6 +55,12 @@ MAX_CONSECUTIVE_ERRORS = 50          # Shut down after 50 consecutive batch erro
     queue="streaming",
     bind=True,
     acks_late=True,
+    # CRIT-09: override the global task_soft_time_limit=300 / task_time_limit=360
+    # so Celery does not SIGKILL the streaming daemon after 6 minutes. The
+    # daemon is designed to run indefinitely until self.is_aborted() or the
+    # run is transitioned away from STREAMING_ACTIVE/PAUSED.
+    soft_time_limit=None,
+    time_limit=None,
 )
 def run_streaming_pipeline(self, run_id: str) -> dict:
     """Long-running streaming pipeline daemon.

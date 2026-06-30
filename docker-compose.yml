@@ -152,7 +152,7 @@ services:
     command:
       - sh
       - -c
-      - 'mkdir -p /tmp/gunicorn && python -m backend.scripts.wait_for_db && (python -m backend.scripts.seed_demo || true) && exec gunicorn backend.main:app --config backend/gunicorn.conf.py'
+      - 'mkdir -p /tmp/gunicorn && python -m backend.scripts.wait_for_db && if [ "$$ENVIRONMENT" != "production" ]; then python -m backend.scripts.seed_demo || true; fi && exec gunicorn backend.main:app --config backend/gunicorn.conf.py'
     env_file:
       - .env
     environment:
@@ -708,7 +708,7 @@ services:
       - "127.0.0.1:1234:1234"
     environment:
       - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382
-      - JWT_SECRET=${SECRET_KEY}
+      - SECRET_KEY=${SECRET_KEY}
       - PORT=1234
     depends_on:
       redis-yjs:
@@ -752,7 +752,7 @@ services:
       - pipelineiq-network
 
   minio:
-    image: minio/minio:${MINIO_IMAGE_TAG:-latest}
+    image: minio/minio:${MINIO_IMAGE_TAG:-RELEASE.2025-04-22T22-12-26Z}
     container_name: pipelineiq-minio
     command: server /data --console-address ":9001"
     environment:
@@ -783,7 +783,6 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=/api/v1
       - NEXT_PUBLIC_APP_VERSION=${APP_VERSION:-12.7.3}
-      - AUTH_JWT_SECRET=${SECRET_KEY}
     depends_on:
       api:
         condition: service_healthy

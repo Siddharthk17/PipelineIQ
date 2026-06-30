@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import signal
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -39,22 +38,12 @@ VALIDATION_FUEL = 100_000
 MAX_CACHED_MODULES = 100
 MAX_WASM_MEMORY_BYTES = 16 * 1024 * 1024
 MAX_WASM_TABLE_ELEMENTS = 10_000
-WASM_EXECUTION_TIMEOUT_SECONDS = 30
-
 
 @dataclass
 class WasmValidationResult:
     valid: bool
     exported_functions: list[str]
     error: str | None = None
-
-
-class _WasmTimeout(Exception):
-    pass
-
-
-def _timeout_handler(signum, frame):
-    raise _WasmTimeout("WASM execution exceeded timeout")
 
 
 class WasmExecutor:
@@ -129,61 +118,49 @@ class WasmExecutor:
         error_count = 0
         max_errors = max(10, len(table) // 10)
 
-        try:
-            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(WASM_EXECUTION_TIMEOUT_SECONDS)
+        df = table.to_pandas()
+        for _, row in df[input_columns].iterrows():
             try:
-                df = table.to_pandas()
-                for _, row in df[input_columns].iterrows():
-                    try:
-                        args = [float(row[col]) for col in input_columns]
-                    except (TypeError, ValueError) as e:
-                        logger.debug("Row conversion error: %s", e)
-                        for col in input_columns:
-                            result_arrays[col].append(None)
-                        result_arrays[output_column].append(None)
-                        continue
+                args = [float(row[col]) for col in input_columns]
+            except (TypeError, ValueError) as e:
+                logger.debug("Row conversion error: %s", e)
+                for col in input_columns:
+                    result_arrays[col].append(None)
+                result_arrays[output_column].append(None)
+                continue
 
-                    try:
-                        store.set_fuel(FUEL_PER_ROW)
-                        result = wasm_func(store, *args)
-                        val = float(result) if result is not None else None
-                        for col in input_columns:
-                            result_arrays[col].append(row[col])
-                        result_arrays[output_column].append(val)
-                    except Trap as trap:
-                        error_count += 1
-                        if error_count > max_errors:
-                            raise RuntimeError(
-                                f"WASM execution failed on too many rows ({error_count}). "
-                                f"Last trap: {trap}"
-                            ) from trap
-                        logger.debug("Wasm trap on row (fuel exhausted or invalid operation)")
-                        for col in input_columns:
-                            result_arrays[col].append(None)
-                        result_arrays[output_column].append(None)
-                    except _WasmTimeout:
-                        raise
-                    except Exception as e:
-                        error_count += 1
-                        if error_count > max_errors:
-                            raise RuntimeError(
-                                f"WASM execution failed on too many rows ({error_count}). "
-                                f"Last error: {e}"
-                            ) from e
-                        logger.debug("Wasm execution error on row: %s", e)
-                        for col in input_columns:
-                            result_arrays[col].append(None)
-                        result_arrays[output_column].append(None)
-            finally:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
-        except _WasmTimeout:
-            logger.warning("WASM execution timed out after %d seconds", WASM_EXECUTION_TIMEOUT_SECONDS)
-            raise HTTPException(
-                status_code=408,
-                detail=f"WASM execution timed out after {WASM_EXECUTION_TIMEOUT_SECONDS}s",
-            )
+            try:
+                # MED-03: do not reset fuel per row. The Store was seeded once
+                # with FUEL_PER_STEP, so every invocation burns from one unified
+                # step budget and pathological modules cannot run forever by
+                # spreading work across rows.
+                result = wasm_func(store, *args)
+                val = float(result) if result is not None else None
+                for col in input_columns:
+                    result_arrays[col].append(row[col])
+                result_arrays[output_column].append(val)
+            except Trap as trap:
+                error_count += 1
+                if error_count > max_errors:
+                    raise RuntimeError(
+                        f"WASM execution failed on too many rows ({error_count}). "
+                        f"Last trap: {trap}"
+                    ) from trap
+                logger.debug("Wasm trap on row (fuel exhausted or invalid operation)")
+                for col in input_columns:
+                    result_arrays[col].append(None)
+                result_arrays[output_column].append(None)
+            except Exception as e:
+                error_count += 1
+                if error_count > max_errors:
+                    raise RuntimeError(
+                        f"WASM execution failed on too many rows ({error_count}). "
+                        f"Last error: {e}"
+                    ) from e
+                logger.debug("Wasm execution error on row: %s", e)
+                for col in input_columns:
+                    result_arrays[col].append(None)
+                result_arrays[output_column].append(None)
 
         result_table = pa.table(result_arrays)
         ordered_columns = list(table.schema.names)

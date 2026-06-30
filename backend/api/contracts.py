@@ -25,6 +25,7 @@ from backend.schemas import (
     ContractStatusResponse,
     ContractUpdateRequest,
 )
+from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +68,17 @@ def _ensure_pipeline_contract_access(
     if permission and permission.permission_level in required_levels:
         return
     if allow_new and not (
-        db.query(PipelineRun).filter(PipelineRun.name == pipeline_name).first()
+        db.query(PipelineRun)
+        .filter(
+            PipelineRun.name == pipeline_name,
+            PipelineRun.user_id == current_user.id,
+        )
+        .first()
         or db.query(PipelineContract)
-        .filter(PipelineContract.pipeline_name == pipeline_name)
+        .filter(
+            PipelineContract.pipeline_name == pipeline_name,
+            PipelineContract.user_id == str(current_user.id),
+        )
         .first()
     ):
         return
@@ -81,6 +90,17 @@ def _contract_query(db: Session, current_user: User):
     if current_user.role != "admin":
         query = query.filter(PipelineContract.user_id == str(current_user.id))
     return query
+
+
+def _parse_uuid_param(value: str, name: str):
+    try:
+        validate_uuid_format(value)
+        return as_uuid(value)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {name}",
+        ) from exc
 
 
 # Contract definition CRUD
@@ -181,13 +201,14 @@ def get_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Get a specific contract definition by ID."""
+    parsed_contract_id = _parse_uuid_param(contract_id, "contract_id")
     _ensure_pipeline_contract_access(
         db, current_user, pipeline_name, {"owner", "runner", "viewer"}
     )
     contract = (
         _contract_query(db, current_user)
         .filter(
-            PipelineContract.id == contract_id,
+            PipelineContract.id == parsed_contract_id,
             PipelineContract.pipeline_name == pipeline_name,
         )
         .first()
@@ -222,11 +243,12 @@ def update_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Update an existing contract definition (creates a new version)."""
+    parsed_contract_id = _parse_uuid_param(contract_id, "contract_id")
     _ensure_pipeline_contract_access(db, current_user, pipeline_name, {"owner"})
     existing = (
         _contract_query(db, current_user)
         .filter(
-            PipelineContract.id == contract_id,
+            PipelineContract.id == parsed_contract_id,
             PipelineContract.pipeline_name == pipeline_name,
         )
         .first()
@@ -278,11 +300,12 @@ def delete_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Delete a contract definition."""
+    parsed_contract_id = _parse_uuid_param(contract_id, "contract_id")
     _ensure_pipeline_contract_access(db, current_user, pipeline_name, {"owner"})
     contract = (
         _contract_query(db, current_user)
         .filter(
-            PipelineContract.id == contract_id,
+            PipelineContract.id == parsed_contract_id,
             PipelineContract.pipeline_name == pipeline_name,
         )
         .first()
@@ -402,8 +425,9 @@ def list_run_violations(
     current_user: User = Depends(get_current_user),
 ):
     """List all contract violations for a given pipeline run."""
+    parsed_run_id = _parse_uuid_param(run_id, "run_id")
     run = db.query(PipelineRun).filter(
-        PipelineRun.id == run_id).first()
+        PipelineRun.id == parsed_run_id).first()
     if not run:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -416,7 +440,7 @@ def list_run_violations(
 
     violations = (
         db.query(ContractViolationRecord)
-        .filter(ContractViolationRecord.run_id == run_id)
+        .filter(ContractViolationRecord.run_id == parsed_run_id)
         .order_by(
             ContractViolationRecord.step_index,
             ContractViolationRecord.severity.desc(),
@@ -454,7 +478,8 @@ def list_step_violations(
     current_user: User = Depends(get_current_user),
 ):
     """List contract violations for a specific step within a run."""
-    run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    parsed_run_id = _parse_uuid_param(run_id, "run_id")
+    run = db.query(PipelineRun).filter(PipelineRun.id == parsed_run_id).first()
     if not run:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -467,7 +492,7 @@ def list_step_violations(
     violations = (
         db.query(ContractViolationRecord)
         .filter(
-            ContractViolationRecord.run_id == run_id,
+            ContractViolationRecord.run_id == parsed_run_id,
             ContractViolationRecord.step_name == step_name,
         )
         .order_by(ContractViolationRecord.severity.desc())

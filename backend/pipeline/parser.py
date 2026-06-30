@@ -16,6 +16,7 @@ import yaml
 
 from backend.config import settings
 from backend.execution.sql_builder import validate_sql_step_query
+from backend.utils.yaml_security import validate_yaml_input
 from backend.pipeline.exceptions import InvalidYAMLError, MissingRequiredFieldError
 from backend.utils.string_utils import (
     find_closest_column,
@@ -430,21 +431,17 @@ class PipelineParser:
     def _parse_yaml(self, yaml_string: str) -> dict:
         """Parse raw YAML string into a dictionary."""
         try:
+            validate_yaml_input(yaml_string)
             # Strip potential diff markers before parsing
             from backend.pipeline.diff_utils import strip_diff_markers
             cleaned_yaml = strip_diff_markers(yaml_string)
             raw = yaml.safe_load(cleaned_yaml.strip())
         except yaml.YAMLError as exc:
-            # Attempt auto-recovery for js-yaml vs PyYAML incompatibilities
-            try:
-                from backend.pipeline.diff_utils import strip_diff_markers
-                cleaned_yaml = strip_diff_markers(yaml_string).strip()
-                repaired = _repair_quoted_values(cleaned_yaml)
-                raw = yaml.safe_load(repaired)
-            except yaml.YAMLError:
-                line = getattr(exc, "problem_mark", None)
-                line_num = line.line + 1 if line else None
-                raise InvalidYAMLError(str(exc), line=line_num) from exc
+            line = getattr(exc, "problem_mark", None)
+            line_num = line.line + 1 if line else None
+            raise InvalidYAMLError(str(exc), line=line_num) from exc
+        except ValueError as exc:
+            raise InvalidYAMLError(str(exc)) from exc
 
         if not isinstance(raw, dict):
             raise InvalidYAMLError(
