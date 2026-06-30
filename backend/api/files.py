@@ -359,6 +359,17 @@ async def upload_file(
             )
     except HTTPException:
         raise
+    except ValueError as exc:
+        if "File size exceeds maximum" in str(exc):
+            storage_service.delete(stored_path)
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=str(exc),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to upload file: {exc}",
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

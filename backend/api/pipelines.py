@@ -143,7 +143,6 @@ def _create_run_schema_snapshots(
         db.query(UploadedFile)
         .filter(
             UploadedFile.id.in_(referenced_file_ids),
-            UploadedFile.user_id == user_id,
         )
         .all()
     )
@@ -179,9 +178,7 @@ def validate_pipeline(
 
     registered_ids = {
         str(row[0])
-        for row in db.query(UploadedFile.id)
-        .filter(UploadedFile.user_id == current_user.id)
-        .all()
+        for row in db.query(UploadedFile.id).all()
     }
     result = _pipeline_parser.validate(config, registered_ids)
     if result.is_valid:
@@ -189,7 +186,6 @@ def validate_pipeline(
             collect_schema_validation_errors(
                 config,
                 db,
-                user_id=str(current_user.id),
             )
         )
         result.is_valid = len(result.errors) == 0
@@ -371,9 +367,7 @@ def run_pipeline(
     # is valid
     registered_ids = {
         str(row[0])
-        for row in db.query(UploadedFile.id)
-        .filter(UploadedFile.user_id == current_user.id)
-        .all()
+        for row in db.query(UploadedFile.id).all()
     }
     validation_result = _pipeline_parser.validate(config, registered_ids)
 
@@ -417,7 +411,6 @@ def run_pipeline(
     schema_errors = collect_schema_validation_errors(
         config,
         db,
-        user_id=str(current_user.id),
     )
     if schema_errors:
         raise HTTPException(

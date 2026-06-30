@@ -239,6 +239,7 @@ class TestPipelineValidation:
             "/api/v1/pipelines/validate",
             json={"yaml_config": yaml_config},
         )
+        print(f"\nDEBUG - file_id={file_id}\nyaml={yaml_config}\nresponse={response.status_code} {response.json()}")
         assert response.status_code == 200
         assert response.json()["is_valid"] is True
         assert response.json()["errors"] == []

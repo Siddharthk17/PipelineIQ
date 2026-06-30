@@ -432,9 +432,12 @@ class PipelineParser:
         """Parse raw YAML string into a dictionary."""
         try:
             validate_yaml_input(yaml_string)
-            # Strip potential diff markers before parsing
             from backend.pipeline.diff_utils import strip_diff_markers
             cleaned_yaml = strip_diff_markers(yaml_string)
+            # Auto-repair js-yaml output that doubles quotes around scalars
+            # (e.g. file_id: ""uuid"" → file_id: "uuid") before feeding
+            # the string to the YAML parser.
+            cleaned_yaml = _repair_quoted_values(cleaned_yaml)
             raw = yaml.safe_load(cleaned_yaml.strip())
         except yaml.YAMLError as exc:
             line = getattr(exc, "problem_mark", None)

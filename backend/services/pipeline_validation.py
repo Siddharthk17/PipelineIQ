@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -28,7 +29,7 @@ def collect_schema_validation_errors(
     config: Any,
     db: Session,
     *,
-    user_id: str | None = None,
+    user_id: str | UUID | None = None,
 ) -> list[ValidationError]:
     """Simulate step-by-step schema flow to catch column mismatches early."""
     errors: list[ValidationError] = []

@@ -10,6 +10,13 @@ import os
 # OpenTelemetry from trying to connect to Jaeger during test runs.
 os.environ.setdefault("ENVIRONMENT", "test")
 
+# Use local filesystem storage in tests instead of MinIO/S3 so the
+# storage_service singleton (created at import time) picks up a
+# LocalStorageProvider that doesn't need Docker networking.
+# Override (not setdefault) because .env may have STORAGE_TYPE=s3.
+os.environ["STORAGE_TYPE"] = "local"
+os.environ["S3_ENDPOINT_URL"] = ""
+
 import warnings
 from typing import Generator
 from unittest.mock import MagicMock, patch
@@ -43,6 +50,16 @@ from limits.storage import MemoryStorage
 _memory_storage = MemoryStorage()
 limiter._storage = _memory_storage
 limiter._limiter.storage = _memory_storage
+
+# Audit log writes create their own SessionLocal() pointing at the real
+# Postgres (pgbouncer), which is unreachable from the test process and
+# causes a ~45-second DNS timeout.  Swap in a no-op so tests don't hang.
+import backend.services.audit_service as _audit_mod
+_audit_mod.log_action = lambda *a, **kw: None  # type: ignore[method-assign]
+# Callers that did `from audit_service import log_action` (e.g. pipelines.py)
+# also need updating.
+import backend.api.pipelines as _pipelines_mod
+_pipelines_mod.log_action = lambda *a, **kw: None  # type: ignore[method-assign]
 
 pytest_plugins = ["pytest_asyncio"]
 

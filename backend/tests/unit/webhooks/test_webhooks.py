@@ -154,13 +154,14 @@ def test_webhook_hmac_signature_correct():
     """HMAC signature is computed correctly."""
     secret = "my_secret_key"
     body = '{"event": "test"}'
+    ts = "1740000000"
     expected = hmac.new(
         secret.encode(),
-        body.encode(),
+        ts.encode() + b"." + body.encode(),
         hashlib.sha256).hexdigest()
 
     from backend.services.webhook_service import _sign_payload
-    assert _sign_payload(secret, body) == expected
+    assert _sign_payload(secret, body, timestamp=ts) == expected
 
 
 def test_webhook_delivery_on_pipeline_complete(auth_client):
