@@ -163,11 +163,18 @@ def _benchmark_size(row_count: int, repeats: int) -> dict:
 
     result: dict[str, dict[str, float]] = {}
     for op in BENCHMARK_OPS:
+        def run_pandas(op_name: str = op) -> object:
+            return _run_pandas(op_name, sales, customers)
+
+        def run_duckdb(op_name: str = op) -> object:
+            return _run_duckdb(
+                op_name, conn, sales_arrow, customers_arrow)
+
         pandas_mean, pandas_median, pandas_p95 = _time_ms(
-            lambda op_name=op: _run_pandas(op_name, sales, customers), repeats
+            run_pandas, repeats
         )
         duckdb_mean, duckdb_median, duckdb_p95 = _time_ms(
-            lambda op_name=op: _run_duckdb(op_name, conn, sales_arrow, customers_arrow),
+            run_duckdb,
             repeats,
         )
         speedup = round(pandas_mean / duckdb_mean, 3) if duckdb_mean > 0 else 0.0

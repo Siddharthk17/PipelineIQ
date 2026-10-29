@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
@@ -24,17 +25,20 @@ def get_storage_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_read_db_dependency),
 ):
+    tier_stats: dict[str, Any] = {}
     try:
         bus = get_arrow_bus()
         tier_stats = bus.get_tier_stats()
     except Exception as exc:
         tier_stats = {"error": str(exc)}
 
+    bucket_stats: dict[str, Any] = {}
     try:
         bucket_stats = get_bucket_storage_stats()
     except Exception as exc:
         bucket_stats = {"error": str(exc)}
 
+    lifecycle: dict[str, Any] = {}
     try:
         lifecycle = get_lifecycle_policies()
     except Exception as exc:

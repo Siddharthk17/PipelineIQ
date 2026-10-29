@@ -258,7 +258,9 @@ class DuckDBExecutor:
         old_max_rows = None
         try:
             with contextlib.suppress(Exception):
-                old_max_rows = conn.execute("SELECT current_setting('max_rows_to_scan')").fetchone()[0]
+                _row = conn.execute(
+                    "SELECT current_setting('max_rows_to_scan')").fetchone()
+                old_max_rows = _row[0] if _row else None
             with contextlib.suppress(Exception):
                 conn.execute(f"SET max_rows_to_scan={_settings.WORKER_MAX_ROWS_TO_SCAN}")
 

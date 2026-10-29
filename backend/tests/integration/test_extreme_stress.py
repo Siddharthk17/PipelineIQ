@@ -31,7 +31,7 @@ def stress_client(test_db: Session, tmp_path):
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()
     file_settings.UPLOAD_DIR = upload_dir
-    file_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
+    file_settings.ALLOWED_EXTENSIONS = frozenset({".csv", ".json"})
     file_settings.MAX_UPLOAD_SIZE = 500 * 1024 * 1024
     file_settings.MAX_ROWS_PER_FILE = 1000000
 

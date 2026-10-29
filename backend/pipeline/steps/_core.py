@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
 import orjson
 import pandas as pd
@@ -115,7 +115,7 @@ SUPPORTED_FILE_EXTENSIONS: dict[str, Callable[..., pd.DataFrame]] = {
     ".json": pd.read_json,
 }
 
-TableLike = pa.Table | pd.DataFrame
+TableLike: TypeAlias = pa.Table | pd.DataFrame
 
 
 class StepExecutor:
@@ -1168,7 +1168,12 @@ class StepExecutor:
                 sampled_df = input_df.reset_index(drop=True)
             elif config.stratify_by:
                 groups = []
-                target_n = config.n or int(len(input_df) * config.fraction)
+                target_n = config.n
+                if target_n is None:
+                    if config.fraction is None:
+                        raise ValueError(
+                            "Sample step requires n or fraction")
+                    target_n = int(len(input_df) * config.fraction)
                 for _, group_df in input_df.groupby(config.stratify_by):
                     group_n = max(
                         1, int(

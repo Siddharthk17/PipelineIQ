@@ -38,3 +38,15 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["backend"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+follow_imports = "silent"
+show_error_codes = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "backend.alembic.*"
+ignore_errors = true

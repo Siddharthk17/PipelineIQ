@@ -155,10 +155,11 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             if not messages:
                 continue
 
-            valid = [m for m in messages if not m.error()]
+            message_errors = [(m, m.error()) for m in messages]
+            valid = [m for m, err in message_errors if err is None]
             errors = [
-                m for m in messages
-                if m.error() and m.error().code() != KafkaError._PARTITION_EOF
+                m for m, err in message_errors
+                if err is not None and err.code() != KafkaError._PARTITION_EOF
             ]
 
             if errors:
@@ -269,7 +270,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
 
 def _step_type(step) -> str:
     val = getattr(step, "type", None) or getattr(step, "step_type", None)
-    if hasattr(val, "value"):
+    if val is not None and hasattr(val, "value"):
         return val.value
     return str(val) if val else ""
 

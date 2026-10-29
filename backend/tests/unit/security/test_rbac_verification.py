@@ -25,7 +25,7 @@ def set_current_user(user: User):
 
 
 @pytest.fixture()
-def rbac_client(test_db: Session, tmp_path) -> TestClient:
+def rbac_client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
     """TestClient with base infrastructure, but auth managed per test."""
 
     def override_get_db() -> Generator[Session, None, None]:

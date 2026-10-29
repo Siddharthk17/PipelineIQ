@@ -258,7 +258,7 @@ def _configure_logging() -> None:
 
     if settings.ENVIRONMENT == "production":
         # JSON output for production — parseable by Grafana Loki, Datadog, etc.
-        processors = [*shared_processors, structlog.processors.StackInfoRenderer(), structlog.processors.format_exc_info, structlog.processors.JSONRenderer()]
+        processors: list = [*shared_processors, structlog.processors.StackInfoRenderer(), structlog.processors.format_exc_info, structlog.processors.JSONRenderer()]
     else:
         # Human-readable console output for development
         processors = [*shared_processors, structlog.dev.ConsoleRenderer(colors=True)]

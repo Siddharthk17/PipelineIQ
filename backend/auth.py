@@ -229,7 +229,7 @@ def verify_token(token: str) -> dict | None:
         return payload
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    request: Request = None,
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects Request; None default keeps direct calls working
     db: Session = Depends(get_db),
 ) -> User:
     token = None
@@ -286,7 +286,7 @@ async def get_current_user_sse(
         description="JWT token for SSE EventSource clients that cannot set headers",
     ),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
-    request: Request = None,
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects Request; None default keeps direct calls working
     db: Session = Depends(get_db),
 ) -> User:
     raw_token = token

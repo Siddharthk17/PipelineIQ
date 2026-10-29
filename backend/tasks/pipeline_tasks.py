@@ -1087,7 +1087,7 @@ def _update_schedule_stats(db, pipeline_run: PipelineRun) -> None:
                 )
 
         # Update PipelineSchedule counters
-        update_values = {"last_run_status": status_str}
+        update_values: dict = {"last_run_status": status_str}
         if pipeline_run.status == PipelineStatus.COMPLETED:
             update_values["successful_runs"] = PipelineSchedule.successful_runs + 1
         elif pipeline_run.status == PipelineStatus.HEALED:

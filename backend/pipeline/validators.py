@@ -7,6 +7,7 @@ and sample failing values.
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
@@ -79,7 +80,14 @@ def _execute_single_rule(df: pd.DataFrame, rule: dict) -> ValidationRuleResult:
             message=f"Column '{column}' not found",
         )
 
-    series = df[column] if column else None
+    series: Any = df[column] if column else None
+    if series is None and check not in ("min_rows", "max_rows"):
+        return ValidationRuleResult(
+            rule_name=f"{column or 'dataset'}.{check}", column=column,
+            check=check, passed=False, severity=severity,
+            failing_count=len(df), total_count=len(df), failing_examples=[],
+            message=f"Check '{check}' requires a column",
+        )
 
     if check == "not_null":
         mask = series.isnull()

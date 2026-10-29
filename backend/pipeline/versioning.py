@@ -122,7 +122,7 @@ def diff_pipelines(
 def save_version(
     pipeline_name: str,
     yaml_config: str,
-    run_id: str | None,
+    run_id: _uuid.UUID | str | None,
     db: Session,
     *,
     max_retries: int = 5,

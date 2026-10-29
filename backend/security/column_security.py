@@ -13,6 +13,7 @@ Policies are cached in Redis for 60 seconds to avoid repeated DB lookups.
 import logging
 import re
 from dataclasses import dataclass
+from typing import cast
 
 import orjson
 import pandas as pd
@@ -162,7 +163,7 @@ def get_column_policies_for_file(
 
     try:
         redis = get_cache_redis_binary()
-        cached = redis.get(cache_key)
+        cached = cast('bytes | None', redis.get(cache_key))
         if cached:
             return _deserialize_policy_records(cached)
     except Exception:

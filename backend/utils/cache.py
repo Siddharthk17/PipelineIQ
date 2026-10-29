@@ -7,7 +7,7 @@ Used to cache expensive lineage computations and stats.
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import orjson
@@ -59,7 +59,7 @@ def cache_get(key: str) -> Any | None:
     if not _should_use_redis_cache():
         return None
     try:
-        value = _get_client().get(key)
+        value = cast('str | None', _get_client().get(key))
     except redis.RedisError:
         logger.warning("Redis cache_get failed for key: %s", key)
         _REDIS_CACHE_DISABLED = True

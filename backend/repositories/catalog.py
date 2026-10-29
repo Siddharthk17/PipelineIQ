@@ -13,6 +13,7 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import cast
 
 import networkx as nx
 import orjson
@@ -84,7 +85,7 @@ def upsert_data_asset(
 
         if existing:
             existing.last_seen_at = now
-            existing.metadata = metadata or {}
+            existing.metadata_ = metadata or {}
             db.flush()
             return str(existing.id)
         else:
@@ -310,7 +311,7 @@ def get_blast_radius(
     redis = get_cache_redis_binary()
 
     try:
-        cached = redis.get(cache_key)
+        cached = cast('bytes | None', redis.get(cache_key))
         if cached:
             logger.debug("Blast radius cache HIT: %s", asset_name)
             return json.loads(cached)
@@ -801,7 +802,7 @@ def _list_orphans_sqlite(
     )
     if not is_admin and owner_id is not None:
         results = results.filter(DataAsset.owner_id == owner_id)
-    results = results.order_by(
+    assets = results.order_by(
         DataAsset.last_seen_at.asc()).limit(100).all()
 
     return [
@@ -812,7 +813,7 @@ def _list_orphans_sqlite(
             "asset_type": r.asset_type,
             "last_seen_at": r.last_seen_at.isoformat() if r.last_seen_at else None,
         }
-        for r in results
+        for r in assets
     ]
 
 
@@ -822,7 +823,7 @@ def get_cached_run_lineage(run_id: str, db: Session) -> nx.DiGraph:
     redis = get_cache_redis_binary()
 
     try:
-        cached = redis.get(cache_key)
+        cached = cast("bytes | None", redis.get(cache_key))
         if cached:
             G = nx.node_link_graph(orjson.loads(cached))
             logger.debug("Lineage cache HIT: %s", run_id)

@@ -182,7 +182,7 @@ async def inspect_dlq(
     group = f"dlq-inspector-{uuid_module.uuid4().hex[:8]}"
     consumer = make_consumer(group, auto_offset_reset="earliest")
     consumer.subscribe([dlq_topic])
-    messages = []
+    messages: list = []
     t_start = time.time()
 
     while len(messages) < limit and (time.time() - t_start) < 5.0:
@@ -193,20 +193,30 @@ async def inspect_dlq(
         for msg in batch:
             if msg.error():
                 continue
-            headers = {
-                k: v.decode("utf-8", errors="replace") if v else ""
-                for k, v in (msg.headers() or [])
-            }
+            headers: dict[str, str] = {}
+            raw_headers = msg.headers() or []
+            if isinstance(raw_headers, list):
+                for k, v in raw_headers:
+                    if isinstance(v, bytes):
+                        headers[str(k)] = v.decode("utf-8", errors="replace")
+                    elif v is not None:
+                        headers[str(k)] = str(v)
             try:
-                val = msg.value().decode("utf-8", errors="replace")
-                with contextlib.suppress(Exception):
-                    val = orjson.loads(val)
+                raw_value = msg.value()
+                if raw_value is None:
+                    val = None
+                else:
+                    val = raw_value.decode("utf-8", errors="replace")
+                    with contextlib.suppress(Exception):
+                        val = orjson.loads(val)
             except Exception:
                 val = "<binary>"
+            raw_key = msg.key()
             messages.append({
                 "partition": msg.partition(),
                 "offset": msg.offset(),
-                "key": msg.key().decode("utf-8", errors="replace") if msg.key() else None,
+                    "key": raw_key.decode("utf-8", errors="replace")
+                    if raw_key else None,
                 "value": val,
                 "error": headers.get("x-error"),
                 "original_topic": headers.get("x-original-topic"),

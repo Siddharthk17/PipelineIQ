@@ -1,5 +1,5 @@
 """Data contract ORM model — schema expectations for pipeline output."""
-
+import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 
@@ -47,7 +47,7 @@ class PipelineContract(Base):
 
     __tablename__ = "pipeline_contracts"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     pipeline_name: Mapped[str] = mapped_column(
         String(255), nullable=False, index=True)
@@ -61,7 +61,7 @@ class PipelineContract(Base):
         server_default="'warn'")
     consumers: Mapped[list] = mapped_column(
         PgJSONB, nullable=False, default=list, server_default="'[]'")
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     is_active: Mapped[bool] = mapped_column(

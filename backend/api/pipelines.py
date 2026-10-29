@@ -815,6 +815,14 @@ def _ensure_utc(dt):
     return dt
 
 
+def _iter_chunks(file_obj):
+    while True:
+        chunk = file_obj.read(8192)
+        if not chunk:
+            break
+        yield chunk
+
+
 def _download_s3_export_object(s3_key: str):
     """Download one S3 export object as a streaming response.
 
@@ -834,7 +842,7 @@ def _download_s3_export_object(s3_key: str):
         return None
     media_type = "text/csv" if s3_key.endswith(".csv") else "application/json"
     return StreamingResponse(
-        iter(lambda fh=file_obj: fh.read(8192), b""),
+        _iter_chunks(file_obj),
         media_type=media_type,
         headers={
             "Content-Disposition": f'attachment; filename="{os.path.basename(s3_key)}"'
@@ -1121,12 +1129,13 @@ def get_run_download_url(
     step_result = save_steps[0]
 
     fresh_url = step_result.download_url
-    try:
-        from backend.execution.steps.save_step import refresh_download_url
-        fresh_url = refresh_download_url(step_result.output_object_name)
-    except Exception as exc:
-        logger.warning(
-            "Could not refresh presigned URL, using stored URL: %s", exc)
+    if step_result.output_object_name:
+        try:
+            from backend.execution.steps.save_step import refresh_download_url
+            fresh_url = refresh_download_url(step_result.output_object_name)
+        except Exception as exc:
+            logger.warning(
+                "Could not refresh presigned URL, using stored URL: %s", exc)
 
     return {
         "run_id": run_id,

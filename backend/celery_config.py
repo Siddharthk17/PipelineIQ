@@ -44,7 +44,7 @@ task_soft_time_limit = 300
 task_time_limit = 360
 task_default_retry_delay = 30
 # Task-level retry policies are defined per-task via decorators.
-task_annotations = {}
+task_annotations: dict = {}
 
 # Keep result backend short-lived to avoid Redis growth.
 result_expires = 3600

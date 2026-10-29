@@ -1,6 +1,7 @@
 """Pipeline catalog — searchable list of all pipelines with AI descriptions."""
 
 import hashlib
+from typing import cast
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
@@ -94,9 +95,9 @@ def get_pipeline_description(
     redis = get_cache_redis()
 
     try:
-        cached = redis.get(cache_key)
+        cached = cast("str | None", redis.get(cache_key))
         if cached:
-            return {"pipeline_name": pipeline_name, "description": cached.decode("utf-8")}
+            return {"pipeline_name": pipeline_name, "description": cached}
     except Exception:
         pass
 

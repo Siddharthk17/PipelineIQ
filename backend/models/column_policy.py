@@ -1,6 +1,7 @@
+import uuid
+
 from sqlalchemy import (
     CheckConstraint,
-    Column,
     DateTime,
     ForeignKey,
     String,
@@ -10,6 +11,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from backend.database import Base
@@ -22,30 +24,32 @@ _AllowedRoles = _PgArray.with_variant(JSON(), "sqlite")
 class ColumnPolicy(Base):
     __tablename__ = "column_policies"
 
-    id = Column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
         primary_key=True,
         default=_generate_uuid,
     )
-    file_id = Column(
+    file_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
         ForeignKey("uploaded_files.id", ondelete="CASCADE"),
         nullable=False,
     )
-    column_name = Column(String(500), nullable=False)
-    policy = Column(String(20), nullable=False)
-    mask_pattern = Column(String(100), nullable=True)
-    allowed_roles = Column(
+    column_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    policy: Mapped[str] = mapped_column(String(20), nullable=False)
+    mask_pattern: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    allowed_roles: Mapped[list[str]] = mapped_column(
         _AllowedRoles,
         nullable=False,
         server_default="{}",
     )
-    created_by = Column(
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    created_at = Column(
+    created_at = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,

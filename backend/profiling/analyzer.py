@@ -131,7 +131,7 @@ def infer_semantic_type(series: pd.Series, column_name: str) -> str:
 
 def detect_semantic_flags(series: pd.Series, column_name: str) -> list[str]:
     """Detect boolean flags describing the column's characteristics."""
-    flags = []
+    flags: list[str] = []
     name_lower = column_name.lower()
     non_null = series.dropna()
     total = len(series)

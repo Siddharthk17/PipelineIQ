@@ -10,7 +10,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, cast
 
 import orjson
 import pandas as pd
@@ -84,7 +84,7 @@ def _cache_pending_upload(file_id: str, payload: dict) -> None:
 
 def _get_pending_upload(file_id: str) -> dict | None:
     try:
-        raw = get_cache_redis().get(_pending_upload_key(file_id))
+        raw = cast('str | None', get_cache_redis().get(_pending_upload_key(file_id)))
     except RedisError:
         logger.warning(
             "Failed to read pending upload state for file_id=%s",

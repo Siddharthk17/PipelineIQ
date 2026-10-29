@@ -121,6 +121,11 @@ class WasmExecutor:
                 f"Exported functions: {available}"
             ) from exc
 
+        if not callable(wasm_func):
+            raise ValueError(
+                f"Export '{function_name}' is not a callable function"
+            )
+
         columns = [*list(input_columns), output_column]
         result_arrays: dict[str, list] = {c: [] for c in columns}
         for col in table.schema.names:
@@ -199,7 +204,7 @@ class WasmExecutor:
             validation_config = Config()
             validation_config.consume_fuel = True
             validation_engine = Engine(validation_config)
-            module = Module(validation_engine, wasm_bytes)
+            module = Module(validation_engine, bytes(wasm_bytes))
             store = Store(validation_engine)
             store.set_limits(
                 memory_size=MAX_WASM_MEMORY_BYTES,
@@ -243,7 +248,7 @@ class WasmExecutor:
 
         if module_key not in self._module_cache:
             logger.info("Compiling new Wasm module: %s...", module_key[:16])
-            module = Module(self._engine, wasm_bytes)
+            module = Module(self._engine, bytes(wasm_bytes))
             self._module_cache[module_key] = module
             self._module_cache.move_to_end(module_key)
             if len(self._module_cache) > MAX_CACHED_MODULES:

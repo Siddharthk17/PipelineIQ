@@ -54,8 +54,11 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
             return {"status": "skipped", "reason": "schedule_inactive"}
 
         # Create a schedule_run record (tracks this firing)
+        from backend.utils.uuid_utils import as_uuid
+
+        schedule_uuid = as_uuid(schedule_id)
         schedule_run = ScheduleRun(
-            schedule_id=schedule_id,
+            schedule_id=schedule_uuid,
             triggered_at=datetime.now(UTC),
         )
         db.add(schedule_run)
@@ -70,7 +73,7 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
         # Submit the pipeline for execution
         from backend.tasks.pipeline_tasks import execute_pipeline_task
 
-        run_id = str(uuid4())
+        run_id = uuid4()
 
         # Create a pipeline_run record
         pipeline_run = PipelineRun(
@@ -80,7 +83,7 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
             yaml_config=schedule.yaml_config,
             user_id=schedule.user_id,
             trigger="scheduled",
-            schedule_id=schedule_id,
+            schedule_id=schedule_uuid,
         )
         db.add(pipeline_run)
         db.commit()
@@ -92,7 +95,7 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
 
         # Submit for asynchronous execution
         execute_pipeline_task.apply_async(
-            args=[run_id],
+            args=[str(run_id)],
             queue="bulk",
         )
 
@@ -108,6 +111,6 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
         db.rollback()
         raise self.retry(exc=exc) from exc
     else:
-        return {"run_id": run_id, "status": "submitted"}
+        return {"run_id": str(run_id), "status": "submitted"}
     finally:
         db.close()

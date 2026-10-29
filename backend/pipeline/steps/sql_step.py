@@ -29,14 +29,13 @@ Safety:
 from __future__ import annotations
 
 import re
-from typing import ClassVar
 
-_FORBIDDEN_KEYWORDS: ClassVar[set[str]] = {
+_FORBIDDEN_KEYWORDS: set[str] = {
     "INSERT", "UPDATE", "DELETE", "DROP", "CREATE",
     "ALTER", "TRUNCATE", "GRANT", "REVOKE",
 }
 
-_ALLOWED_LEADING: ClassVar[set[str]] = {"SELECT", "WITH"}
+_ALLOWED_LEADING: set[str] = {"SELECT", "WITH"}
 
 _INPUT_PLACEHOLDER = re.compile(r"\{\{[ \t]*input[ \t]*\}\}")
 

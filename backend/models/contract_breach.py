@@ -1,5 +1,5 @@
 """Contract violation record ORM model — persistent breach tracking."""
-
+import uuid
 from datetime import datetime
 
 from sqlalchemy import (
@@ -30,9 +30,9 @@ class ContractViolationRecord(Base):
 
     __tablename__ = "contract_violations"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    run_id: Mapped[str] = mapped_column(
+    run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     step_name: Mapped[str] = mapped_column(String(255), nullable=False)

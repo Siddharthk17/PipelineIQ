@@ -94,7 +94,7 @@ def test_db(test_engine) -> Generator[Session, None, None]:
 
 
 @pytest.fixture()
-def client(test_db: Session, tmp_path) -> TestClient:
+def client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
     """FastAPI TestClient with the test database injected.
 
     Auth dependencies are overridden with a mock admin user so existing
@@ -154,15 +154,13 @@ def client(test_db: Session, tmp_path) -> TestClient:
         mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
         mock_profile_task.return_value = MagicMock(id="mock-profile-task-id")
         test_client = TestClient(app)
-        test_client._mock_task = mock_task
-        test_client._mock_profile_task = mock_profile_task
         yield test_client
 
     app.dependency_overrides.clear()
 
 
 @pytest.fixture()
-def auth_client(test_db: Session, tmp_path) -> TestClient:
+def auth_client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
     """TestClient WITHOUT auth overrides — for testing real auth flows."""
 
     def override_get_db() -> Generator[Session, None, None]:

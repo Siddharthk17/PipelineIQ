@@ -339,15 +339,16 @@ async def validate_yaml(
         return ValidateYamlResponse(valid=False, error=str(e), step_count=0)
 
 
-def _get_file_or_404(file_id: str, user_id: str, db: Session):
+def _get_file_or_404(file_id: str, user_id, db: Session):
     """Get a file record belonging to the user, or return None."""
     try:
         file_uuid = as_uuid(file_id)
+        owner_id = as_uuid(user_id)
     except (ValueError, TypeError):
         return None
 
     return (
         db.query(UploadedFile)
-        .filter(UploadedFile.id == file_uuid, UploadedFile.user_id == user_id)
+        .filter(UploadedFile.id == file_uuid, UploadedFile.user_id == owner_id)
         .first()
     )

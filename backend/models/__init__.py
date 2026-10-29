@@ -100,7 +100,7 @@ class PipelineRun(Base):
 
     __tablename__ = "pipeline_runs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[PipelineStatus] = mapped_column(
@@ -130,7 +130,7 @@ class PipelineRun(Base):
         String(32), nullable=True)
     trigger: Mapped[str] = mapped_column(
         String(20), nullable=False, default="manual")
-    schedule_id: Mapped[str | None] = mapped_column(Uuid, ForeignKey(
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey(
         "pipeline_schedules.id", ondelete="SET NULL"), nullable=True)
 
     __table_args__ = (
@@ -175,9 +175,9 @@ class StepResult(Base):
 
     __tablename__ = "step_results"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    pipeline_run_id: Mapped[str] = mapped_column(
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id"), nullable=False
     )
     step_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -227,9 +227,9 @@ class LineageGraph(Base):
 
     __tablename__ = "lineage_graphs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    pipeline_run_id: Mapped[str] = mapped_column(
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id"), nullable=False, unique=True
     )
     graph_data: Mapped[dict] = mapped_column(PgJSONB, nullable=False)
@@ -248,9 +248,9 @@ class HealingAttempt(Base):
 
     __tablename__ = "healing_attempts"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    run_id: Mapped[str] = mapped_column(
+    run_id: Mapped[uuid.UUID] = mapped_column(
         "pipeline_run_id",
         Uuid, ForeignKey("pipeline_runs.id"), nullable=False, index=True
     )
@@ -321,7 +321,7 @@ class UploadedFile(Base):
 
     __tablename__ = "uploaded_files"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_path: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -333,7 +333,7 @@ class UploadedFile(Base):
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     previous_version_id: Mapped[str | None] = mapped_column(
@@ -353,12 +353,12 @@ class SchemaSnapshot(Base):
 
     __tablename__ = "schema_snapshots"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    file_id: Mapped[str] = mapped_column(
+    file_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("uploaded_files.id"), nullable=False
     )
-    run_id: Mapped[str | None] = mapped_column(
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id"), nullable=True
     )
     columns: Mapped[list] = mapped_column(PgJSONB, nullable=False)
@@ -378,7 +378,7 @@ class PipelineVersion(Base):
 
     __tablename__ = "pipeline_versions"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     pipeline_name: Mapped[str] = mapped_column(
         String(255), nullable=False, index=True)
@@ -387,7 +387,7 @@ class PipelineVersion(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    run_id: Mapped[str | None] = mapped_column(
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id"), nullable=True
     )
     change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -400,7 +400,7 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     email: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, index=True
@@ -430,10 +430,10 @@ class Webhook(Base):
 
     __tablename__ = "webhooks"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     name: Mapped[str] = mapped_column(String(200), nullable=False, default="Webhook")
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
@@ -462,12 +462,12 @@ class WebhookDelivery(Base):
 
     __tablename__ = "webhook_deliveries"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    webhook_id: Mapped[str] = mapped_column(
+    webhook_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False
     )
-    run_id: Mapped[str | None] = mapped_column(Uuid, nullable=True)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     payload = mapped_column(PgJSONB, nullable=False)
     response_status: Mapped[int | None
@@ -495,7 +495,7 @@ class AuditLog(Base):
 
     __tablename__ = "audit_logs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     user_id: Mapped[str | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -503,7 +503,7 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     resource_type: Mapped[str | None] = mapped_column(
         String(50), nullable=True)
-    resource_id: Mapped[str | None] = mapped_column(Uuid, nullable=True)
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     details = mapped_column(PgJSONB, nullable=True, default=dict)
     ip_address: Mapped[str | None] = mapped_column(
         String(45), nullable=True)
@@ -533,9 +533,9 @@ class PipelineSchedule(Base):
 
     __tablename__ = "pipeline_schedules"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     pipeline_name: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -575,11 +575,11 @@ class ScheduleRun(Base):
 
     __tablename__ = "schedule_runs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    schedule_id: Mapped[str] = mapped_column(Uuid, ForeignKey(
+    schedule_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey(
         "pipeline_schedules.id", ondelete="CASCADE"), nullable=False)
-    run_id: Mapped[str | None] = mapped_column(Uuid, ForeignKey(
+    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey(
         "pipeline_runs.id", ondelete="SET NULL"), nullable=True)
     triggered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -595,9 +595,9 @@ class NotificationConfig(Base):
 
     __tablename__ = "notification_configs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     type: Mapped[NotificationType] = mapped_column(
@@ -628,11 +628,11 @@ class PipelinePermission(Base):
 
     __tablename__ = "pipeline_permissions"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     pipeline_name: Mapped[str] = mapped_column(
         String(255), nullable=False, index=True)
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     permission_level: Mapped[PermissionLevel] = mapped_column(
@@ -654,9 +654,9 @@ class FileProfile(Base):
 
     __tablename__ = "file_profiles"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    file_id: Mapped[str] = mapped_column(
+    file_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
         ForeignKey("uploaded_files.id", ondelete="CASCADE"),
         nullable=False,
@@ -685,7 +685,7 @@ class WasmModule(Base):
 
     __tablename__ = "wasm_modules"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     name: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, index=True)
@@ -703,7 +703,7 @@ class WasmModule(Base):
         Integer, nullable=False, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true")
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -718,7 +718,7 @@ class StreamingStats(Base):
 
     __tablename__ = "streaming_stats"
 
-    run_id: Mapped[str] = mapped_column(
+    run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), primary_key=True
     )
     batches_processed: Mapped[int] = mapped_column(

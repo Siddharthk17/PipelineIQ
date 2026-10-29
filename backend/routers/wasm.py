@@ -89,10 +89,10 @@ async def validate_wasm_module(
             detail=f"Wasm module exceeds {MAX_WASM_SIZE // (1024*1024)}MB limit",
         )
 
-    errors = []
-    warnings = []
-    exports = []
-    imports = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    exports: list[dict] = []
+    imports: list[str] = []
 
     try:
         exports, imports = _inspect_wasm(wasm_bytes)

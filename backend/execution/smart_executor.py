@@ -52,6 +52,7 @@ class SmartExecutor:
     ) -> None:
         self.pandas_executor = pandas_executor or StepExecutor()
         self.duckdb_executor = duckdb_executor or DuckDBExecutor()
+        self._current_run_id: str | None = None
 
     @staticmethod
     def _step_type(step: StepConfig) -> str:

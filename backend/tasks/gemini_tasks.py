@@ -6,7 +6,7 @@ This ensures we never exceed Gemini's free tier limits.
 import hashlib
 import random
 import time
-from typing import Any
+from typing import Any, cast
 
 import orjson
 import structlog
@@ -188,7 +188,7 @@ def call_gemini_task(
     cache_key = f"gemini:resp:{hashlib.sha256(cache_input.encode()).hexdigest()}"
 
     redis = get_cache_redis()
-    cached = redis.get(cache_key)
+    cached = cast("str | None", redis.get(cache_key))
     if cached:
         slog.info("gemini_cache_hit", cache_key_prefix=cache_key[:16])
         return cached
@@ -343,7 +343,7 @@ def generate_pipeline_description_task(
         f"gemini:resp:{hashlib.sha256(cache_input.encode()).hexdigest()}"
     )
 
-    cached = redis.get(response_cache_key)
+    cached = cast("str | bytes | None", redis.get(response_cache_key))
     if cached:
         result_text = cached.decode("utf-8") if isinstance(cached, bytes) else cached
         redis.setex(cache_key, RESPONSE_CACHE_TTL * 24, result_text)

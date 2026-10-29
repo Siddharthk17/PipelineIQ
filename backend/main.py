@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, ORJSONResponse, Respon
 from prometheus_fastapi_instrumentator import Instrumentator
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-from slowapi import _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler as _slowapi_rate_limit_handler
 from slowapi.errors import RateLimitExceeded
 
 from backend.api.audit import router as audit_router
@@ -236,13 +236,24 @@ if settings.ENVIRONMENT != "production":
     @app.get("/redoc", include_in_schema=False)
     async def redoc_html() -> HTMLResponse:
         return get_redoc_html(
-            openapi_url=app.openapi_url,
+            openapi_url=app.openapi_url or "/openapi.json",
             title=f"{app.title} - ReDoc",
             redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js",
         )
 
 
 app.state.limiter = limiter
+
+
+async def _rate_limit_exceeded_handler(
+    request: Request, exc: Exception
+) -> Response:
+    """Translate slowapi's handler to FastAPI's expected handler signature."""
+    from typing import cast
+
+    return _slowapi_rate_limit_handler(request, cast(RateLimitExceeded, exc))
+
+
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
@@ -370,7 +381,7 @@ async def validation_error_handler(
 @app.exception_handler(Exception)
 async def generic_error_handler(
         request: Request,
-        exc: Exception) -> JSONResponse:
+        exc: Exception) -> Response:
     """Handle unexpected errors with a safe error response.
 
     Never exposes internal details to the client. The request_id

@@ -84,7 +84,7 @@ async def _post_with_safe_redirects(
 
     validate_public_http_url(url)
     method = "POST"
-    body = content
+    body: bytes | None = content
     for _ in range(max_hops + 1):
         if method == "POST":
             resp = await client.post(url, content=body, headers=headers)

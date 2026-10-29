@@ -39,7 +39,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 @pytest.fixture
 def simple_add_wasm() -> bytes:
     """(f64, f64) -> f64 add function."""
-    return wat2wasm("""
+    return bytes(wat2wasm("""
         (module
             (func (export "add") (param f64 f64) (result f64)
                 local.get 0
@@ -47,13 +47,13 @@ def simple_add_wasm() -> bytes:
                 f64.add
             )
         )
-    """)
+    """))
 
 
 @pytest.fixture
 def risk_score_wasm() -> bytes:
     """4 f64 inputs -> 1 f64 output risk score."""
-    return wat2wasm("""
+    return bytes(wat2wasm("""
         (module
             (func (export "compute_risk")
                 (param $age f64) (param $income f64)
@@ -90,26 +90,26 @@ def risk_score_wasm() -> bytes:
                 f64.add
             )
         )
-    """)
+    """))
 
 
 @pytest.fixture
 def infinite_loop_wasm() -> bytes:
     """Infinite loop — killed by fuel budget."""
-    return wat2wasm("""
+    return bytes(wat2wasm("""
         (module
             (func (export "infinite") (param f64) (result f64)
                 (block $b (loop $l br $l))
                 local.get 0
             )
         )
-    """)
+    """))
 
 
 @pytest.fixture
 def multi_export_wasm() -> bytes:
     """Three exported functions: double, square, negate."""
-    return wat2wasm("""
+    return bytes(wat2wasm("""
         (module
             (func (export "double") (param f64) (result f64)
                 local.get 0
@@ -127,7 +127,7 @@ def multi_export_wasm() -> bytes:
                 f64.sub
             )
         )
-    """)
+    """))
 
 
 @pytest.fixture
@@ -139,7 +139,7 @@ def invalid_wasm_bytes() -> bytes:
 @pytest.fixture
 def wasi_import_wasm() -> bytes:
     """Wasm module that imports WASI — should be rejected."""
-    return wat2wasm("""
+    return bytes(wat2wasm("""
         (module
             (import "wasi_snapshot_preview1" "fd_write"
                 (func (param i32 i32 i32 i32) (result i32)))
@@ -151,7 +151,7 @@ def wasi_import_wasm() -> bytes:
                 call 0
             )
         )
-    """)
+    """))
 
 
 # SECTION 1: WasmExecutor — Execution Correctness

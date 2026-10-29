@@ -520,7 +520,7 @@ class PipelineParser:
             # type
             return StepConfig(
                 name=step_name,
-                step_type=step_type_str)  # type: ignore[arg-type]
+                step_type=step_type_str)
 
         config = self._build_typed_step(step_name, step_type, step_raw)
         raw_contract = step_raw.get("contract")
@@ -692,7 +692,7 @@ class PipelineParser:
         try:
             operator = FilterOperator(operator_str)
         except ValueError:
-            operator = operator_str  # type: ignore[assignment]
+            operator = operator_str
 
         return FilterStepConfig(
             name=name,
@@ -711,7 +711,7 @@ class PipelineParser:
         try:
             how = JoinHow(how_str)
         except ValueError:
-            how = how_str  # type: ignore[assignment]
+            how = how_str
 
         # YAML parses bare 'on' as boolean True; check both keys
         on_value = raw.get("on", "") or raw.get(True, "")
@@ -733,7 +733,7 @@ class PipelineParser:
         try:
             order = SortOrder(order_str)
         except ValueError:
-            order = order_str  # type: ignore[assignment]
+            order = order_str
 
         return SortStepConfig(
             name=name,
