@@ -91,6 +91,47 @@ def _noop_progress_callback(event: StepProgressEvent) -> None:
     """Default no-op progress callback used when none is provided."""
 
 
+def _step_inputs(step) -> list[str]:
+    """Step names this step reads from the table registry."""
+    refs = [
+        getattr(step, "input", None),
+        getattr(step, "left", None),
+        getattr(step, "right", None),
+    ]
+    return [ref for ref in refs if ref]
+
+
+def _compute_consumer_counts(steps) -> dict[str, int]:
+    """Count how many future steps read each step's output table."""
+    counts: dict[str, int] = {}
+    for step in steps:
+        for ref in _step_inputs(step):
+            counts[ref] = counts.get(ref, 0) + 1
+    return counts
+
+
+def _store_and_evict(
+    table_registry: dict,
+    step_name: str,
+    table,
+    consumed: list[str],
+    remaining: dict[str, int],
+) -> None:
+    """Store a step output and evict inputs no future step needs.
+
+    Bounds batch-run memory: intermediate tables are dropped as soon as
+    their last consumer has run, instead of accumulating every step's
+    output for the whole run.
+    """
+    table_registry[step_name] = table
+    for ref in consumed:
+        if ref not in remaining:
+            continue
+        remaining[ref] -= 1
+        if remaining[ref] <= 0 and ref != step_name:
+            table_registry.pop(ref, None)
+
+
 class PipelineRunner:
     """Orchestrates the execution of a complete pipeline.
 
@@ -132,6 +173,7 @@ class PipelineRunner:
         step_results: list[StepExecutionResult] = []
         total_rows_processed: int = 0
         pipeline_start = time.perf_counter()
+        consumers = _compute_consumer_counts(config.steps)
 
         logger.info(
             "Pipeline '%s' (run_id=%s) starting with %d steps",
@@ -158,7 +200,13 @@ class PipelineRunner:
                     user_role=user_role,
                 )
                 step_results.append(result)
-                table_registry[step.name] = result.output_table
+                _store_and_evict(
+                    table_registry,
+                    step.name,
+                    result.output_table,
+                    _step_inputs(step),
+                    consumers,
+                )
                 total_rows_processed += result.rows_in
 
         except StepExecutionError as exc:
