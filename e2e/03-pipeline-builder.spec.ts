@@ -139,9 +139,10 @@ test.describe("Visual Pipeline Builder", () => {
     await expect(page.getByTestId("config-panel")).toBeVisible({ timeout: 5_000 });
 
     // The panel unmounts on close, which can detach the button between
-    // Playwright's actionability check and the click; click via evaluate.
-    await page.getByTestId("config-panel-close").evaluate((el: HTMLElement) => el.click());
-    await expect(page.getByTestId("config-panel")).not.toBeVisible();
+    // Playwright's actionability check and the click; a detachment error
+    // still means the panel closed, so tolerate it and assert the end state.
+    await page.getByTestId("config-panel-close").click({ timeout: 10_000 }).catch(() => {});
+    await expect(page.getByTestId("config-panel")).not.toBeVisible({ timeout: 10_000 });
   });
 
   test("Join step shows two input handles", async ({ page }) => {
