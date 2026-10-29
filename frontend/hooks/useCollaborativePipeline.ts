@@ -258,6 +258,7 @@ export function useCollaborativePipeline({
 
   const syncNodesToYjs = useDebouncedCallback(
     (nodes: Node[]) => {
+      console.error("[syncNodesToYjs] called, nodes", nodes.length);
       if (yjsSyncingRef.current) return
 
       localSyncingRef.current = true
