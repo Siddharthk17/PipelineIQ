@@ -66,7 +66,6 @@ test.describe("Visual Pipeline Builder", () => {
     await page.getByTestId("mode-yaml-btn").click();
     const yamlEditor = page.locator(".cm-editor, [data-testid='yaml-editor']").first();
     await yamlEditor.click();
-    await page.keyboard.press("Control+A");
 
     const yamlContent = [
       "pipeline:",
@@ -77,11 +76,18 @@ test.describe("Visual Pipeline Builder", () => {
       "      file_id: dummy-id",
     ].join("\n");
 
-    await page.keyboard.type(yamlContent);
-    await page.waitForTimeout(600);
+    // Paste atomically: char-by-char typing fights the editor's
+    // auto-indent and mangles the YAML before it can parse.
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.evaluate((t) => navigator.clipboard.writeText(t), yamlContent);
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Control+V");
+    await page.waitForTimeout(800);
 
-    // The typed step must materialize as a canvas node (not merely as
-    // editor text): this is the real YAML->canvas sync assertion.
+    // The canvas only mounts in visual mode; switch back to see the node.
+    await page.getByTestId("mode-visual-btn").click();
+    // The pasted step must materialize as a canvas node: this is the real
+    // YAML->canvas sync assertion.
     await expect(
       page.locator('[data-testid="step-node-load_data"]'),
     ).toBeVisible({ timeout: 5_000 });

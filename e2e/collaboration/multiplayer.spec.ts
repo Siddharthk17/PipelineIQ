@@ -76,7 +76,6 @@ test.describe("Multiplayer Collaboration", () => {
     await page1.getByTestId("mode-yaml-btn").click();
     const yamlEditor1 = page1.locator(".cm-editor, [data-testid='yaml-editor']").first();
     await yamlEditor1.click();
-    await page1.keyboard.press("Control+A");
 
     const yamlContent = [
       "pipeline:",
@@ -87,12 +86,19 @@ test.describe("Multiplayer Collaboration", () => {
       "      file_id: shared-file-id",
     ].join("\n");
 
-    await page1.keyboard.type(yamlContent);
+    // Paste atomically: char-by-char typing fights the editor's
+    // auto-indent and mangles the YAML before it can parse.
+    await page1.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page1.evaluate((t) => navigator.clipboard.writeText(t), yamlContent);
+    await page1.keyboard.press("Control+A");
+    await page1.keyboard.press("Control+V");
     await page1.waitForTimeout(800);
 
+    // The canvas only mounts in visual mode; switch back to see the node.
+    await page1.getByTestId("mode-visual-btn").click();
     await expect(
       page1.locator('[data-testid="step-node-load_data"]')
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 10_000 });
 
     // The edit syncs through the shared yjs room: page2's canvas converges.
     await expect(

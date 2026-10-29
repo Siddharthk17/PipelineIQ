@@ -200,10 +200,7 @@ export function usePipelineEditor({
 
   const parseYamlToGraph = useDebouncedCallback((nextYaml: string) => {
     try {
-      console.error("[parse-body] running, yaml len", nextYaml.length);
-      console.error("[parse-body] yaml head", JSON.stringify(nextYaml.slice(0, 160)));
       const parsed = yamlToGraph(nextYaml);
-      console.error("[parse-body] parsed nodes", parsed.nodes.length);
       parsedFromYamlRef.current = true;
       initializedFromYamlRef.current = true;
       setNodes(parsed.nodes);
@@ -236,8 +233,6 @@ export function usePipelineEditor({
       emittedFromGraphRef.current = false;
       return;
     }
-    // PIPELINEIQ_S52_MARKER: temporary parse tracing
-    console.error("[parse-effect] firing, yaml len", yamlText.length);
     parseYamlToGraph(yamlText);
   }, [yamlText, parseYamlToGraph]);
 

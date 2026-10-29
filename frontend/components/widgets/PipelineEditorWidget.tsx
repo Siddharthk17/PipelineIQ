@@ -177,14 +177,11 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     authToken: token ?? undefined,
   });
 
-  // NOTE (S-new): the yjs CodeMirror text binding is deliberately disabled.
-  // Binding yCollab(yYaml) while the editor is also React-controlled via
-  // `value={code}` creates a feedback loop (controlled value <-> Y.Text)
-  // that crashes React with "Maximum update depth exceeded" (#185) on
-  // every keystroke, so YAML->canvas sync never runs. Collaboration still
-  // converges at the graph level: parsed nodes/edges sync through yjs and
-  // each side re-emits YAML from its own graph. Re-enable live shared text
-  // only with an uncontrolled editor owned by yjs.
+  // yjs text binding is intentionally NOT used here. The editor is
+  // React-controlled via `value={code}`, and binding yCollab(yYaml) at the
+  // same time makes the two sources fight over the document. Keep
+  // collaboration at the graph level (nodes/edges/cursors/presence sync
+  // through yjs; each side re-emits YAML from its own graph).
   const yCollabExtension = useMemo(
     () => {
       return [];
