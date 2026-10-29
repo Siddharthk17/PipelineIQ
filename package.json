@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "description": "A data pipeline orchestration engine. Define pipelines in YAML, upload CSV/JSON files, execute transformations with real-time monitoring, and trace every column back to its source through automatic lineage graphs.",
   "main": "index.js",
-  "workspaces": ["frontend", "y-websocket"],
+  "workspaces": [
+    "frontend",
+    "y-websocket"
+  ],
   "directories": {
     "test": "tests"
   },
@@ -47,6 +50,7 @@
   },
   "homepage": "https://github.com/Siddharthk17/PipelineIQ#readme",
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "^1.60.0"
   }
 }
