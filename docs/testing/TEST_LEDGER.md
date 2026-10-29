@@ -60,8 +60,8 @@ CLIs: docker 29.9 + compose 5.6 OK; psql 16 OK; curl/jq OK; node 26/npm 11 OK; p
 | S41 | frontend | Misleading stats (hardcoded +12%/+5% trends; AnimatedNumber NaN when 0); blocking confirm()/alert(); StreamingRunCard full reload after pause/resume/stop, no error handling | P3 | SUSPECTED | QuickStatsWidget.tsx:55-58,17; wasm-modules/page.tsx:110,117; StreamingRunCard.tsx:59-63 | — | — |
 | S42 | tests | Import-time skip gates hide failures (evaluated at collection; only ConnectionError caught; hardcoded localhost ignores E2E_BASE_URL); always-skip test_sandbox; retries/sleeps mask races; time-dependent asserts; order-dependent shared-state; conftest mock-admin + mocked .delay bypass real JWT/RBAC/worker paths; hardcoded expired JWTs in scripts; k6 fake file_id | P2 | SUSPECTED | test_public_endpoints.py:8-16 et al; test_sandbox.py:183-186; conftest.py:39-45,111-156 | — | — |
 | S43 | infra | Redis cache key/secret naming drift + compose-only vars with no backend reads; MAX_UPLOAD_SIZE 500MB vs k8s 50MB vs render /tmp/uploads; ALLOW_REGISTRATION=false k8s-only undocumented | P3 | SUSPECTED | configmap.yaml:32; compose:172; k8s:27 | — | — |
-| B01 | api | KNOWN BUG: notification endpoint 502 (test path maps downstream failure -> 502; see SYSTEM_MAP 10.3) | P1 | SUSPECTED | notifications.py:248-252,280-283 | — | — |
-| B02 | api | KNOWN BUG: file upload 422s (content/parse validation branches; see SYSTEM_MAP 10.4) | P1 | SUSPECTED | files.py:554-595,633-667 + metadata fns | — | — |
+| B01 | api | Notification test endpoint returns 502 when downstream unreachable (inconsistent with webhook test 200+delivered:false; 502 implies our outage) | P1 | OPEN | live probe 2026-10-29: POST /api/v1/notifications/{id}/test w/ https://example.com/hooks/invalid -> 502 {detail: Failed to send test...}; code notifications.py:248-252 maps send==False to 502 | — | — |
+| B02 | api | Valid non-UTF8 CSVs rejected + BOM corrupts column name: latin-1 -> 422 'does not match extension'; utf-16 -> 422; BOM file -> 201 but column stored as \ufeffa (validation uses utf-8-sig, extraction utf-8) | P1 | OPEN | live probes 2026-10-29 (see phase-1 notes); files.py:558-561 vs files.py:641-656 decode mismatch | — | — |
 
 ## Architectural warnings from compose-log analysis (to resolve in Phase 1)
 
@@ -74,3 +74,10 @@ CLIs: docker 29.9 + compose 5.6 OK; psql 16 OK; curl/jq OK; node 26/npm 11 OK; p
 ## Rules reminder
 
 Reproduce with failing test -> root-cause -> smallest fix -> keep regression test -> rerun suite -> log + commit. No weakening tests. No try/except swallowing, no hiding races, no sleep fixes.
+
+## Phase 1 baseline notes (2026-10-29)
+
+- Pre-rebuild: pipelineiq-api was Restarting (255) on the stale stack (finding: API crash loop before clean rebuild; fresh build resolved, root cause TBD from old logs - volumes since removed).
+- `docker compose down -v` on LOCAL stack (local creds, 127.0.0.1 bindings) then `up --build`: all 25 containers healthy, zero restarts. Time to healthy ~110s.
+- Log triage: redis overcommit x4 (host sysctl, dev-harmless; redis-overcommit-fix container is echo no-op - S30); postgres 'SET LOCAL can only be used in transaction blocks' at 05:35:27 (matches S27 migration concern, under investigation); grafana missing provisioning dirs + sqlite lock retries at boot (transient, healthy after); minio single-drive, redpanda dev-mode/btrfs/perf_event, jaeger 0.0.0.0 warnings (all dev-noise, harmless).
+- Stack probes: /health 200, /readyz all-ok, SSE 200, nginx / 307, /api 401 w/o auth (correct), B01 502 reproduced, B02 latin-1/utf-16 422 + BOM column corruption reproduced.
