@@ -11,6 +11,21 @@ import numpy as np
 import pandas as pd
 
 
+def _safe_float(value: object) -> float:
+    """Coerce a pandas/numpy scalar to float, mapping NA/NaN/inf to 0.0.
+
+    Nullable extension dtypes yield pd.NA (not NaN) for reductions like
+    std() over a single value, and math.isnan() raises TypeError on it.
+    """
+    try:
+        result = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    if math.isnan(result) or math.isinf(result):
+        return 0.0
+    return result
+
+
 def infer_semantic_type(series: pd.Series, column_name: str) -> str:
     """Infer the semantic type of a column."""
     name_lower = column_name.lower()
@@ -266,12 +281,10 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
                             "max": round(float(numeric_series.max()), 6),
                             "mean": round(float(numeric_series.mean()), 6),
                             "median": round(float(numeric_series.median()), 6),
-                            "std_dev": round(
-                                float(numeric_series.std())
-                                if not math.isnan(numeric_series.std())
-                                else 0.0,
-                                6,
-                            ),
+                    "std_dev": round(
+                        _safe_float(numeric_series.std()),
+                        6,
+                    ),
                             "p25": round(q1, 6),
                             "p75": round(q3, 6),
                             "outlier_count": int(

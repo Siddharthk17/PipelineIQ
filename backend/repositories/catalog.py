@@ -351,7 +351,6 @@ def _blast_radius_postgres(
         "name": asset_name,
         "max_depth": max_depth,
         "limit": MAX_CTE_RESULTS,
-        "cte_limit": MAX_CTE_RESULTS,
     }
 
     if asset_type:
@@ -367,33 +366,28 @@ def _blast_radius_postgres(
         hop_owner_join = ""
         hop_owner_filter = ""
 
-    # Optimized recursive CTE:
-    # - Drops the O(n) `visited` array tracking (was O(n^2) memory + O(n)
-    #   `!= ALL(...)` check at every step, the main cause of the 5-30s
-    #   statement timeouts on `/impact`).
-    # - Uses `NOT EXISTS` against the accumulating CTE results for cycle
-    #   detection (O(1) per step, leveraging the existing
-    #   idx_asset_rel_source_target covering index).
-    # - Adds an inner `LIMIT` to cap the working set per iteration so a
-    #   single bad query cannot exhaust the DB.
-    # - Statement timeout is set per-iteration via `SET LOCAL` inside an
-    #   explicit transaction so it actually takes effect under PgBouncer.
+    # Recursive walk with array-path cycle detection. PostgreSQL forbids
+    # referencing the recursive CTE inside a subquery, so visited tracking
+    # uses a UUID path array carried along each branch instead:
+    # `NOT (ar.target_id = ANY (d.path))` is a plain expression over the
+    # current row and is legal in the recursive term. downstream_min keeps
+    # the shallowest depth per asset, so diamond joins collapse.
+    # Statement timeout is set per-iteration via `SET LOCAL` inside an
+    # explicit transaction so it actually takes effect under PgBouncer.
     sql = text(f"""
-        WITH RECURSIVE downstream(id, depth) AS (
-            SELECT da.id, 0
+        WITH RECURSIVE downstream(id, depth, path) AS (
+            SELECT da.id, 0, ARRAY[da.id]
             FROM data_assets da
             {where_clause}
 
             UNION ALL
 
-            SELECT ar.target_id, d.depth + 1
-            FROM asset_relationships ar
+            SELECT ar.target_id, d.depth + 1, d.path || ar.target_id
+            FROM (SELECT DISTINCT source_id, target_id FROM asset_relationships) ar
             JOIN downstream d ON d.id = ar.source_id
             {hop_owner_join}
             WHERE d.depth < :max_depth
-              AND NOT EXISTS (
-                  SELECT 1 FROM downstream d2 WHERE d2.id = ar.target_id
-              )
+              AND NOT (ar.target_id = ANY (d.path))
               {hop_owner_filter}
         ),
         downstream_min AS (
@@ -540,28 +534,24 @@ def get_upstream_lineage(
         "name": asset_name,
         "max_depth": max_depth,
         "limit": MAX_CTE_RESULTS,
-        "cte_limit": MAX_CTE_RESULTS,
     }
     if scoped:
         params["owner_id"] = str(owner_id)
 
     sql = text(f"""
-        WITH RECURSIVE upstream(id, name, namespace, asset_type, depth) AS MATERIALIZED (
-            SELECT da.id, da.name, da.namespace, da.asset_type, 0
+        WITH RECURSIVE upstream(id, name, namespace, asset_type, depth, path) AS MATERIALIZED (
+            SELECT da.id, da.name, da.namespace, da.asset_type, 0, ARRAY[da.id]
             FROM data_assets da
             WHERE da.name = :name {owner_filter}
 
             UNION ALL
 
-            SELECT parent.id, parent.name, parent.namespace, parent.asset_type, u.depth + 1
+            SELECT parent.id, parent.name, parent.namespace, parent.asset_type, u.depth + 1, u.path || parent.id
             FROM data_assets parent
-            JOIN asset_relationships ar ON ar.source_id = parent.id
+            JOIN (SELECT DISTINCT source_id, target_id FROM asset_relationships) ar ON ar.source_id = parent.id
             JOIN upstream u ON u.id = ar.target_id
             WHERE u.depth < :max_depth {hop_filter}
-              AND NOT EXISTS (
-                  SELECT 1 FROM upstream u2 WHERE u2.id = parent.id
-              )
-            LIMIT :cte_limit
+              AND NOT (parent.id = ANY (u.path))
         )
         SELECT DISTINCT name, namespace, asset_type, depth
         FROM upstream

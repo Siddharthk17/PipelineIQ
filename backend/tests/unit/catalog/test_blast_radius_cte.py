@@ -71,3 +71,36 @@ class TestNetworkXBoundary:
         # Graph must not grossly exceed the limit (small overshoot from edge-level check is acceptable)
         assert G.number_of_nodes() <= MAX_LINEAGE_NODES + 20
         assert "__truncated__" in G.nodes
+
+
+def test_recursive_ctes_have_no_self_referencing_subqueries():
+    """Postgres forbids referencing the recursive CTE inside a subquery
+    ("recursive reference ... must not appear within a subquery") and
+    fails the whole statement. A previous revision used
+    NOT EXISTS (SELECT ... FROM downstream/u2 ...) for cycle detection,
+    which made /impact and /lineage fail on Postgres while SQLite tests
+    stayed green (the API then swallowed the error into []). Cycle
+    detection must use the array-path form instead.
+    """
+    import re
+
+    from backend.repositories import catalog as cat_module
+
+    source = inspect.getsource(cat_module)
+    for match in re.finditer(
+        r"NOT EXISTS\s*\(\s*SELECT[^;]*?FROM\s+(\w+)", source
+    ):
+        assert match.group(1) not in ("downstream", "upstream", "d2", "u2"), (
+            "illegal self-referencing subquery in recursive CTE: "
+            + match.group(0)[:80]
+        )
+    assert "ANY (d.path)" in source
+    assert "ANY (u.path)" in source
+    # Edges are deduplicated before the walk: every run re-records the
+    # same (source, target) edges, and without DISTINCT the diamond
+    # fan-out explodes the working set until the statement timeout fires.
+    assert "SELECT DISTINCT source_id, target_id FROM asset_relationships" in source
+    # LIMIT is not implemented inside a recursive term: an inner
+    # LIMIT fails the whole statement (and the API swallowed it into []).
+    # Only the outer result LIMIT may remain.
+    assert "LIMIT :cte_limit" not in source

@@ -250,20 +250,11 @@ def call_gemini_task(
             # Free tier exhausted - this is a TERMINAL failure, not a success.
             # Raising (instead of returning a sentinel string) ensures Celery
             # marks the task as FAILED rather than mis-reporting it as
-            # succeeded with a poisoned payload. The state update surfaces
-            # the reason to result consumers without putting a sentinel
-            # in the result backend.
+            # succeeded with a poisoned payload. Do not call update_state
+            # with a plain-dict meta first: the JSON result backend decodes
+            # the stored payload as an encoded exception on mark_as_failure,
+            # and a plain dict breaks that read-back (KeyError: exc_type).
             slog.warning("gemini_free_tier_quota_exhausted")
-            self.update_state(
-                state="FAILURE",
-                meta={
-                    "error": "gemini_free_tier_quota_exhausted",
-                    "reason": (
-                        "Google Gemini free-tier quota exhausted. "
-                        "Retries will not recover from a hard quota limit."
-                    ),
-                },
-            )
             raise GeminiQuotaExhaustedError(
                 "Google Gemini free-tier quota exhausted."
             ) from e
@@ -291,11 +282,9 @@ def call_gemini_task(
 
         # Non-retryable client error: raise a real exception so Celery marks
         # the task as FAILED instead of returning a poisoned sentinel.
+        # (No manual update_state first: a plain-dict meta corrupts the
+        # result-backend read-back on mark_as_failure.)
         slog.error("gemini_client_error", error=error_str[:500])
-        self.update_state(
-            state="FAILURE",
-            meta={"error": "gemini_client_error", "reason": error_str[:500]},
-        )
         raise GeminiClientError(f"Gemini AI service error: {error_str[:500]}") from e
     else:
         return result_text
