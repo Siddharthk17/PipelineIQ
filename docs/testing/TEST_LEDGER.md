@@ -119,3 +119,8 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 - hadolint: Dockerfile DL3008/DL3015 (unpinned apt, no --no-install-recommends); backend/Dockerfile DL3013 (pip from requirements file but flagged: uses requirements.txt so acceptable w/ pinned file); pgbouncer/Dockerfile DL3018 (unpinned apk). frontend/nginx/y-websocket clean.
 - gitleaks working tree: .env hits are the ignored local dev file (gitignored, never committed); .next*/.next-build hits are build-chunk hashes (false positives, build dirs untracked... verify gitignored); scripts/run_tests.py:5, run_stress.py:4, security_tests.py:3 hardcoded JWTs (tracked, expired 2026-04 but must remove).
 - gitleaks history (173 commits): 5 hits. tests/{security_tests,run_tests,run_stress}.py JWTs in old commit (files moved to scripts/, still present -> same fix). AGENTS.md:1500 + A.md:1654 generic-api-key are doc placeholders ("eyJhbGciOi...") -> false positives, files removed from HEAD.
+
+## npm audit (2026-10-29)
+
+- Prod (omit=dev): 8 vulns (1 moderate, 6 high, 1 critical): baseline-browser-mapping(m), browserslist(h), js-yaml(h), nanoid(h), next(critical, via postcss+sharp), postcss(h), sharp(h, libheif+librsvg), source-map-js(h). All transitive via Next toolchain; fix via npm audit fix + rebuild + retest in fix loop.
+- All (incl dev): 17 vulns (5 moderate, 10 high, 2 critical).
