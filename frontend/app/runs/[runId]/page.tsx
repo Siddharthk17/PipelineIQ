@@ -31,6 +31,27 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
       .finally(() => setPageLoading(false));
   }, [isLoading, resolvedParams.runId, router, user]);
 
+  const isTerminal = run === null || [
+    "COMPLETED",
+    "HEALED",
+    "FAILED",
+    "CANCELLED",
+    "CONTRACT_VIOLATION",
+    "TIMEOUT",
+  ].includes(run.status);
+
+  // Poll while the run is active so progress, logs and results appear
+  // without a manual refresh. Polling stops at a terminal status.
+  useEffect(() => {
+    if (isLoading || !user || !run || isTerminal) return;
+    const timer = window.setInterval(() => {
+      getPipelineRun(resolvedParams.runId)
+        .then(setRun)
+        .catch(() => {});
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [isLoading, user, resolvedParams.runId, run, isTerminal]);
+
   const handleDownload = async () => {
     setDownloadLoading(true);
     try {
