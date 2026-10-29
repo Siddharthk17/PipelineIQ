@@ -3,13 +3,13 @@
 import hashlib
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.database import get_read_db
 from backend.db.redis_pools import get_cache_redis
-from backend.models import PipelineSchedule, PipelineRun, User
+from backend.models import PipelineRun, PipelineSchedule, User
 
 router = APIRouter(prefix="/api/catalog/pipelines", tags=["Pipeline Catalog"])
 

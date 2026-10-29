@@ -49,14 +49,14 @@ class TestNetworkXBoundary:
         assert "redis" in cache_source.lower() or "cache" in cache_source.lower()
 
     def test_max_lineage_nodes_limit_exists(self):
-        from backend.repositories.catalog import MAX_LINEAGE_NODES, MAX_LINEAGE_EDGES
+        from backend.repositories.catalog import MAX_LINEAGE_EDGES, MAX_LINEAGE_NODES
         assert MAX_LINEAGE_NODES == 10_000
         assert MAX_LINEAGE_EDGES == 50_000
 
     def test_build_bounded_lineage_graph_respects_node_limit(self):
         from backend.repositories.catalog import (
-            build_bounded_lineage_graph,
             MAX_LINEAGE_NODES,
+            build_bounded_lineage_graph,
         )
 
         class MockStep:

@@ -13,11 +13,11 @@ def validate_uuid_format(value: str) -> None:
     """Raise 422 if the value is not a valid UUID."""
     try:
         uuid.UUID(value)
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid UUID format: '{value}'",
-        )
+        ) from exc
 
 
 def as_uuid(val) -> uuid.UUID:

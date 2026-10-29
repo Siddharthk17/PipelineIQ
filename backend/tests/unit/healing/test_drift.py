@@ -1,8 +1,8 @@
 import json
-import requests
 import time
 
 import pytest
+import requests
 
 BASE_URL = "http://localhost/api/v1"
 AUTH_URL = "http://localhost/auth"
@@ -11,11 +11,12 @@ AUTH_URL = "http://localhost/auth"
 def _server_reachable():
     try:
         requests.get("http://localhost/healthz", timeout=2)
-        return True
     except requests.ConnectionError:
         return False
 
 
+    else:
+        return True
 def auth_request_with_retry(session, path, payload, attempts=5):
     for attempt in range(1, attempts + 1):
         resp = session.post(f"{AUTH_URL}/{path}", json=payload)

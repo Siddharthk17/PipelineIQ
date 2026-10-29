@@ -1,20 +1,22 @@
-import pytest
-from typing import Generator
-from sqlalchemy.orm import Session
-from backend.main import app
-from backend.auth import get_current_user
-from backend.models import (
-    User,
-    PipelinePermission,
-    PermissionLevel,
-    PipelineRun,
-    PipelineStatus,
-)
 import uuid as _uuid
+from collections.abc import Generator
+from unittest.mock import MagicMock, patch
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from backend.auth import get_current_user
 from backend.database import get_db
 from backend.dependencies import get_read_db, get_write_db
-from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch
+from backend.main import app
+from backend.models import (
+    PermissionLevel,
+    PipelinePermission,
+    PipelineRun,
+    PipelineStatus,
+    User,
+)
 
 
 def set_current_user(user: User):
@@ -220,6 +222,7 @@ def test_run_pipeline_rbac(rbac_client, users, sample_pipeline, test_db):
 def test_cancel_pipeline_rbac(rbac_client, users, test_db, sample_pipeline):
     # Create a RUNNING pipeline run
     import uuid as _uuid
+
     from backend.models import PipelineRun, PipelineStatus
 
     run = PipelineRun(

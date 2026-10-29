@@ -1,6 +1,6 @@
 """Tests for the Parquet save step output."""
 import io
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq

@@ -7,20 +7,31 @@ autodiscovers all task modules) and asserts every configured name
 resolves.
 """
 
-from backend.celery_app import celery_app
-from backend.celery_config import beat_schedule, task_routes
-
 # Import every task module so @task decorators register with the app,
 # mirroring what the workers load at startup.
-import backend.tasks.gemini_tasks  # noqa: F401
-import backend.tasks.notification_tasks  # noqa: F401
-import backend.tasks.pipeline_tasks  # noqa: F401
-import backend.tasks.profiling  # noqa: F401
-import backend.tasks.scheduled_pipeline  # noqa: F401
-import backend.tasks.schedule_tasks  # noqa: F401
-import backend.tasks.storage_maintenance  # noqa: F401
-import backend.tasks.streaming_pipeline  # noqa: F401
-import backend.tasks.webhook_tasks  # noqa: F401
+from backend.tasks import gemini_tasks as gemini_tasks
+from backend.tasks import notification_tasks as notification_tasks
+from backend.tasks import pipeline_tasks as pipeline_tasks
+from backend.tasks import profiling as profiling
+from backend.tasks import schedule_tasks as schedule_tasks
+from backend.tasks import scheduled_pipeline as scheduled_pipeline
+from backend.tasks import storage_maintenance as storage_maintenance
+from backend.tasks import streaming_pipeline as streaming_pipeline
+from backend.tasks import webhook_tasks as webhook_tasks
+
+_REGISTERED_TASK_MODULES = (
+    gemini_tasks,
+    notification_tasks,
+    pipeline_tasks,
+    profiling,
+    schedule_tasks,
+    scheduled_pipeline,
+    storage_maintenance,
+    streaming_pipeline,
+    webhook_tasks,
+)
+from backend.celery_app import celery_app
+from backend.celery_config import beat_schedule, task_routes
 
 
 def _registered_names() -> set[str]:

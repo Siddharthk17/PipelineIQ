@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
-
 HEALABLE_ERROR_TYPES: dict[str, str] = {
     "ColumnNotFoundError": "column_renamed_or_removed",
     "JoinKeyMissingError": "join_key_missing_in_schema",
@@ -63,7 +60,7 @@ def is_healable(error: Exception) -> bool:
     return True
 
 
-def get_healing_scenario(error: Exception) -> Optional[str]:
+def get_healing_scenario(error: Exception) -> str | None:
     """Return the human-readable healing scenario when an error is healable."""
     if not is_healable(error):
         return None

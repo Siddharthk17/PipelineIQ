@@ -8,7 +8,6 @@ spans in pipeline steps.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -16,7 +15,12 @@ from opentelemetry.instrumentation.celery import CeleryInstrumentor
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION, DEPLOYMENT_ENVIRONMENT
+from opentelemetry.sdk.resources import (
+    DEPLOYMENT_ENVIRONMENT,
+    SERVICE_NAME,
+    SERVICE_VERSION,
+    Resource,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import ParentBasedTraceIdRatio
@@ -25,8 +29,8 @@ from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
-_TRACER_PROVIDER: Optional[TracerProvider] = None
-_TRACER: Optional[trace.Tracer] = None
+_TRACER_PROVIDER: TracerProvider | None = None
+_TRACER: trace.Tracer | None = None
 _fastapi_instrumented: bool = False
 _sqlalchemy_instrumented: bool = False
 _redis_instrumented: bool = False

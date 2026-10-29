@@ -4,7 +4,6 @@ Search, blast radius, upstream lineage, orphan detection.
 """
 import asyncio
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import text
@@ -12,13 +11,15 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.config import settings
-from backend.dependencies import get_read_db_dependency, get_write_db_dependency
+from backend.dependencies import get_read_db_dependency
 from backend.models import User
 from backend.pipeline.exceptions import ClientDisconnected
 from backend.repositories.catalog import (
-    search_assets,
     get_blast_radius,
     get_upstream_lineage,
+    search_assets,
+)
+from backend.repositories.catalog import (
     list_orphan_assets as list_orphan_assets_repo,
 )
 from backend.utils.rate_limiter import limiter
@@ -36,12 +37,11 @@ async def _ensure_client_connected(request: Request) -> None:
     """
     while True:
         try:
-            if await request.is_disconnected():
-                raise ClientDisconnected()
-        except ClientDisconnected:
-            raise
+            disconnected = await request.is_disconnected()
         except Exception:
             return
+        if disconnected:
+            raise ClientDisconnected()
         await asyncio.sleep(0.1)
 
 
@@ -51,7 +51,7 @@ def search_catalog(
     request: Request,
     response: Response,
     q: str = Query(..., min_length=2, description="Search query for asset names"),
-    asset_type: Optional[str] = Query(None, description="Filter: file|column|pipeline|topic"),
+    asset_type: str | None = Query(None, description="Filter: file|column|pipeline|topic"),
     limit: int = Query(default=20, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = get_read_db_dependency(),
@@ -74,7 +74,7 @@ async def get_impact_analysis(
     request: Request,
     response: Response,
     asset_name: str,
-    asset_type: Optional[str] = Query(None),
+    asset_type: str | None = Query(None),
     max_depth: int = Query(default=10, le=15),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_read_db_dependency),

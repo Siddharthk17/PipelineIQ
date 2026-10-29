@@ -4,7 +4,8 @@ import logging
 
 from fastapi import FastAPI
 
-from backend.api.sse import router as sse_router, legacy_router as sse_legacy_router
+from backend.api.sse import legacy_router as sse_legacy_router
+from backend.api.sse import router as sse_router
 
 
 class _SSEHealthCheckFilter(logging.Filter):

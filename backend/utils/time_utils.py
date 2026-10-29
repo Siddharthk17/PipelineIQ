@@ -6,7 +6,7 @@ results and API responses.
 """
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def utcnow() -> datetime:
@@ -15,7 +15,7 @@ def utcnow() -> datetime:
     Always use this instead of datetime.utcnow() which returns a naive
     datetime without timezone info.
     """
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def measure_ms(start: float) -> int:

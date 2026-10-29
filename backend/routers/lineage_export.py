@@ -3,9 +3,9 @@
 GET /api/runs/{run_id}/openlineage -- single run event (JSON)
 GET /api/lineage/export -- all runs as NDJSON bulk export
 """
-import orjson
 import logging
 
+import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.auth import get_current_user
 from backend.config import settings
 from backend.dependencies import get_read_db_dependency
-from backend.models import User, PipelineRun
+from backend.models import PipelineRun, User
 from backend.openlineage.builder import build_openlineage_event
 from backend.repositories.catalog import get_cached_run_lineage
 from backend.utils.rate_limiter import limiter

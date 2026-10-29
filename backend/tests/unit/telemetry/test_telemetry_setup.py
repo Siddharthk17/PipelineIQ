@@ -6,23 +6,18 @@ initialisation, subprocess instrumentation wrappers, and format utilities.
 
 from __future__ import annotations
 
-import os
-from unittest import mock
-
-import pytest
-
+from backend.config import settings
 from backend.telemetry import (
     OTEL_SERVICE_NAME,
-    _get_otel_sample_rate,
     _get_otel_endpoint,
+    _get_otel_sample_rate,
     _is_otel_enabled,
-    format_trace_id,
-    format_span_id,
     current_span_context,
-    setup_telemetry,
+    format_span_id,
+    format_trace_id,
     get_tracer,
+    setup_telemetry,
 )
-from backend.config import settings
 
 
 class TestOTelConfigHelpers:

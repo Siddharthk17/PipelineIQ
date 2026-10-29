@@ -6,7 +6,7 @@ for interactive API documentation.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -18,9 +18,9 @@ class ColumnDriftResponse(BaseModel):
     column: str = Field(..., description="Column name affected")
     drift_type: str = Field(...,
                             description="Type of drift: added, removed, type_changed")
-    old_value: Optional[str] = Field(
+    old_value: str | None = Field(
         None, description="Previous type (for type_changed)")
-    new_value: Optional[str] = Field(
+    new_value: str | None = Field(
         None, description="New type (for type_changed)")
     severity: str = Field(..., description="Severity: breaking, warning, info")
 
@@ -31,7 +31,7 @@ class SchemaDriftResponse(BaseModel):
     has_drift: bool = Field(..., description="Whether drift was detected")
     breaking_changes: int = Field(0, description="Number of breaking changes")
     warnings: int = Field(0, description="Number of warnings")
-    drift_items: List[ColumnDriftResponse] = Field(
+    drift_items: list[ColumnDriftResponse] = Field(
         default_factory=list, description="Individual drift items"
     )
 
@@ -44,12 +44,12 @@ class FileUploadResponse(BaseModel):
                                    description="Original filename as uploaded")
     row_count: int = Field(..., description="Number of data rows in the file")
     column_count: int = Field(..., description="Number of columns in the file")
-    columns: List[str] = Field(..., description="Ordered list of column names")
-    dtypes: Dict[str, str] = Field(
+    columns: list[str] = Field(..., description="Ordered list of column names")
+    dtypes: dict[str, str] = Field(
         ..., description="Mapping of column name to pandas dtype"
     )
     file_size_bytes: int = Field(..., description="File size in bytes")
-    schema_drift: Optional[SchemaDriftResponse] = Field(
+    schema_drift: SchemaDriftResponse | None = Field(
         None, description="Schema drift report (null for first upload of a file)")
 
     model_config = {
@@ -90,13 +90,13 @@ class UploadUrlResponse(BaseModel):
 
     method: str = Field(..., description="Upload method: api or direct")
     file_id: str = Field(..., description="Reserved file identifier")
-    upload_url: Optional[str] = Field(
+    upload_url: str | None = Field(
         None, description="Direct upload URL for large files"
     )
-    upload_endpoint: Optional[str] = Field(
+    upload_endpoint: str | None = Field(
         None, description="API upload endpoint for small files"
     )
-    confirm_endpoint: Optional[str] = Field(
+    confirm_endpoint: str | None = Field(
         None, description="Confirmation endpoint after direct upload"
     )
 
@@ -104,7 +104,7 @@ class UploadUrlResponse(BaseModel):
 class FileListResponse(BaseModel):
     """Response listing all uploaded files."""
 
-    files: List[FileUploadResponse] = Field(
+    files: list[FileUploadResponse] = Field(
         ..., description="List of all uploaded files"
     )
     total: int = Field(..., description="Total number of uploaded files")
@@ -118,7 +118,7 @@ class RunPipelineRequest(BaseModel):
         description="Complete YAML pipeline configuration string",
         min_length=10,
     )
-    name: Optional[str] = Field(
+    name: str | None = Field(
         None,
         description="Human-readable name for this run. Defaults to pipeline name from YAML.",
         max_length=255,
@@ -191,12 +191,12 @@ class ValidatePipelineRequest(BaseModel):
 class ValidationErrorDetail(BaseModel):
     """A single validation error found in a pipeline configuration."""
 
-    step_name: Optional[str] = Field(
+    step_name: str | None = Field(
         None, description="Name of the step with the error, if applicable"
     )
     field: str = Field(..., description="Field name that has the error")
     message: str = Field(..., description="Human-readable error description")
-    suggestion: Optional[str] = Field(
+    suggestion: str | None = Field(
         None, description="Suggested fix for the error"
     )
 
@@ -204,7 +204,7 @@ class ValidationErrorDetail(BaseModel):
 class ValidationWarningDetail(BaseModel):
     """A non-blocking warning about the pipeline configuration."""
 
-    step_name: Optional[str] = Field(
+    step_name: str | None = Field(
         None, description="Name of the step with the warning"
     )
     message: str = Field(..., description="Human-readable warning description")
@@ -214,10 +214,10 @@ class ValidatePipelineResponse(BaseModel):
     """Response from pipeline validation."""
 
     is_valid: bool = Field(..., description="Whether the pipeline is valid")
-    errors: List[ValidationErrorDetail] = Field(
+    errors: list[ValidationErrorDetail] = Field(
         default_factory=list, description="List of validation errors"
     )
-    warnings: List[ValidationWarningDetail] = Field(
+    warnings: list[ValidationWarningDetail] = Field(
         default_factory=list, description="List of validation warnings"
     )
 
@@ -231,35 +231,35 @@ class StepResultResponse(BaseModel):
     step_index: int = Field(...,
                             description="Zero-based position in the pipeline")
     status: str = Field(..., description="Step execution status")
-    rows_in: Optional[int] = Field(None, description="Number of input rows")
-    rows_out: Optional[int] = Field(None, description="Number of output rows")
-    columns_in: Optional[List[str]] = Field(
+    rows_in: int | None = Field(None, description="Number of input rows")
+    rows_out: int | None = Field(None, description="Number of output rows")
+    columns_in: list[str] | None = Field(
         None, description="Input column names")
-    columns_out: Optional[List[str]] = Field(
+    columns_out: list[str] | None = Field(
         None, description="Output column names")
-    duration_ms: Optional[int] = Field(
+    duration_ms: int | None = Field(
         None, description="Execution time in ms")
-    warnings: Optional[List[str]] = Field(
+    warnings: list[str] | None = Field(
         None, description="Non-fatal warnings")
-    error_message: Optional[str] = Field(
+    error_message: str | None = Field(
         None, description="Error details if failed")
-    trace_id: Optional[str] = Field(
+    trace_id: str | None = Field(
         None, description="OpenTelemetry trace ID")
-    span_id: Optional[str] = Field(
+    span_id: str | None = Field(
         None, description="OpenTelemetry span ID")
-    started_at: Optional[str] = Field(
+    started_at: str | None = Field(
         None, description="Step start timestamp (ISO 8601)")
-    completed_at: Optional[str] = Field(
+    completed_at: str | None = Field(
         None, description="Step completion timestamp (ISO 8601)")
-    engine: Optional[str] = Field(
+    engine: str | None = Field(
         None, description="Execution engine (pandas, duckdb)")
-    download_url: Optional[str] = Field(
+    download_url: str | None = Field(
         None, description="Presigned download URL for save step output")
-    output_filename: Optional[str] = Field(
+    output_filename: str | None = Field(
         None, description="Output filename for save step")
-    output_format: Optional[str] = Field(
+    output_format: str | None = Field(
         None, description="Output format (csv, json, parquet)")
-    output_size_bytes: Optional[int] = Field(
+    output_size_bytes: int | None = Field(
         None, description="Output file size in bytes")
 
 
@@ -270,67 +270,67 @@ class HealingAttemptResponse(BaseModel):
     attempt_number: int = Field(...,
                                 description="1-indexed healing attempt number")
     status: str = Field(..., description="Healing attempt status")
-    pipeline_name: Optional[str] = Field(
+    pipeline_name: str | None = Field(
         None, description="Pipeline name for this run")
-    failed_step: Optional[str] = Field(
+    failed_step: str | None = Field(
         None, description="Step name where failure was observed")
-    error_type: Optional[str] = Field(
+    error_type: str | None = Field(
         None, description="Failure exception type")
-    error_message: Optional[str] = Field(
+    error_message: str | None = Field(
         None, description="Failure exception message")
-    old_schema: Optional[Dict[str, Any]] = Field(
+    old_schema: dict[str, Any] | None = Field(
         None, description="Schema snapshot captured when the run started"
     )
-    new_schema: Optional[Dict[str, Any]] = Field(
+    new_schema: dict[str, Any] | None = Field(
         None, description="Current schema observed when healing ran"
     )
-    removed_columns: Optional[List[str]] = Field(
+    removed_columns: list[str] | None = Field(
         None, description="Columns that disappeared between old and new schema"
     )
-    added_columns: Optional[List[str]] = Field(
+    added_columns: list[str] | None = Field(
         None, description="Columns that appeared in the new schema"
     )
-    renamed_candidates: Optional[List[Dict[str, Any]]] = Field(
+    renamed_candidates: list[dict[str, Any]] | None = Field(
         None, description="Likely rename pairs detected from the schema diff"
     )
-    gemini_patch: Optional[Dict[str, Any]] = Field(
+    gemini_patch: dict[str, Any] | None = Field(
         None, description="Structured JSON patch returned by Gemini"
     )
-    sandbox_result: Optional[Dict[str, Any]] = Field(
+    sandbox_result: dict[str, Any] | None = Field(
         None, description="DuckDB sandbox validation result for the patch"
     )
     applied: bool = Field(
         False, description="Whether the candidate patch was applied")
-    confidence: Optional[float] = Field(
+    confidence: float | None = Field(
         None, description="Gemini confidence score for the selected patch"
     )
-    healed_at: Optional[datetime] = Field(
+    healed_at: datetime | None = Field(
         None, description="When the patch was accepted and applied"
     )
-    classification_reason: Optional[str] = Field(
+    classification_reason: str | None = Field(
         None, description="Healer classification reason"
     )
-    ai_valid: Optional[bool] = Field(
+    ai_valid: bool | None = Field(
         None, description="AI-reported patch validity")
-    ai_error: Optional[str] = Field(
+    ai_error: str | None = Field(
         None, description="AI generation error details")
-    parser_valid: Optional[bool] = Field(
+    parser_valid: bool | None = Field(
         None, description="Whether parser/semantic validation passed"
     )
-    sandbox_passed: Optional[bool] = Field(
+    sandbox_passed: bool | None = Field(
         None, description="Whether dry-run planner predicted success"
     )
-    validation_errors: Optional[List[str]] = Field(
+    validation_errors: list[str] | None = Field(
         None, description="Candidate validation errors"
     )
-    validation_warnings: Optional[List[str]] = Field(
+    validation_warnings: list[str] | None = Field(
         None, description="Candidate validation warnings"
     )
-    diff_lines: Optional[List[Dict[str, Any]]] = Field(
+    diff_lines: list[dict[str, Any]] | None = Field(
         None, description="Line-level patch diff from AI repair"
     )
     created_at: datetime = Field(..., description="Attempt creation timestamp")
-    completed_at: Optional[datetime] = Field(
+    completed_at: datetime | None = Field(
         None, description="Attempt completion timestamp"
     )
 
@@ -380,12 +380,12 @@ class ContractStatusResponse(BaseModel):
 
     pipeline_name: str = Field(..., description="Pipeline name")
     has_contract: bool = Field(..., description="Whether a contract is defined")
-    active_contract_id: Optional[str] = Field(None, description="Active contract ID")
-    active_contract_version: Optional[int] = Field(
+    active_contract_id: str | None = Field(None, description="Active contract ID")
+    active_contract_version: int | None = Field(
         None, description="Active contract version"
     )
-    last_run_id: Optional[str] = Field(None, description="Latest run ID")
-    last_run_status: Optional[str] = Field(None, description="Latest run status")
+    last_run_id: str | None = Field(None, description="Latest run ID")
+    last_run_status: str | None = Field(None, description="Latest run status")
     total_violations: int = Field(default=0, description="Total violations in latest run")
 
 
@@ -396,8 +396,8 @@ class ContractViolationResponse(BaseModel):
     rule: str = Field(..., description="Violated rule (dtype, not_null, unique, etc.)")
     severity: str = Field(..., description="Severity level: error or warning")
     message: str = Field(..., description="Human-readable violation description")
-    actual: Optional[str] = Field(None, description="Actual value observed")
-    expected: Optional[str] = Field(None, description="Expected value per contract")
+    actual: str | None = Field(None, description="Actual value observed")
+    expected: str | None = Field(None, description="Expected value per contract")
 
 
 class PipelineRunResponse(BaseModel):
@@ -407,25 +407,25 @@ class PipelineRunResponse(BaseModel):
     name: str = Field(..., description="Human-readable pipeline name")
     status: str = Field(..., description="Current pipeline status")
     created_at: datetime = Field(..., description="When the run was created")
-    started_at: Optional[datetime] = Field(
+    started_at: datetime | None = Field(
         None, description="When execution started"
     )
-    completed_at: Optional[datetime] = Field(
+    completed_at: datetime | None = Field(
         None, description="When execution finished"
     )
-    duration_ms: Optional[int] = Field(
+    duration_ms: int | None = Field(
         None, description="Total execution time in ms"
     )
-    total_rows_in: Optional[int] = Field(None, description="Total input rows")
-    total_rows_out: Optional[int] = Field(
+    total_rows_in: int | None = Field(None, description="Total input rows")
+    total_rows_out: int | None = Field(
         None, description="Total output rows")
-    error_message: Optional[str] = Field(None, description="Error if failed")
-    trace_id: Optional[str] = Field(
+    error_message: str | None = Field(None, description="Error if failed")
+    trace_id: str | None = Field(
         None, description="OpenTelemetry trace ID for distributed tracing")
-    step_results: List[StepResultResponse] = Field(
+    step_results: list[StepResultResponse] = Field(
         default_factory=list, description="Ordered list of step results"
     )
-    healing_attempts: List[HealingAttemptResponse] = Field(
+    healing_attempts: list[HealingAttemptResponse] = Field(
         default_factory=list,
         description="Ordered healing attempts for this run",
     )
@@ -434,7 +434,7 @@ class PipelineRunResponse(BaseModel):
 class PipelineRunListResponse(BaseModel):
     """Response listing pipeline runs."""
 
-    runs: List[PipelineRunResponse] = Field(...,
+    runs: list[PipelineRunResponse] = Field(...,
                                             description="List of pipeline runs")
     total: int = Field(..., description="Total number of runs")
 
@@ -445,10 +445,10 @@ class ReactFlowNodeResponse(BaseModel):
     id: str = Field(..., description="Unique node identifier")
     type: str = Field(...,
                       description="Node type: sourceFile, stepNode, columnNode, outputFile")
-    data: Dict[str, Any] = Field(  # Any needed: React Flow data is polymorphic
+    data: dict[str, Any] = Field(  # Any needed: React Flow data is polymorphic
         ..., description="Node display data (label, metadata)"
     )
-    position: Dict[str, int] = Field(
+    position: dict[str, int] = Field(
         ..., description="Node position as {x, y} coordinates"
     )
 
@@ -460,7 +460,7 @@ class ReactFlowEdgeResponse(BaseModel):
     source: str = Field(..., description="Source node ID")
     target: str = Field(..., description="Target node ID")
     animated: bool = Field(False, description="Whether the edge is animated")
-    style: Optional[Dict[str, str]] = Field(
+    style: dict[str, str] | None = Field(
         None, description="Edge styling (e.g., stroke color for join keys)"
     )
 
@@ -468,9 +468,9 @@ class ReactFlowEdgeResponse(BaseModel):
 class LineageGraphResponse(BaseModel):
     """Complete React Flow lineage graph for a pipeline run."""
 
-    nodes: List[ReactFlowNodeResponse] = Field(...,
+    nodes: list[ReactFlowNodeResponse] = Field(...,
                                                description="All graph nodes")
-    edges: List[ReactFlowEdgeResponse] = Field(...,
+    edges: list[ReactFlowEdgeResponse] = Field(...,
                                                description="All graph edges")
 
 
@@ -494,7 +494,7 @@ class ColumnLineageResponse(BaseModel):
     source_column: str = Field(
         ..., description="Original column name in the source file"
     )
-    transformation_chain: List[TransformationStepResponse] = Field(
+    transformation_chain: list[TransformationStepResponse] = Field(
         ..., description="Ordered list of transformations applied"
     )
     total_steps: int = Field(
@@ -508,10 +508,10 @@ class ImpactAnalysisResponse(BaseModel):
     source_step: str = Field(...,
                              description="Step containing the source column")
     source_column: str = Field(..., description="The column being analyzed")
-    affected_steps: List[str] = Field(
+    affected_steps: list[str] = Field(
         ..., description="All downstream steps that use this column"
     )
-    affected_output_columns: List[str] = Field(
+    affected_output_columns: list[str] = Field(
         ..., description="All output columns derived from this column"
     )
 
@@ -530,10 +530,10 @@ class ErrorResponse(BaseModel):
 
     error_type: str = Field(..., description="Machine-readable error type")
     message: str = Field(..., description="Human-readable error message")
-    details: Optional[Dict[str, Any]] = Field(  # Any needed: error context varies
+    details: dict[str, Any] | None = Field(  # Any needed: error context varies
         None, description="Additional structured error context"
     )
-    request_id: Optional[str] = Field(
+    request_id: str | None = Field(
         None, description="Request ID for log tracing"
     )
 
@@ -542,10 +542,10 @@ class WasmModuleExport(BaseModel):
     """A single exported function from a Wasm module."""
 
     name: str = Field(..., description="Exported function name")
-    params: List[str] = Field(
+    params: list[str] = Field(
         default_factory=list, description="Parameter types (e.g., ['f64', 'f64'])"
     )
-    result: Optional[str] = Field(
+    result: str | None = Field(
         None, description="Return type (e.g., 'f64')")
 
 
@@ -554,13 +554,13 @@ class WasmModuleUploadResponse(BaseModel):
 
     id: str = Field(..., description="Module ID")
     name: str = Field(..., description="Module name (unique)")
-    description: Optional[str] = Field(None, description="Module description")
+    description: str | None = Field(None, description="Module description")
     file_size_bytes: int = Field(..., description="Module size in bytes")
     sha256_hash: str = Field(..., description="SHA256 hash of the .wasm binary")
-    exports: List[WasmModuleExport] = Field(
+    exports: list[WasmModuleExport] = Field(
         ..., description="Exported functions with signatures"
     )
-    imports: List[str] = Field(
+    imports: list[str] = Field(
         default_factory=list,
         description="Imported modules (must be empty for sandbox)",
     )
@@ -572,7 +572,7 @@ class WasmModuleUploadResponse(BaseModel):
 class WasmModuleListResponse(BaseModel):
     """Response listing all registered Wasm modules."""
 
-    modules: List[WasmModuleUploadResponse] = Field(
+    modules: list[WasmModuleUploadResponse] = Field(
         ..., description="List of registered Wasm modules"
     )
     total: int = Field(..., description="Total number of modules")
@@ -582,15 +582,15 @@ class WasmModuleValidateResponse(BaseModel):
     """Response from Wasm module validation."""
 
     is_valid: bool = Field(..., description="Whether the module is valid")
-    exports: List[WasmModuleExport] = Field(
+    exports: list[WasmModuleExport] = Field(
         default_factory=list, description="Exported functions"
     )
-    imports: List[str] = Field(
+    imports: list[str] = Field(
         default_factory=list, description="Imported modules"
     )
-    errors: List[str] = Field(
+    errors: list[str] = Field(
         default_factory=list, description="Validation errors"
     )
-    warnings: List[str] = Field(
+    warnings: list[str] = Field(
         default_factory=list, description="Validation warnings"
     )

@@ -56,8 +56,9 @@ def _two_users(auth_client):
 
 def test_run_with_foreign_file_id_404s(auth_client, monkeypatch, sales_csv_bytes):
     """User B cannot run a pipeline over user A's file."""
-    import backend.api.pipelines as pipelines_mod
     from types import SimpleNamespace
+
+    import backend.api.pipelines as pipelines_mod
 
     monkeypatch.setattr(
         pipelines_mod.execute_pipeline_task, "delay",

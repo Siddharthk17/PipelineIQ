@@ -5,21 +5,18 @@ middleware, route mounting, and health checks. This is the single
 entry point for the application.
 """
 
-from backend.routers.ai import router as ai_router
-from backend.routers.wasm import router as wasm_router
-from backend.routers.streaming import router as streaming_router
 import logging
 import os
 import re
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
 
+import orjson
 import sentry_sdk
 import structlog
-import orjson
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,12 +28,12 @@ from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from backend.api.router import api_router, legacy_api_router
-from backend.api.auth import router as auth_router
-from backend.api.webhooks import router as webhooks_router
 from backend.api.audit import router as audit_router
+from backend.api.auth import router as auth_router
+from backend.api.router import api_router, legacy_api_router
+from backend.api.webhooks import router as webhooks_router
 from backend.config import settings
-from backend.database import create_all_tables, write_engine, read_engine
+from backend.database import create_all_tables, read_engine, write_engine
 from backend.db.redis_pools import (
     get_broker_redis,
     get_cache_redis,
@@ -44,10 +41,12 @@ from backend.db.redis_pools import (
     get_yjs_redis,
 )
 from backend.pipeline.exceptions import PipelineIQError
+from backend.routers.ai import router as ai_router
+from backend.routers.streaming import router as streaming_router
+from backend.routers.wasm import router as wasm_router
 from backend.services.storage_service import S3StorageProvider, storage_service
+from backend.telemetry import instrument_all
 from backend.utils.rate_limiter import limiter
-
-from backend.telemetry import instrument_all, instrument_fastapi, setup_telemetry, force_flush
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,7 @@ logger = logging.getLogger(__name__)
 # Import the shared `ClientDisconnected` from the exceptions module to
 # avoid a circular import between `main.py` and the routers that
 # raise it. (Routers are imported at module load time below.)
-from backend.pipeline.exceptions import ClientDisconnected  # noqa: E402
+from backend.pipeline.exceptions import ClientDisconnected
 
 
 # Silence health check and metrics access log noise
@@ -136,11 +135,10 @@ def _validate_upload_dir() -> None:
         test_file.touch()
         test_file.unlink()
         logger.info("Upload directory validated: %s", upload_dir)
-    except OSError as exc:
-        logger.error(
-            "Upload directory '%s' is not writable: %s",
-            upload_dir,
-            exc)
+    except OSError:
+        logger.exception(
+            "Upload directory '%s' is not writable",
+            upload_dir)
         raise
 
 
@@ -416,13 +414,14 @@ async def api_version_middleware(request: Request, call_next):
         response = await call_next(request)
         response.headers["X-API-Version"] = "v1"
         response.headers["X-App-Version"] = settings.APP_VERSION
-        return response
     except RuntimeError as exc:
         if str(exc) == "No response returned.":
             return Response(status_code=499)
         raise
 
 
+    else:
+        return response
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     """Use Nginx-provided X-Request-ID or generate a new one.
@@ -448,13 +447,14 @@ async def request_id_middleware(request: Request, call_next):
     try:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
-        return response
     except RuntimeError as exc:
         if str(exc) == "No response returned.":
             return Response(status_code=499)
         raise
 
 
+    else:
+        return response
 @app.middleware("http")
 async def timing_middleware(request: Request, call_next):
     """Add X-Process-Time header with request processing duration."""
@@ -463,12 +463,13 @@ async def timing_middleware(request: Request, call_next):
         response = await call_next(request)
         duration_ms = (time.perf_counter() - start) * 1000
         response.headers["X-Process-Time"] = f"{duration_ms:.2f}ms"
-        return response
     except RuntimeError as exc:
         if str(exc) == "No response returned.":
             return Response(status_code=499)
         raise
 
+    else:
+        return response
 @app.middleware("http")
 async def structlog_access_middleware(request: Request, call_next):
     """Log requests in JSON using structlog, avoiding uvicorn access log."""
@@ -516,13 +517,12 @@ app.include_router(wasm_router)
 app.include_router(streaming_router)
 
 from backend.routers.catalog import router as catalog_router
-from backend.routers.lineage_export import router as lineage_export_router
-from backend.routers.column_policies import router as column_policies_router
 from backend.routers.catalog_pipelines import router as catalog_pipelines_router
-
-from backend.routers.storage import router as storage_router
+from backend.routers.column_policies import router as column_policies_router
 from backend.routers.contracts import router as contracts_router
+from backend.routers.lineage_export import router as lineage_export_router
 from backend.routers.runs import router as runs_router
+from backend.routers.storage import router as storage_router
 
 app.include_router(catalog_router)
 app.include_router(lineage_export_router)
@@ -623,23 +623,25 @@ def _check_db_health(engine, role: str) -> str:
     try:
         with engine.connect() as conn:
             conn.exec_driver_sql("SELECT 1")
-        return "ok"
-    except Exception as exc:
-        logger.error("Database %s health check failed: %s", role, exc)
+    except Exception:
+        logger.exception("Database %s health check failed", role)
         return "error"
 
 
+    else:
+        return "ok"
 def _check_redis_health(factory, role: str) -> str:
     """Check Redis connectivity by sending a PING command."""
     try:
         client = factory()
         client.ping()
-        return "ok"
     except Exception as exc:
         logger.warning("Redis %s health check failed: %s", role, exc)
         return "error"
 
 
+    else:
+        return "ok"
 def _check_storage_health() -> str:
     """Check local or S3-compatible storage readiness."""
     try:
@@ -652,7 +654,9 @@ def _check_storage_health() -> str:
             probe_path = upload_dir / f".healthcheck_{os.getpid()}"
             probe_path.touch(exist_ok=True)
             probe_path.unlink(missing_ok=True)
-        return "ok"
     except Exception as exc:
         logger.warning("Storage health check failed: %s", exc)
         return "error"
+
+    else:
+        return "ok"

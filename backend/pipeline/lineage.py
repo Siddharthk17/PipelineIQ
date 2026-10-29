@@ -13,7 +13,7 @@ Node naming convention (consistent everywhere):
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 import networkx as nx
 
@@ -56,7 +56,7 @@ class ColumnLineage:
     column_name: str
     source_file: str
     source_column: str
-    transformation_chain: List[TransformationStep]
+    transformation_chain: list[TransformationStep]
     total_steps: int
 
 
@@ -66,8 +66,8 @@ class ImpactAnalysis:
 
     source_step: str
     source_column: str
-    affected_steps: List[str]
-    affected_output_columns: List[str]
+    affected_steps: list[str]
+    affected_output_columns: list[str]
 
 
 @dataclass
@@ -76,8 +76,8 @@ class ReactFlowNode:
 
     id: str
     type: str
-    data: Dict[str, Any]  # Any needed: React Flow data payload is polymorphic
-    position: Dict[str, int]
+    data: dict[str, Any]  # Any needed: React Flow data payload is polymorphic
+    position: dict[str, int]
 
 
 @dataclass
@@ -88,21 +88,21 @@ class ReactFlowEdge:
     source: str
     target: str
     animated: bool = False
-    style: Optional[Dict[str, str]] = None
+    style: dict[str, str] | None = None
 
 
 @dataclass
 class ReactFlowGraph:
     """Complete React Flow graph for visualization."""
 
-    nodes: List[ReactFlowNode]
-    edges: List[ReactFlowEdge]
+    nodes: list[ReactFlowNode]
+    edges: list[ReactFlowEdge]
 
 
 LAYER_X_SPACING: int = 300
 NODE_Y_SPACING: int = 80
 
-_NODE_TYPE_MAP: Dict[str, str] = {
+_NODE_TYPE_MAP: dict[str, str] = {
     "source_file": "sourceFile",
     "source_column": "columnNode",
     "step": "stepNode",
@@ -129,8 +129,8 @@ class LineageRecorder:
         file_id: str,
         file_name: str,
         step_name: str,
-        columns: List[str],
-        dtypes: Dict[str, str],
+        columns: list[str],
+        dtypes: dict[str, str],
     ) -> None:
         """Record a file load step in the lineage graph."""
         file_node = _file_node_id(file_id)
@@ -182,7 +182,7 @@ class LineageRecorder:
         step_name: str,
         step_type: str,
         input_step: str,
-        columns: List[str],
+        columns: list[str],
     ) -> None:
         """Record a step that passes all columns through unchanged (filter/sort)."""
         step_node = _step_node_id(step_name)
@@ -222,8 +222,8 @@ class LineageRecorder:
         self,
         step_name: str,
         input_step: str,
-        kept_columns: List[str],
-        dropped_columns: List[str],
+        kept_columns: list[str],
+        dropped_columns: list[str],
     ) -> None:
         """Record a select/projection step that keeps only specified columns.
 
@@ -272,8 +272,8 @@ class LineageRecorder:
         self,
         step_name: str,
         input_step: str,
-        rename_mapping: Dict[str, str],
-        all_columns: List[str],
+        rename_mapping: dict[str, str],
+        all_columns: list[str],
     ) -> None:
         """Record a column rename step.
 
@@ -319,9 +319,9 @@ class LineageRecorder:
         step_name: str,
         left_step: str,
         right_step: str,
-        left_cols: List[str],
-        right_cols: List[str],
-        output_cols: List[str],
+        left_cols: list[str],
+        right_cols: list[str],
+        output_cols: list[str],
         join_key: str,
         how: str,
     ) -> None:
@@ -369,9 +369,9 @@ class LineageRecorder:
         self,
         step_name: str,
         input_step: str,
-        group_by_cols: List[str],
-        aggregations: List[Dict[str, str]],
-        output_cols: List[str],
+        group_by_cols: list[str],
+        aggregations: list[dict[str, str]],
+        output_cols: list[str],
     ) -> None:
         """Record a group-by aggregation step.
 
@@ -392,7 +392,7 @@ class LineageRecorder:
 
         # Build a mapping of output column name → input column name
         # for lineage tracing
-        output_to_input: Dict[str, str] = {}
+        output_to_input: dict[str, str] = {}
 
         # Group-by columns pass through
         for col in group_by_cols:
@@ -449,7 +449,7 @@ class LineageRecorder:
         step_name: str,
         input_step: str,
         filename: str,
-        columns: List[str],
+        columns: list[str],
     ) -> None:
         """Record a save step writing output to a file.
 
@@ -512,32 +512,30 @@ class LineageRecorder:
 
         source_file = "unknown"
         source_column = column_name
-        transformation_chain: List[TransformationStep] = []
-        visited: Set[str] = set()
+        transformation_chain: list[TransformationStep] = []
+        visited: set[str] = set()
         visited.add(target_node)
 
         # BFS: queue contains nodes to explore
-        queue: List[str] = [target_node]
-        step_nodes_seen: List[str] = []
-        source_col_nodes: List[str] = []
+        queue: list[str] = [target_node]
+        step_nodes_seen: list[str] = []
+        source_col_nodes: list[str] = []
 
         while queue:
             node = queue.pop(0)
             attrs = self.graph.nodes[node]
             node_type = attrs.get("node_type", "")
 
-            if node_type == "source_file":
-                if source_file == "unknown":
-                    source_file = attrs.get("label", "unknown")
+            if node_type == "source_file" and source_file == "unknown":
+                source_file = attrs.get("label", "unknown")
                 # Don't continue - there may be no predecessors anyway
 
             if node_type == "source_column":
                 source_col_nodes.append(node)
                 # Don't continue - follow predecessors to find the step node
 
-            if node_type == "step":
-                if node not in step_nodes_seen:
-                    step_nodes_seen.append(node)
+            if node_type == "step" and node not in step_nodes_seen:
+                step_nodes_seen.append(node)
 
             # Follow all predecessor edges
             for pred in self.graph.predecessors(node):
@@ -620,8 +618,8 @@ class LineageRecorder:
         source_node = _col_node_id(step_name, column_name)
         descendants = nx.descendants(self.graph, source_node)
 
-        affected_steps: List[str] = []
-        affected_output_columns: List[str] = []
+        affected_steps: list[str] = []
+        affected_output_columns: list[str] = []
 
         for node in descendants:
             attrs = self.graph.nodes[node]
@@ -653,7 +651,7 @@ class LineageRecorder:
         edges = self._build_react_flow_edges()
         return ReactFlowGraph(nodes=nodes, edges=edges)
 
-    def _build_react_flow_nodes(self) -> List[ReactFlowNode]:
+    def _build_react_flow_nodes(self) -> list[ReactFlowNode]:
         """Build positioned React Flow nodes from the graph."""
         if not self.graph.nodes:
             return []
@@ -667,9 +665,9 @@ class LineageRecorder:
         layers = self._assign_layers(topo_order)
         return self._position_nodes(layers)
 
-    def _assign_layers(self, topo_order: List[str]) -> Dict[int, List[str]]:
+    def _assign_layers(self, topo_order: list[str]) -> dict[int, list[str]]:
         """Assign nodes to layers based on longest path from source."""
-        layer_map: Dict[str, int] = {}
+        layer_map: dict[str, int] = {}
         for node in topo_order:
             predecessors = list(self.graph.predecessors(node))
             if not predecessors:
@@ -679,16 +677,16 @@ class LineageRecorder:
                     max(layer_map.get(pred, 0) for pred in predecessors) + 1
                 )
 
-        layers: Dict[int, List[str]] = {}
+        layers: dict[int, list[str]] = {}
         for node, layer in layer_map.items():
             layers.setdefault(layer, []).append(node)
 
         return layers
 
     def _position_nodes(
-            self, layers: Dict[int, List[str]]) -> List[ReactFlowNode]:
+            self, layers: dict[int, list[str]]) -> list[ReactFlowNode]:
         """Position nodes in a layered layout."""
-        nodes: List[ReactFlowNode] = []
+        nodes: list[ReactFlowNode] = []
 
         for layer_idx in sorted(layers.keys()):
             layer_nodes = layers[layer_idx]
@@ -717,9 +715,9 @@ class LineageRecorder:
 
         return nodes
 
-    def _build_react_flow_edges(self) -> List[ReactFlowEdge]:
+    def _build_react_flow_edges(self) -> list[ReactFlowEdge]:
         """Build React Flow edges with join key styling."""
-        edges: List[ReactFlowEdge] = []
+        edges: list[ReactFlowEdge] = []
 
         for idx, (source, target, data) in enumerate(
                 self.graph.edges(data=True)):
@@ -742,7 +740,7 @@ class LineageRecorder:
         index_col: str,
         columns_col: str,
         values_col: str,
-        output_columns: List[str],
+        output_columns: list[str],
     ) -> None:
         """Record a pivot step that reshapes data from long to wide format."""
         step_node = _step_node_id(step_name)
@@ -786,9 +784,9 @@ class LineageRecorder:
         self,
         step_name: str,
         input_step: str,
-        id_columns: List[str],
-        value_columns: List[str],
-        output_columns: List[str],
+        id_columns: list[str],
+        value_columns: list[str],
+        output_columns: list[str],
     ) -> None:
         """Record an unpivot (melt) step that reshapes data from wide to long format."""
         step_node = _step_node_id(step_name)
@@ -831,8 +829,8 @@ class LineageRecorder:
         self,
         step_name: str,
         input_step: str,
-        columns: List[str],
-        subset: Optional[List[str]],
+        columns: list[str],
+        subset: list[str] | None,
     ) -> None:
         """Record a deduplicate step that removes duplicate rows."""
         step_node = _step_node_id(step_name)
@@ -872,7 +870,7 @@ class LineageRecorder:
         self,
         step_name: str,
         input_step: str,
-        columns: List[str],
+        columns: list[str],
         method: str,
     ) -> None:
         """Record a fill_nulls step that fills missing values."""
@@ -914,7 +912,7 @@ class LineageRecorder:
         self,
         step_name: str,
         input_step: str,
-        columns: List[str],
+        columns: list[str],
     ) -> None:
         """Record a sample step that randomly samples rows."""
         step_node = _step_node_id(step_name)
@@ -953,8 +951,8 @@ class LineageRecorder:
         self,
         step_name: str,
         input_step: str,
-        input_columns: List[str],
-        output_columns: List[str],
+        input_columns: list[str],
+        output_columns: list[str],
     ) -> None:
         """Record a SQL step.
 
@@ -1002,9 +1000,9 @@ class LineageRecorder:
         step_name: str,
         input_step: str,
         function_name: str,
-        input_columns: List[str],
+        input_columns: list[str],
         output_column: str,
-        columns: List[str],
+        columns: list[str],
     ) -> None:
         """Record a WebAssembly UDF compute step.
 
@@ -1051,7 +1049,7 @@ class LineageRecorder:
             output_column,
         )
 
-    def serialize(self) -> Dict[str, Any]:
+    def serialize(self) -> dict[str, Any]:
         """Serialize the lineage graph for database storage.
 
         Returns both raw graph data (node-link format) and pre-computed
@@ -1083,14 +1081,14 @@ class LineageRecorder:
             },
         }
 
-    def _add_node(self, node_id: str, attrs: Dict[str, Any]) -> None:
+    def _add_node(self, node_id: str, attrs: dict[str, Any]) -> None:
         """Add a node to the graph with the given attributes."""
         self.graph.add_node(node_id, **attrs)
 
     def _connect_join_side(
         self,
         input_step: str,
-        columns: List[str],
+        columns: list[str],
         step_node: str,
         join_key: str,
     ) -> None:

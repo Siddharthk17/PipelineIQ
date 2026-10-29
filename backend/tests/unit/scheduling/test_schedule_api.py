@@ -1,10 +1,11 @@
 """Tests for the schedule CRUD API endpoints."""
-import pytest
-from fastapi.testclient import TestClient
 from unittest.mock import MagicMock
 
-from backend.main import app
+import pytest
+from fastapi.testclient import TestClient
+
 from backend.auth import get_current_user
+from backend.main import app
 
 
 @pytest.fixture
@@ -68,8 +69,9 @@ class TestCronValidation:
         assert req.cron_expression == "0 6 * * 1"
 
     def test_rejects_invalid_cron_pydantic(self):
-        from backend.api.schedules import CreateScheduleRequest
         from pydantic import ValidationError
+
+        from backend.api.schedules import CreateScheduleRequest
         with pytest.raises(ValidationError):
             CreateScheduleRequest(
                 pipeline_name="test",

@@ -8,7 +8,6 @@ import hashlib
 import logging
 import uuid
 from io import BytesIO
-from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from minio import Minio
@@ -136,7 +135,7 @@ async def validate_wasm_module(
 async def upload_wasm_module(
     name: str,
     file: UploadFile = File(...),
-    description: Optional[str] = None,
+    description: str | None = None,
     fuel_budget: int = 10_000_000,
     db: Session = Depends(get_write_db_dependency),
     current_user: User = Depends(get_current_user),

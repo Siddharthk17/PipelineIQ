@@ -35,8 +35,9 @@ def test_viewer_run_new_pipeline_grants_owner(
     auth_client, test_db, monkeypatch, sales_csv_bytes
 ):
     """A viewer running a new pipeline name gets a 202 and an owner grant."""
-    import backend.api.pipelines as pipelines_mod
     from types import SimpleNamespace
+
+    import backend.api.pipelines as pipelines_mod
 
     monkeypatch.setattr(
         pipelines_mod.execute_pipeline_task,
@@ -93,8 +94,9 @@ def test_viewer_rerun_own_pipeline_allowed(
     auth_client, monkeypatch, sales_csv_bytes
 ):
     """A viewer who owns a pipeline name can run it again."""
-    import backend.api.pipelines as pipelines_mod
     from types import SimpleNamespace
+
+    import backend.api.pipelines as pipelines_mod
 
     monkeypatch.setattr(
         pipelines_mod.execute_pipeline_task,

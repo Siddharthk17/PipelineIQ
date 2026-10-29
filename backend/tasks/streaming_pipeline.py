@@ -8,11 +8,10 @@ Architectural differences from batch pipeline task:
   - Failed batches route to DLQ, pipeline continues (does NOT stop)
 """
 
-import orjson
-import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
+import orjson
 import pandas as pd
 import pyarrow as pa
 from celery.utils.log import get_task_logger
@@ -27,13 +26,10 @@ from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.lineage import LineageRecorder
 from backend.streaming.redpanda_client import (
     get_admin_client,
-    get_producer_circuit_breaker,
     make_consumer,
     make_dlq_producer,
     make_producer,
-    produce_with_fallback,
     try_drain_fallback,
-    validate_topic_name,
 )
 from backend.utils.sse_security import sign_sse_payload
 from backend.utils.time_utils import utcnow
@@ -133,9 +129,12 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         )
 
         while not _is_aborted(db, run_id):
-            if stats["batches"] % 10 == 0 and stats["batches"] > 0:
-                if _handle_pause(db, run_id):
-                    break
+            if (
+                stats["batches"] % 10 == 0
+                and stats["batches"] > 0
+                and _handle_pause(db, run_id)
+            ):
+                break
 
             # Backpressure detection: pause if consumer lag is too high
             lag = _compute_consumer_lag(consumer)
@@ -211,7 +210,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
 
                 df = table_registry[output_name].to_pandas()
             except Exception as exc:
-                logger.error("Batch processing error: %s", exc)
+                logger.exception("Batch processing error")
                 _send_dlq(dlq_producer, deduped, topic, str(exc))
                 stats["failed"] += len(deduped)
                 stats["dlq"] += len(deduped)
@@ -228,8 +227,8 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             if publish_step and producer and not df.empty:
                 try:
                     _publish(producer, df, publish_step)
-                except Exception as exc:
-                    logger.error("Publish error (non-fatal): %s", exc)
+                except Exception:
+                    logger.exception("Publish error (non-fatal)")
 
             batch_ms = (time.monotonic() - t0) * 1000
             stats["batches"] += 1
@@ -248,10 +247,8 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             "Streaming stopped: batches=%d, messages=%d",
             stats["batches"], stats["messages"],
         )
-        return stats
-
-    except Exception as exc:
-        logger.exception("Streaming error: %s", exc)
+    except Exception:
+        logger.exception("Streaming error")
         try:
             _set_status(db, run_id, PipelineStatus.FAILED)
             db.commit()
@@ -267,6 +264,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             dlq_producer.flush(timeout=5)
         db.close()
         logger.info("Consumer closed for run_id=%s", run_id)
+    return stats
 
 
 def _step_type(step) -> str:
@@ -313,7 +311,7 @@ def _publish(producer, df: pd.DataFrame, publish_step) -> None:
 
 def _send_dlq(dlq_producer, messages, original_topic: str, error: str) -> None:
     dlq_topic = f"{original_topic}.dlq"
-    failed_at = datetime.now(timezone.utc).isoformat()
+    failed_at = datetime.now(UTC).isoformat()
     for msg in messages:
         dlq_producer.produce(
             topic=dlq_topic,
@@ -336,12 +334,14 @@ def _is_aborted(db, run_id: str) -> bool:
         run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
         if not run:
             return True
-        return run.status not in (
+        aborted = run.status not in (
             PipelineStatus.STREAMING_ACTIVE,
             PipelineStatus.STREAMING_PAUSED,
         )
     except Exception:
         return True
+    else:
+        return aborted
 
 
 def _handle_pause(db, run_id: str) -> bool:
@@ -413,7 +413,7 @@ def _compute_consumer_lag(consumer) -> int:
             return 0
         for tp in assignments:
             try:
-                low, high = consumer.get_watermark_offsets(tp, timeout=1.0)
+                _low, high = consumer.get_watermark_offsets(tp, timeout=1.0)
                 committed = consumer.committed([tp], timeout=1.0)
                 if committed and committed[0].offset >= 0:
                     lag = high - committed[0].offset
@@ -421,9 +421,10 @@ def _compute_consumer_lag(consumer) -> int:
                         total_lag += lag
             except Exception:
                 continue
-        return total_lag
     except Exception:
         return 0
+    else:
+        return total_lag
 
 
 def _sse_progress(run_id: str, stats: dict, throughput: float) -> None:

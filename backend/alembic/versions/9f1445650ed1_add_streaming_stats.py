@@ -5,9 +5,9 @@ Revises: 0010
 Create Date: 2026-05-18 10:00:00.000000
 
 """
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, TIMESTAMP
+from alembic import op
+from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 
 # revision identifiers, used by Alembic.
 revision = '9f1445650ed1'

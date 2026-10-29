@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any
 
 import pandas as pd
 
@@ -52,14 +52,14 @@ DTYPE_MAP: dict[str, DtypeKind] = {
 @dataclass
 class ColumnContract:
     name: str
-    dtype: Optional[DtypeKind] = None
+    dtype: DtypeKind | None = None
     required: bool = True
     not_null: bool = False
     unique: bool = False
-    min_value: Optional[Union[int, float]] = None
-    max_value: Optional[Union[int, float]] = None
-    allowed_values: Optional[list[Any]] = None
-    regex: Optional[str] = None
+    min_value: int | float | None = None
+    max_value: int | float | None = None
+    allowed_values: list[Any] | None = None
+    regex: str | None = None
 
     def validate(self, series: pd.Series) -> list[ContractViolation]:
         violations: list[ContractViolation] = []
@@ -160,8 +160,8 @@ class ContractViolation:
     rule: str
     severity: ContractSeverity
     message: str
-    actual: Optional[str] = None
-    expected: Optional[str] = None
+    actual: str | None = None
+    expected: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -180,8 +180,8 @@ class Contract:
 
     step_name: str
     columns: list[ColumnContract] = field(default_factory=list)
-    min_rows: Optional[int] = None
-    max_rows: Optional[int] = None
+    min_rows: int | None = None
+    max_rows: int | None = None
 
     def validate(self, df: pd.DataFrame) -> list[ContractViolation]:
         violations: list[ContractViolation] = []
@@ -262,7 +262,7 @@ def parse_contract_from_yaml(data: dict) -> Contract:
 
 
 def validate_step_contract(
-    contract_cfg: Optional[dict],
+    contract_cfg: dict | None,
     df: pd.DataFrame,
     step_name: str,
 ) -> list[ContractViolation]:

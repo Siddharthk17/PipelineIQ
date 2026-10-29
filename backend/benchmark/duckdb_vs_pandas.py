@@ -13,14 +13,13 @@ import json
 import platform
 import statistics
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 import duckdb
 import pandas as pd
 import pyarrow as pa
-
 
 BENCHMARK_OPS = ("filter", "aggregate", "join", "sort", "sql_projection")
 LEGACY_OPERATION_NAME = {"aggregate": "aggregation"}
@@ -206,7 +205,7 @@ def run_benchmarks(sizes: list[int], repeats: int) -> dict:
     }
 
     payload = {
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "generated_at_utc": datetime.now(UTC).isoformat(),
         "benchmark": "duckdb_vs_pandas",
         "parameters": {
             "sizes": sizes,

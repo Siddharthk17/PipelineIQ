@@ -6,10 +6,8 @@ Revises: h1a2b3c4d5e7
 
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, TIMESTAMP
-
+from alembic import op
 
 revision: str = "0bc02f8e7589"
 down_revision: Union[str, None] = "h1a2b3c4d5e7"

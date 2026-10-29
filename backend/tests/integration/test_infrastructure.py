@@ -4,16 +4,15 @@ These tests require the local Docker stack to be running and are intentionally
 runtime-oriented instead of static text inspection.
 """
 
-from pathlib import Path
 import os
 import socket
+from pathlib import Path
 
 import psycopg2
 import pytest
 import redis
 import requests
 import yaml
-
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION_TESTS") != "1",
@@ -93,10 +92,9 @@ def test_redis_instances_are_reachable_and_distinct():
 
 def test_pgbouncer_primary_accepts_connections():
     _assert_tcp_open(5432)
-    with _connect_postgres(port=5432) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT 1")
-            assert cursor.fetchone()[0] == 1
+    with _connect_postgres(port=5432) as conn, conn.cursor() as cursor:
+        cursor.execute("SELECT 1")
+        assert cursor.fetchone()[0] == 1
 
 
 def test_pgbouncer_primary_uses_transaction_pooling():
@@ -124,10 +122,9 @@ def test_pgbouncer_primary_uses_transaction_pooling():
 
 def test_pgbouncer_replica_is_in_recovery():
     _assert_tcp_open(5433)
-    with _connect_postgres(port=5433) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT pg_is_in_recovery()")
-            assert cursor.fetchone()[0] is True
+    with _connect_postgres(port=5433) as conn, conn.cursor() as cursor:
+        cursor.execute("SELECT pg_is_in_recovery()")
+        assert cursor.fetchone()[0] is True
 
 
 def test_performance_indexes_exist():
@@ -139,12 +136,11 @@ def test_performance_indexes_exist():
         "idx_pipeline_schedules_active",
         "idx_lineage_graphs_run_id",
     }
-    with _connect_postgres(port=5432) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'"
-            )
-            existing_indexes = {row[0] for row in cursor.fetchall()}
+    with _connect_postgres(port=5432) as conn, conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'"
+        )
+        existing_indexes = {row[0] for row in cursor.fetchall()}
 
     assert required_indexes.issubset(existing_indexes)
 

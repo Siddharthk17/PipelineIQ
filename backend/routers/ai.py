@@ -6,13 +6,13 @@ The client polls for completion using the task_id.
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency
-from backend.models import User, PipelineRun, UploadedFile
+from backend.models import PipelineRun, UploadedFile, User
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.exceptions import ClientDisconnected
 from backend.utils.uuid_utils import as_uuid
@@ -202,8 +202,8 @@ async def repair_failed_run(
     """
     try:
         run_uuid = as_uuid(run_id)
-    except (ValueError, TypeError):
-        raise HTTPException(400, "Invalid run_id format")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "Invalid run_id format") from exc
 
     # Get the failed run
     run = db.query(PipelineRun).filter(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
@@ -89,7 +89,7 @@ def get_storage_stats(
         "lifecycle":       lifecycle,
         "event_stats":     event_stats,
         "growth_trend_7d": growth_trend,
-        "generated_at":    datetime.now(timezone.utc).isoformat(),
+        "generated_at":    datetime.now(UTC).isoformat(),
     }
 
 

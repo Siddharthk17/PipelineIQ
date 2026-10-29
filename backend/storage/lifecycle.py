@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from minio import Minio
@@ -131,7 +131,7 @@ def get_bucket_storage_stats() -> dict[str, Any]:
 
             total_bytes = sum(o.size or 0 for o in objects)
             largest = max(objects, key=lambda o: o.size or 0)
-            oldest = min(objects, key=lambda o: o.last_modified or datetime.now(timezone.utc))
+            oldest = min(objects, key=lambda o: o.last_modified or datetime.now(UTC))
             top10 = sorted(objects, key=lambda o: o.size or 0, reverse=True)[:10]
 
             stats[bucket] = {

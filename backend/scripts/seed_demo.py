@@ -4,12 +4,13 @@ Run: python -m backend.scripts.seed_demo
 Or:  python scripts/seed_demo.py   (from /app inside Docker)
 """
 
-from backend.auth import get_password_hash
-from backend.models import User
-from backend.database import SessionLocal
-import sys
 import os
+import sys
 import uuid
+
+from backend.auth import get_password_hash
+from backend.database import SessionLocal
+from backend.models import User
 
 # Ensure the project root is on sys.path when run from /app
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))

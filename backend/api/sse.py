@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -16,7 +16,8 @@ from backend.db.redis_pools import get_cache_redis_async, get_pubsub_redis_async
 from backend.dependencies import get_read_db_dependency
 from backend.models import PipelineRun, PipelineStatus, User
 from backend.utils.sse_security import public_sse_payload, verify_sse_payload
-from backend.utils.uuid_utils import as_uuid as _as_uuid, validate_uuid_format as _validate_uuid_format
+from backend.utils.uuid_utils import as_uuid as _as_uuid
+from backend.utils.uuid_utils import validate_uuid_format as _validate_uuid_format
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +247,7 @@ def _status_cache_key(run_id: str) -> str:
     return f"pipeline_progress:last:{run_id}"
 
 
-async def _get_cached_event(cache_client, run_id: str) -> Optional[dict]:
+async def _get_cached_event(cache_client, run_id: str) -> dict | None:
     """Return the latest cached progress payload for this run, if present."""
     try:
         cached_payload = await cache_client.get(_status_cache_key(run_id))
@@ -273,7 +274,7 @@ async def _get_cached_event(cache_client, run_id: str) -> Optional[dict]:
     return parsed
 
 
-def _parse_message_payload(data) -> Optional[dict]:
+def _parse_message_payload(data) -> dict | None:
     """Parse Redis pub/sub message payload into a dict."""
     if isinstance(data, dict):
         return data

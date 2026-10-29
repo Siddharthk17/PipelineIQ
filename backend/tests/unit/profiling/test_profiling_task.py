@@ -119,7 +119,7 @@ def test_load_file_from_storage_missing_path_raises_value_error(
         "download",
         download_mock)
 
-    with pytest.raises(ValueError, match="File not found at path: missing-key.csv"):
+    with pytest.raises(ValueError, match="File not found at path: missing-key\.csv"):
         profiling_tasks._load_file_from_disk(file_id)
 
     exists_mock.assert_called_once_with("missing-key.csv")

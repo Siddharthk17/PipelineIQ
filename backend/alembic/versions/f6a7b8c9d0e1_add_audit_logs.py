@@ -5,9 +5,9 @@ Revises: e5f6a7b8c9d0
 Create Date: 2026-03-05
 """
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 revision = "f6a7b8c9d0e1"
 down_revision = "e5f6a7b8c9d0"

@@ -4,6 +4,8 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
+from backend.execution.duckdb_executor import DuckDBExecutor
+from backend.execution.smart_executor import SmartExecutor
 from backend.pipeline.exceptions import (
     ColumnNotFoundError,
     FilterTypeMismatchError,
@@ -22,14 +24,12 @@ from backend.pipeline.parser import (
     RenameStepConfig,
     SampleStepConfig,
     SelectStepConfig,
-    SqlStepConfig,
     SortOrder,
     SortStepConfig,
+    SqlStepConfig,
     StepType,
     UnpivotStepConfig,
 )
-from backend.execution.smart_executor import SmartExecutor
-from backend.execution.duckdb_executor import DuckDBExecutor
 from backend.pipeline.steps import StepExecutor
 
 

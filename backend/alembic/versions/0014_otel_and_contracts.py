@@ -6,9 +6,9 @@ Create Date: 2026-05-21
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMP
+from alembic import op
+from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 
 revision: str = "0014_otel_and_contracts"
 down_revision: Union[str, None] = "013ebea62143"

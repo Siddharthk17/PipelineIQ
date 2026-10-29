@@ -10,7 +10,6 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select, delete as sqla_delete
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user

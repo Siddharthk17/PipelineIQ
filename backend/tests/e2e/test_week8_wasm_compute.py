@@ -15,18 +15,18 @@ NOTE: STORAGE_TYPE=local is set in e2e/conftest.py before any imports.
 """
 
 import hashlib
-import json
+import inspect
+import os
 import sys
 import time
-import os
-import inspect
+from datetime import UTC
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
-from wasmtime import wat2wasm, Config, Engine, Store, Module, Linker, Trap
+from wasmtime import Engine, Linker, Module, Store, wat2wasm
 
 # Add backend to path (conftest.py already sets this, but keep for standalone runs)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -290,7 +290,7 @@ class TestWasmExecutorModuleCaching:
         from backend.execution.wasm_executor import WasmExecutor
         executor = WasmExecutor()
 
-        module = executor._get_or_compile(simple_add_wasm)
+        executor._get_or_compile(simple_add_wasm)
         assert expected_key in executor._module_cache
 
 
@@ -381,7 +381,7 @@ class TestWasmExecutorMultipleExports:
 
             result = executor.execute(table, MockStep(), multi_export_wasm)
             values = result.column("result").to_pylist()
-            for got, exp in zip(values, expected):
+            for got, exp in zip(values, expected, strict=False):
                 assert got == pytest.approx(exp), f"{fn_name}: expected {exp}, got {got}"
 
 
@@ -441,7 +441,7 @@ class TestParserWasmComputeStepConfig:
     """E2E: Parser correctly handles wasm_compute step type."""
 
     def test_parses_valid_wasm_compute_step(self):
-        from backend.pipeline.parser import PipelineParser, StepType, WasmComputeStepConfig
+        from backend.pipeline.parser import PipelineParser, WasmComputeStepConfig
 
         yaml_str = """
 pipeline:
@@ -566,9 +566,9 @@ class TestStepExecutorWasmComputeDispatch:
         assert StepType.WASM_COMPUTE in executor._dispatch
 
     def test_execute_wasm_compute_produces_correct_output(self, simple_add_wasm):
-        from backend.pipeline.steps import StepExecutor
         from backend.pipeline.lineage import LineageRecorder
-        from backend.pipeline.parser import WasmComputeStepConfig, StepType
+        from backend.pipeline.parser import StepType, WasmComputeStepConfig
+        from backend.pipeline.steps import StepExecutor
 
         table = pa.table({"a": [1.0, 2.0, 3.0], "b": [10.0, 20.0, 30.0]})
         table_registry = {"load_data": table}
@@ -603,9 +603,9 @@ class TestStepExecutorWasmComputeDispatch:
         assert sums[2] == pytest.approx(33.0)
 
     def test_execute_wasm_compute_raises_on_missing_module(self):
-        from backend.pipeline.steps import StepExecutor
         from backend.pipeline.lineage import LineageRecorder
-        from backend.pipeline.parser import WasmComputeStepConfig, StepType
+        from backend.pipeline.parser import StepType, WasmComputeStepConfig
+        from backend.pipeline.steps import StepExecutor
 
         table = pa.table({"a": [1.0]})
         table_registry = {"load_data": table}
@@ -726,7 +726,7 @@ class TestSmartExecutorWasmComputeRouting:
 
     def test_wasm_compute_routed_to_pandas_executor(self, simple_add_wasm):
         from backend.execution.smart_executor import SmartExecutor
-        from backend.pipeline.parser import WasmComputeStepConfig, StepType
+        from backend.pipeline.parser import StepType, WasmComputeStepConfig
 
         table = pa.table({"a": [1.0], "b": [2.0]})
         table_registry = {"load_data": table}
@@ -759,13 +759,15 @@ class TestWasmApiEndpoints:
 
     def _get_auth_headers(self):
         """Get auth headers for API tests."""
-        from backend.auth import create_access_token
         import uuid
+
+        from backend.auth import create_access_token
         token = create_access_token(data={"sub": str(uuid.uuid4()), "role": "admin"})
         return {"Authorization": f"Bearer {token}"}
 
     def test_validate_endpoint_accepts_valid_wasm(self, simple_add_wasm):
         from fastapi.testclient import TestClient
+
         from backend.main import app
 
         client = TestClient(app)
@@ -785,6 +787,7 @@ class TestWasmApiEndpoints:
 
     def test_validate_endpoint_rejects_invalid_bytes(self, invalid_wasm_bytes):
         from fastapi.testclient import TestClient
+
         from backend.main import app
 
         client = TestClient(app)
@@ -800,6 +803,7 @@ class TestWasmApiEndpoints:
 
     def test_validate_endpoint_rejects_wasi_imports(self, wasi_import_wasm):
         from fastapi.testclient import TestClient
+
         from backend.main import app
 
         client = TestClient(app)
@@ -816,6 +820,7 @@ class TestWasmApiEndpoints:
 
     def test_upload_endpoint_requires_name(self, simple_add_wasm):
         from fastapi.testclient import TestClient
+
         from backend.main import app
 
         client = TestClient(app)
@@ -828,6 +833,7 @@ class TestWasmApiEndpoints:
 
     def test_upload_endpoint_rejects_short_name(self, simple_add_wasm):
         from fastapi.testclient import TestClient
+
         from backend.main import app
 
         client = TestClient(app)
@@ -840,6 +846,7 @@ class TestWasmApiEndpoints:
 
     def test_list_endpoint_returns_array(self):
         from fastapi.testclient import TestClient
+
         from backend.main import app
 
         client = TestClient(app)
@@ -869,8 +876,9 @@ class TestPipelineTasksWasmLoading:
         assert result == {}
 
     def test_load_wasm_modules_queries_db_correctly(self, simple_add_wasm):
-        from backend.tasks.pipeline_tasks import _load_wasm_modules
         import uuid
+
+        from backend.tasks.pipeline_tasks import _load_wasm_modules
 
         mock_db = MagicMock()
         mock_module = MagicMock()
@@ -885,8 +893,10 @@ class TestPipelineTasksWasmLoading:
         mock_response.read.return_value = simple_add_wasm
         mock_minio.get_object.return_value = mock_response
 
-        with patch("backend.db.minio_client.get_minio_client", return_value=mock_minio):
-            with patch("backend.tasks.pipeline_tasks.settings") as mock_settings:
+        with (
+            patch("backend.db.minio_client.get_minio_client", return_value=mock_minio),
+            patch("backend.tasks.pipeline_tasks.settings") as mock_settings,
+        ):
                 mock_settings.WASM_BUCKET = "test-bucket"
                 result = _load_wasm_modules(mock_db, {str(mock_module.id)})
 
@@ -956,8 +966,9 @@ class TestWasmModuleSchemas:
         assert export.result == "f64"
 
     def test_wasm_module_upload_response_schema(self):
-        from backend.schemas import WasmModuleUploadResponse, WasmModuleExport
-        from datetime import datetime, timezone
+        from datetime import datetime
+
+        from backend.schemas import WasmModuleExport, WasmModuleUploadResponse
 
         response = WasmModuleUploadResponse(
             id="test-id",
@@ -969,14 +980,14 @@ class TestWasmModuleSchemas:
             imports=[],
             fuel_budget=10_000_000,
             is_active=True,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
         )
         assert response.name == "test_module"
         assert response.fuel_budget == 10_000_000
         assert len(response.exports) == 1
 
     def test_wasm_module_validate_response_schema(self):
-        from backend.schemas import WasmModuleValidateResponse, WasmModuleExport
+        from backend.schemas import WasmModuleExport, WasmModuleValidateResponse
 
         response = WasmModuleValidateResponse(
             is_valid=True,
@@ -1109,18 +1120,21 @@ class TestFullPipelineWasmCompute:
     @pytest.mark.skip(reason="Requires Redis for ArrowDataBus; infrastructure test covered by unit tests")
     def test_full_pipeline_load_filter_wasm_compute_save(self, simple_add_wasm):
         """Execute a complete pipeline: load → filter → wasm_compute → save."""
-        import tempfile
         import uuid
-        import pandas as pd
-        import shutil
-        from backend.config import settings
 
-        from backend.pipeline.runner import PipelineRunner
+        import pandas as pd
+
+        from backend.config import settings
         from backend.pipeline.parser import (
+            FilterOperator,
+            FilterStepConfig,
+            LoadStepConfig,
             PipelineConfig,
-            LoadStepConfig, FilterStepConfig, WasmComputeStepConfig,
-            SaveStepConfig, StepType, FilterOperator
+            SaveStepConfig,
+            StepType,
+            WasmComputeStepConfig,
         )
+        from backend.pipeline.runner import PipelineRunner
 
         # Create test CSV in UPLOAD_DIR so LocalStorageProvider can find it
         upload_dir = settings.UPLOAD_DIR

@@ -9,8 +9,8 @@ Task idempotency: if the same run_id is submitted twice, the task
 checks the current status and only proceeds if PENDING.
 """
 
+import contextlib
 import logging
-from typing import Dict
 
 import orjson
 from redis.exceptions import RedisError
@@ -19,6 +19,8 @@ from backend.celery_app import celery_app
 from backend.config import settings
 from backend.database import SessionLocal
 from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
+from backend.execution.healing_agent import attempt_heal
+from backend.execution.healing_classifier import get_healing_scenario, is_healable
 from backend.models import (
     ContractViolationRecord,
     HealingAttempt,
@@ -36,8 +38,6 @@ from backend.models import (
     WasmModule,
 )
 from backend.pipeline.cache import get_parsed_pipeline
-from backend.execution.healing_agent import attempt_heal
-from backend.execution.healing_classifier import get_healing_scenario, is_healable
 from backend.pipeline.runner import (
     PipelineRunner,
     ProgressCallback,
@@ -162,7 +162,7 @@ def check_and_enforce_contract(
         summary: RunSummary from PipelineRunner.execute()
     """
     from backend.contracts import build_breach_report, validate_against_contract
-    from backend.models import ContractSeverity, PipelineContract
+    from backend.models import PipelineContract
 
     try:
         active_contract = (
@@ -251,7 +251,7 @@ def check_and_enforce_contract(
     max_retries=0,
     acks_late=True,
 )
-def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
+def execute_pipeline_task(self, run_id: str) -> dict[str, str]:
     """Execute a pipeline run asynchronously.
 
     This task is idempotent: if the run_id already has a non-PENDING
@@ -285,9 +285,6 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
         _mark_running(db, pipeline_run)
         summary = _execute_with_autonomous_healing(db, pipeline_run)
         _persist_results(db, pipeline_run, summary)
-
-        return {"run_id": run_id, "status": pipeline_run.status.value}
-
     except Exception as exc:
         logger.error(
             "Unexpected error executing pipeline %s: %s",
@@ -304,6 +301,8 @@ def execute_pipeline_task(self, run_id: str) -> Dict[str, str]:
             safe_error,
         )
         raise
+    else:
+        return {"run_id": run_id, "status": pipeline_run.status.value}
     finally:
         try:
             from backend.execution.arrow_bus import get_arrow_bus
@@ -368,14 +367,14 @@ def _mark_failed(db, run_id: str, error_message: str) -> None:
                     "error_message": safe_error,
                 },
             )
-    except Exception as exc:
-        logger.error("Failed to mark pipeline %s as FAILED: %s", run_id, exc)
+    except Exception:
+        logger.exception("Failed to mark pipeline %s as FAILED", run_id)
         db.rollback()
 
 
 def _load_wasm_modules(
     db, wasm_ids: set[str]
-) -> Dict[str, bytes]:
+) -> dict[str, bytes]:
     """Load Wasm module binaries from MinIO/S3 storage.
 
     Returns a dict mapping wasm_file_id to raw .wasm binary bytes.
@@ -384,15 +383,14 @@ def _load_wasm_modules(
     if not wasm_ids:
         return {}
 
-    from backend.utils.uuid_utils import as_uuid
     from fastapi import HTTPException
+
+    from backend.utils.uuid_utils import as_uuid
 
     uuid_ids = []
     for wid in wasm_ids:
-        try:
+        with contextlib.suppress(ValueError, AttributeError, HTTPException):
             uuid_ids.append(as_uuid(wid))
-        except (ValueError, AttributeError, HTTPException):
-            pass
 
     if not uuid_ids:
         return {}
@@ -407,7 +405,7 @@ def _load_wasm_modules(
 
     from backend.repositories.wasm import load_wasm_bytes_sync
 
-    wasm_modules: Dict[str, bytes] = {}
+    wasm_modules: dict[str, bytes] = {}
 
     for module in modules:
         try:
@@ -419,11 +417,10 @@ def _load_wasm_modules(
                 module.id,
                 len(wasm_bytes),
             )
-        except Exception as exc:
-            logger.error(
-                "Failed to load Wasm module %s from storage: %s",
+        except Exception:
+            logger.exception(
+                "Failed to load Wasm module %s from storage",
                 module.name,
-                exc,
             )
 
     return wasm_modules
@@ -448,10 +445,8 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
 
         uuid_ids = []
         for fid in referenced_file_ids:
-            try:
+            with contextlib.suppress(ValueError, AttributeError):
                 uuid_ids.append(as_uuid(fid))
-            except (ValueError, AttributeError):
-                pass
         uploaded_files = (
             db.query(UploadedFile).filter(UploadedFile.id.in_(uuid_ids)).all()
             if uuid_ids
@@ -768,7 +763,7 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     the global catalog does not change the run status or prevent the
     pipeline from succeeding. Only the db.commit() failure is fatal.
     """
-    from backend.metrics import PIPELINE_RUNS_TOTAL, PIPELINE_DURATION_SECONDS
+    from backend.metrics import PIPELINE_DURATION_SECONDS, PIPELINE_RUNS_TOTAL
 
     healed_run = (
         pipeline_run.status == PipelineStatus.HEALED
@@ -790,9 +785,7 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             break
 
     if summary.status == RunnerPipelineStatus.COMPLETED:
-        if has_contract_violations and healed_run:
-            pipeline_run.status = PipelineStatus.CONTRACT_VIOLATION
-        elif has_contract_violations:
+        if (has_contract_violations and healed_run) or has_contract_violations:
             pipeline_run.status = PipelineStatus.CONTRACT_VIOLATION
         elif healed_run:
             pipeline_run.status = PipelineStatus.HEALED
@@ -898,8 +891,8 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             lineage_graph=summary.lineage.graph,
             owner_id=pipeline_run.user_id,
         )
-    except Exception as exc:
-        logger.error("Catalog registration failed for run %s: %s", pipeline_run.id, exc)
+    except Exception:
+        logger.exception("Catalog registration failed for run %s", pipeline_run.id)
 
     db.commit()
 
@@ -921,11 +914,10 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             error_message=pipeline_run.error_message or "",
             user_id=str(pipeline_run.user_id) if pipeline_run.user_id else "",
         )
-    except Exception as exc:
-        logger.error(
-            "Failed to queue notification task for run %s: %s",
-            pipeline_run.id,
-            exc)
+    except Exception:
+        logger.exception(
+            "Failed to queue notification task for run %s",
+            pipeline_run.id)
 
     try:
         from backend.tasks.webhook_tasks import deliver_webhooks_task
@@ -945,9 +937,9 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             rows_processed=summary.total_rows_processed or 0,
             user_id=str(pipeline_run.user_id) if pipeline_run.user_id else "",
         )
-    except Exception as exc:
-        logger.error(
-            "Failed to queue webhook task for run %s: %s", pipeline_run.id, exc
+    except Exception:
+        logger.exception(
+            "Failed to queue webhook task for run %s", pipeline_run.id
         )
 
 

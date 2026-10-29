@@ -4,11 +4,11 @@ Runs on the 'gemini' queue with concurrency=1 and rate_limit='50/m'.
 This ensures we never exceed Gemini's free tier limits.
 """
 import hashlib
-import orjson
 import random
 import time
 from typing import Any
 
+import orjson
 import structlog
 from celery.utils.log import get_task_logger
 
@@ -240,7 +240,6 @@ def call_gemini_task(
             actual_tokens=actual_tokens,
             response_length=len(result_text),
         )
-        return result_text
 
     except Exception as e:
         if budget_reserved:
@@ -277,7 +276,7 @@ def call_gemini_task(
                 max_retries=self.max_retries,
                 retry_in_seconds=backoff,
             )
-            raise self.retry(exc=e, countdown=backoff)
+            raise self.retry(exc=e, countdown=backoff) from e
 
         if _is_transient_server_error(error_str):
             backoff = _compute_retry_delay(self.request.retries)
@@ -288,7 +287,7 @@ def call_gemini_task(
                 retry_in_seconds=backoff,
                 error=error_str[:200],
             )
-            raise self.retry(exc=e, countdown=backoff)
+            raise self.retry(exc=e, countdown=backoff) from e
 
         # Non-retryable client error: raise a real exception so Celery marks
         # the task as FAILED instead of returning a poisoned sentinel.
@@ -298,6 +297,8 @@ def call_gemini_task(
             meta={"error": "gemini_client_error", "reason": error_str[:500]},
         )
         raise GeminiClientError(f"Gemini AI service error: {error_str[:500]}") from e
+    else:
+        return result_text
     finally:
         structlog.contextvars.clear_contextvars()
 
@@ -380,7 +381,6 @@ def generate_pipeline_description_task(
         if result_text:
             redis.setex(response_cache_key, RESPONSE_CACHE_TTL, result_text)
             redis.setex(cache_key, RESPONSE_CACHE_TTL * 24, result_text)
-        return result_text
 
     except Exception as exc:
         if budget_reserved:
@@ -393,8 +393,10 @@ def generate_pipeline_description_task(
                 retry_in_seconds=backoff,
                 error=error_str[:200],
             )
-            raise self.retry(exc=exc, countdown=backoff)
+            raise self.retry(exc=exc, countdown=backoff) from exc
         slog.warning("pipeline_description_failed", error=error_str[:200])
         return ""
+    else:
+        return result_text
     finally:
         structlog.contextvars.clear_contextvars()

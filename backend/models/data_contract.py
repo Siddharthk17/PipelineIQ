@@ -2,18 +2,19 @@
 
 from datetime import datetime
 from enum import Enum as PyEnum
-from typing import Optional
 
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Enum as SQLEnum,
     ForeignKey,
     Integer,
     String,
     Text,
     Uuid,
     func,
+)
+from sqlalchemy import (
+    Enum as SQLEnum,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -52,7 +53,7 @@ class PipelineContract(Base):
         String(255), nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     yaml_content: Mapped[str] = mapped_column(Text, nullable=False)
-    output_schema: Mapped[Optional[dict]] = mapped_column(PgJSONB, nullable=True)
+    output_schema: Mapped[dict | None] = mapped_column(PgJSONB, nullable=True)
     severity: Mapped[ContractSeverity] = mapped_column(
         SQLEnum(ContractSeverity, name="contractseverity",
                 values_callable=_enum_values, validate_strings=True),

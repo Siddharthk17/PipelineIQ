@@ -15,7 +15,7 @@ import inspect
 import time
 
 import pytest
-from wasmtime import Config, Engine, Store, Module, Linker, Trap, wat2wasm
+from wasmtime import Config, Engine, Linker, Module, Store, Trap, wat2wasm
 
 
 class TestWasmSandboxIsolation:
@@ -131,6 +131,7 @@ class TestWasmSandboxIsolation:
     def test_wasm_executor_only_accepts_f64_inputs(self):
         """WasmExecutor converts input columns to float64; string columns produce None."""
         import pyarrow as pa
+
         from backend.execution.wasm_executor import WasmExecutor
 
         wasm_bytes = wat2wasm("""

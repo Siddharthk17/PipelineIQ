@@ -1,14 +1,15 @@
 """Unit tests for the data profiling engine."""
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
+
 from backend.profiling.analyzer import (
-    profile_dataframe,
-    infer_semantic_type,
-    detect_semantic_flags,
     compute_completeness,
     compute_histogram,
+    detect_semantic_flags,
+    infer_semantic_type,
+    profile_dataframe,
 )
 
 

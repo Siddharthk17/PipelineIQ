@@ -5,6 +5,7 @@ for tens of seconds when the database is unreachable. Engines must carry
 a bounded connect timeout.
 """
 
+import contextlib
 from unittest.mock import patch
 
 import backend.database as database_module
@@ -19,12 +20,9 @@ def test_postgres_engine_has_bounded_connect_timeout():
 
     with patch.object(
         database_module, "create_engine", side_effect=fake_create_engine
-    ):
-        try:
-            database_module._build_engine(
-                "postgresql://u:p@dbhost:5432/db")
-        except RuntimeError:
-            pass
+    ), contextlib.suppress(RuntimeError):
+        database_module._build_engine(
+            "postgresql://u:p@dbhost:5432/db")
     connect_args = seen.get("connect_args", {})
     assert "connect_timeout" in connect_args, connect_args
     assert 0 < int(connect_args["connect_timeout"]) <= 10

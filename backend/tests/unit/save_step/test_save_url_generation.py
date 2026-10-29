@@ -1,5 +1,5 @@
 """Tests for download URL generation and refresh."""
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 

@@ -5,7 +5,7 @@ another user's assets. Admins keep the global view.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from backend.models import AssetRelationship, DataAsset, User
 
@@ -35,7 +35,7 @@ def _seed(auth_client, test_db, tag):
     user_a.role = "viewer"
     user_b.role = "viewer"
     test_db.commit()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     a_file = DataAsset(
         asset_type="file", name=f"a_secret_{tag}.csv", namespace="files",
         owner_id=user_a.id, last_seen_at=now)

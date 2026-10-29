@@ -59,7 +59,6 @@ class TestArrowIpcSerialization:
         assert ipc_bytes[:4] == b"\xff\xff\xff\xff", "IPC stream must start with 0xFFFFFFFF"
 
     def test_ipc_smaller_than_csv(self, table_large):
-        import io
         from backend.execution.arrow_bus import ArrowDataBus
 
         ipc_bytes = ArrowDataBus._table_to_bytes(table_large)
@@ -69,7 +68,7 @@ class TestArrowIpcSerialization:
 
 class TestArrowBusHotTier:
     def test_small_table_routes_to_hot_tier(self, table_small):
-        from backend.execution.arrow_bus import ArrowDataBus, REDIS_THRESHOLD
+        from backend.execution.arrow_bus import REDIS_THRESHOLD, ArrowDataBus
 
         mock_redis = MagicMock()
         bus = ArrowDataBus.__new__(ArrowDataBus)
@@ -191,6 +190,7 @@ class TestCleanupRun:
 class TestTierStats:
     def test_get_tier_stats_returns_hot_warm_cold(self):
         from pathlib import Path
+
         from backend.execution.arrow_bus import ArrowDataBus
 
         mock_redis = MagicMock()
@@ -215,8 +215,8 @@ class TestLifecycleIntegration:
     def test_lifecycle_module_imports(self):
         from backend.storage.lifecycle import (
             apply_all_lifecycle_policies,
-            get_lifecycle_policies,
             get_bucket_storage_stats,
+            get_lifecycle_policies,
         )
         assert callable(apply_all_lifecycle_policies)
         assert callable(get_lifecycle_policies)
@@ -232,6 +232,7 @@ class TestLifecycleIntegration:
 
     def test_apply_policies_handles_all_buckets(self):
         import inspect
+
         from backend.storage import lifecycle as lc_module
         source = inspect.getsource(lc_module.apply_all_lifecycle_policies)
         for bucket in ["pipelineiq-outputs", "pipelineiq-spills",

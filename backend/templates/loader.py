@@ -68,7 +68,7 @@ def fork_template(
     Returns:
         The forked pipeline YAML with all placeholders replaced.
     """
-    pipeline_yaml, meta = get_pipeline_yaml_from_template(template_id)
+    pipeline_yaml, _meta = get_pipeline_yaml_from_template(template_id)
 
     for placeholder, actual_id in file_mappings.items():
         pipeline_yaml = pipeline_yaml.replace(
@@ -85,7 +85,7 @@ def fork_template(
     remaining = re.findall(r'\{\{(\w+)\}\}', pipeline_yaml)
     if remaining:
         raise ValueError(
-            "Unfilled template placeholders remain: %s. "
-            "Provide file_mappings for these placeholders." % remaining)
+            f"Unfilled template placeholders remain: {remaining}. "
+            "Provide file_mappings for these placeholders.")
 
     return pipeline_yaml

@@ -47,7 +47,7 @@ def test_connection_failure_is_not_healable():
 
 
 def test_file_not_found_is_not_healable():
-    assert is_healable(IOError("file not found")) is False
+    assert is_healable(OSError("file not found")) is False
 
 
 def test_syntax_error_is_not_healable():

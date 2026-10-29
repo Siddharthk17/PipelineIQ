@@ -43,8 +43,9 @@ def _upload(auth_client, headers, sales_csv_bytes):
 
 def _run_named(auth_client, headers, name, file_id, monkeypatch,
              expect=202):
-    import backend.api.pipelines as pipelines_mod
     from types import SimpleNamespace
+
+    import backend.api.pipelines as pipelines_mod
 
     monkeypatch.setattr(
         pipelines_mod.execute_pipeline_task,

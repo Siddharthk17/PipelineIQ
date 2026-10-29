@@ -1,7 +1,6 @@
 """Contract violation record ORM model — persistent breach tracking."""
 
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import (
     DateTime,
@@ -43,8 +42,8 @@ class ContractViolationRecord(Base):
     rule: Mapped[str] = mapped_column(String(50), nullable=False)
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    actual: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    expected: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    actual: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expected: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

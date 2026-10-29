@@ -6,7 +6,6 @@
 from backend.pipeline.planner import generate_execution_plan
 from backend.tests.conftest import upload_file
 
-
 SIMPLE_YAML_TEMPLATE = """pipeline:
   name: test_plan
   steps:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import jellyfish
 
-
 RENAME_SIMILARITY_THRESHOLD = 0.85
 
 

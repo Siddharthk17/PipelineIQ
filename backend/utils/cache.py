@@ -7,7 +7,7 @@ Used to cache expensive lineage computations and stats.
 import logging
 import os
 import time
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import orjson
@@ -45,9 +45,7 @@ def _should_use_redis_cache() -> bool:
 
     parsed = urlparse(settings.REDIS_CACHE_URL or "")
     host = (parsed.hostname or "").lower()
-    if host in _DOCKER_SERVICE_HOSTS and not _running_in_docker():
-        return False
-    return True
+    return not (host in _DOCKER_SERVICE_HOSTS and not _running_in_docker())
 
 
 def _get_client() -> redis.Redis:
@@ -55,7 +53,7 @@ def _get_client() -> redis.Redis:
     return get_cache_redis()
 
 
-def cache_get(key: str) -> Optional[Any]:
+def cache_get(key: str) -> Any | None:
     """Get a cached value by key. Returns None on miss."""
     global _REDIS_CACHE_DISABLED, _REDIS_CACHE_DISABLED_UNTIL
     if not _should_use_redis_cache():
@@ -74,7 +72,7 @@ def cache_get(key: str) -> Optional[Any]:
     return orjson.loads(value)
 
 
-def cache_set(key: str, value: Any, ttl: Optional[int] = None) -> None:
+def cache_set(key: str, value: Any, ttl: int | None = None) -> None:
     """Set a cached value. If ttl is given (seconds), key expires after ttl."""
     global _REDIS_CACHE_DISABLED, _REDIS_CACHE_DISABLED_UNTIL
     if not _should_use_redis_cache():

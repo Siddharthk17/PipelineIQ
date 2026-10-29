@@ -4,8 +4,8 @@ Revision ID: d4e6f8a1b2c3
 Revises: c3f5e7a8b901
 Create Date: 2026-03-05
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
 revision = "d4e6f8a1b2c3"

@@ -6,7 +6,6 @@ Celery task dispatch is mocked to avoid needing a running worker.
 
 import time
 
-
 from backend.models import (
     HealingAttempt,
     HealingAttemptStatus,

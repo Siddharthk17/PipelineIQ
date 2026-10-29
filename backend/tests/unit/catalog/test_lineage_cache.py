@@ -1,11 +1,8 @@
 """Tests for per-run lineage caching in Redis."""
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import networkx as nx
 
 from backend.repositories.catalog import (
     LINEAGE_CACHE_TTL,
-    get_cached_run_lineage,
     build_bounded_lineage_graph,
 )
 

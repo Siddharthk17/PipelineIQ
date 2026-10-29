@@ -6,17 +6,18 @@ signature pattern, returning a StepExecutionResult with timing,
 row counts, and column metadata.
 """
 
-import orjson
 import logging
 import time
-from datetime import datetime, timezone
-import pandas as pd
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any
 
+import orjson
+import pandas as pd
 import pyarrow as pa
-from backend.services.storage_service import storage_service
+
 from backend.pipeline.exceptions import (
     AggregationError,
     ColumnNotFoundError,
@@ -41,9 +42,9 @@ from backend.pipeline.parser import (
     SampleStepConfig,
     SaveStepConfig,
     SelectStepConfig,
-    SqlStepConfig,
     SortOrder,
     SortStepConfig,
+    SqlStepConfig,
     StepConfig,
     StepType,
     StreamPublishStepConfig,
@@ -51,6 +52,7 @@ from backend.pipeline.parser import (
     ValidateStepConfig,
     WasmComputeStepConfig,
 )
+from backend.services.storage_service import storage_service
 from backend.utils.time_utils import measure_ms
 
 logger = logging.getLogger(__name__)
@@ -65,11 +67,11 @@ class StepExecutionResult:
     output_table: pa.Table
     rows_in: int
     rows_out: int
-    columns_in: List[str]
-    columns_out: List[str]
+    columns_in: list[str]
+    columns_out: list[str]
     duration_ms: int
-    warnings: List[str] = field(default_factory=list)
-    contract_violations: List[dict] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    contract_violations: list[dict] = field(default_factory=list)
     trace_id: str | None = None
     span_id: str | None = None
     engine: str | None = None
@@ -89,7 +91,7 @@ class StepExecutionResult:
 
 # Maps FilterOperator → a callable that takes (pd.Series, value) →
 # pd.Series[bool]
-FILTER_OPERATIONS: Dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] = {
+FILTER_OPERATIONS: dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] = {
     FilterOperator.EQUALS: lambda s, v: s == v,
     FilterOperator.NOT_EQUALS: lambda s, v: s != v,
     FilterOperator.GREATER_THAN: lambda s, v: s > v,
@@ -108,12 +110,12 @@ FILTER_OPERATIONS: Dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] =
     FilterOperator.IS_NOT_NULL: lambda s, _: s.notna(),
 }
 
-SUPPORTED_FILE_EXTENSIONS: Dict[str, Callable[..., pd.DataFrame]] = {
+SUPPORTED_FILE_EXTENSIONS: dict[str, Callable[..., pd.DataFrame]] = {
     ".csv": pd.read_csv,
     ".json": pd.read_json,
 }
 
-TableLike = Union[pa.Table, pd.DataFrame]
+TableLike = pa.Table | pd.DataFrame
 
 
 class StepExecutor:
@@ -126,7 +128,7 @@ class StepExecutor:
     """
 
     def __init__(self) -> None:
-        self._dispatch: Dict[StepType, Callable] = {
+        self._dispatch: dict[StepType, Callable] = {
             StepType.LOAD: self.execute_load,
             StepType.FILTER: self.execute_filter,
             StepType.SELECT: self.execute_select,
@@ -148,12 +150,12 @@ class StepExecutor:
 
     def execute(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: StepConfig,
         recorder: LineageRecorder,
-        file_paths: Optional[Dict[str, str]] = None,
-        file_metadata: Optional[Dict[str, Dict[str, str]]] = None,
-        wasm_modules: Optional[Dict[str, bytes]] = None,
+        file_paths: dict[str, str] | None = None,
+        file_metadata: dict[str, dict[str, str]] | None = None,
+        wasm_modules: dict[str, bytes] | None = None,
     ) -> StepExecutionResult:
         """Dispatch step execution to the appropriate handler.
 
@@ -184,12 +186,12 @@ class StepExecutor:
 
     def execute_load(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: LoadStepConfig,
         recorder: LineageRecorder,
-        file_paths: Dict[str, str],
-        file_metadata: Dict[str, Dict[str, str]],
-        user_role: Optional[str] = None,
+        file_paths: dict[str, str],
+        file_metadata: dict[str, dict[str, str]],
+        user_role: str | None = None,
     ) -> StepExecutionResult:
         """Load a file into a DataFrame.
 
@@ -211,8 +213,8 @@ class StepExecutor:
         try:
             from backend.database import SessionLocal
             from backend.security.column_security import (
-                get_column_policies_for_file,
                 apply_column_policies,
+                get_column_policies_for_file,
             )
 
             db = SessionLocal()
@@ -233,7 +235,7 @@ class StepExecutor:
                     valid_role,
                 )
         except Exception as exc:
-            logger.error("Column policy enforcement failed: %s", exc)
+            logger.exception("Column policy enforcement failed")
             raise RuntimeError(
                 "Column security policy enforcement failed; pipeline execution stopped."
             ) from exc
@@ -304,34 +306,34 @@ class StepExecutor:
         if pd.api.types.is_numeric_dtype(series):
             try:
                 return pd.to_numeric(value)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
                 raise FilterTypeMismatchError(
                     step_name=step_name,
                     column=column,
                     column_dtype=str(series.dtype),
                     value=value,
                     operator=operator,
-                )
+                ) from exc
 
         if pd.api.types.is_datetime64_any_dtype(series):
             try:
                 coerced = pd.to_datetime(value)
                 if coerced is not None:
                     return coerced
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
                 raise FilterTypeMismatchError(
                     step_name=step_name,
                     column=column,
                     column_dtype=str(series.dtype),
                     value=value,
                     operator=operator,
-                )
+                ) from exc
 
         return value
 
     def execute_filter(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: FilterStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -347,7 +349,7 @@ class StepExecutor:
         input_table = table_registry[config.input]
         input_df = input_table.to_pandas()
         columns_in = list(input_df.columns)
-        warnings: List[str] = []
+        warnings: list[str] = []
 
         self._validate_column_exists(config.name, config.column, columns_in)
 
@@ -423,7 +425,7 @@ class StepExecutor:
 
     def execute_select(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: SelectStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -470,7 +472,7 @@ class StepExecutor:
 
     def execute_rename(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: RenameStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -522,7 +524,7 @@ class StepExecutor:
 
     def execute_join(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: JoinStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -594,7 +596,7 @@ class StepExecutor:
 
     def execute_aggregate(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: AggregateStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -644,10 +646,10 @@ class StepExecutor:
     def _build_aggregation_dict(
         self,
         config: AggregateStepConfig,
-        available_columns: List[str],
-    ) -> Dict[str, List[str]]:
+        available_columns: list[str],
+    ) -> dict[str, list[str]]:
         """Build the pandas aggregation dictionary from config."""
-        agg_dict: Dict[str, List[str]] = {}
+        agg_dict: dict[str, list[str]] = {}
         for agg in config.aggregations:
             col = agg.get("column", "")
             func = agg.get("function", "")
@@ -659,7 +661,7 @@ class StepExecutor:
         self,
         config: AggregateStepConfig,
         input_df: pd.DataFrame,
-        agg_dict: Dict[str, List[str]],
+        agg_dict: dict[str, list[str]],
     ) -> pd.DataFrame:
         """Execute the group-by aggregation and flatten column names."""
         # Ensure numeric columns for numeric aggregations
@@ -694,7 +696,7 @@ class StepExecutor:
 
     def execute_sort(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: SortStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -740,7 +742,7 @@ class StepExecutor:
 
     def execute_save(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: SaveStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -766,7 +768,7 @@ class StepExecutor:
         except ImportError:
             pass
         except Exception as exc:
-            logger.error("Failed to save step output: %s", exc)
+            logger.exception("Failed to save step output")
             raise FileReadError(
                 step_name=config.name,
                 file_path=config.filename or "output",
@@ -774,8 +776,8 @@ class StepExecutor:
             ) from exc
 
         if save_result is None:
-            import uuid as _uuid
             import io
+            import uuid as _uuid
             input_df = input_table.to_pandas()
             filename = config.filename
             ext = Path(filename).suffix.lower() or ".csv"
@@ -797,7 +799,7 @@ class StepExecutor:
                     buffer.seek(0)
                 storage_service.upload(buffer, stored_path)
             except Exception as exc:
-                logger.error("Failed to save file %s: %s", stored_path, exc)
+                logger.exception("Failed to save file %s", stored_path)
                 raise FileReadError(
                     step_name=config.name,
                     file_path=stored_path,
@@ -843,7 +845,7 @@ class StepExecutor:
 
     def execute_validate(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: ValidateStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -854,7 +856,7 @@ class StepExecutor:
         input_table = table_registry[config.input]
         input_df = input_table.to_pandas()
         columns = list(input_df.columns)
-        warnings: List[str] = []
+        warnings: list[str] = []
 
         result = run_validate(input_df, config.rules, config.name)
 
@@ -890,7 +892,7 @@ class StepExecutor:
         self,
         step_name: str,
         column: str,
-        available_columns: List[str],
+        available_columns: list[str],
     ) -> None:
         """Validate that a column exists, raising ColumnNotFoundError if not."""
         if column not in available_columns:
@@ -918,7 +920,7 @@ class StepExecutor:
 
     def execute_pivot(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: PivotStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -928,7 +930,7 @@ class StepExecutor:
         input_df = self._to_pandas_df(input_table)
         columns_in = list(input_df.columns)
 
-        all_cols = config.index + [config.columns, config.values]
+        all_cols = [*config.index, config.columns, config.values]
         for col in all_cols:
             self._validate_column_exists(config.name, col, columns_in)
 
@@ -976,7 +978,7 @@ class StepExecutor:
 
     def execute_unpivot(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: UnpivotStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -1029,7 +1031,7 @@ class StepExecutor:
 
     def execute_deduplicate(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: DeduplicateStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -1074,7 +1076,7 @@ class StepExecutor:
 
     def execute_fill_nulls(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: FillNullsStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -1142,7 +1144,7 @@ class StepExecutor:
 
     def execute_sample(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: SampleStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -1216,7 +1218,7 @@ class StepExecutor:
 
     def execute_sql(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: SqlStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -1228,10 +1230,10 @@ class StepExecutor:
 
     def execute_wasm_compute(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: WasmComputeStepConfig,
         recorder: LineageRecorder,
-        wasm_modules: Optional[Dict[str, bytes]] = None,
+        wasm_modules: dict[str, bytes] | None = None,
     ) -> StepExecutionResult:
         """Execute a WebAssembly UDF against each row of the input DataFrame.
 
@@ -1287,7 +1289,7 @@ class StepExecutor:
 
     def execute_stream_publish(
         self,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         config: StreamPublishStepConfig,
         recorder: LineageRecorder,
     ) -> StepExecutionResult:
@@ -1315,17 +1317,17 @@ class StepExecutor:
                 value = orjson.dumps({k: str(v) if not isinstance(v, (str, int, float, bool, type(None), list, dict)) else v for k, v in record.items()})
                 producer.produce(topic=config.topic, key=key, value=value)
             pending = producer.flush(timeout=10)
-            if pending > 0:
-                raise RuntimeError(
-                    f"{pending} message(s) still in queue after flush — "
-                    f"broker unreachable or backpressured"
-                )
-            logger.info(
-                "Published %d rows to topic '%s'", len(input_df), config.topic
-            )
-        except Exception as exc:
-            logger.error("stream_publish failed: %s", exc)
+        except Exception:
+            logger.exception("stream_publish failed")
             raise
+        if pending > 0:
+            raise RuntimeError(
+                f"{pending} message(s) still in queue after flush — "
+                f"broker unreachable or backpressured"
+            )
+        logger.info(
+            "Published %d rows to topic '%s'", len(input_df), config.topic
+        )
 
         recorder.record_passthrough(
             step_name=config.name,

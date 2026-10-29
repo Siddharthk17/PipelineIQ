@@ -26,7 +26,7 @@ def _ns(**kwargs):
 
 def test_sse_authorize_allows_grantee(test_db):
     from backend.api import sse as sse_mod
-    from backend.models import PipelinePermission, PermissionLevel
+    from backend.models import PermissionLevel, PipelinePermission
 
     owner_id = uuid.uuid4()
     viewer_id = uuid.uuid4()
@@ -61,8 +61,9 @@ def test_sse_authorize_allows_grantee(test_db):
 def test_lineage_export_admin_bypass_and_uuid_shape(
     auth_client, test_db, monkeypatch, sales_csv_bytes
 ):
-    import backend.api.pipelines as pipelines_mod
     from types import SimpleNamespace
+
+    import backend.api.pipelines as pipelines_mod
 
     monkeypatch.setattr(
         pipelines_mod.execute_pipeline_task, "delay",
@@ -126,7 +127,7 @@ def test_audit_logs_garbage_user_id(auth_client, test_db):
     from backend.models import User
 
     suffix = uuid.uuid4().hex[:8]
-    headers = _register_login(auth_client, f"au_{suffix}@t.local",
+    _register_login(auth_client, f"au_{suffix}@t.local",
                               f"au_{suffix}")
     admin = test_db.query(User).filter_by(
         email=f"au_{suffix}@t.local").one()

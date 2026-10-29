@@ -5,8 +5,8 @@ from sqlalchemy import (
     ForeignKey,
     String,
     Text,
-    Uuid,
     UniqueConstraint,
+    Uuid,
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY

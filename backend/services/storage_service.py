@@ -4,15 +4,12 @@ import shutil
 import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import BinaryIO
 
 import boto3
 from botocore.exceptions import ClientError
+
 from backend.config import settings
-
-
-class StorageProvider(ABC):
-    """Abstract base class for file storage providers."""
 
 
 def _validate_storage_key(key: str) -> str:
@@ -30,6 +27,13 @@ def _validate_storage_key(key: str) -> str:
     if any(part in ("", ".", "..") for part in normalized.split("/")):
         raise ValueError(f"Invalid storage key: {key!r}")
     return normalized
+
+
+class StorageProvider(ABC):
+    """Abstract base class for file storage providers."""
+
+
+
 
     @abstractmethod
     def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
@@ -62,13 +66,13 @@ def _validate_storage_key(key: str) -> str:
     @abstractmethod
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         """Return a presigned URL for direct upload to storage. Return None if not supported."""
 
     @abstractmethod
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         """Return a presigned URL for direct download from storage. Return None if not supported."""
 
 
@@ -138,12 +142,12 @@ class LocalStorageProvider(StorageProvider):
 
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         return None
 
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         return None
 
 
@@ -171,7 +175,7 @@ class S3StorageProvider(StorageProvider):
             max_size: int) -> int:
         key = _validate_storage_key(destination_path)
         total_read = 0
-        temp_file_path: Optional[str] = None
+        temp_file_path: str | None = None
 
         try:
             with tempfile.NamedTemporaryFile(delete=False) as temp_file:
@@ -211,10 +215,11 @@ class S3StorageProvider(StorageProvider):
         key = _validate_storage_key(path)
         try:
             self.s3.head_object(Bucket=self.bucket, Key=key)
-            return True
         except ClientError:
             return False
 
+        else:
+            return True
     def get_size(self, path: str) -> int:
         key = _validate_storage_key(path)
         response = self.s3.head_object(Bucket=self.bucket, Key=key)
@@ -222,7 +227,7 @@ class S3StorageProvider(StorageProvider):
 
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         key = _validate_storage_key(destination_path)
         try:
             return self.s3.generate_presigned_url(
@@ -235,7 +240,7 @@ class S3StorageProvider(StorageProvider):
 
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         key = _validate_storage_key(source_path)
         try:
             return self.s3.generate_presigned_url(
@@ -280,13 +285,13 @@ class StorageService:
 
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         return self.provider.get_presigned_upload_url(
             destination_path, expiration)
 
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         return self.provider.get_presigned_download_url(
             source_path, expiration)
 

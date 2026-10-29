@@ -8,12 +8,10 @@ setting is missing or invalid, preventing runtime configuration errors.
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 import structlog
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 WEAK_SECRET_VALUES = frozenset(
@@ -82,7 +80,7 @@ class Settings(BaseSettings):
     WORKER_MAX_ROWS_TO_SCAN: int = 10_000_000
 
     API_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: List[str] = [
+    CORS_ORIGINS: list[str] = [
         "http://localhost",
         "http://localhost:80",
         "http://localhost:3000",
@@ -123,7 +121,7 @@ class Settings(BaseSettings):
     S3_ACCESS_KEY: str = ""
     S3_SECRET_KEY: str = ""
     S3_BUCKET: str = "pipelineiq-outputs"  # Dedicated bucket for pipeline outputs
-    S3_ENDPOINT_URL: Optional[str] = None  # Required for MinIO
+    S3_ENDPOINT_URL: str | None = None  # Required for MinIO
     WASM_BUCKET: str = "pipelineiq-wasm"
 
     # Sentry
@@ -260,16 +258,10 @@ def _configure_logging() -> None:
 
     if settings.ENVIRONMENT == "production":
         # JSON output for production — parseable by Grafana Loki, Datadog, etc.
-        processors = shared_processors + [
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.JSONRenderer(),
-        ]
+        processors = [*shared_processors, structlog.processors.StackInfoRenderer(), structlog.processors.format_exc_info, structlog.processors.JSONRenderer()]
     else:
         # Human-readable console output for development
-        processors = shared_processors + [
-            structlog.dev.ConsoleRenderer(colors=True),
-        ]
+        processors = [*shared_processors, structlog.dev.ConsoleRenderer(colors=True)]
 
     structlog.configure(
         processors=processors,

@@ -4,15 +4,14 @@ These tests are gated behind RUN_INTEGRATION_TESTS=1 and avoid live Gemini calls
 by monkeypatching generation helpers.
 """
 
-from types import SimpleNamespace
 import os
+from types import SimpleNamespace
 
 import pytest
 
 from backend.models import PipelineRun, PipelineStatus
 from backend.tests.conftest import build_simple_pipeline_yaml, upload_file
 from backend.utils.uuid_utils import as_uuid
-
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION_TESTS") != "1",

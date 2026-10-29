@@ -73,7 +73,7 @@ def _get_gemini_client() -> genai.Client:
             "Set it in .env and restart the gemini worker."
         )
 
-    if _GEMINI_CLIENT is None or _GEMINI_CLIENT_API_KEY != api_key:
+    if _GEMINI_CLIENT is None or api_key != _GEMINI_CLIENT_API_KEY:
         _GEMINI_CLIENT = genai.Client(api_key=api_key)
         _GEMINI_CLIENT_API_KEY = api_key
     return _GEMINI_CLIENT

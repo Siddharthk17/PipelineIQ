@@ -5,9 +5,10 @@ This separation makes the core logic fully unit testable.
 """
 
 import math
-import pandas as pd
-import numpy as np
 from typing import Any
+
+import numpy as np
+import pandas as pd
 
 
 def infer_semantic_type(series: pd.Series, column_name: str) -> str:
@@ -104,10 +105,11 @@ def infer_semantic_type(series: pd.Series, column_name: str) -> str:
         ):
             try:
                 pd.to_datetime(sample.head(50), format="mixed", errors="raise")
-                return "datetime"
             except (ValueError, TypeError):
                 pass
 
+            else:
+                return "datetime"
         uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         if sample.str.lower().str.match(uuid_pattern).mean() > 0.5 or any(
             x in name_lower

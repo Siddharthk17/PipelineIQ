@@ -8,11 +8,11 @@ Design principles:
 3. Upsert semantics: assets registered multiple times update last_seen_at
 4. Bulk upsert: register_run_assets() uses INSERT ... ON CONFLICT
 """
+import contextlib
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import networkx as nx
 import orjson
@@ -20,7 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.db.redis_pools import get_cache_redis_binary
-from backend.models import DataAsset, AssetRelationship
+from backend.models import AssetRelationship, DataAsset
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +51,10 @@ def upsert_data_asset(
     name: str,
     namespace: str,
     owner_id=None,
-    metadata: Optional[dict] = None,
+    metadata: dict | None = None,
 ) -> str:
     """Insert or update a data asset. Returns the asset UUID."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if _is_postgres(db):
         stmt = text("""
@@ -107,12 +107,12 @@ def upsert_asset_relationship(
     source_id: str,
     target_id: str,
     relation: str,
-    pipeline_name: Optional[str] = None,
-    run_id: Optional[str] = None,
+    pipeline_name: str | None = None,
+    run_id: str | None = None,
 ) -> None:
     """Insert an asset relationship edge. Duplicates allowed (different runs)."""
     if _is_postgres(db):
-        now_ts = datetime.now(timezone.utc)
+        now_ts = datetime.now(UTC)
         stmt = text("""
             INSERT INTO asset_relationships (source_id, target_id, relation, pipeline_name, run_id, created_at)
             VALUES (:source_id, :target_id, :relation, :pipeline_name, :run_id, :created_at)
@@ -143,7 +143,7 @@ def upsert_asset_relationship(
                 relation=relation,
                 pipeline_name=pipeline_name,
                 run_id=run_uuid,
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             )
             db.add(rel)
             db.flush()
@@ -195,7 +195,7 @@ def _register_graph_assets(
 
     registered = 0
 
-    pipeline_asset_id = upsert_data_asset(
+    upsert_data_asset(
         db=db,
         asset_type="pipeline",
         name=pipeline_name,
@@ -289,7 +289,7 @@ def _classify_edge(edge_data: dict) -> str:
 def get_blast_radius(
     db: Session,
     asset_name: str,
-    asset_type: Optional[str] = None,
+    asset_type: str | None = None,
     max_depth: int = MAX_CTE_DEPTH,
     owner_id=None,
     is_admin: bool = False,
@@ -340,7 +340,7 @@ def get_blast_radius(
 def _blast_radius_postgres(
     db: Session,
     asset_name: str,
-    asset_type: Optional[str],
+    asset_type: str | None,
     max_depth: int,
     owner_id=None,
     is_admin: bool = False,
@@ -437,12 +437,10 @@ def _blast_radius_postgres(
         )
         result = db.execute(sql, params)
         rows = result.fetchall()
-    except Exception as exc:
-        logger.error("Blast radius query failed for '%s': %s", asset_name, exc)
-        try:
+    except Exception:
+        logger.exception("Blast radius query failed for '%s'", asset_name)
+        with contextlib.suppress(Exception):
             db.rollback()
-        except Exception:
-            pass
         return []
     return [
         {
@@ -460,7 +458,7 @@ def _blast_radius_postgres(
 def _blast_radius_sqlite(
     db: Session,
     asset_name: str,
-    asset_type: Optional[str],
+    asset_type: str | None,
     max_depth: int,
     owner_id=None,
     is_admin: bool = False,
@@ -579,12 +577,10 @@ def get_upstream_lineage(
         )
         result = db.execute(sql, params)
         return [dict(row._mapping) for row in result.fetchall()]
-    except Exception as exc:
-        logger.error("Upstream lineage query failed for '%s': %s", asset_name, exc)
-        try:
+    except Exception:
+        logger.exception("Upstream lineage query failed for '%s'", asset_name)
+        with contextlib.suppress(Exception):
             db.rollback()
-        except Exception:
-            pass
         return []
 
 
@@ -641,7 +637,7 @@ def _upstream_lineage_sqlite(
 def search_assets(
     db: Session,
     query: str,
-    asset_type: Optional[str] = None,
+    asset_type: str | None = None,
     limit: int = 20,
     owner_id=None,
     is_admin: bool = False,
@@ -663,7 +659,7 @@ def search_assets(
 def _search_assets_postgres(
     db: Session,
     query: str,
-    asset_type: Optional[str],
+    asset_type: str | None,
     limit: int,
     owner_id=None,
     is_admin: bool = False,
@@ -708,7 +704,7 @@ def _search_assets_postgres(
 def _search_assets_sqlite(
     db: Session,
     query: str,
-    asset_type: Optional[str],
+    asset_type: str | None,
     limit: int,
     owner_id=None,
     is_admin: bool = False,
@@ -797,7 +793,7 @@ def _list_orphans_sqlite(
     """SQLite orphan listing using datetime comparison."""
     from datetime import timedelta
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_inactive)
+    cutoff = datetime.now(UTC) - timedelta(days=days_inactive)
 
     results = db.query(DataAsset).filter(
         DataAsset.last_seen_at < cutoff,

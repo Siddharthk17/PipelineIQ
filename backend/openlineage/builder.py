@@ -5,8 +5,7 @@ Apache Spark, dbt, DataHub, Marquez, and OpenMetadata.
 
 Spec: https://openlineage.io/spec/1-0-5/OpenLineage.json
 """
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import networkx as nx
 
@@ -19,15 +18,15 @@ def build_openlineage_event(
     pipeline_name: str,
     status: str,
     started_at: datetime,
-    completed_at: Optional[datetime],
-    duration_ms: Optional[int],
-    output_row_count: Optional[int],
+    completed_at: datetime | None,
+    duration_ms: int | None,
+    output_row_count: int | None,
     lineage_graph: nx.DiGraph,
     file_ids: list[str],
 ) -> dict:
     """Build a complete OpenLineage RunEvent for a pipeline run."""
     event_type = _map_status_to_event_type(status)
-    event_time = (completed_at or started_at or datetime.now(timezone.utc)).isoformat()
+    event_time = (completed_at or started_at or datetime.now(UTC)).isoformat()
 
     return {
         "eventType": event_type,

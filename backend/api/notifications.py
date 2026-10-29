@@ -5,6 +5,7 @@ a test endpoint to verify webhook connectivity.
 """
 
 import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
@@ -14,11 +15,11 @@ from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import NotificationConfig, NotificationType, User
 from backend.services.audit_service import log_action
 from backend.services.notification_service import (
-    send_slack_notification,
     send_email_notification,
+    send_slack_notification,
 )
 from backend.utils.url_security import UnsafeURL, validate_public_http_url
-from backend.utils.uuid_utils import validate_uuid_format, as_uuid
+from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +82,11 @@ def create_notification_config(
     """Create a new notification channel configuration."""
     try:
         notif_type = NotificationType(body.type)
-    except ValueError:
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid notification type '{body.type}'. Must be 'slack' or 'email'.",
-        )
+        ) from exc
 
     if notif_type == NotificationType.SLACK:
         slack_url = body.config.get("slack_webhook_url")
@@ -100,7 +101,7 @@ def create_notification_config(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
-            )
+            ) from exc
     elif notif_type == NotificationType.EMAIL:
         email_to = body.config.get("email_to")
         if not email_to:
@@ -236,7 +237,7 @@ def test_notification(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
-            )
+            ) from exc
 
         success = send_slack_notification(
             webhook_url,

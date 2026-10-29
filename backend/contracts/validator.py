@@ -150,8 +150,8 @@ def _parse_contract(yaml_content: str) -> dict:
     """Parse contract YAML into a validated dict."""
     try:
         data = yaml.safe_load(yaml_content)
-    except yaml.YAMLError as exc:
-        logger.error("Failed to parse contract YAML: %s", exc)
+    except yaml.YAMLError:
+        logger.exception("Failed to parse contract YAML")
         return {}
 
     if not isinstance(data, dict):

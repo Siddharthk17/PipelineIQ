@@ -4,8 +4,6 @@ import inspect
 import json
 from unittest.mock import MagicMock
 
-import pytest
-
 
 class TestDefaultConstants:
     def test_default_partitions_is_8(self):

@@ -5,8 +5,7 @@ automatically via Celery Beat.
 """
 
 import logging
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException, Request, status

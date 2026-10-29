@@ -26,11 +26,12 @@ def db_ready() -> bool:
     try:
         conn = psycopg2.connect(DATABASE_URL, connect_timeout=3)
         conn.close()
-        return True
     except psycopg2.OperationalError:
         return False
 
 
+    else:
+        return True
 def main() -> int:
     last_error = None
     delay = RETRY_DELAY

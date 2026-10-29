@@ -118,7 +118,7 @@ def _run_pipeline_in_sandbox(*,
                     step, "input", ""), table_registry)
             input_df = input_table.to_pandas()
             missing_columns = [
-                column for column in step.mapping.keys() if column not in input_df.columns]
+                column for column in step.mapping if column not in input_df.columns]
             if missing_columns:
                 raise ValueError(
                     f"Rename step '{step.name}' references missing columns: {missing_columns}")

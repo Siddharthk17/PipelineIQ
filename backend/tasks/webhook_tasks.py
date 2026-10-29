@@ -12,13 +12,13 @@ to the same host.
 import asyncio
 import hashlib
 import hmac
-import orjson
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
+import orjson
 from celery import Task
 
 from backend.celery_app import celery_app
@@ -54,6 +54,14 @@ class WebhookTask(Task):
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECT_HOPS = 3
+
+
+def _raise_for_bad_status(response: httpx.Response) -> None:
+    """Raise for retry accounting when a webhook endpoint returns non-2xx."""
+    raise httpx.RequestError(
+        f"Webhook returned {response.status_code}: {response.text[:200]}",
+        request=response.request,
+    )
 
 
 async def _post_with_safe_redirects(
@@ -188,9 +196,9 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
                 duration_ms=duration_ms,
             )
             if success:
-                delivery.delivered_at = datetime.now(timezone.utc)
+                delivery.delivered_at = datetime.now(UTC)
             else:
-                delivery.failed_at = datetime.now(timezone.utc)
+                delivery.failed_at = datetime.now(UTC)
                 delivery.error_message = f"HTTP {resp.status_code}"
             db.add(delivery)
             db.commit()
@@ -198,12 +206,7 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
             db.close()
 
         if not success:
-            raise httpx.RequestError(
-                f"Webhook returned {resp.status_code}: {resp.text[:200]}"
-            )
-
-        return {"success": True, "status_code": resp.status_code, "duration_ms": duration_ms}
-
+            _raise_for_bad_status(resp)
     except UnsafeURL as e:
         duration_ms = int(time.time() * 1000) - start_ms
         error_str = f"Redirect target blocked: {e}"
@@ -218,7 +221,7 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
                 attempt_number=attempt_number,
                 duration_ms=duration_ms,
             )
-            delivery.failed_at = datetime.now(timezone.utc)
+            delivery.failed_at = datetime.now(UTC)
             delivery.error_message = error_str
             db.add(delivery)
             db.commit()
@@ -246,7 +249,7 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
                 attempt_number=attempt_number,
                 duration_ms=duration_ms,
             )
-            delivery.failed_at = datetime.now(timezone.utc)
+            delivery.failed_at = datetime.now(UTC)
             delivery.error_message = error_str
             db.add(delivery)
             db.commit()
@@ -260,6 +263,12 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
             error_str,
         )
         raise
+
+    return {
+        "success": True,
+        "status_code": resp.status_code,
+        "duration_ms": duration_ms,
+    }
 
 
 @celery_app.task(
@@ -278,7 +287,7 @@ def deliver_webhooks_task(
     steps_count: int = 0,
     rows_processed: int = 0,
     user_id: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Deliver webhooks for a pipeline run asynchronously.
 
     Enqueues individual deliver_webhook tasks for each active webhook
@@ -301,7 +310,7 @@ def deliver_webhooks_task(
         event_type = f"pipeline_{status.lower()}"
         payload = {
             "event": event_type,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "data": {
                 "run_id": str(run_id),
                 "pipeline_name": pipeline_name,
@@ -321,15 +330,15 @@ def deliver_webhooks_task(
                     args=[str(wh.id), payload],
                     queue="critical",
                 )
-
+    except Exception as exc:
+        logger.exception("Webhook delivery failed for run %s", run_id)
+        raise self.retry(exc=exc) from exc
+    else:
         return {
             "run_id": run_id,
             "status": "enqueued" if matched > 0 else "skipped",
             "matched_webhooks": matched,
         }
-    except Exception as exc:
-        logger.error("Webhook delivery failed for run %s: %s", run_id, exc)
-        raise self.retry(exc=exc)
 
 
 def fire_webhooks_for_event(

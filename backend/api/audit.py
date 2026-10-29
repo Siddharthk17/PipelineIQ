@@ -1,14 +1,13 @@
 """Audit log API endpoints."""
 
 import logging
-from typing import List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_user, get_current_admin
+from backend.auth import get_current_admin, get_current_user
 from backend.dependencies import get_read_db_dependency
 from backend.models import AuditLog, User
 
@@ -18,23 +17,23 @@ router = APIRouter(prefix="/audit", tags=["Audit"])
 
 class AuditLogResponse(BaseModel):
     id: str
-    user_id: Optional[str]
+    user_id: str | None
     action: str
-    resource_type: Optional[str]
-    resource_id: Optional[str]
-    details: Optional[dict]
-    ip_address: Optional[str]
+    resource_type: str | None
+    resource_id: str | None
+    details: dict | None
+    ip_address: str | None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
 
-@router.get("/logs", response_model=List[AuditLogResponse])
+@router.get("/logs", response_model=list[AuditLogResponse])
 def get_audit_logs(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
-    action: Optional[str] = None,
-    user_id: Optional[str] = None,
+    action: str | None = None,
+    user_id: str | None = None,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_admin),
 ):
@@ -66,7 +65,7 @@ def get_audit_logs(
     ]
 
 
-@router.get("/logs/mine", response_model=List[AuditLogResponse])
+@router.get("/logs/mine", response_model=list[AuditLogResponse])
 def get_my_audit_logs(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),

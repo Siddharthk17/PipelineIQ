@@ -1,7 +1,9 @@
 """Tests for pipeline template loading and forking."""
 import pytest
+
 from backend.templates.loader import (
-    get_all_templates, fork_template, get_pipeline_yaml_from_template
+    fork_template,
+    get_all_templates,
 )
 
 

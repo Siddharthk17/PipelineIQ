@@ -7,7 +7,6 @@ step-level row/duration estimation.
 
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 import yaml
 from sqlalchemy.orm import Session
@@ -22,15 +21,15 @@ class StepPlan:
     step_index: int
     step_name: str
     step_type: str
-    input_step: Optional[str]
-    input_file_id: Optional[str]
-    estimated_rows_in: Optional[int]
-    estimated_rows_out: Optional[int]
-    estimated_columns: List[str]
+    input_step: str | None
+    input_file_id: str | None
+    estimated_rows_in: int | None
+    estimated_rows_out: int | None
+    estimated_columns: list[str]
     estimated_duration_ms: int
-    warnings: List[str]
+    warnings: list[str]
     will_fail: bool
-    fail_reason: Optional[str]
+    fail_reason: str | None
 
 
 @dataclass
@@ -40,11 +39,11 @@ class ExecutionPlan:
     pipeline_name: str
     total_steps: int
     estimated_total_duration_ms: int
-    steps: List[StepPlan]
-    files_read: List[str]
-    files_written: List[str]
+    steps: list[StepPlan]
+    files_read: list[str]
+    files_written: list[str]
     estimated_rows_processed: int
-    warnings: List[str]
+    warnings: list[str]
     will_succeed: bool
 
 
@@ -69,14 +68,14 @@ def generate_execution_plan(
     if user_id is not None and not is_admin:
         files_query = files_query.filter(UploadedFile.user_id == user_id)
     uploaded_files = files_query.all()
-    file_map: Dict[str, UploadedFile] = {str(f.id): f for f in uploaded_files}
+    file_map: dict[str, UploadedFile] = {str(f.id): f for f in uploaded_files}
 
-    step_plans: List[StepPlan] = []
-    step_rows: Dict[str, int] = {}
-    step_columns: Dict[str, List[str]] = {}
-    files_read: List[str] = []
-    files_written: List[str] = []
-    warnings: List[str] = []
+    step_plans: list[StepPlan] = []
+    step_rows: dict[str, int] = {}
+    step_columns: dict[str, list[str]] = {}
+    files_read: list[str] = []
+    files_written: list[str] = []
+    warnings: list[str] = []
 
     for idx, step in enumerate(steps_raw):
         step_name = step.get("name", f"step_{idx}")
@@ -85,8 +84,8 @@ def generate_execution_plan(
         input_file_id = step.get("file_id")
         will_fail = False
         fail_reason = None
-        step_warnings: List[str] = []
-        estimated_cols: List[str] = []
+        step_warnings: list[str] = []
+        estimated_cols: list[str] = []
 
         # Estimate rows based on step type
         if step_type == "load":
@@ -177,10 +176,7 @@ def generate_execution_plan(
             value_vars = step.get("value_vars", [])
             rows_out = rows_in * max(1, len(value_vars))
             id_vars = step.get("id_vars", [])
-            estimated_cols = id_vars + [
-                step.get("var_name", "variable"),
-                step.get("value_name", "value"),
-            ]
+            estimated_cols = [*id_vars, step.get("var_name", "variable"), step.get("value_name", "value")]
         elif step_type == "deduplicate":
             rows_in = step_rows.get(input_step, 0) if input_step else 0
             rows_out = max(1, int(rows_in * 0.85))

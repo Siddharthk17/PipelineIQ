@@ -7,7 +7,6 @@ diffs between versions for change tracking.
 import difflib
 import uuid as _uuid
 from dataclasses import dataclass
-from typing import List, Optional
 
 import yaml
 from sqlalchemy.exc import IntegrityError
@@ -22,9 +21,9 @@ class StepDiff:
 
     step_name: str
     change_type: str  # "added", "removed", "modified"
-    old_config: Optional[dict]
-    new_config: Optional[dict]
-    changed_fields: List[str]
+    old_config: dict | None
+    new_config: dict | None
+    changed_fields: list[str]
 
 
 @dataclass
@@ -34,9 +33,9 @@ class PipelineDiff:
     version_a: int
     version_b: int
     pipeline_name: str
-    steps_added: List[str]
-    steps_removed: List[str]
-    steps_modified: List[StepDiff]
+    steps_added: list[str]
+    steps_removed: list[str]
+    steps_modified: list[StepDiff]
     has_changes: bool
     unified_diff: str
     change_summary: str
@@ -123,7 +122,7 @@ def diff_pipelines(
 def save_version(
     pipeline_name: str,
     yaml_config: str,
-    run_id: Optional[str],
+    run_id: str | None,
     db: Session,
     *,
     max_retries: int = 5,
@@ -139,7 +138,7 @@ def save_version(
 
     normalized_run_id = _uuid.UUID(
         run_id) if isinstance(run_id, str) else run_id
-    last_error: Optional[Exception] = None
+    last_error: Exception | None = None
 
     for attempt in range(max_retries):
         latest = (

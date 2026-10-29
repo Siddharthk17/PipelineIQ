@@ -11,7 +11,7 @@ import os
 os.environ.setdefault("ENVIRONMENT", "test")
 
 import warnings
-from typing import Generator
+from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 warnings.filterwarnings(
@@ -21,20 +21,22 @@ warnings.filterwarnings(
     module=r"starlette\.formparsers",
 )
 
+import contextlib
+
 import pandas as pd
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
+from limits.storage import MemoryStorage
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import backend.models  # noqa: F401 (model registration side effect)
 from backend.database import Base, get_db, get_read_db, get_write_db
 from backend.main import app
-import backend.models  # noqa: F401 — ensure ORM models are registered with Base.metadata
 from backend.pipeline.lineage import LineageRecorder
 from backend.utils.rate_limiter import limiter
-from limits.storage import MemoryStorage
 
 # Tests run without Redis. The limiter was created at import time with
 # settings.REDIS_CACHE_URL, so swap its storage (and the strategy's
@@ -55,11 +57,10 @@ TEST_DATABASE_URL = "sqlite:///:memory:"
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
     """Reset rate limiter storage between ALL tests."""
-    try:
+    # If the storage backend (e.g. Redis) is unreachable in a particular
+    # test run, don't fail the test setup — the limiter just won't reset.
+    with contextlib.suppress(Exception):
         limiter.reset()
-    except Exception:
-        # If the storage backend (e.g. Redis) is unreachable in a particular
-        # test run, don't fail the test setup — the limiter just won't reset.
         pass
     yield
 
@@ -108,9 +109,10 @@ def client(test_db: Session, tmp_path) -> TestClient:
     app.dependency_overrides[get_write_db] = override_get_db
 
     # Override auth dependencies with a mock admin user
-    from backend.auth import get_current_user, get_current_admin, get_optional_user
-    from backend.models import User
     import uuid as _uuid
+
+    from backend.auth import get_current_admin, get_current_user, get_optional_user
+    from backend.models import User
 
     # Fixed UUID so tests can reference the mock user for FK relationships
     MOCK_USER_ID = _uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")

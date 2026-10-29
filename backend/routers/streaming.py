@@ -1,12 +1,13 @@
 """Streaming pipeline control and Dead Letter Queue management API."""
 
-import orjson
+import contextlib
 import logging
 import time
 import uuid as uuid_module
 
+import orjson
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_admin, get_current_user
@@ -136,7 +137,7 @@ async def list_topics(current_user: User = Depends(get_current_user)):
     try:
         return {"topics": get_admin_client().list_topics()}
     except Exception as exc:
-        raise HTTPException(503, f"Cannot connect to Redpanda: {exc}")
+        raise HTTPException(503, f"Cannot connect to Redpanda: {exc}") from exc
 
 
 @router.post("/topics")
@@ -148,7 +149,7 @@ async def create_topic(
     try:
         topic = validate_topic_name(topic)
     except ValueError as exc:
-        raise HTTPException(400, str(exc))
+        raise HTTPException(400, str(exc)) from exc
     created = get_admin_client().create_topic(topic, partitions=partitions)
     return {"topic": topic, "partitions": partitions, "created": created}
 
@@ -161,7 +162,7 @@ async def delete_topic(
     try:
         topic = validate_topic_name(topic)
     except ValueError as exc:
-        raise HTTPException(400, str(exc))
+        raise HTTPException(400, str(exc)) from exc
     get_admin_client().delete_topic(topic)
     return {"deleted": topic}
 
@@ -198,10 +199,8 @@ async def inspect_dlq(
             }
             try:
                 val = msg.value().decode("utf-8", errors="replace")
-                try:
+                with contextlib.suppress(Exception):
                     val = orjson.loads(val)
-                except Exception:
-                    pass
             except Exception:
                 val = "<binary>"
             messages.append({

@@ -163,9 +163,8 @@ def _serialize_json(table: pa.Table) -> tuple[bytes, str]:
     records = df.to_dict(orient="records")
 
     def sanitize(obj):
-        if isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
         return obj
 
     sanitized = [

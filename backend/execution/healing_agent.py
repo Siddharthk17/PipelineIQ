@@ -13,7 +13,13 @@ from backend.ai.healing_prompts import build_healing_prompt, validate_healing_pa
 from backend.execution.patch_applier import apply_patch
 from backend.execution.sandbox import run_patch_in_sandbox
 from backend.execution.schema_diff import compute_schema_diff
-from backend.models import FileProfile, HealingAttempt, HealingAttemptStatus, SchemaSnapshot, UploadedFile
+from backend.models import (
+    FileProfile,
+    HealingAttempt,
+    HealingAttemptStatus,
+    SchemaSnapshot,
+    UploadedFile,
+)
 from backend.utils.time_utils import utcnow
 from backend.utils.uuid_utils import as_uuid
 
@@ -285,6 +291,7 @@ def attempt_heal(
 
 def _call_gemini_for_healing(prompt: str) -> str:
     import asyncio
+
     from backend.clients.gemini_client import get_gemini_model
 
     model = get_gemini_model()
@@ -303,8 +310,8 @@ def _call_gemini_for_healing(prompt: str) -> str:
             )
             try:
                 response = future.result(timeout=60)
-            except concurrent.futures.TimeoutError:
-                raise TimeoutError("Gemini healing call timed out after 60s")
+            except concurrent.futures.TimeoutError as exc:
+                raise TimeoutError("Gemini healing call timed out after 60s") from exc
     else:
         response = model.generate_content(
             prompt,

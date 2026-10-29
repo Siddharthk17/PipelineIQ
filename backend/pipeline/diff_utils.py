@@ -1,4 +1,3 @@
-import re
 
 def strip_diff_markers(text: str) -> str:
     """
@@ -19,10 +18,7 @@ def strip_diff_markers(text: str) -> str:
         if line.startswith('-'):
             continue
         # Strip '+' marker from addition lines, keep remaining content
-        if line.startswith('+'):
-            result.append(line[1:])
-        # Strip leading space from unified diff context lines
-        elif line.startswith(' '):
+        if line.startswith('+') or line.startswith(' '):
             result.append(line[1:])
         else:
             result.append(line)

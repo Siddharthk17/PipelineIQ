@@ -4,12 +4,13 @@ Provides access to pipeline version history, diffs, and restore.
 """
 
 import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import PipelineVersion, User, PipelinePermission
+from backend.models import PipelinePermission, PipelineVersion, User
 from backend.pipeline.versioning import diff_pipelines, save_version
 
 logger = logging.getLogger(__name__)

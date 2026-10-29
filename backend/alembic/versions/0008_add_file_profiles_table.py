@@ -8,8 +8,8 @@ Creates the file_profiles table for storing automatic data profiling results.
 Stores column-level statistics, semantic types, and quality flags.
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0008"

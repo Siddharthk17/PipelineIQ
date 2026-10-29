@@ -7,7 +7,6 @@ and sample failing values.
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional
 
 import pandas as pd
 
@@ -17,7 +16,7 @@ class ValidationRuleResult:
     """Result of evaluating a single validation rule."""
 
     rule_name: str
-    column: Optional[str]
+    column: str | None
     check: str
     passed: bool
     severity: str
@@ -34,7 +33,7 @@ class ValidationStepResult:
     passed: bool  # False only if error-severity rules fail
     error_count: int
     warning_count: int
-    rule_results: List[ValidationRuleResult]
+    rule_results: list[ValidationRuleResult]
     output_df: pd.DataFrame  # passed through unchanged
 
 
@@ -47,7 +46,7 @@ SUPPORTED_CHECKS = frozenset({
 
 def execute_validate(
     df: pd.DataFrame,
-    rules: List[dict],
+    rules: list[dict],
     step_name: str,
 ) -> ValidationStepResult:
     """Execute all validation rules against a DataFrame."""

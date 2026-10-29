@@ -6,26 +6,26 @@ Validates that core operations complete within acceptable time bounds.
 import io
 import time
 import uuid as _uuid
+
 import numpy as np
-
 import pandas as pd
-import pytest
-
-from backend.auth import get_current_user
-from backend.dependencies import get_db, get_read_db, get_write_db
-from backend.main import app
-from backend.models import LineageGraph, PipelineRun, PipelineStatus, User
-from backend.pipeline.lineage import LineageRecorder
-from backend.pipeline.parser import StepType, FilterOperator, FilterStepConfig
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
 
 # New imports for execution performance
 import pyarrow as pa
-from backend.execution.smart_executor import SmartExecutor
-from backend.execution.duckdb_executor import DuckDBExecutor
-from backend.pipeline.steps import StepExecutor
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from backend.auth import get_current_user
+from backend.dependencies import get_db, get_read_db, get_write_db
 from backend.execution.arrow_bus import get_arrow_bus
+from backend.execution.duckdb_executor import DuckDBExecutor
+from backend.execution.smart_executor import SmartExecutor
+from backend.main import app
+from backend.models import LineageGraph, PipelineRun, PipelineStatus, User
+from backend.pipeline.lineage import LineageRecorder
+from backend.pipeline.parser import FilterOperator, FilterStepConfig, StepType
+from backend.pipeline.steps import StepExecutor
 
 
 class TestUploadPerformance:

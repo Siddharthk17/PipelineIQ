@@ -31,11 +31,11 @@ class _FakeS3:
         self.calls.append(("download_fileobj", key))
         buffer.write(self.objects[key])
 
-    def delete_object(self, Bucket, Key):  # noqa: N803
+    def delete_object(self, Bucket, Key):
         self.calls.append(("delete_object", Key))
         self.objects.pop(Key, None)
 
-    def head_object(self, Bucket, Key):  # noqa: N803
+    def head_object(self, Bucket, Key):
         self.calls.append(("head_object", Key))
         if Key not in self.objects:
             from botocore.exceptions import ClientError

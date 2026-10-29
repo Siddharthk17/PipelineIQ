@@ -13,17 +13,17 @@ from dataclasses import dataclass
 import yaml
 from sqlalchemy.orm import Session
 
-from backend.models import FileProfile, UploadedFile
-from backend.pipeline.cache import get_parsed_pipeline
-from backend.pipeline.parser import PipelineParser
-from backend.services.pipeline_validation import collect_schema_validation_errors
-from backend.tasks.gemini_tasks import call_gemini_task
 from backend.ai.prompts import (
     GENERATION_SYSTEM_PROMPT,
     REPAIR_SYSTEM_PROMPT,
     SELF_FIX_PROMPT,
     STEP_TYPE_REFERENCE,
 )
+from backend.models import FileProfile, UploadedFile
+from backend.pipeline.cache import get_parsed_pipeline
+from backend.pipeline.parser import PipelineParser
+from backend.services.pipeline_validation import collect_schema_validation_errors
+from backend.tasks.gemini_tasks import call_gemini_task
 
 logger = logging.getLogger(__name__)
 _pipeline_parser = PipelineParser()
@@ -183,8 +183,8 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
                 f"  Columns: {', '.join(column_descriptions)}"
             )
 
-        except Exception as e:
-            logger.error(f"Error building schema for file_id={file_id}: {e}")
+        except Exception:
+            logger.exception(f"Error building schema for file_id={file_id}")
             sections.append(
                 f"File {i}: [file_id: {file_id}] — error loading schema")
 
@@ -224,7 +224,7 @@ async def generate_pipeline_from_description(
             yaml="",
             valid=False,
             attempts=1,
-            error=f"AI service error: {str(e)}"
+            error=f"AI service error: {e!s}"
         )
 
     validation_error = None
@@ -258,7 +258,7 @@ async def generate_pipeline_from_description(
             yaml=raw_yaml,
             valid=False,
             attempts=2,
-            error=f"Self-fix failed: {str(e)}"
+            error=f"Self-fix failed: {e!s}"
         )
 
     # Validate Attempt 2
@@ -431,8 +431,8 @@ async def _call_gemini_async(
         )
     except Exception as e:
         from backend.tasks.gemini_tasks import (
-            GeminiQuotaExhaustedError,
             GeminiClientError,
+            GeminiQuotaExhaustedError,
         )
 
         # Surface terminal task failures with user-friendly messages. The
@@ -449,7 +449,7 @@ async def _call_gemini_async(
         error_str = str(e)
         service_error = _detect_ai_service_error(error_str)
         if service_error:
-            raise Exception(service_error)
+            raise Exception(service_error) from e
         # Re-raise other errors
         raise
 

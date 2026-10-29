@@ -13,12 +13,11 @@ from backend.auth import get_current_user
 from backend.database import get_db
 from backend.models import (
     ContractViolationRecord,
-    PipelinePermission,
     PipelineContract,
+    PipelinePermission,
     PipelineRun,
     User,
 )
-from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 from backend.schemas import (
     ContractCreateRequest,
     ContractDefResponse,
@@ -26,6 +25,7 @@ from backend.schemas import (
     ContractStatusResponse,
     ContractUpdateRequest,
 )
+from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 logger = logging.getLogger(__name__)
 

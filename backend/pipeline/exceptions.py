@@ -24,7 +24,7 @@ Hierarchy:
 """
 
 import difflib
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class PipelineIQError(Exception):
@@ -38,7 +38,7 @@ class PipelineIQError(Exception):
         self.message = message
         super().__init__(message)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -67,13 +67,13 @@ class PipelineConfigError(PipelineIQError):
 class InvalidYAMLError(PipelineConfigError):
     """Raised when the YAML string cannot be parsed."""
 
-    def __init__(self, yaml_error: str, line: Optional[int] = None) -> None:
+    def __init__(self, yaml_error: str, line: int | None = None) -> None:
         self.yaml_error = yaml_error
         self.line = line
         location = f" at line {line}" if line else ""
         super().__init__(f"Invalid YAML{location}: {yaml_error}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -89,7 +89,7 @@ class MissingRequiredFieldError(PipelineConfigError):
         self,
         field: str,
         context: str,
-        step_name: Optional[str] = None,
+        step_name: str | None = None,
     ) -> None:
         self.field = field
         self.context = context
@@ -99,7 +99,7 @@ class MissingRequiredFieldError(PipelineConfigError):
             f"Missing required field '{field}'{location}: {context}"
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -120,7 +120,7 @@ class DuplicateStepNameError(PipelineConfigError):
             f"Each step must have a unique name."
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -136,7 +136,7 @@ class InvalidStepTypeError(PipelineConfigError):
         self,
         step_name: str,
         invalid_type: str,
-        valid_types: List[str],
+        valid_types: list[str],
     ) -> None:
         self.step_name = step_name
         self.invalid_type = invalid_type
@@ -148,7 +148,7 @@ class InvalidStepTypeError(PipelineConfigError):
             f"Valid types: {valid_types}.{hint}"
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -167,7 +167,7 @@ class InvalidStepReferenceError(PipelineConfigError):
         step_name: str,
         reference_field: str,
         referenced_step: str,
-        available_steps: List[str],
+        available_steps: list[str],
     ) -> None:
         self.step_name = step_name
         self.reference_field = reference_field
@@ -181,7 +181,7 @@ class InvalidStepReferenceError(PipelineConfigError):
             f"Available prior steps: {available_steps}.{hint}"
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -200,7 +200,7 @@ class FileNotRegisteredError(PipelineConfigError):
         self,
         step_name: str,
         file_id: str,
-        registered_file_ids: List[str],
+        registered_file_ids: list[str],
     ) -> None:
         self.step_name = step_name
         self.file_id = file_id
@@ -210,7 +210,7 @@ class FileNotRegisteredError(PipelineConfigError):
             f"Registered file IDs: {registered_file_ids}"
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -227,7 +227,7 @@ class StepExecutionError(PipelineIQError):
         self.step_name = step_name
         super().__init__(f"Step '{step_name}': {message}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -246,7 +246,7 @@ class ColumnNotFoundError(StepExecutionError):
         self,
         step_name: str,
         column: str,
-        available_columns: List[str],
+        available_columns: list[str],
     ) -> None:
         self.column = column
         self.available_columns = available_columns
@@ -262,7 +262,7 @@ class ColumnNotFoundError(StepExecutionError):
             f"Available columns: {available_columns}.{hint}",
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -280,7 +280,7 @@ class InvalidOperatorError(StepExecutionError):
         self,
         step_name: str,
         operator: str,
-        valid_operators: List[str],
+        valid_operators: list[str],
     ) -> None:
         self.operator = operator
         self.valid_operators = valid_operators
@@ -290,7 +290,7 @@ class InvalidOperatorError(StepExecutionError):
             f"Valid operators: {valid_operators}",
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -308,7 +308,7 @@ class JoinKeyMissingError(StepExecutionError):
         step_name: str,
         join_key: str,
         side: str,
-        available_columns: List[str],
+        available_columns: list[str],
     ) -> None:
         self.join_key = join_key
         self.side = side
@@ -325,7 +325,7 @@ class JoinKeyMissingError(StepExecutionError):
             f"Available columns: {available_columns}.{hint}",
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -355,7 +355,7 @@ class AggregationError(StepExecutionError):
             f"Aggregation '{function}' on column '{column}' failed: {reason}",
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -382,7 +382,7 @@ class FileReadError(StepExecutionError):
             f"Failed to read file '{file_path}': {reason}",
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -400,7 +400,7 @@ class UnsupportedFileFormatError(StepExecutionError):
         step_name: str,
         file_path: str,
         extension: str,
-        supported_extensions: List[str],
+        supported_extensions: list[str],
     ) -> None:
         self.file_path = file_path
         self.extension = extension
@@ -411,7 +411,7 @@ class UnsupportedFileFormatError(StepExecutionError):
             f"Supported formats: {supported_extensions}",
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -445,7 +445,7 @@ class FilterTypeMismatchError(StepExecutionError):
             f"Check that the filter value type is compatible with the column type.",
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             **super().to_dict(),
             "column": self.column,
@@ -472,7 +472,7 @@ class RenameConflictError(StepExecutionError):
             f"The new names conflict with existing columns that are not being renamed."
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -499,7 +499,7 @@ class StepTimeoutError(StepExecutionError):
             f"(limit: {timeout_seconds}s)",
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "error_type": self.__class__.__name__,
             "message": self.message,
@@ -510,8 +510,8 @@ class StepTimeoutError(StepExecutionError):
 
 
 def _find_closest_match(
-    target: str, candidates: List[str], cutoff: float = 0.6
-) -> Optional[str]:
+    target: str, candidates: list[str], cutoff: float = 0.6
+) -> str | None:
     """Find the closest string match using difflib sequence matching."""
     matches = difflib.get_close_matches(target, candidates, n=1, cutoff=cutoff)
     return matches[0] if matches else None

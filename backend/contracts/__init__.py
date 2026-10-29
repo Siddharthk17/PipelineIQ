@@ -16,12 +16,12 @@ from backend.contracts.validator import (
 )
 
 __all__ = [
-    "BreachReport",
-    "ContractViolation",
-    "ContractValidationResult",
     "TYPE_CATEGORY_MAP",
-    "build_breach_report",
-    "validate_against_contract",
+    "BreachReport",
+    "ContractValidationResult",
+    "ContractViolation",
     "_arrow_type_category",
     "_parse_contract",
+    "build_breach_report",
+    "validate_against_contract",
 ]

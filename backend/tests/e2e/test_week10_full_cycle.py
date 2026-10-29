@@ -19,7 +19,7 @@ Direct DB writes are used for setup; all queries go through API endpoints.
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID as _UUID
 
 import networkx as nx
@@ -27,7 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func
 
-from backend.models import DataAsset, PipelineRun, LineageGraph
+from backend.models import DataAsset, LineageGraph, PipelineRun
 from backend.repositories.catalog import register_run_assets
 
 
@@ -37,7 +37,7 @@ def seeded_data(test_db):
     run_id = uuid.uuid4()
     yaml_cfg = _build_pipeline_yaml()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     run = PipelineRun(
         id=run_id,
         name="e2e_pipeline",

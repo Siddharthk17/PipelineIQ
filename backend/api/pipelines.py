@@ -6,25 +6,30 @@ result retrieval, cancellation, and export.
 
 import logging
 import os
+from datetime import UTC
+
 import orjson
-from typing import Optional
-from kombu.exceptions import OperationalError as KombuOperationalError
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session, selectinload
 
 from backend.auth import get_current_user
 from backend.config import settings
+from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import ContractViolationRecord, HealingAttempt, PipelineRun, PipelineStatus, SchemaSnapshot, StepResult, UploadedFile, User
-from datetime import timezone
-from backend.pipeline.parser import PipelineParser, StepType
-from backend.pipeline.cache import get_parsed_pipeline
-from backend.pipeline.planner import generate_execution_plan
-from backend.services.pipeline_validation import (
-    collect_schema_validation_errors,
-    serialize_validation_errors,
+from backend.models import (
+    HealingAttempt,
+    PipelineRun,
+    PipelineStatus,
+    SchemaSnapshot,
+    StepResult,
+    UploadedFile,
+    User,
 )
+from backend.pipeline.cache import get_parsed_pipeline
+from backend.pipeline.parser import PipelineParser, StepType
+from backend.pipeline.planner import generate_execution_plan
 from backend.schemas import (
     HealingAttemptResponse,
     PipelineRunListResponse,
@@ -37,16 +42,21 @@ from backend.schemas import (
     ValidationErrorDetail,
     ValidationWarningDetail,
 )
+from backend.services.audit_service import log_action
+from backend.services.pipeline_validation import (
+    collect_schema_validation_errors,
+    serialize_validation_errors,
+)
 from backend.tasks.pipeline_tasks import execute_pipeline_task
 from backend.tasks.streaming_pipeline import run_streaming_pipeline
-from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.utils.rate_limiter import limiter
-from backend.services.audit_service import log_action
+from backend.utils.sse_security import sign_sse_payload
 from backend.utils.uuid_utils import (
-    validate_uuid_format as _validate_uuid_format,
     as_uuid as _as_uuid,
 )
-from backend.utils.sse_security import sign_sse_payload
+from backend.utils.uuid_utils import (
+    validate_uuid_format as _validate_uuid_format,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -304,8 +314,7 @@ def _check_pipeline_permission(
             # becomes its owner. Names already in use by anyone else stay
             # off-limits — otherwise anyone could co-opt another user's
             # pipeline, contracts and versions just by reusing its name.
-            from backend.models import PipelineContract, PipelinePermission
-            from backend.models import PermissionLevel
+            from backend.models import PermissionLevel, PipelineContract, PipelinePermission
 
             name_in_use = (
                 db.query(PipelineRun.id)
@@ -543,7 +552,7 @@ def list_pipeline_runs(
     response: Response,
     page: int = 1,
     limit: int = 20,
-    status_filter: Optional[str] = None,
+    status_filter: str | None = None,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> PipelineRunListResponse:
@@ -802,8 +811,35 @@ def get_healing_history(
 def _ensure_utc(dt):
     """Attach UTC tzinfo to naive datetimes from SQLite."""
     if dt is not None and dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
+
+
+def _download_s3_export_object(s3_key: str):
+    """Download one S3 export object as a streaming response.
+
+    Returns None when the object is missing or unreadable so the caller
+    can try the next candidate key.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from backend.services.storage_service import storage_service
+
+    try:
+        if not storage_service.exists(s3_key):
+            return None
+        file_obj = storage_service.download(s3_key)
+    except Exception as e:
+        logger.warning("Failed to download %s from S3: %s", s3_key, e)
+        return None
+    media_type = "text/csv" if s3_key.endswith(".csv") else "application/json"
+    return StreamingResponse(
+        iter(lambda fh=file_obj: fh.read(8192), b""),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{os.path.basename(s3_key)}"'
+        },
+    )
 
 
 def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
@@ -1120,6 +1156,7 @@ def export_pipeline_output(
     When STORAGE_TYPE=s3, returns a presigned S3 URL for direct download.
     """
     from pathlib import Path
+
     from fastapi.responses import FileResponse
 
     _validate_uuid_format(run_id)
@@ -1227,42 +1264,24 @@ def export_pipeline_output(
             )
 
         try:
-            from backend.services.storage_service import storage_service
-            from fastapi.responses import StreamingResponse
-
-            for s3_key in s3_keys:
-                try:
-                    if storage_service.exists(s3_key):
-                        file_obj = storage_service.download(s3_key)
-                        media_type = (
-                            "text/csv"
-                            if s3_key.endswith(".csv")
-                            else "application/json"
-                        )
-                        return StreamingResponse(
-                            iter(lambda: file_obj.read(8192), b""),
-                            media_type=media_type,
-                            headers={
-                                "Content-Disposition": f'attachment; filename="{os.path.basename(s3_key)}"'
-                            },
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to download %s from S3: %s", s3_key, e)
-                    continue
-
+            candidates = [
+                _download_s3_export_object(s3_key) for s3_key in s3_keys
+            ]
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("S3 export error for run_id=%s", run_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to download file from S3 storage: {e!s}",
+            ) from e
+        found = next((r for r in candidates if r is not None), None)
+        if found is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Output file not found in S3 storage",
             )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error("S3 export error for run_id=%s: %s", run_id, e)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to download file from S3 storage: {str(e)}",
-            )
+        return found
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,

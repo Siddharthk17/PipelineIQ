@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session
 from backend.api.sse import (
     legacy_router,
     router,
+)
+from backend.api.sse import (
     stream_pipeline_progress as _stream_pipeline_progress,
+)
+from backend.api.sse import (
     stream_pipeline_progress_legacy as _stream_pipeline_progress_legacy,
 )
 from backend.auth import get_current_user_sse

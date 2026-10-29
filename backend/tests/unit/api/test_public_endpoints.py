@@ -1,5 +1,5 @@
-import requests
 import pytest
+import requests
 
 BASE_URL = "http://localhost/api/v1"
 AUTH_URL = "http://localhost/auth"
@@ -8,11 +8,12 @@ AUTH_URL = "http://localhost/auth"
 def _server_reachable():
     try:
         requests.get("http://localhost/healthz", timeout=2)
-        return True
     except requests.ConnectionError:
         return False
 
 
+    else:
+        return True
 @pytest.mark.skipif(not _server_reachable(), reason="Requires running Docker stack")
 def test_public_access():
     # Login first

@@ -20,11 +20,12 @@ httpfs extension:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import duckdb
 import pyarrow as pa
@@ -37,7 +38,7 @@ from backend.execution.sql_builder import build_sql_for_step
 logger = logging.getLogger(__name__)
 
 _worker_lock = threading.Lock()
-_worker_conn: Optional[duckdb.DuckDBPyConnection] = None
+_worker_conn: duckdb.DuckDBPyConnection | None = None
 _worker_connection = _worker_conn
 
 
@@ -62,15 +63,30 @@ def _configure_connection(
         logger.info("DuckDB httpfs extension disabled by default")
         return
 
+    _configure_httpfs(conn)
+
+
+def _s3_credentials() -> tuple[str, str, str, str]:
+    """Read MinIO/S3 credentials, raising when they are not configured."""
+    minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+    minio_access_key = os.environ.get("MINIO_ROOT_USER", "minio")
+    minio_secret_key = os.environ.get("MINIO_ROOT_PASSWORD", "minio123")
+    minio_region = os.environ.get("MINIO_REGION", "us-east-1")
+
+    if not minio_access_key or not minio_secret_key:
+        raise ValueError(
+            "S3 credentials not configured — set MINIO_ROOT_USER "
+            "and MINIO_ROOT_PASSWORD"
+        )
+    return minio_endpoint, minio_access_key, minio_secret_key, minio_region
+
+
+def _configure_httpfs(conn) -> None:
+    """Load the httpfs extension and point it at MinIO/S3."""
+    minio_endpoint, minio_access_key, minio_secret_key, minio_region = (
+        _s3_credentials()
+    )
     try:
-        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
-        minio_access_key = os.environ.get("MINIO_ROOT_USER", "minio")
-        minio_secret_key = os.environ.get("MINIO_ROOT_PASSWORD", "minio123")
-        minio_region = os.environ.get("MINIO_REGION", "us-east-1")
-
-        if not minio_access_key or not minio_secret_key:
-            raise ValueError("S3 credentials not configured — set MINIO_ROOT_USER and MINIO_ROOT_PASSWORD")
-
         conn.execute("INSTALL httpfs")
         conn.execute("LOAD httpfs")
         conn.execute(f"SET s3_endpoint='{minio_endpoint}'")
@@ -79,7 +95,7 @@ def _configure_connection(
         conn.execute(f"SET s3_access_key_id='{minio_access_key}'")
         conn.execute(f"SET s3_secret_access_key='{minio_secret_key}'")
         conn.execute(f"SET s3_region='{minio_region}'")
-        conn.execute(f"SET s3_allowed_structural_columns=0")
+        conn.execute("SET s3_allowed_structural_columns=0")
         logger.info("DuckDB httpfs extension loaded for MinIO access (tenant-scoped)")
     except Exception as exc:
         logger.warning(
@@ -183,7 +199,7 @@ class DuckDBExecutor:
         self._connection_getter = connection_getter
         self._local_fallback = local_fallback
         self._local_threads = local_threads
-        self._local_connection: Optional[duckdb.DuckDBPyConnection] = None
+        self._local_connection: duckdb.DuckDBPyConnection | None = None
         self._local_lock = threading.Lock()
 
     def _get_connection(self) -> duckdb.DuckDBPyConnection:
@@ -205,7 +221,7 @@ class DuckDBExecutor:
         step: object,
         input_table: pa.Table,
         *,
-        extra_tables: Optional[dict[str, pa.Table]] = None,
+        extra_tables: dict[str, pa.Table] | None = None,
     ) -> pa.Table:
         """Execute a single step using DuckDB SQL.
 
@@ -220,7 +236,7 @@ class DuckDBExecutor:
         sql: str,
         input_table: pa.Table,
         *,
-        extra_tables: Optional[dict[str, pa.Table]] = None,
+        extra_tables: dict[str, pa.Table] | None = None,
     ) -> pa.Table:
         from backend.config import settings as _settings
 
@@ -241,14 +257,10 @@ class DuckDBExecutor:
 
         old_max_rows = None
         try:
-            try:
+            with contextlib.suppress(Exception):
                 old_max_rows = conn.execute("SELECT current_setting('max_rows_to_scan')").fetchone()[0]
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 conn.execute(f"SET max_rows_to_scan={_settings.WORKER_MAX_ROWS_TO_SCAN}")
-            except Exception:
-                pass
 
             arrow_result = conn.execute(sql).arrow()
             if isinstance(arrow_result, pa.Table):
@@ -256,10 +268,8 @@ class DuckDBExecutor:
             return arrow_result.read_all()
         finally:
             if old_max_rows is not None:
-                try:
+                with contextlib.suppress(Exception):
                     conn.execute(f"SET max_rows_to_scan={old_max_rows}")
-                except Exception:
-                    pass
             for name in table_names:
                 try:
                     conn.unregister(name)

@@ -1,7 +1,7 @@
 """Audit logging service — records all user actions."""
 
+import contextlib
 import logging
-from typing import Optional
 from uuid import UUID
 
 from fastapi import Request
@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 def log_action(
     db: Session,
     action: str,
-    user_id: Optional[UUID] = None,
-    resource_type: Optional[str] = None,
-    resource_id: Optional[UUID] = None,
-    details: Optional[dict] = None,
-    request: Optional[Request] = None,
+    user_id: UUID | None = None,
+    resource_type: str | None = None,
+    resource_id: UUID | None = None,
+    details: dict | None = None,
+    request: Request | None = None,
 ) -> None:
     """Record an audit log entry.
 
@@ -46,14 +46,10 @@ def log_action(
         )
         audit_db.add(entry)
         audit_db.commit()
-    except Exception as exc:
-        logger.error("Failed to write audit log: %s", exc)
-        try:
+    except Exception:
+        logger.exception("Failed to write audit log")
+        with contextlib.suppress(Exception):
             audit_db.rollback()
-        except Exception:
-            pass
     finally:
-        try:
+        with contextlib.suppress(Exception):
             audit_db.close()
-        except Exception:
-            pass

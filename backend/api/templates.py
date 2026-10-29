@@ -73,11 +73,11 @@ def get_template(template_id: str) -> dict:
     _validate_template_id(template_id)
     try:
         pipeline_yaml, meta = get_pipeline_yaml_from_template(template_id)
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Template '{template_id}' not found",
-        )
+        ) from exc
     return {
         "id": meta["id"],
         "name": meta["name"],
@@ -109,16 +109,16 @@ def fork_pipeline_template(
             pipeline_name=request.pipeline_name,
             file_mappings=request.file_mappings,
         )
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Template '{template_id}' not found",
-        )
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
-        )
+        ) from exc
 
     # Validate YAML parses
     import yaml
@@ -128,7 +128,7 @@ def fork_pipeline_template(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Forked template produces invalid YAML: {exc}",
-        )
+        ) from exc
 
     if "{{" in pipeline_yaml or "}}" in pipeline_yaml:
         remaining = re.findall(r'\{\{(\w+)\}\}', pipeline_yaml)
