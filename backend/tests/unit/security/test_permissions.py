@@ -110,13 +110,13 @@ def test_permissions():
     assert resp.status_code == 202, f"Admin run failed: {resp.status_code} {resp.text}"
 
     # 5. Viewer tries the admin's pipeline without a grant (should fail 403).
-    print("Testing viewer run on someone else's pipeline (should fail 403)...")
+    print("Testing viewer run on someone else's pipeline (should fail 404)...")
     resp = viewer_session.post(f"{BASE_URL}/pipelines/run", json={
         "yaml_config": _pipeline_yaml(admin_name, viewer_file_id),
         "name": admin_name,
     })
     print(f"Response: {resp.status_code} - {resp.text}")
-    assert resp.status_code == 403, "Viewer should not run another user's pipeline"
+    assert resp.status_code == 404, "Viewer should not run another user's pipeline"
 
     # 6. Admin grants Runner permission.
     print("Granting runner permission...")
@@ -143,13 +143,13 @@ def test_permissions():
     print("Permission revoked.")
 
     # 9. Viewer tries again (should fail 403).
-    print("Testing viewer run after revocation (should fail 403)...")
+    print("Testing viewer run after revocation (should fail 404)...")
     resp = viewer_session.post(f"{BASE_URL}/pipelines/run", json={
         "yaml_config": _pipeline_yaml(admin_name, viewer_file_id),
         "name": admin_name,
     })
     print(f"Response: {resp.status_code} - {resp.text}")
-    assert resp.status_code == 403, "Viewer should not be able to run after revocation"
+    assert resp.status_code == 404, "Viewer should not be able to run after revocation"
 
 if __name__ == "__main__":
     try:

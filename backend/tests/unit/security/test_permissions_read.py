@@ -83,13 +83,13 @@ def test_read_permissions():
         time.sleep(1)
 
     # 4. Test Export (Should fail for Viewer without permission)
-    print("Testing export for Viewer without permission (should fail 403)...")
+    print("Testing export for Viewer without permission (should fail 404)...")
     resp = viewer_session.get(f"{BASE_URL}/pipelines/{run_id}/export")
     print(f"Export Response: {resp.status_code}")
-    assert resp.status_code == 403, "Viewer should not be allowed to export another user's run"
+    assert resp.status_code == 404, "Viewer should not be allowed to export another user's run"
     
     # 5. Test Cancel (Should fail for Viewer)
-    print("Testing cancel for Viewer without permission (should fail 403)...")
+    print("Testing cancel for Viewer without permission (should fail 404)...")
     # We need a running pipeline for this. Let's run another one.
     resp = admin_session.post(f"{BASE_URL}/pipelines/run", json={
         "yaml_config": valid_yaml,
@@ -99,7 +99,7 @@ def test_read_permissions():
     
     resp = viewer_session.post(f"{BASE_URL}/pipelines/{cancel_run_id}/cancel")
     print(f"Cancel Response: {resp.status_code}")
-    assert resp.status_code == 403, "Viewer should not be allowed to cancel another user's run"
+    assert resp.status_code == 404, "Viewer should not be allowed to cancel another user's run"
 
 if __name__ == "__main__":
     test_read_permissions()

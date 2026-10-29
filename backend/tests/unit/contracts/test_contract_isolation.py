@@ -97,7 +97,7 @@ def test_same_name_run_grants_no_contract_read(
     _register(auth_client, f"attacker_{suffix}@t.local", f"attacker_{suffix}")
     attacker = _login(auth_client, f"attacker_{suffix}@t.local")
     file_id = _upload(auth_client, attacker, sales_csv_bytes)
-    _run_named(auth_client, attacker, name, file_id, monkeypatch, expect=403)
+    _run_named(auth_client, attacker, name, file_id, monkeypatch, expect=404)
 
     listed = auth_client.get(
         f"/api/v1/contracts/pipelines/{name}", headers=attacker)
@@ -116,7 +116,7 @@ def test_same_name_run_grants_no_contract_write(
     _register(auth_client, f"attackerw_{suffix}@t.local", f"attackerw_{suffix}")
     attacker = _login(auth_client, f"attackerw_{suffix}@t.local")
     file_id = _upload(auth_client, attacker, sales_csv_bytes)
-    _run_named(auth_client, attacker, name, file_id, monkeypatch, expect=403)
+    _run_named(auth_client, attacker, name, file_id, monkeypatch, expect=404)
 
     updated = auth_client.put(
         f"/api/v1/contracts/pipelines/{name}/{contract_id}",

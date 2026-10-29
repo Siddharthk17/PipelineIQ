@@ -20,10 +20,13 @@ class TestSaveUrlGeneration:
         step = MagicMock()
         step.filename = "output.csv"
 
-        with patch("backend.execution.steps.save_step._get_minio_client") as mock_minio:
+        with (
+            patch("backend.execution.steps.save_step._get_minio_client"),
+            patch("backend.execution.steps.save_step._get_presign_client") as mock_presign,
+        ):
             client = _make_minio_client()
             client.generate_presigned_url.return_value = "https://minio/outputs/run-001/output.csv?token=xyz"
-            mock_minio.return_value = client
+            mock_presign.return_value = client
 
             result = execute_save_step(table, step, run_id="run-001")
 
@@ -31,10 +34,13 @@ class TestSaveUrlGeneration:
             assert result.object_name == "outputs/run-001/output.csv"
 
     def test_refresh_download_url_generates_new_url(self):
-        with patch("backend.execution.steps.save_step._get_minio_client") as mock_minio:
+        with (
+            patch("backend.execution.steps.save_step._get_minio_client"),
+            patch("backend.execution.steps.save_step._get_presign_client") as mock_presign,
+        ):
             client = _make_minio_client()
             client.generate_presigned_url.return_value = "https://minio/refreshed-url"
-            mock_minio.return_value = client
+            mock_presign.return_value = client
 
             url = refresh_download_url("outputs/run-001/output.csv")
             assert url == "https://minio/refreshed-url"
