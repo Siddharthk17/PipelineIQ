@@ -271,8 +271,10 @@ def _check_pipeline_permission(
             pipeline_name,
             grant_owner,
         )
-        if grant_owner and user.role != "viewer":
+        if grant_owner:
             # First time this pipeline is run/created - grant ownership
+            # to whoever created it. Global roles do not matter here:
+            # per-pipeline ownership governs pipeline access.
             new_perm = PipelinePermission(
                 pipeline_name=pipeline_name,
                 user_id=user.id,
