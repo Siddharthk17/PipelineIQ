@@ -138,3 +138,4 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 ## Schema drift check (2026-10-29)
 
 - ORM metadata vs live pg_indexes diff: exactly 1 missing (ix_pipeline_runs_user_created). DB extras are migration-created perf indexes + PG auto constraint backing (acceptable).
+| S45 | config | Dead env knobs (read into Settings, never used): STEP_TIMEOUT_SECONDS, CACHE_TTL_STATS, DRIFT_DETECTION_ENABLED, MAX_VERSIONS_PER_PIPELINE, READ_REPLICA_HOST. Misleading: documented limits that don't apply | P3 | OPEN | grep settings.X in backend/ 2026-10-29 (only ACCESS_TOKEN_EXPIRE_MINUTES false-positive, used via import) | — | — |
