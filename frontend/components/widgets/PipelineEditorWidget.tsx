@@ -73,7 +73,36 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   const [aiGenerateError, setAIGenerateError] = useState<string | null>(null);
   const [aiColumnSuggestions, setAiColumnSuggestions] = useState<Record<string, string>>({});
   const [runError, setRunError] = useState<string | null>(null);
-  const [runCooldownUntil, setRunCooldownUntil] = useState<number>(0);
+  const [isRunCoolingDown, setIsRunCoolingDown] = useState(false);
+  const runCooldownTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const timer = runCooldownTimerRef.current;
+    return () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, []);
+
+  const startRunCooldown = useCallback((ms: number) => {
+    if (runCooldownTimerRef.current !== null) {
+      window.clearTimeout(runCooldownTimerRef.current);
+    }
+    setIsRunCoolingDown(true);
+    runCooldownTimerRef.current = window.setTimeout(() => {
+      runCooldownTimerRef.current = null;
+      setIsRunCoolingDown(false);
+    }, ms);
+  }, []);
+
+  const clearRunCooldown = useCallback(() => {
+    if (runCooldownTimerRef.current !== null) {
+      window.clearTimeout(runCooldownTimerRef.current);
+      runCooldownTimerRef.current = null;
+    }
+    setIsRunCoolingDown(false);
+  }, []);
   const [showCostCard, setShowCostCard] = useState(false);
 
   const formatRunError = useCallback((error: unknown): string => {
@@ -224,7 +253,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
       runPipeline(args.yamlConfig, args.pipelineName),
     onSuccess: (data, variables) => {
       setRunError(null);
-      setRunCooldownUntil(0);
+      clearRunCooldown();
       const runName =
         variables.pipelineName ||
         extractPipelineName(variables.yamlConfig) ||
@@ -252,12 +281,10 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
       setRunError(formatRunError(error));
       const status = (error as { status?: number })?.status;
       if (typeof status === "number" && status >= 400 && status < 500) {
-        setRunCooldownUntil(Date.now() + 5000);
+        startRunCooldown(5000);
       }
     },
   });
-
-  const isRunCoolingDown = runCooldownUntil > Date.now();
 
   const latestFileId = files?.[0]?.id ?? null;
 
@@ -265,39 +292,30 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     if (!files || files.length > 0) {
       return;
     }
-    setCode((previousCode) => removeFileIdLines(previousCode));
+    void (async () => {
+      setCode((previousCode) => removeFileIdLines(previousCode));
+    })();
   }, [files]);
 
   useEffect(() => {
     if (!latestFileId) {
       return;
     }
-    setCode((previousCode) => {
-      if (hasNonEmptyFileId(previousCode)) {
-        return previousCode;
-      }
-      return upsertFileIdInFirstLoadStep(previousCode, latestFileId);
-    });
+    void (async () => {
+      setCode((previousCode) => {
+        if (hasNonEmptyFileId(previousCode)) {
+          return previousCode;
+        }
+        return upsertFileIdInFirstLoadStep(previousCode, latestFileId);
+      });
+    })();
   }, [latestFileId]);
 
   useEffect(() => {
-    setRunError(null);
+    void (async () => {
+      setRunError(null);
+    })();
   }, [code]);
-
-  useEffect(() => {
-    if (!runCooldownUntil) {
-      return;
-    }
-    const remainingMs = runCooldownUntil - Date.now();
-    if (remainingMs <= 0) {
-      setRunCooldownUntil(0);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setRunCooldownUntil(0);
-    }, remainingMs);
-    return () => window.clearTimeout(timer);
-  }, [runCooldownUntil]);
 
   const aiSuggestionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -310,13 +328,17 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
 
     const errors = validation?.errors ?? [];
     if (errors.length === 0 || availableColumnsForAutocomplete.length === 0) {
-      setAiColumnSuggestions({});
+      void (async () => {
+        setAiColumnSuggestions({});
+      })();
       return;
     }
 
     const columns = collectMissingColumnCandidates(errors);
     if (columns.length === 0) {
-      setAiColumnSuggestions({});
+      void (async () => {
+        setAiColumnSuggestions({});
+      })();
       return;
     }
 

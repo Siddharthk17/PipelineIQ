@@ -101,9 +101,11 @@ export function VersionHistoryWidget() {
       return;
     }
 
-    setPipelineName((currentName) => currentName || detectedPipelineName);
-    setAutoLoadedPipelineName(detectedPipelineName);
-    void loadVersions(detectedPipelineName);
+    void (async () => {
+      setPipelineName((currentName) => currentName || detectedPipelineName);
+      setAutoLoadedPipelineName(detectedPipelineName);
+      await loadVersions(detectedPipelineName);
+    })();
   }, [lastYamlConfig, autoLoadedPipelineName, loadVersions]);
 
   const toggleSelect = (v: number) => {

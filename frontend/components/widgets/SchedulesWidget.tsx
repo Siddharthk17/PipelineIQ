@@ -177,7 +177,9 @@ export function SchedulesWidget() {
   }, []);
 
   useEffect(() => {
-    loadSchedules();
+    void (async () => {
+      await loadSchedules();
+    })();
   }, [loadSchedules]);
 
   const handleToggle = useCallback((id: string) => {

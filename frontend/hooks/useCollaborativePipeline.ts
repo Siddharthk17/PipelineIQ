@@ -60,8 +60,6 @@ export function useCollaborativePipeline({
   const [doc] = useState(() => new Y.Doc())
 
   const providerRef = useRef<WebsocketProvider | null>(null)
-  const authTokenRef = useRef(authToken)
-  authTokenRef.current = authToken
 
   const authFailedRef = useRef(false)
   const authFailedForRoomRef = useRef<string | null>(null)

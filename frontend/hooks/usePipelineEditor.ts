@@ -234,7 +234,6 @@ export function usePipelineEditor({
       return;
     }
     parseYamlToGraph(yamlText);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [yamlText, parseYamlToGraph]);
 
   useEffect(() => {
@@ -246,7 +245,6 @@ export function usePipelineEditor({
       return;
     }
     emitGraphToYaml({ pipelineName, nodes, edges });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edges, emitGraphToYaml, nodes, pipelineName]);
 
   const selectedNodeId = useMemo(
@@ -584,8 +582,16 @@ export function usePipelineEditor({
     },
     onNodeConfigure: handleConfigure,
   });
-  const collabRef = useRef(collab);
-  collabRef.current = collab;
+  const collabRef = useRef<ReturnType<typeof useCollaborativePipeline> | null>(
+    null,
+  );
+  useEffect(() => {
+    // Latest-ref pattern: emitGraphToYaml is debounced on node/edge changes
+    // and must always see the current collab without re-subscribing when
+    // collab identity changes. Assignment here is intentional.
+    // eslint-disable-next-line react-hooks/immutability -- latest-ref is updated post-commit, never during render
+    collabRef.current = collab;
+  });
 
   const effectiveOnNodesChange = useCallback(
     (changes: NodeChange<BuilderNode>[]) => {

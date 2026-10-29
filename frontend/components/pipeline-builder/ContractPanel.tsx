@@ -58,8 +58,10 @@ export function ContractPanel() {
   }, [pipelineId]);
 
   useEffect(() => {
-    loadContracts();
-    loadStatus();
+    void (async () => {
+      await loadContracts();
+      await loadStatus();
+    })();
   }, [loadContracts, loadStatus]);
 
   const handleSave = async () => {

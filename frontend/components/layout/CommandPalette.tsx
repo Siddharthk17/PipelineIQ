@@ -88,7 +88,6 @@ export function CommandPalette({ isOpen, onClose, onOpenThemeBuilder, onOpenKeyb
   const prevIsOpen = useRef(isOpen);
   useEffect(() => {
     if (isOpen && !prevIsOpen.current) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on open transition
       setQuery('');
       setSelectedIndex(0);
       setTimeout(() => inputRef.current?.focus(), 50);

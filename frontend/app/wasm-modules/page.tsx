@@ -34,13 +34,7 @@ export default function WasmModulesPage() {
     }
   }, [isLoading, router, user]);
 
-  useEffect(() => {
-    if (user) {
-      fetchModules();
-    }
-  }, [user]);
-
-  const fetchModules = async () => {
+  const fetchModules = useCallback(async () => {
     setLoading(true);
     try {
       const data = await listWasmModules();
@@ -50,7 +44,15 @@ export default function WasmModulesPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      void (async () => {
+        await fetchModules();
+      })();
+    }
+  }, [user, fetchModules]);
 
   const handleFileSelect = useCallback(
     async (file: File) => {

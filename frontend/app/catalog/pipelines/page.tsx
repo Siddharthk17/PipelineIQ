@@ -87,7 +87,9 @@ export default function PipelineCatalogPage() {
       return;
     }
     if (!user) return;
-    loadPipelines();
+    void (async () => {
+      await loadPipelines();
+    })();
   }, [isLoading, user, router, loadPipelines]);
 
   useEffect(() => {
