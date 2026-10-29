@@ -162,6 +162,29 @@ class S3StorageProvider(StorageProvider):
             endpoint_url=settings.S3_ENDPOINT_URL,
         )
         self.bucket = settings.S3_BUCKET
+        self._presign_client = None
+
+    def _get_presign_client(self):
+        """Boto client pointed at the browser-reachable endpoint.
+
+        Presigned URLs embed the endpoint host in the signature, so they
+        must be signed for the URL the browser will actually fetch — not
+        the internal docker hostname used for server-side operations.
+        """
+        if self._presign_client is None:
+            endpoint = (
+                settings.S3_PUBLIC_ENDPOINT_URL or settings.S3_ENDPOINT_URL
+            )
+            if endpoint == settings.S3_ENDPOINT_URL:
+                self._presign_client = self.s3
+            else:
+                self._presign_client = boto3.client(
+                    "s3",
+                    aws_access_key_id=settings.S3_ACCESS_KEY,
+                    aws_secret_access_key=settings.S3_SECRET_KEY,
+                    endpoint_url=endpoint,
+                )
+        return self._presign_client
 
     def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
         key = _validate_storage_key(destination_path)
@@ -230,7 +253,7 @@ class S3StorageProvider(StorageProvider):
     ) -> str | None:
         key = _validate_storage_key(destination_path)
         try:
-            return self.s3.generate_presigned_url(
+            return self._get_presign_client().generate_presigned_url(
                 ClientMethod="put_object",
                 Params={"Bucket": self.bucket, "Key": key},
                 ExpiresIn=expiration,
@@ -243,7 +266,7 @@ class S3StorageProvider(StorageProvider):
     ) -> str | None:
         key = _validate_storage_key(source_path)
         try:
-            return self.s3.generate_presigned_url(
+            return self._get_presign_client().generate_presigned_url(
                 ClientMethod="get_object",
                 Params={"Bucket": self.bucket, "Key": key},
                 ExpiresIn=expiration,

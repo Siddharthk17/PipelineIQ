@@ -88,7 +88,7 @@ def execute_save_step(
         "Saved pipeline output: run_id=%s, filename=%s, size=%.1fKB, rows=%d",
         run_id, filename, len(content) / 1024, table.num_rows)
 
-    download_url = minio.generate_presigned_url(
+    download_url = _get_presign_client(minio).generate_presigned_url(
         "get_object",
         Params={
             "Bucket": bucket,
@@ -108,10 +108,33 @@ def execute_save_step(
     )
 
 
+def _get_presign_client(server_client):
+    """Boto client pointed at the browser-reachable endpoint for signing.
+
+    Presigned URLs embed the endpoint host in the signature, so they must
+    be signed for the URL the browser will fetch, not the internal docker
+    hostname used for server-side operations.
+    """
+    from backend.config import settings
+
+    public_endpoint = (
+        settings.S3_PUBLIC_ENDPOINT_URL or settings.S3_ENDPOINT_URL)
+    if not public_endpoint or public_endpoint == settings.S3_ENDPOINT_URL:
+        return server_client
+    import boto3
+
+    return boto3.client(
+        "s3",
+        aws_access_key_id=settings.S3_ACCESS_KEY,
+        aws_secret_access_key=settings.S3_SECRET_KEY,
+        endpoint_url=public_endpoint,
+    )
+
+
 def refresh_download_url(object_name: str) -> str:
     """Generate a fresh presigned URL for an existing output file."""
     minio = _get_minio_client()
-    return minio.generate_presigned_url(
+    return _get_presign_client(minio).generate_presigned_url(
         "get_object",
         Params={
             "Bucket": settings.S3_BUCKET,

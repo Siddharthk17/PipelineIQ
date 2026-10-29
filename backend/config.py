@@ -126,6 +126,12 @@ class Settings(BaseSettings):
     S3_SECRET_KEY: str = ""
     S3_BUCKET: str = "pipelineiq-outputs"  # Dedicated bucket for pipeline outputs
     S3_ENDPOINT_URL: str | None = None  # Required for MinIO
+    # Publicly reachable base URL used when signing presigned URLs for
+    # browsers. Falls back to S3_ENDPOINT_URL when unset (correct when the
+    # endpoint is already public, e.g. real S3). Local dev needs the host
+    # address, e.g. http://127.0.0.1:9000, since browsers cannot resolve
+    # the internal docker hostname (minio:9000).
+    S3_PUBLIC_ENDPOINT_URL: str | None = None
     WASM_BUCKET: str = "pipelineiq-wasm"
 
     # Sentry

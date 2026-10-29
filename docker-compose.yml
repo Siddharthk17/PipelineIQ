@@ -178,6 +178,7 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
       - OTEL_SERVICE_NAME=pipelineiq-api
       - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
@@ -253,6 +254,7 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
       - OTEL_SERVICE_NAME=pipelineiq-sse
       - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
@@ -323,6 +325,7 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -391,6 +394,7 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -459,6 +463,7 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -530,6 +535,7 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
     depends_on:
       pgbouncer:
         condition: service_healthy
