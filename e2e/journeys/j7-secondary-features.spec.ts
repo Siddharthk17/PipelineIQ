@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { API, UI, registerUser, runPipeline, simpleYaml, uploadCsv, waitForRun } from "./helpers";
+import { API, UI, registerUser, runPipeline, simpleYaml, uiLogin, uploadCsv, waitForRun } from "./helpers";
 
 /**
  * J7: schedules + contracts + templates + WASM + catalog — the secondary
@@ -178,12 +178,7 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
   expect(await waitForRun(request, user.token, violRun)).toBe("CONTRACT_VIOLATION");
 
   // --- UI spot check: schedules page renders for a logged-in user.
-  await page.goto(`${UI}/login`, { waitUntil: "domcontentloaded" }).catch(() => {});
-  await page.goto(`${UI}/login`, { waitUntil: "domcontentloaded" });
-  await page.getByTestId("email-input").fill(user.email);
-  await page.getByTestId("password-input").fill(user.password);
-  await page.getByTestId("login-btn").click();
-  await page.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 30_000 });
+  await uiLogin(page, user.email, user.password);
   await page.goto(`${UI}/schedules`, { waitUntil: "domcontentloaded" }).catch(() => {});
   await expect(page.getByText(/schedule/i).first()).toBeVisible({ timeout: 30_000 });
 });

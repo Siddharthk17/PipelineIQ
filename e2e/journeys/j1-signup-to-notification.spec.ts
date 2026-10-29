@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { uiLogin } from "./helpers";
 
 /**
  * J1: new user signs up, logs in, uploads a dataset, builds a pipeline,
@@ -39,20 +40,29 @@ test("J1 signup, upload, run, results, download, notify, logout", async ({
     }
   });
 
-  // 1. Sign up through the UI.
+  // 1. Sign up through the UI (rate-limited: retry on 429).
   await page.goto(`${UI}/register`, { waitUntil: "domcontentloaded" });
   await expect(page.getByPlaceholder("you@example.com")).toBeVisible({
     timeout: 15_000,
   });
-  await page.getByPlaceholder("you@example.com").fill(email);
-  await page.getByPlaceholder("your_username").fill(username);
-  const pwds = page.getByPlaceholder("••••••••");
-  await pwds.nth(0).fill(password);
-  await pwds.nth(1).fill(password);
-  await page.getByRole("button", { name: /create account/i }).click();
-  await page.waitForURL((url) => !url.pathname.startsWith("/register"), {
-    timeout: 30_000,
-  });
+  for (let attempt = 0; ; attempt++) {
+    await page.getByPlaceholder("you@example.com").fill(email);
+    await page.getByPlaceholder("your_username").fill(username);
+    const pwds = page.getByPlaceholder("••••••••");
+    await pwds.nth(0).fill(password);
+    await pwds.nth(1).fill(password);
+    await page.getByRole("button", { name: /create account/i }).click();
+    try {
+      await page.waitForURL((url) => !url.pathname.startsWith("/register"), {
+        timeout: 15_000,
+      });
+      break;
+    } catch {
+      if (attempt >= 7) throw new Error("register: still on /register after retries");
+      await new Promise((r) => setTimeout(r, 15_000));
+      await page.goto(`${UI}/register`, { waitUntil: "domcontentloaded" }).catch(() => {});
+    }
+  }
 
   // 2. Log in through the UI (fresh session check is part of the journey).
   await page.goto(`${UI}/login`, { waitUntil: "domcontentloaded" });
@@ -60,9 +70,14 @@ test("J1 signup, upload, run, results, download, notify, logout", async ({
     await page.getByTestId("email-input").fill(email);
     await page.getByTestId("password-input").fill(password);
     await page.getByTestId("login-btn").click();
-    await page.waitForURL((url) => !url.pathname.endsWith("/login"), {
-      timeout: 30_000,
-    });
+    try {
+      await page.waitForURL((url) => !url.pathname.endsWith("/login"), {
+        timeout: 15_000,
+      });
+    } catch {
+      // Rate-limited amid a busy suite: reuse the retrying helper.
+      await uiLogin(page, email, password);
+    }
   }
   await expect(page).not.toHaveURL(/\/login$/);
 

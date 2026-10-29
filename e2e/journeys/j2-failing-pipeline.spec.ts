@@ -3,6 +3,7 @@ import {
   API,
   UI,
   registerUser,
+  uiLogin,
   runPipeline,
   simpleYaml,
   uploadCsv,
@@ -68,12 +69,7 @@ test("J2 failing pipeline shows error, retry succeeds", async ({ page, request }
   expect(badStatus).toBe("FAILED");
 
   // The failed run is visible in the UI with an error.
-  await page.goto(`${UI}/login`, { waitUntil: "domcontentloaded" }).catch(() => {});
-  await page.goto(`${UI}/login`, { waitUntil: "domcontentloaded" });
-  await page.getByTestId("email-input").fill(user.email);
-  await page.getByTestId("password-input").fill(user.password);
-  await page.getByTestId("login-btn").click();
-  await page.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 30_000 });
+  await uiLogin(page, user.email, user.password);
   await page.goto(`${UI}/runs/${badRun}`, { waitUntil: "domcontentloaded" });
   await expect(page.getByText(/failed/i).first()).toBeVisible({ timeout: 30_000 });
   // Error message names the missing column.

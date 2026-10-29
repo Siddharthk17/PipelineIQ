@@ -1,4 +1,4 @@
-import { APIRequestContext, expect } from "@playwright/test";
+import { APIRequestContext, Page, expect } from "@playwright/test";
 
 /** Shared helpers for journey specs: one browser context == one user. */
 export const API = process.env.E2E_API_URL || "http://127.0.0.1:8000";
@@ -28,9 +28,15 @@ export async function registerUser(
     });
   }
   expect(reg.ok(), await reg.text()).toBeTruthy();
-  const login = await request.post(`${API}/auth/login`, {
+  let login = await request.post(`${API}/auth/login`, {
     data: { email, password },
   });
+  for (let i = 0; i < 8 && login.status() === 429; i++) {
+    await new Promise((r) => setTimeout(r, 10_000));
+    login = await request.post(`${API}/auth/login`, {
+      data: { email, password },
+    });
+  }
   expect(login.ok(), await login.text()).toBeTruthy();
   const { access_token: token } = await login.json();
   return { email, password, token };
@@ -60,10 +66,18 @@ export async function runPipeline(
   yaml: string,
   name?: string,
 ): Promise<string> {
-  const resp = await request.post(`${API}/api/v1/pipelines/run`, {
+  // Pipeline runs are rate-limited; back off and retry on 429.
+  let resp = await request.post(`${API}/api/v1/pipelines/run`, {
     data: name ? { yaml_config: yaml, name } : { yaml_config: yaml },
     headers: { Authorization: `Bearer ${token}` },
   });
+  for (let i = 0; i < 5 && resp.status() === 429; i++) {
+    await new Promise((r) => setTimeout(r, 15_000));
+    resp = await request.post(`${API}/api/v1/pipelines/run`, {
+      data: name ? { yaml_config: yaml, name } : { yaml_config: yaml },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
   expect(resp.status(), await resp.text()).toBe(202);
   const { run_id } = await resp.json();
   return run_id as string;
@@ -118,4 +132,24 @@ export function simpleYaml(name: string, fileId: string, saveAs: string): string
     "      input: src",
     `      filename: ${saveAs}`,
   ].join("\n");
+}
+
+/** Log in through the UI, tolerating auth rate limits (5/min). */
+export async function uiLogin(page: Page, email: string, password: string): Promise<void> {
+  await page.goto(`${UI}/login`, { waitUntil: "domcontentloaded" }).catch(() => {});
+  await page.goto(`${UI}/login`, { waitUntil: "domcontentloaded" });
+  for (let attempt = 0; attempt < 8; attempt++) {
+    await page.getByTestId("email-input").fill(email);
+    await page.getByTestId("password-input").fill(password);
+    await page.getByTestId("login-btn").click();
+    try {
+      await page.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 15_000 });
+      return;
+    } catch {
+      // Probably a 429 from the auth limiter; back off and retry.
+      await new Promise((r) => setTimeout(r, 15_000));
+      await page.goto(`${UI}/login`, { waitUntil: "domcontentloaded" }).catch(() => {});
+    }
+  }
+  throw new Error("uiLogin: still on /login after retries (auth rate limited?)");
 }
