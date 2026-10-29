@@ -559,6 +559,42 @@ class TestSortStep:
         with pytest.raises(ColumnNotFoundError):
             executor.execute_sort(df_registry, config, recorder)
 
+    def test_sort_list_by_with_ascending_list(
+        self, executor, recorder, sample_sales_table
+    ):
+        """List `by` with per-column `ascending` flags sorts correctly (S-new).
+
+        Regression: list `by` used to 500 at validation (`.strip()` on a
+        list) and `ascending` was silently dropped.
+        """
+        df_registry = {"load_sales": sample_sales_table}
+        config = SortStepConfig(
+            name="sort_list",
+            step_type=StepType.SORT,
+            input="load_sales",
+            by=["amount"],
+            order=SortOrder.ASC,
+            ascending=[False],
+        )
+        result = executor.execute_sort(df_registry, config, recorder)
+        amounts = result.output_df["amount"].tolist()
+        assert amounts == sorted(amounts, reverse=True)
+
+    def test_sort_list_by_nonexistent_column_raises_error(
+        self, executor, recorder, sample_sales_table
+    ):
+        """List `by` with a bad column raises ColumnNotFoundError, not 500."""
+        df_registry = {"load_sales": sample_sales_table}
+        config = SortStepConfig(
+            name="sort_list_bad",
+            step_type=StepType.SORT,
+            input="load_sales",
+            by=["nonexistent"],
+            order=SortOrder.ASC,
+        )
+        with pytest.raises(ColumnNotFoundError):
+            executor.execute_sort(df_registry, config, recorder)
+
 
 class TestExecutionResult:
     """Tests for StepExecutionResult metadata correctness."""

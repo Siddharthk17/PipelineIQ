@@ -1,18 +1,25 @@
-import { test, expect } from "../fixtures/auth";
+import { test, expect } from "@playwright/test";
+
+test.use({ storageState: "e2e/.auth/demo.json" });
+
+const baseUrl = process.env.E2E_BASE_URL;
 
 test.describe("Pipeline Scheduling", () => {
-  test("Schedule creation UI is accessible", async ({ authenticatedPage }) => {
-    await authenticatedPage.goto("/schedules");
-    const hasContent = await Promise.any([
-      authenticatedPage.locator('[data-testid="create-schedule-btn"]').isVisible({ timeout: 5000 }).catch(() => false),
-      authenticatedPage.locator("text=No schedules configured").isVisible({ timeout: 5000 }).catch(() => false),
-      authenticatedPage.locator("text=New Schedule").isVisible({ timeout: 5000 }).catch(() => false),
-    ]);
-    expect(hasContent).toBeTruthy();
+  test("Schedule creation UI is accessible", async ({ page }) => {
+    test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
+    await page.goto(`${baseUrl}/schedules`, { waitUntil: "domcontentloaded" });
+    // Any one of these proves the page rendered (Promise.any would resolve
+    // on the first `false`, so assert directly instead).
+    await expect(
+      page.locator("text=No schedules configured").or(
+        page.locator('[data-testid="create-schedule-btn"]'),
+      ).or(page.locator("text=New Schedule")),
+    ).toBeVisible({ timeout: 10_000 });
   });
 
-  test("Cron validation rejects invalid expressions via API", async ({ apiContext }) => {
-    const resp = await apiContext.post("/api/schedules", {
+  test("Cron validation rejects invalid expressions via API", async ({ page }) => {
+    test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
+    const resp = await page.request.post(`${baseUrl}/api/v1/schedules`, {
       data: {
         pipeline_name: "test",
         yaml_config: "pipeline:\n  name: test\n  steps: []",
@@ -22,34 +29,34 @@ test.describe("Pipeline Scheduling", () => {
     expect([400, 401, 422]).toContain(resp.status());
   });
 
-  test("Templates page shows 5 templates", async ({ authenticatedPage }) => {
-    await authenticatedPage.goto("/templates");
-    await authenticatedPage.waitForSelector('[data-testid="template-card"]', { timeout: 10_000 });
-    const count = await authenticatedPage.locator('[data-testid="template-card"]').count();
+  test("Templates page shows 5 templates", async ({ page }) => {
+    test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
+    await page.goto(`${baseUrl}/templates`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="template-card"]', { timeout: 10_000 });
+    const count = await page.locator('[data-testid="template-card"]').count();
     expect(count).toBe(5);
   });
 
-  test("Template fork button is present", async ({ authenticatedPage }) => {
-    await authenticatedPage.goto("/templates");
-    await authenticatedPage.waitForSelector('[data-testid="template-card"]', { timeout: 10_000 });
-    const firstCard = authenticatedPage.locator('[data-testid="template-card"]').first();
-    await expect(
-      firstCard.locator('[data-testid="fork-template-btn"]').or(
-        firstCard.locator("text=Use Template").or(firstCard.locator("text=Fork"))
-      )
-    ).toBeVisible();
+  test("Template card opens the builder with the template", async ({ page }) => {
+    test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
+    await page.goto(`${baseUrl}/templates`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="template-card"]', { timeout: 10_000 });
+    // Forking happens by opening a template card in the builder.
+    await page.locator('[data-testid="template-card"]').first().click();
+    await page.waitForURL((u) => u.pathname === "/pipelines/new" && u.searchParams.has("template"), { timeout: 10_000 });
   });
 
-  test("Completed run shows download button", async ({ authenticatedPage }) => {
-    await authenticatedPage.goto("/runs");
-    const successRun = authenticatedPage.locator('[data-status="success"]').first();
+  test("Completed run shows download button", async ({ page }) => {
+    test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
+    await page.goto(`${baseUrl}/runs`, { waitUntil: "domcontentloaded" });
+    const successRun = page.locator('[data-status="completed"]').first();
     const count = await successRun.count();
 
     if (count > 0) {
       await successRun.click();
       await expect(
-        authenticatedPage.locator('[data-testid="download-output-btn"]').or(
-          authenticatedPage.locator("text=Download Output").or(authenticatedPage.locator("text=Download CSV"))
+        page.locator('[data-testid="download-output-btn"]').or(
+          page.locator("text=Download Output").or(page.locator("text=Download CSV"))
         )
       ).toBeVisible();
     } else {

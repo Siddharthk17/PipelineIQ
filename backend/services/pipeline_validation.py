@@ -146,9 +146,12 @@ def collect_schema_validation_errors(config: Any, db: Session) -> list[Validatio
                     output_columns.append(f"{column}_{function}")
             schema[step_name] = output_columns
         elif step_type == StepType.SORT.value:
-            _append_missing_column_error(
-                errors, step_name, "by", getattr(step, "by", ""), input_step, available
-            )
+            by_value = getattr(step, "by", "")
+            by_cols = by_value if isinstance(by_value, list) else [by_value]
+            for column in by_cols:
+                _append_missing_column_error(
+                    errors, step_name, "by", column, input_step, available
+                )
             schema[step_name] = available
         elif step_type == StepType.VALIDATE.value:
             for rule in list(getattr(step, "rules", []) or []):

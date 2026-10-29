@@ -710,12 +710,24 @@ class StepExecutor:
         input_df = input_table.to_pandas()
         columns_in = list(input_df.columns)
 
-        self._validate_column_exists(config.name, config.by, columns_in)
+        by_cols = config.by if isinstance(config.by, list) else [config.by]
+        by_cols = [str(c) for c in by_cols if str(c).strip()]
+        for col in by_cols:
+            self._validate_column_exists(config.name, col, columns_in)
 
         def _pandas_sort() -> pa.Table:
-            ascending = config.order == SortOrder.ASC
+            asc = getattr(config, "ascending", None)
+            if asc is None:
+                ascending: object = [config.order == SortOrder.ASC] * len(by_cols)
+            else:
+                vals = asc if isinstance(asc, list) else [asc]
+                if len(vals) == 1 and len(by_cols) > 1:
+                    vals = vals * len(by_cols)
+                if len(vals) != len(by_cols):
+                    raise ValueError("Sort 'ascending' length must match 'by' columns")
+                ascending = [bool(v) for v in vals]
             sorted_df = input_df.sort_values(
-                by=config.by, ascending=ascending
+                by=by_cols, ascending=ascending
             ).reset_index(drop=True)
             return pa.Table.from_pandas(sorted_df, preserve_index=False)
 

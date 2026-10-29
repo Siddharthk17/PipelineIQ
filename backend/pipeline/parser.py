@@ -168,6 +168,7 @@ class SortStepConfig(StepConfig):
     input: str = ""
     by: str = ""
     order: SortOrder = SortOrder.ASC
+    ascending: object = None
 
 
 @dataclass
@@ -731,7 +732,7 @@ class PipelineParser:
         """Build a SortStepConfig, safely parsing the sort order."""
         order_str = raw.get("order", "asc")
         try:
-            order = SortOrder(order_str)
+            order = SortOrder(str(order_str).lower())
         except ValueError:
             order = order_str
 
@@ -741,6 +742,7 @@ class PipelineParser:
             input=raw.get("input", ""),
             by=raw.get("by", ""),
             order=order,
+            ascending=raw.get("ascending"),
         )
 
     def _check_pipeline_name(
@@ -937,13 +939,22 @@ class PipelineParser:
                         message="Aggregate step must specify at least one group_by column",
                     ))
 
-            if isinstance(step, SortStepConfig) and not step.by.strip():
-                errors.append(
-                    ValidationError(
-                        step_name=step_name,
-                        field="by",
-                        message="Sort step must specify a non-empty 'by' column",
-                    ))
+            if isinstance(step, SortStepConfig):
+                by_vals = step.by if isinstance(step.by, list) else [step.by]
+                if not any(str(b).strip() for b in by_vals):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="by",
+                            message="Sort step must specify a non-empty 'by' column",
+                        ))
+                if not isinstance(step.order, SortOrder):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="order",
+                            message="Sort step 'order' must be 'asc' or 'desc'",
+                        ))
 
             if isinstance(step, ValidateStepConfig) and not step.rules:
                 errors.append(

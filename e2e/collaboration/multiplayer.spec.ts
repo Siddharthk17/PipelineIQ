@@ -11,7 +11,7 @@ test.describe("Multiplayer Collaboration", () => {
     const pipelineName = `multi_${Date.now()}`;
     const yaml = buildSimplePipelineYAML(fileId, pipelineName);
 
-    const runResp = await apiContext.post("/api/pipelines/run", {
+    const runResp = await apiContext.post("/api/v1/pipelines/run", {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
     });
     expect(runResp.ok()).toBeTruthy();
