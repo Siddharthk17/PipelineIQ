@@ -44,10 +44,55 @@ class WebhookTask(Task):
                     max_connections=100,
                     max_keepalive_connections=20,
                 ),
-                follow_redirects=True,
-                max_redirects=3,
+                # Redirects are followed manually by _post_with_safe_redirects
+                # so every hop can be re-validated. Never enable httpx-level
+                # redirects here: they would skip the egress allow-list.
+                follow_redirects=False,
             )
         return self._client
+
+
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_MAX_REDIRECT_HOPS = 3
+
+
+async def _post_with_safe_redirects(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    content: bytes,
+    headers: dict,
+    max_hops: int = _MAX_REDIRECT_HOPS,
+) -> httpx.Response:
+    """POST with manual redirect handling that re-validates every hop.
+
+    httpx-level redirects are disabled because they would fetch whatever
+    Location the server returns, including link-local/metadata addresses
+    that validate_public_http_url forbids. Each hop is resolved against
+    the previous URL and re-validated; an unsafe target raises UnsafeURL
+    without any further request being made.
+    """
+    from urllib.parse import urljoin
+
+    validate_public_http_url(url)
+    method = "POST"
+    body = content
+    for _ in range(max_hops + 1):
+        if method == "POST":
+            resp = await client.post(url, content=body, headers=headers)
+        else:
+            resp = await client.get(url, headers=headers)
+        if resp.status_code not in _REDIRECT_STATUSES:
+            return resp
+        location = resp.headers.get("location")
+        if not location:
+            return resp
+        url = urljoin(url, location)
+        validate_public_http_url(url)
+        if method == "POST" and resp.status_code in (301, 302, 303):
+            method = "GET"
+            body = None
+    raise httpx.RequestError(f"Too many redirects (>{max_hops} hops)")
 
 
 @celery_app.task(
@@ -114,7 +159,8 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
         headers["X-PipelineIQ-Signature"] = f"sha256={signature}"
 
     try:
-        resp = await task.client.post(
+        resp = await _post_with_safe_redirects(
+            task.client,
             webhook.url,
             content=payload_bytes,
             headers=headers,
@@ -157,6 +203,34 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
             )
 
         return {"success": True, "status_code": resp.status_code, "duration_ms": duration_ms}
+
+    except UnsafeURL as e:
+        duration_ms = int(time.time() * 1000) - start_ms
+        error_str = f"Redirect target blocked: {e}"
+
+        db = SessionLocal()
+        try:
+            delivery = WebhookDelivery(
+                webhook_id=webhook_id,
+                run_id=payload.get("data", {}).get("run_id"),
+                event_type=payload.get("event_type", "unknown"),
+                payload=payload,
+                attempt_number=attempt_number,
+                duration_ms=duration_ms,
+            )
+            delivery.failed_at = datetime.now(timezone.utc)
+            delivery.error_message = error_str
+            db.add(delivery)
+            db.commit()
+        finally:
+            db.close()
+
+        logger.warning(
+            "Webhook redirect blocked: url=%s, error=%s",
+            webhook.url[:60],
+            error_str,
+        )
+        return {"success": False, "error": error_str}
 
     except (httpx.RequestError, httpx.TimeoutException) as e:
         duration_ms = int(time.time() * 1000) - start_ms
