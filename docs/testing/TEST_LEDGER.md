@@ -42,7 +42,7 @@ CLIs: docker 29.9 + compose 5.6 OK; psql 16 OK; curl/jq OK; node 26/npm 11 OK; p
 | S23 | api | Inconsistent error shape/pagination: dict-vs-string details; positional HTTPException; webhook test 200-vs-502; files 503 policy; audit no total; notifications/schedules/versions/files unbounded lists | P3 | SUSPECTED | files cited | — | — |
 | S24 | api | Duplicate/conflicting routes: contracts v1 vs v2 (same table, incompatible); pipelines timing vs runs timing shapes; SSE absent from main api; webhooks/audit unversioned; sse double-mount OpenAPI dup | P1 | SUSPECTED | routers/contracts.py vs api/contracts.py; routers/runs.py:20 vs pipelines.py:1239 | — | — |
 | S25 | db | Missing indexes: step_results(run) ORM none + DB idx dropped; schema_snapshots/audit_logs/notification_configs/webhook_deliveries(run) none; permissions UQ dropped -> dup grants; contracts(pipeline,is_active) none; files(user,filename,version) none; column_policies ORM metadata drift | P2 | SUSPECTED | 1a158ef49016:81,98,120; models files | — | — |
-| S26 | db | Auth fail-open: _is_token_revoked except->False + revoke_token silent warning -> revoked token usable when Redis down | P0 | SUSPECTED | auth.py:189-191,209-211 | — | — |
+| S26 | db | Auth fail-open: _is_token_revoked except->False + revoke_token silent warning -> revoked token usable when Redis down | P0 | VERIFIED | auth.py:182-211 fail-closed + error logs; repro test failed before/passes after; auth+rbac suites 27/27 green | FIX-COMMIT | backend/tests/unit/security/test_token_revocation.py |
 | S27 | db | PgBouncer-unsafe: raw COMMIT/ALTER TYPE enum backfill (database.py:126-142); ALTER TYPE w/o autocommit in 3 migrations; CREATE INDEX CONCURRENTLY (forbidden in pooling); SET LOCAL (meaningless); pool 80-120 conns; LOCK TABLE users PG-only | P1 | SUSPECTED | files cited | — | — |
 | S28 | db | N+1/select-lazy everywhere; cb3e11c88344 backfills ALL orphan files to first user (cross-user leak); inconsistent CASCADE vs SET NULL; HealingAttempt synonym columns invite wrong queries; minio_client None-crash; Redis() per healthcheck leaks sockets | P1 | SUSPECTED | models/__init__ rels; cb3e11c88344:42-51; minio_client.py:10-16; main.py:632-640 | — | — |
 | S29 | infra | worker-streaming skips pg/pgbouncer/minio deps -> boot crash-loop; nginx->flower service_started (not healthy); missing healthchecks (streaming/beat/flower/nginx/console); flower READ_URL primary defeats read-split | P2 | SUSPECTED | compose:1063-1067,861-862,824 + healthcheck gaps | — | — |
@@ -65,6 +65,8 @@ CLIs: docker 29.9 + compose 5.6 OK; psql 16 OK; curl/jq OK; node 26/npm 11 OK; p
 | FZ02 | api | POST /api/v1/wasm/upload 500 on invalid binary: _inspect_wasm ValueError uncaught (sibling validate endpoint catches it). Should be 400 | P1 | OPEN | fuzz d6NTKN + live repro curl 2026-10-29 (request_id 48dbe427); routers/wasm.py:158 exports,imports=_inspect_wasm vs validate path try/except | — | — |
 
 | FZ03 | api | GET /debug/sentry-test always 500, unauthenticated (non-prod only). Deliberate crash-test endpoint; harden to admin-only to avoid oracle/log-spam | P2 | OPEN | debug.py:11; fuzz QPGZQb | — | — |
+
+| S46 | ratelimit | Rate limits keyed by proxy peer IP (no XFF/X-Real-IP handling): one global bucket per endpoint for all clients behind nginx. Login 5/min locks out all users after 5 attempts from anywhere; live tests deterministically collide | P1 | OPEN | slowapi/util.py get_remote_address returns request.client.host; no ProxyHeadersMiddleware in main.py; nginx sets X-Real-IP/XFF (pipelineiq.conf:40-43) but app ignores | — | — |
 
 | S44 | audit | `log_action` bypasses request DB session AND blocks the request path on a fresh pooled connection with no short connect timeout: fail-slow under DB stress (measured 7.5-15s/request on unresolvable host; error only logged) | P2 | OPEN | audit_service.py:38-55; engine pool database.py:18-34 (no connect_timeout); measured test_api.py:349 7.499s vs <1.0 assert | — | — |
 
@@ -150,3 +152,8 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 
 - 130/130 ops, 10645 cases, 91s. 3 unique ST101 server errors; 93 ops 401/403; 1 op 404 (templates/{id} needs data); 12 ops schema-vs-validation mismatch (expected: strict API validation).
 - Auth artifact: fuzzer hit POST /auth/logout with its own token -> self-revocation -> all later requests 401. Real behavior (correct), methodology note: exclude /auth/logout or rotate token in future runs.
+
+## New P1 from post-S26 suite run (2026-10-29)
+
+- Full suite after S26: 275 passed + 2 failed (test_circular_dependency, test_non_existent_file: live login 429, 5/min bucket). Proven NOT an S26 regression: live-gated tests share one 5/min login bucket because slowapi get_remote_address returns the proxy peer IP (no ProxyHeadersMiddleware; nginx sets X-Forwarded-For/X-Real-IP but app ignores them). All host-originated logins share one bucket; behind nginx ALL clients share one bucket (multi-user lockout: 6th concurrent login anywhere rejected).
+- New finding S46 below. Live-test helpers also need economy (module-scoped shared tokens) to stop tripping the (correct) 5/min budget.

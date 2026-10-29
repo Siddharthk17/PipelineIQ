@@ -187,8 +187,11 @@ def _is_token_revoked(jti: str | None) -> bool:
 
         return bool(get_cache_redis().exists(_revoked_token_key(jti)))
     except Exception:
-        logger.warning("Token revocation check failed; allowing request")
-        return False
+        logger.error(
+            "Token revocation check failed; denying request",
+            exc_info=True,
+        )
+        return True
 
 
 def revoke_token(token: str) -> None:
@@ -207,7 +210,7 @@ def revoke_token(token: str) -> None:
 
         get_cache_redis().setex(_revoked_token_key(str(jti)), ttl, "1")
     except Exception:
-        logger.warning("Token revocation failed", exc_info=True)
+        logger.error("Token revocation failed", exc_info=True)
 
 
 def verify_token(token: str) -> Optional[dict]:
