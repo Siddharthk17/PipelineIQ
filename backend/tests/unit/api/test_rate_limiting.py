@@ -105,3 +105,55 @@ class TestRateLimiting:
             json={"yaml_config": yaml_config},
         )
         assert response.status_code == 429
+
+
+class TestClientIpKeying:
+    """Rate limits apply per client IP, not per proxy (S46)."""
+
+    def test_different_client_ips_have_independent_buckets(
+            self, client, sales_csv_bytes):
+        from backend.tests.conftest import (
+            build_simple_pipeline_yaml, upload_file)
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+        yaml_config = build_simple_pipeline_yaml(file_id)
+
+        ip_a = {"X-Real-IP": "10.9.9.1"}
+        for _ in range(10):
+            resp = client.post(
+                "/api/v1/pipelines/run",
+                json={"yaml_config": yaml_config, "name": "test_pipeline"},
+                headers=ip_a,
+            )
+            assert resp.status_code in (200, 202, 422)
+        resp = client.post(
+            "/api/v1/pipelines/run",
+            json={"yaml_config": yaml_config, "name": "test_pipeline"},
+            headers=ip_a,
+        )
+        assert resp.status_code == 429
+
+        # A different client IP is unaffected by the first bucket.
+        resp = client.post(
+            "/api/v1/pipelines/run",
+            json={"yaml_config": yaml_config, "name": "test_pipeline"},
+            headers={"X-Real-IP": "10.9.9.2"},
+        )
+        assert resp.status_code in (200, 202, 422)
+
+    def test_client_ip_key_prefers_real_ip_header(self):
+        from fastapi import Request
+        from backend.utils.rate_limiter import client_ip_key
+
+        scope = {
+            "type": "http",
+            "client": ("9.9.9.9", 1234),
+            "headers": [(b"x-real-ip", b"10.1.2.3")],
+        }
+        assert client_ip_key(Request(scope)) == "10.1.2.3"
+
+    def test_client_ip_key_falls_back_to_peer(self):
+        from fastapi import Request
+        from backend.utils.rate_limiter import client_ip_key
+
+        scope = {"type": "http", "client": ("9.9.9.9", 1234), "headers": []}
+        assert client_ip_key(Request(scope)) == "9.9.9.9"
