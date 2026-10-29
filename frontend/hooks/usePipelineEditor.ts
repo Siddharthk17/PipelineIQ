@@ -233,6 +233,8 @@ export function usePipelineEditor({
       emittedFromGraphRef.current = false;
       return;
     }
+    // PIPELINEIQ_S52_MARKER: temporary parse tracing
+    console.log("[parse-effect] firing, yaml len", yamlText.length);
     parseYamlToGraph(yamlText);
   }, [yamlText, parseYamlToGraph]);
 
