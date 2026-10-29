@@ -88,3 +88,9 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 
 - Unit baseline part 1 (no DB overrides): chunk1 4 failed/270 passed, chunk2 403 passed, chunk3 250 passed. Total 923 passed, 4 failed, 3 skipped.
 - The 4 failures (timing assert 7.5s>1s; 3x rate-limit 202-vs-429) reran GREEN serially (7 passed in 2.65s) after pointing DATABASE_* at 127.0.0.1:5432. Root cause: `log_action` (audit_service.py:38) opens a real SessionLocal to `pgbouncer` hostname (unresolvable from host) and commit()s synchronously in the request path; each mutating request burned ~8-15s in DNS/connect stall. Slow requests stretched the 11-request loop past the 60s sliding window (rate limits never tripped) and broke the <1s timing assert. No product change to the tests; env fix only. Lesson: local unit runs must export DATABASE_URL/WRITE/READ_URL to 127.0.0.1:5432 (mirrors CI localhost PG).
+
+## Baseline unit run 2 (with DB overrides, 2026-10-29)
+
+- chunk1: 274 passed, 2 skipped (97s). chunk2: 403 passed, 1 skipped (5s). chunk3: 250 passed (8s).
+- Total: 927 passed, 3 skipped, 0 failed. Counts as clean-baseline run 1 of 3.
+- Env required for host-side runs: STORAGE_TYPE=local, UPLOAD_DIR=/tmp/qa-uploads, REDIS_* -> 127.0.0.1 ports, DATABASE_* -> 127.0.0.1:5432. (Mirrors CI localhost services; repo .env docker hostnames are unreachable from host.)
