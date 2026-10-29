@@ -180,7 +180,13 @@ async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: Req
   if (!res.ok) {
     if (res.status === 401) {
       clearToken();
-      if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+      // Public pages must stay viewable without a session; only bounce
+      // authenticated-area pages to the login screen.
+      const publicPaths = ["/login", "/register"];
+      if (
+        typeof window !== "undefined" &&
+        !publicPaths.includes(window.location.pathname)
+      ) {
         window.location.href = "/login";
       }
     }

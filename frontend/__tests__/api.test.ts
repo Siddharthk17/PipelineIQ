@@ -161,6 +161,63 @@ describe("fetchApi (via public functions)", () => {
     expect(getToken()).toBeNull();
   });
 
+  it("does not redirect on 401 from public pages", async () => {
+    setToken("expired-token");
+    window.history.pushState({}, "", "/register");
+    const assignSpy = vi.fn();
+    Object.defineProperty(window, "location", {
+      value: new URL("http://localhost/register"),
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(window.location, "href", {
+      get: () => "http://localhost/register",
+      set: assignSpy,
+      configurable: true,
+    });
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+      json: () => Promise.resolve({ detail: "expired" }),
+    } as unknown as Response);
+
+    await expect(getFiles()).rejects.toThrow(ApiError);
+    expect(assignSpy).not.toHaveBeenCalled();
+    window.history.pushState({}, "", "/");
+  });
+
+  it("redirects to /login on 401 from protected pages", async () => {
+    setToken("expired-token");
+    window.history.pushState({}, "", "/dashboard");
+
+    let redirected = "";
+    Object.defineProperty(window, "location", {
+      value: new URL("http://localhost/dashboard"),
+      writable: true,
+    });
+    const assignSpy = vi.fn((url: string) => {
+      redirected = url;
+    });
+    Object.defineProperty(window.location, "href", {
+      get: () => "http://localhost/dashboard",
+      set: assignSpy,
+      configurable: true,
+    });
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      statusText: "Unauthorized",
+      json: () => Promise.resolve({ detail: "expired" }),
+    } as unknown as Response);
+
+    await expect(getFiles()).rejects.toThrow(ApiError);
+    expect(assignSpy).toHaveBeenCalledWith("/login");
+    expect(redirected).toBe("/login");
+  });
+
   it("runPipeline sends POST with JSON body", async () => {
     setToken("tok");
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
