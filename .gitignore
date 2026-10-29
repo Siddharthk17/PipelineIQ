@@ -31,3 +31,4 @@ fixes_pipelineiq.md
 htmlcov/
 .vercel
 .worktrees/
+e2e/.auth/
