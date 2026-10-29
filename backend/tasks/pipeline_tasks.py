@@ -765,6 +765,12 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     """
     from backend.metrics import PIPELINE_DURATION_SECONDS, PIPELINE_RUNS_TOTAL
 
+    # A concurrent cancel wins over a late finish: the user asked to stop,
+    # so record the step results but keep the CANCELLED status instead of
+    # overwriting it with COMPLETED/FAILED.
+    db.refresh(pipeline_run)
+    cancelled = pipeline_run.status == PipelineStatus.CANCELLED
+
     healed_run = (
         pipeline_run.status == PipelineStatus.HEALED
         or db.query(HealingAttempt)
@@ -784,7 +790,9 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             has_contract_violations = True
             break
 
-    if summary.status == RunnerPipelineStatus.COMPLETED:
+    if cancelled:
+        event_type = "pipeline_cancelled"
+    elif summary.status == RunnerPipelineStatus.COMPLETED:
         if (has_contract_violations and healed_run) or has_contract_violations:
             pipeline_run.status = PipelineStatus.CONTRACT_VIOLATION
         elif healed_run:
@@ -877,8 +885,10 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     )
     db.add(lineage_record)
 
-    # Post-run data contract validation
-    check_and_enforce_contract(db, pipeline_run, summary)
+    # Post-run data contract validation (skipped for cancelled runs:
+    # a user-requested stop must not mark violations or block downstream).
+    if not cancelled:
+        check_and_enforce_contract(db, pipeline_run, summary)
 
     try:
         from backend.repositories.catalog import register_run_assets
