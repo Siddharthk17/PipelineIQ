@@ -177,7 +177,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     authToken: token ?? undefined,
   });
 
-  // yjs text binding is intentionally NOT used here. The editor is
+  // The yjs text binding is deliberately left out here. The editor is
   // React-controlled via `value={code}`, and binding yCollab(yYaml) at the
   // same time makes the two sources fight over the document. Keep
   // collaboration at the graph level (nodes/edges/cursors/presence sync

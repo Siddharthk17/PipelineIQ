@@ -26,7 +26,7 @@ def seed_demo():
     try:
         existing = db.query(User).filter(User.email == DEMO_EMAIL).first()
         if existing:
-            print(f"✓ Demo account already exists (id={existing.id})")
+            print(f"Demo account already exists (id={existing.id})")
             return
 
         user = User(
@@ -39,10 +39,10 @@ def seed_demo():
         )
         db.add(user)
         db.commit()
-        print(f"✓ Demo account created: {DEMO_EMAIL} (role=admin)")
+        print(f"Demo account created: {DEMO_EMAIL} (role=admin)")
     except Exception as e:
         db.rollback()
-        print(f"⚠ Demo seed error: {e}")
+        print(f"WARNING: demo seed error: {e}")
     finally:
         db.close()
 

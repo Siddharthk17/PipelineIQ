@@ -74,7 +74,7 @@ export function useCollaborativePipeline({
     // sessions (page reload, shared storageState) carry auth only as the
     // HttpOnly cookie, which the browser sends on the ws handshake and the
     // relay verifies as a fallback. Without this, collaboration silently
-    // never connects after any reload (S-new).
+    // never connects after any reload.
     if ((!authToken && !currentUser) || !pipelineName) {
       if (providerRef.current) {
         providerRef.current.destroy()

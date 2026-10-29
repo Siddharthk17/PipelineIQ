@@ -12,7 +12,7 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
 
   const fileId = await uploadCsv(request, user.token, "j7.csv", "id,region,amount\n1,N,10\n2,S,20\n");
 
-  // --- Schedules: create, list, pause, delete.
+  // Schedules: create, list, pause, delete.
   const sched = await request.post(`${API}/api/v1/schedules/`, {
     data: {
       pipeline_name: `j7_sched_${Date.now().toString(36)}`,
@@ -28,18 +28,18 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
   const delSched = await request.delete(`${API}/api/v1/schedules/${schedId}`, { headers });
   expect([200, 204, 404]).toContain(delSched.status());
 
-  // --- Templates: list exists and one renders runnable YAML.
+  // Templates: list exists and one renders runnable YAML.
   const templates = await request.get(`${API}/api/v1/templates/`, { headers });
   expect(templates.ok(), await templates.text()).toBeTruthy();
   const templateList = await templates.json();
   expect(Array.isArray(templateList.templates ?? templateList)).toBeTruthy();
 
-  // --- Catalog: full-text search over the caller's own assets.
+  // Catalog: full-text search over the caller's own assets.
   const catalog = await request.get(`${API}/api/catalog/search?q=j7&limit=10`, { headers });
   expect(catalog.ok(), await catalog.text()).toBeTruthy();
   expect((await catalog.json()).query).toBe("j7");
 
-  // --- SQL compute step: DuckDB over the uploaded file.
+  // SQL compute step: DuckDB over the uploaded file.
   const sqlYaml = [
     "pipeline:",
     `  name: j7_sql_${Date.now().toString(36)}`,
@@ -59,7 +59,7 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
   const sqlRun = await runPipeline(request, user.token, sqlYaml);
   expect(await waitForRun(request, user.token, sqlRun)).toBe("COMPLETED");
 
-  // --- WASM: garbage is rejected; a real module validates, uploads,
+  // WASM: garbage is rejected; a real module validates, uploads,
   // and runs per-row inside a pipeline.
   const garbage = await request.post(`${API}/api/v1/wasm/validate`, {
     multipart: {
@@ -142,7 +142,7 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
     Number(values[cols.indexOf("amount")]) * 2,
   );
 
-  // --- Contracts: a blocking contract quarantines a violating run.
+  // Contracts: a blocking contract quarantines a violating run.
   const contractPipe = `j7_contract_${Date.now().toString(36)}`;
   const contractYaml = [
     "columns:",
@@ -177,7 +177,7 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
   );
   expect(await waitForRun(request, user.token, violRun)).toBe("CONTRACT_VIOLATION");
 
-  // --- UI spot check: schedules page renders for a logged-in user.
+  // UI spot check: schedules page renders for a logged-in user.
   await uiLogin(page, user.email, user.password);
   await page.goto(`${UI}/schedules`, { waitUntil: "domcontentloaded" }).catch(() => {});
   await expect(page.getByText(/schedule/i).first()).toBeVisible({ timeout: 30_000 });

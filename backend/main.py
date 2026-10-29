@@ -263,7 +263,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.exception_handler(RedisError)
 async def redis_unavailable_handler(request: Request, exc: RedisError) -> JSONResponse:
-    """Cache/queue outages are 503s, not 500s (S-new).
+    """Cache/queue outages are 503s, not 500s.
 
     The rate limiter, revocation checks, and SSE cache all read Redis on
     the request path. When Redis is unreachable the honest answer is
@@ -392,10 +392,10 @@ async def validation_error_handler(
     # Also log to standard logger for Docker log visibility
     import json as _json
     logging.getLogger("pipelineiq").warning(
-        "❌ 422 UNPROCESSABLE ENTITY on %s %s", request.method, request.url
+        "422 Unprocessable Entity on %s %s", request.method, request.url
     )
     logging.getLogger("pipelineiq").error(
-        "❌ MISSING/INVALID FIELDS: %s", _json.dumps(safe_errors, indent=2)
+        "Missing/invalid fields: %s", _json.dumps(safe_errors, indent=2)
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

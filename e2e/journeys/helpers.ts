@@ -92,7 +92,7 @@ export async function waitForRun(
   const start = Date.now();
   for (;;) {
     // Per-request timeout with retry: under heavy worker load a single
-    // poll can be slow; that is not failure. Only the overall deadline
+    // poll can be slow; that is not a failure. Only the overall deadline
     // below fails the wait.
     let resp;
     try {

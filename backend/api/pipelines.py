@@ -450,9 +450,9 @@ def run_pipeline(
             for e in validation_result.errors
         ]
         logger.warning(
-            "❌ 400 BAD REQUEST on POST /api/v1/pipelines/run — YAML validation failed"
+            "400 Bad Request on POST /api/v1/pipelines/run - YAML validation failed"
         )
-        logger.warning("❌ VALIDATION ERRORS: %s", error_details)
+        logger.warning("Validation errors: %s", error_details)
 
         # Otherwise, return all validation errors as 400
         raise HTTPException(
