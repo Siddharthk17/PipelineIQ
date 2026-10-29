@@ -100,3 +100,8 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 - Unit suite with coverage: 927 passed, 3 skipped, 0 failed (121s).
 - TOTAL incl. tests/scripts: 68% (20999 stmts). App code only (omit tests/scripts/alembic/benchmark): 63% (12124 stmts, 4427 miss). Target 90% -> ~3400 lines to cover.
 - Lowest app modules: tasks/scheduled_pipeline 18%, tasks/webhook_tasks 19%, storage/lifecycle 20%, tasks/streaming_pipeline 20%, execution/healing_agent 21%, tasks/schedule_tasks 22%, routers/catalog_pipelines 23%, services/notification_service 24%, routers/streaming 25%, api/contracts 26%, routers/wasm 26%, tasks/gemini_tasks 26%, routers/storage 28%, streaming/redpanda_client 28%.
+
+## Frontend baseline (2026-10-29)
+
+- `npx vitest run` in frontend/: 22 files, 230 tests, all passed (12.5s). Counts as clean-baseline run 1 of 3.
+- Note: `--reporter=basic` is not a valid vitest reporter in this repo (startup error); use default reporter.
