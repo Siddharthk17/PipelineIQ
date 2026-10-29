@@ -31,6 +31,10 @@ def _build_engine(url: str):
         pool_pre_ping=True,
         pool_recycle=1800,
         pool_timeout=30,
+        # Fail fast when the database is unreachable instead of blocking
+        # request-path work (audit logs, storage events) on TCP timeouts.
+        connect_args={
+            "connect_timeout": settings.DB_CONNECT_TIMEOUT_SECONDS},
     )
 
 

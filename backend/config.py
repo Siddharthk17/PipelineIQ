@@ -162,6 +162,7 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = ""
     POSTGRES_USER: str = "pipelineiq"
     POSTGRES_DB: str = "pipelineiq"
+    DB_CONNECT_TIMEOUT_SECONDS: int = 5
 
     @field_validator("LOG_LEVEL")
     @classmethod
