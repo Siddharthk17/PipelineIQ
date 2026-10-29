@@ -172,11 +172,13 @@ def _init_storage_bucket() -> None:
         return
     try:
         import boto3
+        from botocore.config import Config
         s3_client = boto3.client(
             "s3",
             aws_access_key_id=settings.S3_ACCESS_KEY,
             aws_secret_access_key=settings.S3_SECRET_KEY,
             endpoint_url=settings.S3_ENDPOINT_URL,
+            config=Config(signature_version="s3v4"),
         )
         bucket_name = settings.S3_BUCKET
         try:

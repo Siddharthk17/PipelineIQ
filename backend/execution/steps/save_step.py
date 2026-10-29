@@ -122,12 +122,14 @@ def _get_presign_client(server_client):
     if not public_endpoint or public_endpoint == settings.S3_ENDPOINT_URL:
         return server_client
     import boto3
+    from botocore.config import Config
 
     return boto3.client(
         "s3",
         aws_access_key_id=settings.S3_ACCESS_KEY,
         aws_secret_access_key=settings.S3_SECRET_KEY,
         endpoint_url=public_endpoint,
+        config=Config(signature_version="s3v4"),
     )
 
 
@@ -221,11 +223,13 @@ def _get_minio_client():
         client = storage_service.provider.s3
     else:
         import boto3
+        from botocore.config import Config
         client = boto3.client(
             "s3",
             aws_access_key_id=settings.S3_ACCESS_KEY,
             aws_secret_access_key=settings.S3_SECRET_KEY,
             endpoint_url=settings.S3_ENDPOINT_URL,
+            config=Config(signature_version="s3v4"),
         )
 
     global _bucket_ensured

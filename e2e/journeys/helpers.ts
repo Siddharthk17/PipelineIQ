@@ -77,12 +77,22 @@ export async function waitForRun(
 ): Promise<string> {
   const start = Date.now();
   for (;;) {
-    // Per-request timeout: a hung socket must fail fast, never burn the
-    // whole test budget (seen once after an API container restart).
-    const resp = await request.get(`${API}/api/v1/pipelines/${runId}`, {
-      headers: { Authorization: `Bearer ${token}` },
-      timeout: 15_000,
-    });
+    // Per-request timeout with retry: under heavy worker load a single
+    // poll can be slow; that is not failure. Only the overall deadline
+    // below fails the wait.
+    let resp;
+    try {
+      resp = await request.get(`${API}/api/v1/pipelines/${runId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 15_000,
+      });
+    } catch (e) {
+      if (Date.now() - start > timeoutMs) {
+        throw new Error(`run ${runId} polling timed out: last error ${e}`);
+      }
+      await new Promise((r) => setTimeout(r, 5000));
+      continue;
+    }
     expect(resp.ok()).toBeTruthy();
     const run = await resp.json();
     if (["COMPLETED", "HEALED", "FAILED", "CONTRACT_VIOLATION", "CANCELLED", "TIMEOUT"].includes(run.status)) {

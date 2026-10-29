@@ -7,9 +7,14 @@ from pathlib import Path
 from typing import BinaryIO
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from backend.config import settings
+
+# MinIO rejects SigV2 query-auth (AWSAccessKeyId/Signature/Expires).
+# botocore may default to SigV2 for HTTP/IP endpoints, so pin SigV4.
+_SIGV4 = Config(signature_version="s3v4")
 
 
 def _validate_storage_key(key: str) -> str:
@@ -160,6 +165,7 @@ class S3StorageProvider(StorageProvider):
             aws_access_key_id=settings.S3_ACCESS_KEY,
             aws_secret_access_key=settings.S3_SECRET_KEY,
             endpoint_url=settings.S3_ENDPOINT_URL,
+            config=_SIGV4,
         )
         self.bucket = settings.S3_BUCKET
         self._presign_client = None
@@ -183,6 +189,7 @@ class S3StorageProvider(StorageProvider):
                     aws_access_key_id=settings.S3_ACCESS_KEY,
                     aws_secret_access_key=settings.S3_SECRET_KEY,
                     endpoint_url=endpoint,
+                    config=_SIGV4,
                 )
         return self._presign_client
 

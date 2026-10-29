@@ -40,3 +40,20 @@ def test_public_host_preserved_in_download_url(monkeypatch):
     url = provider.get_presigned_download_url("outputs/run-1/a.csv", expiration=60)
     assert url is not None
     assert url.startswith("http://127.0.0.1:9000/"), url
+
+
+def test_presigned_urls_use_sigv4(monkeypatch):
+    """Presigned URLs must use SigV4 (S52).
+
+    botocore may default to SigV2 query-auth (AWSAccessKeyId/Signature/
+    Expires) for HTTP/IP endpoints; MinIO rejects those for PUTs, which
+    broke every direct browser upload over the large-file threshold.
+    """
+    provider = _provider(monkeypatch, public="http://127.0.0.1:9000")
+    for url in (
+        provider.get_presigned_upload_url("uploads/abc.csv", expiration=60),
+        provider.get_presigned_download_url("outputs/run-1/a.csv", expiration=60),
+    ):
+        assert url is not None
+        assert "X-Amz-Algorithm=AWS4-HMAC-SHA256" in url, url
+        assert "AWSAccessKeyId" not in url, url
