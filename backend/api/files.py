@@ -538,6 +538,30 @@ def preview_file(
     }
 
 
+def _decode_csv_bytes(raw: bytes) -> tuple[str, str]:
+    """Decode CSV bytes, trying BOM-aware and legacy encodings in order.
+
+    Tries UTF-8 (with optional BOM), UTF-16 (with BOM, or with NUL bytes
+    present), then Windows-1252. Returns (text, encoding name). Raises
+    UnicodeDecodeError when nothing fits, e.g. for binary garbage.
+    """
+    import codecs
+
+    if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return raw.decode("utf-16"), "utf-16"
+    if b"\x00" in raw:
+        try:
+            return raw.decode("utf-16"), "utf-16"
+        except (UnicodeDecodeError, ValueError):
+            pass
+    for encoding in ("utf-8-sig", "windows-1252"):
+        try:
+            return raw.decode(encoding), encoding
+        except (UnicodeDecodeError, ValueError):
+            continue
+    raise UnicodeDecodeError("csv", raw, 0, 1, "no suitable text encoding")
+
+
 def _validate_file_extension(filename: str) -> None:
     """Raise 400 if the file extension is not in ALLOWED_EXTENSIONS."""
     extension = Path(filename).suffix.lower()
@@ -557,8 +581,14 @@ def _validate_file_content(filename: str, stored_path: str) -> None:
     try:
         if extension == ".csv":
             with storage_service.download(stored_path) as handle:
-                sample = handle.read(4096)
-            text = sample.decode("utf-8-sig")
+                sample = handle.read(1_048_576)
+            try:
+                text, _ = _decode_csv_bytes(sample)
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    "CSV file is not decodable text "
+                    "(tried UTF-8, UTF-16 and Windows-1252)"
+                ) from exc
             if not next(csv.reader(text.splitlines()), None):
                 raise ValueError("CSV file has no header row")
         elif extension == ".json":
@@ -633,37 +663,25 @@ def _extract_file_metadata(
 def _extract_csv_metadata(
         stored_path: str) -> tuple[int, list[str], dict[str, str]]:
     """Read CSV metadata with bounded memory usage."""
+    import io
+
     try:
         with storage_service.download(stored_path) as handle:
-            # Convert binary stream to text wrapper for csv reader
-            import io
-
-            text_handle = io.TextIOWrapper(
-                handle, encoding="utf-8", newline="")
-            reader = csv.reader(text_handle)
-            header = next(reader, None)
-            if header is None:
-                return 0, [], {}
-            row_count = sum(1 for _ in reader)
-            columns = [str(column) for column in header]
-    except UnicodeDecodeError:
-        try:
-            with storage_service.download(stored_path) as handle:
-                import io
-
-                text_handle = io.TextIOWrapper(
-                    handle, encoding="utf-8-sig", newline="")
-                reader = csv.reader(text_handle)
-                header = next(reader, None)
-                if header is None:
-                    return 0, [], {}
-                row_count = sum(1 for _ in reader)
-                columns = [str(column) for column in header]
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Failed to parse file '{stored_path}': {exc}",
-            ) from exc
+            raw = handle.read()
+        text, encoding = _decode_csv_bytes(raw)
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{stored_path}': not decodable text "
+            "(tried UTF-8, UTF-16 and Windows-1252)",
+        ) from exc
+    try:
+        reader = csv.reader(io.StringIO(text, newline=""))
+        header = next(reader, None)
+        if header is None:
+            return 0, [], {}
+        row_count = sum(1 for _ in reader)
+        columns = [str(column) for column in header]
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -674,8 +692,8 @@ def _extract_csv_metadata(
         return row_count, columns, {}
 
     sample_rows = max(1, min(1000, row_count))
-    with storage_service.download(stored_path) as handle:
-        sample_df = pd.read_csv(handle, nrows=sample_rows)
+    sample_df = pd.read_csv(
+        io.BytesIO(raw), nrows=sample_rows, encoding=encoding)
     dtypes = {column: str(dtype) for column, dtype in sample_df.dtypes.items()}
     return row_count, columns, dtypes
 
@@ -940,7 +958,11 @@ def _parse_file_preview(
     extension = Path(filename).suffix.lower()
     try:
         if extension == ".csv":
-            return pd.read_csv(handle, nrows=nrows)
+            import io
+
+            raw = handle.read()
+            text, _ = _decode_csv_bytes(raw)
+            return pd.read_csv(io.StringIO(text), nrows=nrows)
         elif extension == ".json":
             df = pd.read_json(handle)
             return df.head(nrows)

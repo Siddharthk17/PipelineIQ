@@ -252,8 +252,11 @@ async def replay_dlq(
 
 
 async def _get_run_or_404(run_id: str, user_id, db: Session) -> PipelineRun:
+    from backend.utils.uuid_utils import as_uuid, validate_uuid_format
+
+    validate_uuid_format(run_id)
     run = db.query(PipelineRun).filter(
-        PipelineRun.id == run_id,
+        PipelineRun.id == as_uuid(run_id),
         PipelineRun.user_id == user_id,
     ).first()
     if not run:

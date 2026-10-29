@@ -73,7 +73,7 @@ CLIs: docker 29.9 + compose 5.6 OK; psql 16 OK; curl/jq OK; node 26/npm 11 OK; p
 | S44 | audit | `log_action` bypasses request DB session AND blocks the request path on a fresh pooled connection with no short connect timeout: fail-slow under DB stress (measured 7.5-15s/request on unresolvable host; error only logged) | P2 | OPEN | audit_service.py:38-55; engine pool database.py:18-34 (no connect_timeout); measured test_api.py:349 7.499s vs <1.0 assert | — | — |
 
 | B01 | api | Notification test endpoint returns 502 when downstream unreachable (inconsistent with webhook test 200+delivered:false; 502 implies our outage) | P1 | OPEN | live probe 2026-10-29: POST /api/v1/notifications/{id}/test w/ https://example.com/hooks/invalid -> 502 {detail: Failed to send test...}; code notifications.py:248-252 maps send==False to 502 | — | — |
-| B02 | api | Valid non-UTF8 CSVs rejected + BOM corrupts column name: latin-1 -> 422 'does not match extension'; utf-16 -> 422; BOM file -> 201 but column stored as \ufeffa (validation uses utf-8-sig, extraction utf-8) | P1 | OPEN | live probes 2026-10-29 (see phase-1 notes); files.py:558-561 vs files.py:641-656 decode mismatch | — | — |
+| B02 | api | Valid non-UTF8 CSVs rejected + BOM leaked into column name | P1 | VERIFIED | repro test_upload_encodings.py (4 failed before/pass after); shared _decode_csv_bytes (utf-8-sig/utf-16/windows-1252) wired into validate/extract/preview; same fix also repaired preview path | FIX-COMMIT | backend/tests/unit/api/test_upload_encodings.py |
 
 ## Architectural warnings from compose-log analysis (to resolve in Phase 1)
 

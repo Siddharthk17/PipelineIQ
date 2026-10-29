@@ -18,6 +18,8 @@ from typing import Optional
 import orjson
 import pandas as pd
 
+from backend.utils.uuid_utils import as_uuid
+
 logger = logging.getLogger(__name__)
 
 POLICY_CACHE_TTL = 60
@@ -165,7 +167,8 @@ def get_column_policies_for_file(
     except Exception:
         pass
 
-    policies = db.query(ColumnPolicy).filter(ColumnPolicy.file_id == file_id).all()
+    policies = db.query(ColumnPolicy).filter(
+        ColumnPolicy.file_id == as_uuid(file_id)).all()
 
     records = [
         ColumnPolicyRecord(

@@ -329,7 +329,7 @@ def get_contract_status(
     if active and last_run:
         total_violations = (
             db.query(ContractViolationRecord)
-            .filter(ContractViolationRecord.run_id == str(last_run.id))
+            .filter(ContractViolationRecord.run_id == last_run.id)
             .count()
         )
 
@@ -363,7 +363,7 @@ def list_pipeline_breaches(
 
     violations = (
         db.query(ContractViolationRecord)
-        .filter(ContractViolationRecord.run_id == str(last_run.id))
+        .filter(ContractViolationRecord.run_id == last_run.id)
         .order_by(
             ContractViolationRecord.step_index,
             ContractViolationRecord.severity.desc(),

@@ -65,7 +65,7 @@ def create_contract(
         db.query(PipelineContract)
         .filter(
             PipelineContract.pipeline_name == request.pipeline_name,
-            PipelineContract.user_id == str(current_user.id),
+            PipelineContract.user_id == current_user.id,
         )
         .first()
     )
@@ -111,7 +111,7 @@ def list_contracts(
 ):
     contracts = (
         db.query(PipelineContract)
-        .filter(PipelineContract.user_id == str(current_user.id))
+        .filter(PipelineContract.user_id == current_user.id)
         .order_by(PipelineContract.pipeline_name.asc())
         .all()
     )
@@ -146,7 +146,7 @@ def list_contract_breaches(
         db.query(PipelineContract)
         .filter(
             PipelineContract.id == as_uuid(contract_id),
-            PipelineContract.user_id == str(current_user.id),
+            PipelineContract.user_id == current_user.id,
         )
         .first()
     )
@@ -194,7 +194,7 @@ def delete_contract(
         db.query(PipelineContract)
         .filter(
             PipelineContract.id == as_uuid(contract_id),
-            PipelineContract.user_id == str(current_user.id),
+            PipelineContract.user_id == current_user.id,
         )
         .first()
     )
