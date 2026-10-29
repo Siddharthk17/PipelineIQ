@@ -272,22 +272,41 @@ def _check_pipeline_permission(
             grant_owner,
         )
         if grant_owner:
-            # First time this pipeline is run/created - grant ownership
-            # to whoever created it. Global roles do not matter here:
-            # per-pipeline ownership governs pipeline access.
-            new_perm = PipelinePermission(
-                pipeline_name=pipeline_name,
-                user_id=user.id,
-                permission_level="owner",
+            # Self-serve creation: the first user of a brand-new pipeline name
+            # becomes its owner. Names already in use by anyone else stay
+            # off-limits — otherwise anyone could co-opt another user's
+            # pipeline, contracts and versions just by reusing its name.
+            from backend.models import PipelineContract, PipelinePermission
+            from backend.models import PermissionLevel
+
+            name_in_use = (
+                db.query(PipelineRun.id)
+                .filter(PipelineRun.name == pipeline_name)
+                .first()
+                or db.query(PipelineContract.id)
+                .filter(PipelineContract.pipeline_name == pipeline_name)
+                .first()
+                or db.query(PipelinePermission.id)
+                .filter(PipelinePermission.pipeline_name == pipeline_name)
+                .first()
             )
-            db.add(new_perm)
-            db.commit()
-            logger.info(
-                "Granted owner permission to user %s for pipeline %s",
-                user.id,
-                pipeline_name,
-            )
-            return
+            if not name_in_use:
+                # First time this pipeline is run/created - grant ownership
+                # to whoever created it. Global roles do not matter here:
+                # per-pipeline ownership governs pipeline access.
+                new_perm = PipelinePermission(
+                    pipeline_name=pipeline_name,
+                    user_id=user.id,
+                    permission_level=PermissionLevel.OWNER,
+                )
+                db.add(new_perm)
+                db.commit()
+                logger.info(
+                    "Granted owner permission to user %s for pipeline %s",
+                    user.id,
+                    pipeline_name,
+                )
+                return
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
