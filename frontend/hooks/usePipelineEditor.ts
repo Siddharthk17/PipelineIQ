@@ -234,7 +234,7 @@ export function usePipelineEditor({
       return;
     }
     // PIPELINEIQ_S52_MARKER: temporary parse tracing
-    console.log("[parse-effect] firing, yaml len", yamlText.length);
+    console.error("[parse-effect] firing, yaml len", yamlText.length);
     parseYamlToGraph(yamlText);
   }, [yamlText, parseYamlToGraph]);
 
