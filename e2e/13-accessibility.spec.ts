@@ -17,8 +17,11 @@ test.describe("Accessibility", () => {
     test(`${path} has no serious accessibility violations`, async ({ page }) => {
       test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
       await page.goto(`${baseUrl}${path}`, { waitUntil: "domcontentloaded" });
-      // Let client-side auth settle so we scan the real page, not a bounce.
-      await page.waitForTimeout(2500);
+      // Let client-side auth settle and transient states (spinners, toasts)
+      // disappear so we scan the steady page, not a loading flash.
+      await page.waitForLoadState("networkidle").catch(() => {});
+      await page.locator(".animate-spin").waitFor({ state: "detached", timeout: 10_000 }).catch(() => {});
+      await page.waitForTimeout(1000);
       const results = await new AxeBuilder({ page })
         .withTags(["wcag2a", "wcag2aa"])
         .analyze();
