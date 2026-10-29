@@ -200,12 +200,6 @@ def create_schedule(
         details={"pipeline_name": body.pipeline_name, "cron": body.cron_expression},
         request=request)
 
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        register_schedules()
-    except Exception as exc:
-        logger.warning("Schedule saved but Beat registration failed: %s", exc)
-
     logger.info("Schedule created: id=%s, pipeline=%s, cron=%s",
                 schedule.id, body.pipeline_name, body.cron_expression)
     return _schedule_to_response(schedule)
@@ -259,12 +253,6 @@ def pause_schedule(
     db.commit()
     db.refresh(schedule)
 
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        register_schedules()
-    except Exception as exc:
-        logger.warning("Beat deregistration failed: %s", exc)
-
     return _schedule_to_response(schedule)
 
 
@@ -288,12 +276,6 @@ def resume_schedule(
     db.commit()
     db.refresh(schedule)
 
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        register_schedules()
-    except Exception as exc:
-        logger.warning("Beat registration failed: %s", exc)
-
     return _schedule_to_response(schedule)
 
 
@@ -309,14 +291,8 @@ def delete_schedule(
 ) -> dict:
     schedule = _get_schedule_or_404(schedule_id, current_user, db)
 
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        db.delete(schedule)
-        db.commit()
-        register_schedules()
-    except Exception:
-        db.delete(schedule)
-        db.commit()
+    db.delete(schedule)
+    db.commit()
 
     log_action(db, "schedule_deleted", user_id=current_user.id,
                resource_type="schedule", resource_id=as_uuid(schedule_id),
@@ -394,12 +370,6 @@ def toggle_schedule(
         schedule.next_run_at = None
     db.commit()
     db.refresh(schedule)
-
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        register_schedules()
-    except Exception:
-        pass
 
     log_action(db, "schedule_toggled", user_id=current_user.id,
                resource_type="schedule", resource_id=schedule.id,
