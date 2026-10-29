@@ -51,15 +51,24 @@ class ExecutionPlan:
 def generate_execution_plan(
     yaml_config: str,
     db: Session,
+    user_id=None,
+    is_admin: bool = False,
 ) -> ExecutionPlan:
-    """Generate an execution plan from a YAML config without running anything."""
+    """Generate an execution plan from a YAML config without running anything.
+
+    When user_id is given (and not an admin), file metadata is scoped to
+    that user's own uploads so estimates never leak other users' data.
+    """
     raw = yaml.safe_load(yaml_config)
     pipeline_raw = raw.get("pipeline", raw)
     pipeline_name = pipeline_raw.get("name", "unnamed")
     steps_raw = pipeline_raw.get("steps", [])
 
     # Load file metadata from DB
-    uploaded_files = db.query(UploadedFile).all()
+    files_query = db.query(UploadedFile)
+    if user_id is not None and not is_admin:
+        files_query = files_query.filter(UploadedFile.user_id == user_id)
+    uploaded_files = files_query.all()
     file_map: Dict[str, UploadedFile] = {str(f.id): f for f in uploaded_files}
 
     step_plans: List[StepPlan] = []

@@ -150,6 +150,37 @@ def create_schedule(
     next_run = _compute_next_run(body.cron_expression)
     human = cron_to_human(body.cron_expression)
 
+    from backend.models import UploadedFile
+    from backend.pipeline.cache import get_parsed_pipeline
+    from backend.pipeline.parser import PipelineParser
+
+    try:
+        parsed = get_parsed_pipeline(body.yaml_config)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Scheduled pipeline YAML is invalid: {exc}",
+        ) from exc
+
+    from backend.api.pipelines import _check_pipeline_permission
+
+    _check_pipeline_permission(
+        db, current_user, body.pipeline_name, ["owner", "runner"],
+        grant_owner=True,
+    )
+    owned_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()} \
+        if current_user.role == "admin" else {
+            str(row[0]) for row in db.query(UploadedFile.id).filter(
+                UploadedFile.user_id == current_user.id).all()
+        }
+    result = PipelineParser().validate(parsed, owned_ids)
+    if not result.is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scheduled pipeline references unknown files: "
+            + "; ".join(e.message for e in result.errors),
+        )
+
     schedule = PipelineSchedule(
         user_id=current_user.id,
         pipeline_name=body.pipeline_name,

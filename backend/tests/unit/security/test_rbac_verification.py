@@ -161,12 +161,30 @@ def test_run_pipeline_rbac(rbac_client, users, sample_pipeline, test_db):
             user_id=users["owner"].id,
         )
     )
+    runner_file_id = _uuid.uuid4()
+    test_db.add(
+        UploadedFile(
+            id=runner_file_id,
+            original_filename="runner.csv",
+            stored_path="/tmp/runner.csv",
+            file_size_bytes=100,
+            row_count=1,
+            column_count=1,
+            columns=["col1"],
+            dtypes={"col1": "int64"},
+            user_id=users["runner"].id,
+        )
+    )
     test_db.commit()
     # Use the id of the created file
-    file_id = str(test_db.query(UploadedFile).first().id)
+    file_id = str(test_db.query(UploadedFile).filter_by(
+        user_id=users["owner"].id).first().id)
+    runner_file_id = str(runner_file_id)
 
     yaml_config = f"pipeline: {{name: {sample_pipeline}, steps: [{{name: load_step, type: load, file_id: {file_id}}}]}}"
     payload = {"yaml_config": yaml_config, "name": sample_pipeline}
+    runner_yaml = f"pipeline: {{name: {sample_pipeline}, steps: [{{name: load_step, type: load, file_id: {runner_file_id}}}]}}"
+    runner_payload = {"yaml_config": runner_yaml, "name": sample_pipeline}
 
     # Admin can run
     set_current_user(users["admin"])
@@ -180,11 +198,17 @@ def test_run_pipeline_rbac(rbac_client, users, sample_pipeline, test_db):
         "/api/v1/pipelines/run",
         json=payload).status_code == 202
 
-    # Runner can run
+    # Runner can run with their own file (grants never confer file access)
     set_current_user(users["runner"])
     assert rbac_client.post(
         "/api/v1/pipelines/run",
-        json=payload).status_code == 202
+        json=runner_payload).status_code == 202
+
+    # Runner cannot run over the owner's file
+    set_current_user(users["runner"])
+    assert rbac_client.post(
+        "/api/v1/pipelines/run",
+        json=payload).status_code == 404
 
     # Viewer cannot run
     set_current_user(users["viewer"])

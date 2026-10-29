@@ -79,7 +79,7 @@ def estimate_pipeline_cost(
     db,
 ) -> CostEstimate:
     from backend.pipeline.cache import get_parsed_pipeline
-    from backend.models.file_profile import FileProfile
+    from backend.models import FileProfile
     from sqlalchemy import text
 
     try:

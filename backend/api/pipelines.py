@@ -170,7 +170,7 @@ def validate_pipeline(
     """Validate a pipeline configuration against registered files."""
     config = get_parsed_pipeline(body.yaml_config)
 
-    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    registered_ids = _owned_file_ids(db, current_user)
     result = _pipeline_parser.validate(config, registered_ids)
     if result.is_valid:
         result.errors.extend(collect_schema_validation_errors(config, db))
@@ -211,7 +211,10 @@ def plan_pipeline(
     current_user: User = Depends(get_current_user),
 ):
     """Generate a dry-run execution plan for a pipeline."""
-    plan = generate_execution_plan(body.yaml_config, db)
+    plan = generate_execution_plan(
+        body.yaml_config, db,
+        user_id=current_user.id, is_admin=current_user.role == "admin",
+    )
 
     return {
         "pipeline_name": plan.pipeline_name,
@@ -240,6 +243,19 @@ def plan_pipeline(
             for s in plan.steps
         ],
     }
+
+
+def _owned_file_ids(db: Session, user: User) -> set[str]:
+    """IDs of files the user may reference in a pipeline.
+
+    Admins may use any file; everyone else is limited to their own uploads.
+    Referencing another user's file behaves exactly like referencing a
+    missing file (404), so no ownership information leaks.
+    """
+    query = db.query(UploadedFile.id)
+    if user.role != "admin":
+        query = query.filter(UploadedFile.user_id == user.id)
+    return {str(row[0]) for row in query.all()}
 
 
 def _check_pipeline_permission(
@@ -372,7 +388,7 @@ def run_pipeline(
 
     # Verify all referenced file IDs exist in the database and general config
     # is valid
-    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    registered_ids = _owned_file_ids(db, current_user)
     validation_result = _pipeline_parser.validate(config, registered_ids)
 
     if not validation_result.is_valid:
@@ -476,7 +492,7 @@ async def run_pipeline_legacy(
     _check_pipeline_permission(
         db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
     )
-    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    registered_ids = _owned_file_ids(db, current_user)
     validation_result = _pipeline_parser.validate(config, registered_ids)
     if not validation_result.is_valid:
         raise HTTPException(
@@ -979,7 +995,10 @@ def preview_pipeline_step(
             detail=f"step_index {step_index} out of range (0..{len(config.steps) - 1})",
         )
 
-    plan = generate_execution_plan(body.yaml_config, db)
+    plan = generate_execution_plan(
+        body.yaml_config, db,
+        user_id=current_user.id, is_admin=current_user.role == "admin",
+    )
 
     step_info = None
     if step_index < len(plan.steps):
@@ -1301,9 +1320,10 @@ def estimate_run_cost(
 ):
     from backend.cost.estimator import estimate_pipeline_cost
 
+    owned = _owned_file_ids(db, current_user)
     estimate = estimate_pipeline_cost(
         pipeline_yaml=pipeline_yaml,
-        file_ids=file_ids,
+        file_ids=[fid for fid in file_ids if str(fid) in owned],
         db=db,
     )
 
