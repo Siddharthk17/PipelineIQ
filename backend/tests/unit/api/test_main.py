@@ -24,8 +24,9 @@ def test_redis_outage_returns_503_not_500(client, monkeypatch):
     every limited endpoint must fail with 503 + request_id, never an
     opaque 500.
     """
-    import backend.utils.rate_limiter as limiter_mod
     from redis.exceptions import ConnectionError as RedisConnectionError
+
+    import backend.utils.rate_limiter as limiter_mod
 
     def _boom(*args, **kwargs):
         raise RedisConnectionError("Error 111 connecting to redis:6381. Connection refused.")
