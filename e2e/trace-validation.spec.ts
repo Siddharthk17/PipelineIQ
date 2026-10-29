@@ -39,10 +39,11 @@ test.describe("OTel trace field validation", () => {
 
     // Fetch the 50 most recent runs to find a completed one
     const runsResp = await page.request.get(
-      `${baseUrl}/api/v1/pipelines/runs?limit=50`,
+      `${baseUrl}/api/v1/pipelines/?limit=50`,
     );
     expect(runsResp.ok()).toBeTruthy();
-    const runs: Array<{ id: string; status: string }> = await runsResp.json();
+    const runsBody = await runsResp.json();
+    const runs: Array<{ id: string; status: string }> = runsBody.runs ?? runsBody;
 
     const completedRun = runs.find((r) => r.status === "COMPLETED");
     test.skip(!completedRun, "No COMPLETED run available; skipping trace validation.");
@@ -92,10 +93,11 @@ test.describe("OTel trace field validation", () => {
     await login(page);
 
     const runsResp = await page.request.get(
-      `${baseUrl}/api/v1/pipelines/runs?limit=10`,
+      `${baseUrl}/api/v1/pipelines/?limit=10`,
     );
     expect(runsResp.ok()).toBeTruthy();
-    const runs: Array<{ step_results: unknown[] }> = await runsResp.json();
+    const runsBody2 = await runsResp.json();
+    const runs: Array<{ step_results: unknown[] }> = runsBody2.runs ?? runsBody2;
 
     const runWithSteps = runs.find(
       (r) => Array.isArray(r.step_results) && r.step_results.length > 0,
@@ -133,9 +135,10 @@ test.describe("OTel trace field validation", () => {
     await login(page);
 
     const runsResp = await page.request.get(
-      `${baseUrl}/api/v1/pipelines/runs?limit=50`,
+      `${baseUrl}/api/v1/pipelines/?limit=50`,
     );
-    const runs: Array<{ id: string; status: string }> = await runsResp.json();
+    const runsBody = await runsResp.json();
+    const runs: Array<{ id: string; status: string }> = runsBody.runs ?? runsBody;
     const completedRun = runs.find((r) => r.status === "COMPLETED");
     test.skip(!completedRun, "No COMPLETED run to check trace IDs against.");
 
@@ -154,18 +157,59 @@ test.describe("OTel trace field validation", () => {
   });
 
   /**
-   * The Execution Timeline widget must render the "Trace" column header in the
-   * workspace so users can see trace IDs in the UI.
+   * Per-step trace IDs are attached server-side and surfaced on the run
+   * page's Gantt chart (the old /workspace timeline widget no longer
+   * exists; trace links live on the run detail Gantt).
    */
-  test("Execution Timeline widget shows Trace column header in workspace", async ({
+  test("Run detail Gantt surfaces per-step trace links", async ({
     page,
   }) => {
     await login(page);
 
-    await page.goto(`${baseUrl}/workspace`, { waitUntil: "domcontentloaded" });
+    const csvContent = "id,amount\n1,100\n2,200";
+    const uploadResp = await page.request.post(`${baseUrl}/api/files/upload`, {
+      multipart: { file: { name: "trace_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
+    });
+    expect(uploadResp.ok(), await uploadResp.text()).toBeTruthy();
+    const { id: fileId } = await uploadResp.json();
 
-    // The column header "Trace" is rendered inside the timeline widget table
-    const traceHeader = page.locator("text=Trace").first();
-    await expect(traceHeader).toBeVisible({ timeout: 15_000 });
+    const yaml = [
+      "pipeline:",
+      `  name: trace_run_${Date.now()}`,
+      "  steps:",
+      "    - name: src",
+      "      type: load",
+      `      file_id: "${fileId}"`,
+      "    - name: out",
+      "      type: save",
+      "      input: src",
+      "      filename: trace_out",
+    ].join("\n");
+    const runResp = await page.request.post(`${baseUrl}/api/v1/pipelines/run`, {
+      data: { yaml_config: yaml },
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(runResp.ok(), await runResp.text()).toBeTruthy();
+    const { run_id: runId } = await runResp.json();
+
+    // Trace IDs are attached to step results server-side (authoritative check).
+    let traced = false;
+    const start = Date.now();
+    while (Date.now() - start < 120_000) {
+      const detail = await page.request.get(`${baseUrl}/api/v1/pipelines/${runId}`);
+      const body = await detail.json();
+      if (body.status === "COMPLETED" || body.status === "HEALED") {
+        const steps = body.step_results ?? [];
+        traced = steps.length > 0 && steps.every((st: { trace_id?: string }) => typeof st.trace_id === "string" && st.trace_id.length > 0);
+        break;
+      }
+      if (["FAILED", "TIMEOUT", "CANCELLED", "CONTRACT_VIOLATION"].includes(body.status)) break;
+      await page.waitForTimeout(2_000);
+    }
+    expect(traced).toBe(true);
+
+    // And the run page renders the Gantt that surfaces them.
+    await page.goto(`${baseUrl}/runs/${runId}`, { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("execution-gantt")).toBeVisible({ timeout: 15_000 });
   });
 });

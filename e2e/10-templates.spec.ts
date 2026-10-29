@@ -37,9 +37,9 @@ test.describe("Pipeline Templates", () => {
       test.skip(true, "File upload not available");
       return;
     }
-    const { file_id: fileId } = await uploadResp.json();
+    const { id: fileId } = await uploadResp.json();
 
-    const resp = await page.request.post(`${apiUrl}/api/templates/customer_segmentation/fork`, {
+    const resp = await page.request.post(`${apiUrl}/api/v1/templates/customer_segmentation/fork`, {
       data: {
         pipeline_name: `e2e_forked_${Date.now()}`,
         file_mappings: { orders_file_id: fileId },
@@ -55,7 +55,7 @@ test.describe("Pipeline Templates", () => {
   test("Fork template with missing placeholder returns 400", async ({ page }) => {
     await login(page);
 
-    const resp = await page.request.post(`${apiUrl}/api/templates/sales_revenue_report/fork`, {
+    const resp = await page.request.post(`${apiUrl}/api/v1/templates/sales_revenue_report/fork`, {
       data: {
         pipeline_name: "bad_fork",
         file_mappings: {},
