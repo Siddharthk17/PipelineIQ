@@ -1,8 +1,11 @@
 services:
-  redis-overcommit-fix:
+  # Reminder only: this container cannot set the host sysctl itself.
+  # On the Docker host, run: sysctl -w vm.overcommit_memory=1
+  # (persist via /etc/sysctl.conf) to avoid Redis background-save failures.
+  redis-overcommit-note:
     image: alpine:3.19
-    container_name: pipelineiq-redis-overcommit-fix
-    command: ["sh", "-c", "echo 'Set vm.overcommit_memory=1 on the Docker host before production startup'"]
+    container_name: pipelineiq-redis-overcommit-note
+    command: ["sh", "-c", "echo 'REMINDER: set vm.overcommit_memory=1 on the Docker host (sysctl -w vm.overcommit_memory=1)'"]
     restart: "no"
     networks:
       - pipelineiq-network
@@ -626,8 +629,8 @@ services:
       --loglevel notice
     ports:
       - "127.0.0.1:6379:6379"
-    volumes:
-      - redis_broker_data:/data
+    # NOTE: intentionally no volume — broker runs with --save "" --appendonly no,
+    # so mounted storage would never be used.
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
       interval: 10s
@@ -670,7 +673,7 @@ services:
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     depends_on:
-      redis-overcommit-fix:
+      redis-overcommit-note:
         condition: service_completed_successfully
     sysctls:
       net.core.somaxconn: 511
@@ -1090,7 +1093,6 @@ volumes:
   uploads:
   db_data:
   postgres_replica_data_v2:
-  redis_broker_data:
   redis_cache_data:
   redis_yjs_data:
   minio_data:

@@ -67,6 +67,8 @@ git clone https://github.com/Siddharthk17/PipelineIQ.git
 cd PipelineIQ
 cp .env.example .env
 # Edit .env — set POSTGRES_PASSWORD and SECRET_KEY at minimum
+# On Linux hosts, also run: sudo sysctl -w vm.overcommit_memory=1
+# (persists via /etc/sysctl.conf) to avoid Redis background-save failures.
 docker compose up --build -d
 ```
 
@@ -75,9 +77,9 @@ Wait ~45 seconds for all services to initialize. A demo account is seeded automa
 | Service | URL | Purpose |
 |---------|-----|---------|
 | Application (via Nginx) | http://localhost | Full app behind reverse proxy |
-| Swagger API Docs | http://localhost/docs | Interactive API playground |
-| ReDoc API Docs | http://localhost/redoc | Alternative API browser |
-| Celery Flower | http://localhost:5555 | Worker monitoring dashboard |
+| Swagger API Docs | http://localhost:8000/docs | Interactive API playground (direct API port; hidden behind the reverse proxy) |
+| ReDoc API Docs | http://localhost:8000/redoc | Alternative API browser (direct API port; hidden behind the reverse proxy) |
+| Celery Flower | http://localhost:5555 | Worker monitoring dashboard (basic auth: FLOWER_USER / FLOWER_PASSWORD) |
 | Grafana | http://localhost/grafana | 10-panel observability dashboard |
 | Prometheus | http://localhost:9090 | Metrics scraping |
 | Jaeger Tracing | http://localhost:16686 | Distributed tracing UI |

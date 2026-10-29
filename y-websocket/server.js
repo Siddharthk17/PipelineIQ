@@ -84,7 +84,9 @@ setInterval(() => {
 
 const wss = new WebSocketServer({
   port: PORT,
-  maxPayload: 100 * 1024 * 1024,
+  // Yjs sync messages are small (KBs). Cap well below the container memory
+  // limit so a malicious peer cannot OOM the relay with one frame.
+  maxPayload: 10 * 1024 * 1024,
 })
 
 const CLOSE_CODE_AUTH_FAILURE = 4001
