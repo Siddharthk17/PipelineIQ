@@ -17,11 +17,12 @@ PipelineIQ uses a four-queue Celery architecture to isolate different workload t
 ## Four Queues
 
 | Queue | Workers | Tasks Routed | Purpose | Priority |
-|-------|---------|-------------|---------|----------|
-| **critical** | worker-default (routed) | `deliver_webhook` | Webhook delivery must happen fast, not behind slow pipeline runs | Highest |
-| **default** | worker-default ×2, concurrency=4 | `execute_pipeline`, `run_streaming_pipeline` | Normal user-triggered pipeline runs | Normal |
-| **bulk** | worker-bulk ×2, concurrency=2 | `profile_file`, `execute_scheduled_pipeline` | Long-running, CPU/memory intensive operations | Low |
-| **gemini** | worker-gemini ×1, concurrency=1 | `call_gemini_task` | Rate limit enforcement — 1 worker × concurrency=1 = 1 active call max | Normal |
+|-------|---------|--------------|---------|----------|
+| **critical** | worker-critical (conc 2, fast lane) + worker-default (overflow) | `webhooks.deliver`, `notifications.deliver`, `tasks.deliver_webhook` | Webhook/notification delivery must happen fast, not behind slow pipeline runs | Highest |
+| **default** | worker-default (conc 3) | `pipeline.execute` | Normal user-triggered pipeline runs | Normal |
+| **bulk** | worker-bulk (conc 2) | `tasks.profile_file`, `schedules.check`, `tasks.execute_scheduled_pipeline`, `tasks.maintain_storage` | Long-running, CPU/memory intensive operations | Low |
+| **gemini** | worker-gemini (conc 1) | `tasks.call_gemini`, `tasks.generate_pipeline_description`, `tasks.generate_pipeline_ai`, `tasks.repair_pipeline_ai` | Rate limit enforcement — 1 worker × concurrency=1 = 1 active call max | Normal |
+| **streaming** | worker-streaming (conc 8) | `tasks.run_streaming_pipeline` | Long-lived Redpanda consume/publish loop (no task time limit) | Normal |
 
 ---
 
@@ -29,9 +30,11 @@ PipelineIQ uses a four-queue Celery architecture to isolate different workload t
 
 | Worker | Processes | Concurrency | Prefetch Multiplier | Ack Mode | Purpose |
 |--------|-----------|-------------|---------------------|----------|---------|
-| worker-default | 2 | 4 | 1 | Late | Pipeline steps + critical webhooks |
-| worker-bulk | 2 | 2 | 1 | Late | Profiling + scheduled runs |
+| worker-critical | 1 | 2 | 1 | Late | Critical fast lane: webhooks + notifications |
+| worker-default | 1 | 3 | 1 | Late | Pipeline execution; also drains critical overflow so a dead critical worker degrades instead of stalling |
+| worker-bulk | 1 | 2 | 1 | Late | Profiling + scheduled runs |
 | worker-gemini | 1 | 1 | 1 | Late | AI calls only, rate_limit='50/m' |
+| worker-streaming | 1 | 8 | 1 | Late | Redpanda streaming pipelines |
 | celery-beat | 1 | — | — | — | Cron dispatcher (singleton) |
 
 ### Concurrency Rationale

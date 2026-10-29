@@ -176,7 +176,7 @@ services:
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - OTEL_SERVICE_NAME=pipelineiq-api
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -251,7 +251,7 @@ services:
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - OTEL_SERVICE_NAME=pipelineiq-sse
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -314,7 +314,7 @@ services:
       - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
@@ -382,7 +382,7 @@ services:
       - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
@@ -450,7 +450,7 @@ services:
       - REDPANDA_BROKERS=redpanda:9093
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
@@ -521,7 +521,7 @@ services:
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - GEMINI_FALLBACK_MODELS=${GEMINI_FALLBACK_MODELS:-gemini-2.0-flash,gemini-1.5-flash}
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
@@ -587,7 +587,7 @@ services:
       - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -814,6 +814,18 @@ services:
       --inspect_timeout=10000"
     ports:
       - "127.0.0.1:5555:5555"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; socket.create_connection(('127.0.0.1', 5555), timeout=10).close()",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     environment:
       - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
       - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
@@ -859,7 +871,7 @@ services:
       frontend:
         condition: service_healthy
       flower:
-        condition: service_started
+        condition: service_healthy
       grafana:
         condition: service_healthy
     logging:
@@ -1059,7 +1071,7 @@ services:
       - REDPANDA_BROKERS=redpanda:9093
       - CELERY_CONCURRENCY=8
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
       redis-broker:
         condition: service_healthy
