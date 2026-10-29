@@ -46,6 +46,16 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
       }
     } else if (e.key === "Escape") {
       onClose();
+    } else if (/^[1-9]$/.test(e.key) && search === "") {
+      // Number keys pick the Nth visible entry when nothing is typed,
+      // so a widget can be added without leaving the keyboard. Once the
+      // user is searching, digits are treated as search text instead.
+      const idx = parseInt(e.key, 10) - 1;
+      if (filtered[idx]) {
+        addWidget(filtered[idx].id);
+        onClose();
+      }
+    }
     }
   };
 
@@ -97,6 +107,11 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
                     }}
                   >
                     <span className="w-8">{idx === selectedIndex ? ">" : " "}</span>
+                    {idx < 9 && (
+                      <kbd className="mr-2 rounded border border-[var(--widget-border)] px-1 text-[10px] opacity-70">
+                        {idx + 1}
+                      </kbd>
+                    )}
                     <span>{w.title}</span>
                   </div>
                 ))
