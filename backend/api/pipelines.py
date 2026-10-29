@@ -211,6 +211,18 @@ def plan_pipeline(
     current_user: User = Depends(get_current_user),
 ):
     """Generate a dry-run execution plan for a pipeline."""
+    config = get_parsed_pipeline(body.yaml_config)
+    validation_result = _pipeline_parser.validate(
+        config, _owned_file_ids(db, current_user))
+    if not validation_result.is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "Pipeline configuration is invalid",
+                "errors": serialize_validation_errors(
+                    validation_result.errors),
+            },
+        )
     plan = generate_execution_plan(
         body.yaml_config, db,
         user_id=current_user.id, is_admin=current_user.role == "admin",
