@@ -71,8 +71,8 @@ export default function TemplatesPage() {
                   <FileCode className="h-4 w-4 text-[var(--accent-primary)]" />
                   <p className="text-sm font-medium">{template.name}</p>
                 </div>
-                <p className="text-xs text-[var(--text-secondary)]">{template.description}</p>
-                <span className="mt-3 inline-block rounded border border-[var(--widget-border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]">
+                <p className="text-xs text-[var(--text-primary)]">{template.description}</p>
+                <span className="mt-3 inline-block rounded border border-[var(--widget-border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[10px] text-[var(--text-primary)]">
                   {template.category}
                 </span>
               </div>
