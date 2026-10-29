@@ -11,6 +11,7 @@ checks the current status and only proceeds if PENDING.
 
 import contextlib
 import logging
+import re
 
 import orjson
 from redis.exceptions import RedisError
@@ -52,11 +53,27 @@ from backend.utils.time_utils import utcnow
 logger = logging.getLogger(__name__)
 
 
+_PATH_RE = re.compile(r"(?:/[^/\s\"']+)+|\\\\[^\\s\"']+|[A-Za-z]:\\\\[^\\s\"']*")
+_SECRET_RE = re.compile(
+    r"(?i)\b(api[_-]?key|bearer|token|secret|password|passwd|pwd)\b\s*[:=]\s*\S+"
+)
+_MAX_ERROR_CHARS = 2000
+
+
 def _sanitize_error_message(error: object | None) -> str | None:
-    """Return a stable user-facing error without paths, secrets, or SQL details."""
+    """Return a user-facing error with actionable detail.
+
+    Filesystem paths and secret-like values are redacted, but the error
+    class and message are preserved so pipeline owners can debug their
+    own runs (e.g. a misspelled SQL column).
+    """
     if error is None:
         return None
-    return (
+    text = error if isinstance(error, str) else str(error)
+    text = _PATH_RE.sub("[path]", text)
+    text = _SECRET_RE.sub(r"\1=[redacted]", text)
+    text = text.strip()[:_MAX_ERROR_CHARS]
+    return text or (
         "Pipeline execution failed. Review the run configuration or contact "
         "an administrator with the run ID."
     )
