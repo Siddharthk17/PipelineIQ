@@ -466,6 +466,7 @@ export interface BucketStats {
   };
   top10_by_size?: BucketObjectRef[];
   error?: string;
+  note?: string;
 }
 
 export interface LifecycleRule {

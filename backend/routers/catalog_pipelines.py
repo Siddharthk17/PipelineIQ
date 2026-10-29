@@ -131,13 +131,18 @@ def get_pipeline_description(
         queued_key = f"{cache_key}:queued"
         should_queue = bool(redis.set(queued_key, b"1", ex=300, nx=True))
         if should_queue:
+            from backend.clients.gemini_client import gemini_configured
             from backend.tasks.gemini_tasks import generate_pipeline_description_task
 
-            generate_pipeline_description_task.apply_async(
-                args=[cache_key, prompt],
-                kwargs={"tenant_id": str(current_user.id)},
-                queue="gemini",
-            )
+            # Without a key the task would fail immediately and log a
+            # warning on every catalog page view; the fallback text below
+            # is returned instead.
+            if gemini_configured():
+                generate_pipeline_description_task.apply_async(
+                    args=[cache_key, prompt],
+                    kwargs={"tenant_id": str(current_user.id)},
+                    queue="gemini",
+                )
     except Exception:
         pass
 

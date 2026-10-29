@@ -63,6 +63,11 @@ def _configured_model_candidates() -> list[str]:
     return deduped
 
 
+def gemini_configured() -> bool:
+    """True when a Gemini API key is configured (AI features can run)."""
+    return bool(settings.GEMINI_API_KEY.strip())
+
+
 def _get_gemini_client() -> genai.Client:
     global _GEMINI_CLIENT, _GEMINI_CLIENT_API_KEY
 

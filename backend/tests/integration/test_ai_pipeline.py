@@ -50,6 +50,8 @@ pipeline:
             "backend.routers.ai.generate_pipeline_from_description",
             _fake_generate_pipeline_from_description,
         )
+        monkeypatch.setattr(
+            "backend.config.settings.GEMINI_API_KEY", "test-key")
 
         generate_response = client.post(
             "/api/ai/generate",
@@ -98,6 +100,8 @@ pipeline:
             "backend.routers.ai.repair_pipeline_from_error",
             _fake_repair_pipeline_from_error,
         )
+        monkeypatch.setattr(
+            "backend.config.settings.GEMINI_API_KEY", "test-key")
 
         response = client.post(f"/api/ai/runs/{run_id}/repair")
         assert response.status_code == 200

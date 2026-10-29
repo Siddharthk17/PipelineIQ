@@ -119,6 +119,12 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
             </button>
           )}
           <button
+            onClick={() => router.push("/")}
+            className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)]"
+          >
+            Back to Dashboard
+          </button>
+          <button
             onClick={() => router.push("/runs")}
             className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)]"
           >

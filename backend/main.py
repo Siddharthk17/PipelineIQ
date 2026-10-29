@@ -163,6 +163,7 @@ def _run_startup_initialization_once() -> None:
 
         _validate_upload_dir()
         _init_storage_bucket()
+        _ensure_minio_buckets()
         _apply_minio_lifecycle_policies()
         _STARTUP_MARKER_PATH.write_text("initialized\n", encoding="utf-8")
 
@@ -193,6 +194,20 @@ def _init_storage_bucket() -> None:
                 bucket_name)
     except Exception as exc:
         logger.warning("Failed to initialize S3 bucket: %s", exc)
+
+
+def _ensure_minio_buckets() -> None:
+    """Create missing MinIO buckets from the fixed bucket list (idempotent)."""
+    try:
+        from backend.storage.lifecycle import ensure_buckets
+        results = ensure_buckets()
+        for bucket, status in results.items():
+            if status == "created":
+                logger.info("MinIO bucket created: %s", bucket)
+            elif status != "exists":
+                logger.warning("MinIO bucket ensure failed: %s — %s", bucket, status)
+    except Exception as exc:
+        logger.warning("MinIO bucket setup failed (non-fatal): %s", exc)
 
 
 def _apply_minio_lifecycle_policies() -> None:

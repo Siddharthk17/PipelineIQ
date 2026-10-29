@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -377,6 +378,11 @@ function BucketSection({ buckets }: { buckets: Record<string, BucketStats> }) {
                   <span className="text-[10px] text-[var(--text-tertiary)] tabular-nums">
                     {stats.object_count} obj
                   </span>
+                  {stats.note && (
+                    <span className="text-[10px] text-[var(--text-tertiary)]">
+                      &middot; {stats.note}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="text-xs text-[var(--text-secondary)] tabular-nums">
@@ -669,6 +675,7 @@ function ActionsPanel({
 }
 
 export default function StorageAnalyticsPage() {
+  const router = useRouter();
   const { isLoading: authLoading } = useAuth();
   const queryClient = useQueryClient();
 
@@ -733,9 +740,9 @@ export default function StorageAnalyticsPage() {
   }
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: "var(--bg-primary)" }}>
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
-        <header className="flex items-center justify-between">
+    <div className="h-screen overflow-hidden" style={{ backgroundColor: "var(--bg-primary)" }}>
+      <div className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 px-4 py-3">
+        <header className="flex shrink-0 items-center justify-between">
           <div>
             <h1 className="text-lg font-semibold text-[var(--text-primary)]">
               Storage Analytics
@@ -761,10 +768,16 @@ export default function StorageAnalyticsPage() {
             ) : null}
             <button
               onClick={() => refetchStats()}
-              className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] transition-colors"
+              className="rounded p-1.5 transition-colors hover:bg-[var(--bg-tertiary)]"
               title="Refresh"
             >
               <RefreshCw size={14} style={{ color: "var(--text-secondary)" }} />
+            </button>
+            <button
+              onClick={() => router.push("/")}
+              className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--interactive-hover)]"
+            >
+              Back to Dashboard
             </button>
           </div>
         </header>
@@ -849,15 +862,27 @@ export default function StorageAnalyticsPage() {
               cold={stats?.tiers?.cold}
             />
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {stats?.buckets && <BucketSection buckets={stats.buckets} />}
-              {stats?.lifecycle && (
-                <LifecycleSection lifecycle={stats.lifecycle} />
-              )}
-            </div>
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-3">
+              <div className="flex min-h-0 flex-col">
+                {stats?.buckets && <BucketSection buckets={stats.buckets} />}
+              </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {growthPoints.length > 0 && (
+              <div className="flex min-h-0 flex-col gap-3">
+                {stats?.lifecycle && (
+                  <LifecycleSection lifecycle={stats.lifecycle} />
+                )}
+                <ActionsPanel
+                  onEvict={handleEvict}
+                  onClean={handleClean}
+                  isEvicting={evictMutation.isPending}
+                  isCleaning={cleanMutation.isPending}
+                  evictResult={evictResult}
+                  cleanResult={cleanResult}
+                />
+              </div>
+
+              <div className="flex min-h-0 flex-col gap-3">
+                {growthPoints.length > 0 && (
                 <div
                   className="rounded-lg border p-4"
                   style={{
@@ -887,16 +912,8 @@ export default function StorageAnalyticsPage() {
               {stats?.event_stats && (
                 <EventStatsSection events={stats.event_stats} />
               )}
+              </div>
             </div>
-
-            <ActionsPanel
-              onEvict={handleEvict}
-              onClean={handleClean}
-              isEvicting={evictMutation.isPending}
-              isCleaning={cleanMutation.isPending}
-              evictResult={evictResult}
-              cleanResult={cleanResult}
-            />
           </>
         )}
 
