@@ -242,14 +242,15 @@ def test_notification(
             webhook_url,
             "🔔 *PipelineIQ Test Notification*\nThis is a test message to verify your Slack integration.",
         )
-        if success:
-            return {"detail": "Test notification sent successfully"}
-
-        # Slack failed - could be invalid URL or network issue
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to send test notification to Slack. Please verify your webhook URL is correct and accessible.",
-        )
+        return {
+            "detail": (
+                "Test notification sent successfully"
+                if success
+                else "Slack did not accept the test notification. "
+                "Please verify your webhook URL is correct and accessible."
+            ),
+            "delivered": success,
+        }
 
     if config.type == NotificationType.EMAIL:
         recipients = (config.config or {}).get("email_to")
@@ -277,10 +278,14 @@ def test_notification(
                 detail="SMTP is not configured. Please set SMTP_HOST, SMTP_FROM, and other SMTP settings in your environment.",
             )
 
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to send test email",
-        )
+        return {
+            "detail": (
+                "Test email sent successfully"
+                if success
+                else "Failed to send test email"
+            ),
+            "delivered": success,
+        }
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
