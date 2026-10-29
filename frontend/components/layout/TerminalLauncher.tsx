@@ -19,6 +19,10 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
 
   useEffect(() => {
     if (isOpen) {
+      // Start each open with a clean slate: a stale filter would hide
+      // entries and break the number-key shortcuts below.
+      setSearch("");
+      setSelectedIndex(0);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen]);
