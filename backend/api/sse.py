@@ -61,7 +61,7 @@ async def stream_pipeline_progress(
             detail=f"Pipeline run '{run_id}' not found",
         )
 
-    _authorize_run_access(pipeline_run, current_user)
+    _authorize_run_access(pipeline_run, current_user, db)
 
     if pipeline_run.status.value in _TERMINAL_STATUSES:
         return StreamingResponse(
@@ -99,8 +99,13 @@ async def stream_pipeline_progress_legacy(
 
 def _authorize_run_access(
         pipeline_run: PipelineRun,
-        current_user: User) -> None:
-    """Raise 403 if the user cannot access this pipeline run stream."""
+        current_user: User,
+        db: Session | None = None) -> None:
+    """Raise 403 if the user cannot access this pipeline run stream.
+
+    Mirrors the REST run gates: admins, the run owner, and holders of a
+    per-pipeline grant (owner/runner/viewer) may watch the stream.
+    """
     if current_user.role == "admin":
         return
 
@@ -110,11 +115,31 @@ def _authorize_run_access(
             detail="Not authorized to access this pipeline stream",
         )
 
-    if str(pipeline_run.user_id) != str(current_user.id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this pipeline stream",
+    if str(pipeline_run.user_id) == str(current_user.id):
+        return
+
+    if db is not None:
+        from backend.models import PermissionLevel, PipelinePermission
+
+        grant = (
+            db.query(PipelinePermission)
+            .filter(
+                PipelinePermission.pipeline_name == pipeline_run.name,
+                PipelinePermission.user_id == current_user.id,
+            )
+            .first()
         )
+        if grant and grant.permission_level in (
+            PermissionLevel.OWNER,
+            PermissionLevel.RUNNER,
+            PermissionLevel.VIEWER,
+        ):
+            return
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Not authorized to access this pipeline stream",
+    )
 
 
 async def _live_event_generator(

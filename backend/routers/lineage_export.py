@@ -17,7 +17,7 @@ from backend.models import User, PipelineRun
 from backend.openlineage.builder import build_openlineage_event
 from backend.repositories.catalog import get_cached_run_lineage
 from backend.utils.rate_limiter import limiter
-from backend.utils.uuid_utils import as_uuid
+from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 router = APIRouter(prefix="/api", tags=["Lineage"])
 logger = logging.getLogger(__name__)
@@ -36,12 +36,12 @@ def get_run_openlineage_event(
 
     Compatible with DataHub, Marquez, OpenMetadata, and any OpenLineage consumer.
     """
+    validate_uuid_format(run_id)
     run_uuid = as_uuid(run_id)
-    result = db.execute(
-        select(PipelineRun)
-        .where(PipelineRun.id == run_uuid)
-        .where(PipelineRun.user_id == current_user.id)
-    )
+    query = select(PipelineRun).where(PipelineRun.id == run_uuid)
+    if current_user.role != "admin":
+        query = query.where(PipelineRun.user_id == current_user.id)
+    result = db.execute(query)
     run = result.scalar_one_or_none()
     if not run:
         raise HTTPException(404, "Run not found")

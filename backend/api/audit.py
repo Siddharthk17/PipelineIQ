@@ -43,8 +43,10 @@ def get_audit_logs(
     if action:
         query = query.filter(AuditLog.action == action)
     if user_id:
-        import uuid
-        query = query.filter(AuditLog.user_id == uuid.UUID(user_id))
+        from backend.utils.uuid_utils import as_uuid, validate_uuid_format
+
+        validate_uuid_format(user_id)
+        query = query.filter(AuditLog.user_id == as_uuid(user_id))
 
     logs = (
         query.order_by(AuditLog.created_at.desc())
