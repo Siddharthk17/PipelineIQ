@@ -64,7 +64,7 @@ CLIs: docker 29.9 + compose 5.6 OK; psql 16 OK; curl/jq OK; node 26/npm 11 OK; p
 | S43 | infra | Redis cache key/secret naming drift + compose-only vars with no backend reads; MAX_UPLOAD_SIZE 500MB vs k8s 50MB vs render /tmp/uploads; ALLOW_REGISTRATION=false k8s-only undocumented | P3 | SUSPECTED | configmap.yaml:32; compose:172; k8s:27 | — | — |
 | FZ01 | api | POST /pipelines/plan 500 on non-mapping YAML (raw.get on scalar) | P1 | VERIFIED | repro test_plan_robustness.py scalar case (500 before/400 after); plan now validates first (also enforces file ownership) | FIX-COMMIT | backend/tests/unit/api/test_plan_robustness.py |
 
-| FZ02 | api | POST /api/v1/wasm/upload 500 on invalid binary: _inspect_wasm ValueError uncaught (sibling validate endpoint catches it). Should be 400 | P1 | OPEN | fuzz d6NTKN + live repro curl 2026-10-29 (request_id 48dbe427); routers/wasm.py:158 exports,imports=_inspect_wasm vs validate path try/except | — | — |
+| FZ02 | api | POST /api/v1/wasm/upload 500 on invalid binary (uncaught ValueError) | P1 | VERIFIED | repro test_wasm_upload_robustness.py (500 before/400 after); upload now catches ValueError like validate does | FIX-COMMIT | backend/tests/unit/wasm/test_wasm_upload_robustness.py |
 
 | FZ03 | api | GET /debug/sentry-test always 500, unauthenticated (non-prod only). Deliberate crash-test endpoint; harden to admin-only to avoid oracle/log-spam | P2 | OPEN | debug.py:11; fuzz QPGZQb | — | — |
 

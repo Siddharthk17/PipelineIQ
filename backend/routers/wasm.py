@@ -159,7 +159,13 @@ async def upload_wasm_module(
             detail=f"Wasm module exceeds {MAX_WASM_SIZE // (1024*1024)}MB limit",
         )
 
-    exports, imports = _inspect_wasm(wasm_bytes)
+    try:
+        exports, imports = _inspect_wasm(wasm_bytes)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid Wasm binary: {exc}",
+        ) from exc
 
     if imports:
         raise HTTPException(
