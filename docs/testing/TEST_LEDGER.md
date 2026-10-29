@@ -60,6 +60,12 @@ CLIs: docker 29.9 + compose 5.6 OK; psql 16 OK; curl/jq OK; node 26/npm 11 OK; p
 | S41 | frontend | Misleading stats (hardcoded +12%/+5% trends; AnimatedNumber NaN when 0); blocking confirm()/alert(); StreamingRunCard full reload after pause/resume/stop, no error handling | P3 | SUSPECTED | QuickStatsWidget.tsx:55-58,17; wasm-modules/page.tsx:110,117; StreamingRunCard.tsx:59-63 | — | — |
 | S42 | tests | Import-time skip gates hide failures (evaluated at collection; only ConnectionError caught; hardcoded localhost ignores E2E_BASE_URL); always-skip test_sandbox; retries/sleeps mask races; time-dependent asserts; order-dependent shared-state; conftest mock-admin + mocked .delay bypass real JWT/RBAC/worker paths; hardcoded expired JWTs in scripts; k6 fake file_id | P2 | SUSPECTED | test_public_endpoints.py:8-16 et al; test_sandbox.py:183-186; conftest.py:39-45,111-156 | — | — |
 | S43 | infra | Redis cache key/secret naming drift + compose-only vars with no backend reads; MAX_UPLOAD_SIZE 500MB vs k8s 50MB vs render /tmp/uploads; ALLOW_REGISTRATION=false k8s-only undocumented | P3 | SUSPECTED | configmap.yaml:32; compose:172; k8s:27 | — | — |
+| FZ01 | api | POST /pipelines/plan (and preview) 500 on non-mapping YAML: generate_execution_plan does yaml.safe_load then raw.get without type check (AttributeError on scalar). plan endpoint never validates first | P1 | OPEN | fuzz Lh9ZYO + live repro curl 2026-10-29 (request_id 6cf7eb13); planner.py generate_execution_plan raw.get; pipelines.py:200 plan_pipeline no validate call | — | — |
+
+| FZ02 | api | POST /api/v1/wasm/upload 500 on invalid binary: _inspect_wasm ValueError uncaught (sibling validate endpoint catches it). Should be 400 | P1 | OPEN | fuzz d6NTKN + live repro curl 2026-10-29 (request_id 48dbe427); routers/wasm.py:158 exports,imports=_inspect_wasm vs validate path try/except | — | — |
+
+| FZ03 | api | GET /debug/sentry-test always 500, unauthenticated (non-prod only). Deliberate crash-test endpoint; harden to admin-only to avoid oracle/log-spam | P2 | OPEN | debug.py:11; fuzz QPGZQb | — | — |
+
 | S44 | audit | `log_action` bypasses request DB session AND blocks the request path on a fresh pooled connection with no short connect timeout: fail-slow under DB stress (measured 7.5-15s/request on unresolvable host; error only logged) | P2 | OPEN | audit_service.py:38-55; engine pool database.py:18-34 (no connect_timeout); measured test_api.py:349 7.499s vs <1.0 assert | — | — |
 
 | B01 | api | Notification test endpoint returns 502 when downstream unreachable (inconsistent with webhook test 200+delivered:false; 502 implies our outage) | P1 | OPEN | live probe 2026-10-29: POST /api/v1/notifications/{id}/test w/ https://example.com/hooks/invalid -> 502 {detail: Failed to send test...}; code notifications.py:248-252 maps send==False to 502 | — | — |
@@ -139,3 +145,8 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 
 - ORM metadata vs live pg_indexes diff: exactly 1 missing (ix_pipeline_runs_user_created). DB extras are migration-created perf indexes + PG auto constraint backing (acceptable).
 | S45 | config | Dead env knobs (read into Settings, never used): STEP_TIMEOUT_SECONDS, CACHE_TTL_STATS, DRIFT_DETECTION_ENABLED, MAX_VERSIONS_PER_PIPELINE, READ_REPLICA_HOST. Misleading: documented limits that don't apply | P3 | OPEN | grep settings.X in backend/ 2026-10-29 (only ACCESS_TOKEN_EXPIRE_MINUTES false-positive, used via import) | — | — |
+
+## Schemathesis fuzzing (2026-10-29, stateless fuzz phase, admin token)
+
+- 130/130 ops, 10645 cases, 91s. 3 unique ST101 server errors; 93 ops 401/403; 1 op 404 (templates/{id} needs data); 12 ops schema-vs-validation mismatch (expected: strict API validation).
+- Auth artifact: fuzzer hit POST /auth/logout with its own token -> self-revocation -> all later requests 401. Real behavior (correct), methodology note: exclude /auth/logout or rotate token in future runs.
