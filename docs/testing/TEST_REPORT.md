@@ -10,7 +10,7 @@ Date: 2026-10-29. Stack: local docker compose (FastAPI + Celery + 4×Redis + PgB
 | 2 | Frontend vitest + tsc + eslint green | ✅ PASS | 232 passed; `tsc --noEmit` clean; `eslint .` clean |
 | 3 | Journeys J1–J7 green in one run | ✅ PASS | 7/7 in a single `e2e/journeys` run (~2 min) |
 | 4 | Feature E2E green (01–12, trace, subdirs, collab, a11y) | ✅ PASS | 01-auth, 02-upload, 03-builder, 04-run, 05/06/07/08/09/10/12-ai, trace-validation (incl. E2E_ASSERT_TRACES), scheduling, streaming, builder, collaboration (3/3), a11y 7/7 |
-| 5 | Static/security gates | ✅ PASS | ruff check clean; mypy clean (318 files); bandit 0 High (mediums pre-existing B108/B310 in tests); eslint clean; hadolint baseline kept |
+| 5 | Static/security gates | ✅ PASS | ruff check clean; mypy clean (318 files); bandit 0 High (mediums pre-existing B108/B310 in tests); eslint clean; hadolint baseline kept; npm audit: 6 high + 1 moderate fixed via safe upgrades, 2 remaining need Next 16 major (deferred, documented in CHANGELOG) |
 | 6 | Chaos: worker kill, API restart, redis outage | ✅ PASS | killed worker mid-run → COMPLETED; API restart mid-run → COMPLETED + polls recover; redis-cache down → honest 503 (was 500), health 200 |
 | 7 | Concurrency + latency | ✅ PASS | 3 concurrent users × full upload→run→COMPLETED in ~3s; k6: health p95 ~9–19ms, files-list p95 12.6ms @1rps, 0 failed |
 | 8 | No unresolved P1 defects | ✅ PASS | all P0/P1 ledger rows VERIFIED/FIXED/CLOSED (S01–S56, B01/B02, FZ01–FZ03); residuals are P2/P3 follow-ups below |

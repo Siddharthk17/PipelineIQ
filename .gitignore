@@ -1,16 +1,14 @@
-# =====================================================================
-# PipelineIQ .gitignore — only source, config templates, docs and tests
-# are tracked. Everything generated, local, secret or bulky stays out.
-# =====================================================================
+# PipelineIQ: only source, config templates, docs and tests are tracked.
+# Everything generated, local, secret or bulky stays out.
 
-# ---- Secrets & local environment (never commit real credentials) ----
+# Secrets and local environment (never commit real credentials)
 .env
 .env.local
 .env*.local
 *.pem
 *.key
 
-# ---- Python: bytecode, caches, packaging, virtualenvs ----
+# Python bytecode, caches, packaging, virtualenvs
 __pycache__/
 *.py[cod]
 *.pyc
@@ -25,18 +23,18 @@ build/
 *.orig
 *.rej
 
-# ---- Coverage ----
+# Coverage
 .coverage
 .coverage.*
 coverage/
 coverage.xml
 htmlcov/
 
-# ---- Virtual environments ----
+# Virtual environments
 .venv/
 venv/
 
-# ---- Node / frontend build output ----
+# Node and frontend build output
 node_modules/
 .next/
 .next-build/
@@ -46,7 +44,7 @@ frontend/.env.local
 # Pre-downloaded pip packages for Docker builds
 backend/vendor/
 
-# ---- Test & report artifacts (regenerable) ----
+# Test and report artifacts (regenerable)
 test-results/
 playwright-report/
 .schemathesis/
@@ -55,7 +53,7 @@ e2e/.auth/
 frontend/test-results/
 junit*.xml
 
-# ---- Local data: uploads, databases, scratch CSVs ----
+# Local data: uploads, databases, scratch CSVs
 /*.csv
 *.db
 *.sqlite3
@@ -65,7 +63,7 @@ dump.rdb
 uploads/
 backend/uploads/
 
-# ---- IDE & OS noise ----
+# IDE and OS noise
 .idea/
 .vscode/
 *.swp
@@ -74,7 +72,7 @@ backend/uploads/
 .DS_Store
 Thumbs.db
 
-# ---- Misc ----
+# Misc
 *.log
 .vercel
 .worktrees/

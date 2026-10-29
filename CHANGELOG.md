@@ -3,6 +3,23 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [Unreleased]
+
+### Fixed
+- Direct browser uploads over 10 MB work again: presigned S3 URLs are now signed with SigV4 (MinIO rejected the old SigV2 signatures).
+- Sort steps accept a list of columns and per-column directions again instead of failing the run submission.
+- Run error messages now include the actionable failure detail (paths and secrets still redacted).
+- Collaboration connects on restored sessions (page reload), not just fresh logins; typing long YAML in the builder no longer crashes the page.
+- Cross-user run and pipeline-version URLs return 404 instead of 403, so run IDs cannot be probed for existence.
+- A Redis outage now returns 503 Service Unavailable instead of 500 across the API.
+- Accessibility: icon-only buttons labelled, run history scrollable by keyboard, low-contrast palette/template text fixed (axe clean on 7 pages).
+
+### Changed
+- Contract owners can run their own contracted pipelines (ownership recognized alongside permission grants).
+
+### Security
+- Patched 6 high and 1 moderate npm vulnerabilities via safe upgrades. Two remaining advisories (Next.js, PostCSS chain) require a Next 16 major upgrade and are scheduled post-harden.
+
 ## [12.0.3] — Week 23: Full Test Suite, Load Testing & Chaos Engineering
 
 *Note: This release validates that PipelineIQ is not just built correctly, but proven correct under extreme conditions. It introduces comprehensive End-to-End (E2E) testing, high-concurrency load testing, and chaos engineering to guarantee graceful degradation and recovery during infrastructure failures.*
