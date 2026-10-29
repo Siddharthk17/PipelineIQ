@@ -6,6 +6,7 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
   expect: { timeout: 15_000 },
+  globalSetup: './e2e/global-setup.ts',
 
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 2 : 4,

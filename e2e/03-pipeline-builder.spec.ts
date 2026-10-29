@@ -1,16 +1,19 @@
 import { expect, test } from "@playwright/test";
 
+test.use({ storageState: "e2e/.auth/demo.json" });
+
 const baseUrl = process.env.E2E_BASE_URL;
 const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
 const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
 async function login(page: import("@playwright/test").Page) {
   test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
-  await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
-  await page.getByTestId("email-input").fill(email);
-  await page.getByTestId("password-input").fill(password);
-  await page.getByTestId("login-btn").click();
-  await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 15_000 });
+  // Session comes from global-setup storageState (one demo login for the
+  // whole suite, sparing the 5/min auth limiter); just verify it works.
+  await page.goto(`${baseUrl}/files`, { waitUntil: "domcontentloaded" });
+  // The app may bounce through /login while the session restores; wait for
+  // it to settle on an authenticated page.
+  await page.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 15_000 });
 }
 
 test.describe("Visual Pipeline Builder", () => {
@@ -59,6 +62,8 @@ test.describe("Visual Pipeline Builder", () => {
     await login(page);
     await page.goto(`${baseUrl}/pipelines/new`, { waitUntil: "domcontentloaded" });
 
+    // The builder opens in visual mode; switch to YAML mode to edit text.
+    await page.getByTestId("mode-yaml-btn").click();
     const yamlEditor = page.locator(".cm-editor, [data-testid='yaml-editor']").first();
     await yamlEditor.click();
     await page.keyboard.press("Control+A");
@@ -96,7 +101,8 @@ test.describe("Visual Pipeline Builder", () => {
     await paletteItem.dragTo(canvas, {
       targetPosition: { x: box.width / 2, y: box.height / 2 },
     });
-    await page.waitForTimeout(400);
+    // Node creation is async; wait for the node's gear button explicitly.
+    await page.waitForSelector('[data-testid^="config-btn-"]', { timeout: 10_000 });
 
     const configBtn = page.locator('[data-testid^="config-btn-"]').first();
     await configBtn.click();
@@ -119,12 +125,14 @@ test.describe("Visual Pipeline Builder", () => {
     await paletteItem.dragTo(canvas, {
       targetPosition: { x: box.width / 2, y: box.height / 2 },
     });
-    await page.waitForTimeout(400);
+    await page.waitForSelector('[data-testid^="config-btn-"]', { timeout: 10_000 });
 
     await page.locator('[data-testid^="config-btn-"]').first().click();
     await expect(page.getByTestId("config-panel")).toBeVisible({ timeout: 5_000 });
 
-    await page.getByTestId("config-panel-close").click();
+    // The panel unmounts on close, which can detach the button between
+    // Playwright's actionability check and the click; click via evaluate.
+    await page.getByTestId("config-panel-close").evaluate((el: HTMLElement) => el.click());
     await expect(page.getByTestId("config-panel")).not.toBeVisible();
   });
 
@@ -144,7 +152,7 @@ test.describe("Visual Pipeline Builder", () => {
     await paletteJoin.dragTo(canvas, {
       targetPosition: { x: box.width / 2, y: box.height / 2 },
     });
-    await page.waitForTimeout(400);
+    await page.waitForSelector('[data-testid$="-left"]', { timeout: 10_000 });
 
     const handles = await page.locator('[data-testid^="handle-"][data-testid$="-left"], [data-testid^="handle-"][data-testid$="-right"]').count();
     expect(handles).toBeGreaterThanOrEqual(2);
