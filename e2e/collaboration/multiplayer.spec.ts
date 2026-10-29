@@ -1,6 +1,23 @@
 import { test, expect } from "../fixtures/auth";
 import { uploadSampleCSV, buildSimplePipelineYAML, submitPipelineRun, waitForRunStatus } from "../fixtures/pipeline-helpers";
 
+async function loginWithRetry(page: import("@playwright/test").Page, email: string, password: string) {
+  // Back-to-back logins trip the auth limiter (5/min); retry with backoff.
+  for (let attempt = 0; ; attempt++) {
+    await page.goto("/login");
+    await page.fill('[data-testid="email-input"]', email);
+    await page.fill('[data-testid="password-input"]', password);
+    await page.click('[data-testid="login-btn"]');
+    try {
+      await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 10_000 });
+      return;
+    } catch {
+      if (attempt >= 7) throw new Error("collaboration login keeps failing");
+      await new Promise((r) => setTimeout(r, 15_000));
+    }
+  }
+}
+
 test.describe("Multiplayer Collaboration", () => {
   test("Two browser contexts can open the same pipeline builder simultaneously", async ({
     browser,
@@ -14,7 +31,7 @@ test.describe("Multiplayer Collaboration", () => {
     const runResp = await apiContext.post("/api/v1/pipelines/run", {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
     });
-    expect(runResp.ok()).toBeTruthy();
+    expect(runResp.ok(), await runResp.text()).toBeTruthy();
     const { run_id: runId } = await runResp.json();
 
     const userOneCtx = await browser.newContext();
@@ -22,17 +39,8 @@ test.describe("Multiplayer Collaboration", () => {
     const page1 = await userOneCtx.newPage();
     const page2 = await userTwoCtx.newPage();
 
-    await page1.goto("/login");
-    await page1.fill('[data-testid="email-input"]', user.email);
-    await page1.fill('[data-testid="password-input"]', user.password);
-    await page1.click('[data-testid="login-btn"]');
-    await page1.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 10_000 });
-
-    await page2.goto("/login");
-    await page2.fill('[data-testid="email-input"]', user.email);
-    await page2.fill('[data-testid="password-input"]', user.password);
-    await page2.click('[data-testid="login-btn"]');
-    await page2.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 10_000 });
+    await loginWithRetry(page1, user.email, user.password);
+    await loginWithRetry(page2, user.email, user.password);
 
     await page1.goto(`/runs/${runId}`);
     await page2.goto(`/runs/${runId}`);
@@ -55,17 +63,8 @@ test.describe("Multiplayer Collaboration", () => {
     const page1 = await userOneCtx.newPage();
     const page2 = await userTwoCtx.newPage();
 
-    await page1.goto("/login");
-    await page1.fill('[data-testid="email-input"]', user.email);
-    await page1.fill('[data-testid="password-input"]', user.password);
-    await page1.click('[data-testid="login-btn"]');
-    await page1.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 10_000 });
-
-    await page2.goto("/login");
-    await page2.fill('[data-testid="email-input"]', user.email);
-    await page2.fill('[data-testid="password-input"]', user.password);
-    await page2.click('[data-testid="login-btn"]');
-    await page2.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 10_000 });
+    await loginWithRetry(page1, user.email, user.password);
+    await loginWithRetry(page2, user.email, user.password);
 
     await page1.goto("/pipelines/new");
     await page2.goto("/pipelines/new");
@@ -73,6 +72,8 @@ test.describe("Multiplayer Collaboration", () => {
     await expect(page1.locator('[data-testid="pipeline-canvas"]')).toBeVisible({ timeout: 10_000 });
     await expect(page2.locator('[data-testid="pipeline-canvas"]')).toBeVisible({ timeout: 10_000 });
 
+    // The builder opens in visual mode; switch page1 to YAML mode to edit.
+    await page1.getByTestId("mode-yaml-btn").click();
     const yamlEditor1 = page1.locator(".cm-editor, [data-testid='yaml-editor']").first();
     await yamlEditor1.click();
     await page1.keyboard.press("Control+A");
@@ -90,8 +91,13 @@ test.describe("Multiplayer Collaboration", () => {
     await page1.waitForTimeout(800);
 
     await expect(
-      page1.locator('[data-testid="step-node-load_data"]').or(page1.locator("text=load_data"))
+      page1.locator('[data-testid="step-node-load_data"]')
     ).toBeVisible({ timeout: 5_000 });
+
+    // The edit syncs through the shared yjs room: page2's canvas converges.
+    await expect(
+      page2.locator('[data-testid="step-node-load_data"]')
+    ).toBeVisible({ timeout: 15_000 });
 
     await page1.close();
     await page2.close();
@@ -108,17 +114,8 @@ test.describe("Multiplayer Collaboration", () => {
     const page1 = await userOneCtx.newPage();
     const page2 = await userTwoCtx.newPage();
 
-    await page1.goto("/login");
-    await page1.fill('[data-testid="email-input"]', user.email);
-    await page1.fill('[data-testid="password-input"]', user.password);
-    await page1.click('[data-testid="login-btn"]');
-    await page1.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 10_000 });
-
-    await page2.goto("/login");
-    await page2.fill('[data-testid="email-input"]', user.email);
-    await page2.fill('[data-testid="password-input"]', user.password);
-    await page2.click('[data-testid="login-btn"]');
-    await page2.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 10_000 });
+    await loginWithRetry(page1, user.email, user.password);
+    await loginWithRetry(page2, user.email, user.password);
 
     await page1.goto("/pipelines/new");
     await page2.goto("/pipelines/new");

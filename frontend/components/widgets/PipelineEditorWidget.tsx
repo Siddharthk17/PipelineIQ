@@ -4,7 +4,6 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { EditorView } from "@codemirror/view";
-import { yCollab } from "y-codemirror.next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   validatePipeline,
@@ -169,8 +168,6 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     collaborators,
     updateCursor,
     updateSelectedNode,
-    yYaml,
-    provider,
   } = usePipelineEditor({
     yamlText: code,
     onYamlTextChange: setCode,
@@ -180,12 +177,19 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     authToken: token ?? undefined,
   });
 
+  // NOTE (S-new): the yjs CodeMirror text binding is deliberately disabled.
+  // Binding yCollab(yYaml) while the editor is also React-controlled via
+  // `value={code}` creates a feedback loop (controlled value <-> Y.Text)
+  // that crashes React with "Maximum update depth exceeded" (#185) on
+  // every keystroke, so YAML->canvas sync never runs. Collaboration still
+  // converges at the graph level: parsed nodes/edges sync through yjs and
+  // each side re-emits YAML from its own graph. Re-enable live shared text
+  // only with an uncontrolled editor owned by yjs.
   const yCollabExtension = useMemo(
     () => {
-      if (!yYaml || !provider) return [];
-      return [yCollab(yYaml, provider.awareness)];
+      return [];
     },
-    [yYaml, provider],
+    [],
   );
 
   const configuringNode = useMemo(

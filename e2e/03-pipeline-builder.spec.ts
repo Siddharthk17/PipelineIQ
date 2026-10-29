@@ -80,8 +80,10 @@ test.describe("Visual Pipeline Builder", () => {
     await page.keyboard.type(yamlContent);
     await page.waitForTimeout(600);
 
+    // The typed step must materialize as a canvas node (not merely as
+    // editor text): this is the real YAML->canvas sync assertion.
     await expect(
-      page.locator('[data-testid="step-node-load_data"]').or(page.locator("text=load_data")),
+      page.locator('[data-testid="step-node-load_data"]'),
     ).toBeVisible({ timeout: 5_000 });
   });
 

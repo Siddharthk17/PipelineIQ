@@ -106,9 +106,9 @@ export const test = base.extend<AuthFixtures>({
   apiContext: async ({ playwright, user }, use) => {
     const ctx = await playwright.request.newContext({
       baseURL: API_URL,
+      // No forced Content-Type: multipart uploads need their boundary type.
       extraHTTPHeaders: {
         Authorization: `Bearer ${user.token}`,
-        'Content-Type': 'application/json',
       },
     })
     await use(ctx)

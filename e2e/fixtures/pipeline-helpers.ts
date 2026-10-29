@@ -72,12 +72,15 @@ export async function submitPipelineRun(
   pipelineYaml: string,
   pipelineName: string,
 ): Promise<string> {
-  const resp = await apiCtx.post(`${API_URL}/api/runs`, {
+  const resp = await apiCtx.post(`${API_URL}/api/v1/pipelines/run`, {
     data: {
-      pipeline_name: pipelineName,
-      pipeline_yaml: pipelineYaml,
+      yaml_config: pipelineYaml,
+      name: pipelineName,
     },
   })
+  if (!resp.ok()) {
+    throw new Error(`Pipeline submit failed: ${resp.status()} ${await resp.text()}`)
+  }
   const data = await resp.json()
   return data.run_id || data.id
 }
@@ -86,16 +89,16 @@ export async function waitForRunStatus(
   apiCtx: APIRequestContext,
   runId: string,
   expectedStatus: string,
-  timeoutMs: number = 60_000,
+  timeoutMs: number = 120_000,
 ): Promise<void> {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
-    const resp = await apiCtx.get(`${API_URL}/api/runs/${runId}`)
+    const resp = await apiCtx.get(`${API_URL}/api/v1/pipelines/${runId}`)
     const data = await resp.json()
     const status = data.status
 
     if (status === expectedStatus) return
-    if (['failed', 'timeout', 'contract_violation'].includes(status)) {
+    if (['FAILED', 'TIMEOUT', 'CONTRACT_VIOLATION', 'CANCELLED'].includes(status)) {
       throw new Error(
         `Run ${runId} ended with unexpected status: ${status} (expected: ${expectedStatus})`,
       )
