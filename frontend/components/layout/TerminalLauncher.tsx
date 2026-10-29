@@ -56,7 +56,6 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
         onClose();
       }
     }
-    }
   };
 
   return (
