@@ -39,9 +39,22 @@ try {
   // bindState(docName, doc), and provider properties.
   // y-redis handles persistence in real-time via Redis pub/sub, so
   // writeState is a no-op (no need to flush on disconnect).
+  // y-redis throws when the same doc is bound twice (second client joining
+  // a room that is already persisted). That must not take down the server:
+  // the doc is already syncing, so joining can proceed.
+  const redisBindState = (docName, doc) => {
+    try {
+      return redisPersistence.bindState(docName, doc)
+    } catch (err) {
+      if (String((err && err.message) || err).includes("already bound")) {
+        return undefined
+      }
+      throw err
+    }
+  }
   setPersistence({
     provider: redisPersistence,
-    bindState: (docName, doc) => redisPersistence.bindState(docName, doc),
+    bindState: redisBindState,
     writeState: async (docName, doc) => {},
   })
   console.log(`Y-Redis persistence connected: ${redactedRedisUrl.toString()}`)
@@ -135,10 +148,19 @@ wss.on('connection', (ws, req) => {
 
   console.log(`User "${userName}" joined room: "${roomName}"`)
 
-  setupWSConnection(ws, req, {
-    docName: roomName,
-    gc: true,
-  })
+  // A faulty connection must never crash the relay for all other rooms.
+  try {
+    setupWSConnection(ws, req, {
+      docName: roomName,
+      gc: true,
+    })
+  } catch (err) {
+    console.error(`Failed to set up room "${roomName}": ${err.message}`)
+    try {
+      ws.close(1011, "Internal error")
+    } catch (_) { /* ignore */ }
+    return
+  }
 
   ws.on('close', () => {
     console.log(`User "${userName}" left room: "${roomName}"`)
