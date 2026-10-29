@@ -268,6 +268,8 @@ def validate_step_contract(
 ) -> list[ContractViolation]:
     if not contract_cfg:
         return []
+    # Copy: callers may pass a shared/cached mapping that must not be mutated.
+    contract_cfg = dict(contract_cfg)
     contract_cfg["step_name"] = step_name
     contract = parse_contract_from_yaml(contract_cfg)
     return contract.validate(df)
