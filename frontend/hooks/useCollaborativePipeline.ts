@@ -134,14 +134,17 @@ export function useCollaborativePipeline({
       }
       setProvider(null)
     }
-  }, [authToken, currentUser, pipelineName, doc])
+    // currentUser is an inline object (new identity every render); depend
+    // on its stable id instead to avoid a destroy/reconnect storm.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken, currentUser?.id, pipelineName, doc])
 
   useEffect(() => {
     if (authFailedRef.current && authFailedForRoomRef.current === pipelineName) {
       authFailedRef.current = false
       authFailedForRoomRef.current = null
     }
-  }, [authToken, currentUser, pipelineName])
+  }, [authToken, currentUser?.id, pipelineName])
 
   const awareness = provider?.awareness ?? null
 
