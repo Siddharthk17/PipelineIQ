@@ -94,3 +94,9 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 - chunk1: 274 passed, 2 skipped (97s). chunk2: 403 passed, 1 skipped (5s). chunk3: 250 passed (8s).
 - Total: 927 passed, 3 skipped, 0 failed. Counts as clean-baseline run 1 of 3.
 - Env required for host-side runs: STORAGE_TYPE=local, UPLOAD_DIR=/tmp/qa-uploads, REDIS_* -> 127.0.0.1 ports, DATABASE_* -> 127.0.0.1:5432. (Mirrors CI localhost services; repo .env docker hostnames are unreachable from host.)
+
+## Coverage baseline (2026-10-29)
+
+- Unit suite with coverage: 927 passed, 3 skipped, 0 failed (121s).
+- TOTAL incl. tests/scripts: 68% (20999 stmts). App code only (omit tests/scripts/alembic/benchmark): 63% (12124 stmts, 4427 miss). Target 90% -> ~3400 lines to cover.
+- Lowest app modules: tasks/scheduled_pipeline 18%, tasks/webhook_tasks 19%, storage/lifecycle 20%, tasks/streaming_pipeline 20%, execution/healing_agent 21%, tasks/schedule_tasks 22%, routers/catalog_pipelines 23%, services/notification_service 24%, routers/streaming 25%, api/contracts 26%, routers/wasm 26%, tasks/gemini_tasks 26%, routers/storage 28%, streaming/redpanda_client 28%.
