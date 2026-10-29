@@ -72,7 +72,12 @@ Opening `/catalog/pipelines` fires one `/description` request per listed
 pipeline (~40 sequential GETs, all 200). Works, but chatty; batch endpoint
 is a follow-up, not a defect.
 
-## Finding E — frontend broken in manual testing + Alt+Enter report
+## Finding E — frontend broken in manual testing + Alt+Enter report (RESOLVED where reproduced)
+
+Manual browser pass (login, dashboard, builder, catalog+blast-radius, runs,
+run detail, files, schedules, templates, wasm, storage, AI modal, command
+palette): all pages render with zero console errors. No blanket frontend
+breakage found; the concrete defect found was the launcher one below.
 
 User report (2026-10-29): "entire frontend is just not working" in manual
 browser testing, and "1 is just not visible when you add it into the
