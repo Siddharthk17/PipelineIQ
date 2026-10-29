@@ -105,3 +105,11 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 
 - `npx vitest run` in frontend/: 22 files, 230 tests, all passed (12.5s). Counts as clean-baseline run 1 of 3.
 - Note: `--reporter=basic` is not a valid vitest reporter in this repo (startup error); use default reporter.
+
+## Static analysis baseline (2026-10-29)
+
+- ruff (default all rules): 1940 errors. CI enforces only E9,F63,F82 (pass). Biggest: UP045 308, EXE002 293 (executable bit on non-scripts), UP006 272, B008 236, I001 200, BLE001 156, F401 79, RUF012 31, S110 31. 204 files need reformatting. Decision for fix loop: add pyproject.toml with enforced rule set, fix violations, document rest.
+- tsc --noEmit (frontend): clean, exit 0.
+- eslint (frontend): 20 errors, 3 warnings. Real: react-hooks/refs-during-render (usePipelineEditor.ts:588 collabRef, useCollaborativePipeline authTokenRef), setState-in-effect, display-name, purity. Config gap: .next-build/ output linted (needs ignore).
+- bandit: 0 High, 83 Medium, 2171 Low. Medium = B608 SQL-string building (sql_builder by design w/ validator; catalog.py:359,617 raw SQL to review; tests), B113 requests-without-timeout (tests only), B310 (tests). Low = B101 asserts (tests), S110 try-pass.
+- pip-audit: pyjwt 2.10.1 (5 advisories, fix 2.14/2.15), starlette 0.35.1 (multiple, fix up to 1.x), opentelemetry-api 1.42.0 (CVE-2026-114603, fix 1.45.1). Upgrades must stay compatible with fastapi 0.109.
