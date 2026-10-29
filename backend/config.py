@@ -57,7 +57,6 @@ class Settings(BaseSettings):
     )
     DATABASE_WRITE_URL: str = ""
     DATABASE_READ_URL: str = ""
-    READ_REPLICA_HOST: str = "localhost"
     SECRET_KEY: str = ""
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
@@ -79,7 +78,6 @@ class Settings(BaseSettings):
 
     MAX_PIPELINE_STEPS: int = 50
     MAX_ROWS_PER_FILE: int = 1_000_000
-    STEP_TIMEOUT_SECONDS: int = 300
     WORKER_MEMORY_LIMIT_GB: int = 2
     WORKER_MAX_ROWS_TO_SCAN: int = 10_000_000
 
@@ -93,7 +91,6 @@ class Settings(BaseSettings):
     ]
 
     # Caching
-    CACHE_TTL_STATS: int = 30
 
     # Rate Limiting
     RATE_LIMIT_PIPELINE_RUN: str = "10/minute"
@@ -102,7 +99,6 @@ class Settings(BaseSettings):
     RATE_LIMIT_READ: str = "120/minute"
 
     # Schema Drift
-    DRIFT_DETECTION_ENABLED: bool = True
 
     # Data Profiling
     PROFILE_MAX_ROWS: int = 1_000_000
@@ -113,7 +109,6 @@ class Settings(BaseSettings):
     AUTONOMOUS_HEALING_MAX_ATTEMPTS: int = 3
 
     # Versioning
-    MAX_VERSIONS_PER_PIPELINE: int = 50
 
     # Flower (Celery monitoring)
     FLOWER_USER: str = "admin"

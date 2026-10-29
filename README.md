@@ -1375,7 +1375,6 @@ Full list in `.env.example` (108 variables). Key variables:
 |----------|---------|-------------|
 | `MAX_PIPELINE_STEPS` | `50` | Max steps per pipeline |
 | `MAX_ROWS_PER_FILE` | `1,000,000` | Max rows per uploaded file |
-| `STEP_TIMEOUT_SECONDS` | `300` | 5 min per step timeout |
 | `WORKER_MEMORY_LIMIT_GB` | `2` | Memory limit per Celery worker |
 | `AUTONOMOUS_HEALING_MAX_ATTEMPTS` | `3` | Max healing retries |
 
