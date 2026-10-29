@@ -13,7 +13,7 @@ Date: 2026-10-29. Stack: local docker compose (FastAPI + Celery + 4×Redis + PgB
 | 5 | Static/security gates | ✅ PASS | ruff check clean; mypy clean (318 files); bandit 0 High (mediums pre-existing B108/B310 in tests); eslint clean; hadolint baseline kept; npm audit: 6 high + 1 moderate fixed via safe upgrades, 2 remaining need Next 16 major (deferred, documented in CHANGELOG) |
 | 6 | Chaos: worker kill, API restart, redis outage | ✅ PASS | killed worker mid-run → COMPLETED; API restart mid-run → COMPLETED + polls recover; redis-cache down → honest 503 (was 500), health 200 |
 | 7 | Concurrency + latency | ✅ PASS | 3 concurrent users × full upload→run→COMPLETED in ~3s; k6: health p95 ~9–19ms, files-list p95 12.6ms @1rps, 0 failed |
-| 8 | No unresolved P1 defects | ✅ PASS | all P0/P1 ledger rows VERIFIED/FIXED/CLOSED (S01–S56, B01/B02, FZ01–FZ03); residuals are P2/P3 follow-ups below |
+| 8 | No unresolved P1 defects | ✅ PASS | all P0/P1 ledger rows VERIFIED/FIXED/CLOSED (S01–S60, B01/B02, FZ01–FZ03); residuals are P2/P3 follow-ups below |
 | 9 | Fuzz (schemathesis) | ⚠️ DEFERRED | not run; 8GB box prioritized for E2E + unit. OpenAPI schemas exist; schedule post-harden |
 | 10 | Production read-only smoke | ⚠️ DEFERRED | not run (no prod creds in scope); local prod-parity covered by compose stack |
 
@@ -27,6 +27,11 @@ Date: 2026-10-29. Stack: local docker compose (FastAPI + Celery + 4×Redis + PgB
 - S49 swallowed run errors → actionable messages (paths/secrets still redacted).
 - S56 redis outage 500 → honest 503.
 - S52 covered by SigV4 fix; S19/S32/S33/S34/S36/S37/S39/S40/S28 verified-closed with evidence in ledger.
+- S57 catalog blast-radius/lineage CTEs used illegal Postgres (subquery on recursive CTE + inner LIMIT) and swallowed errors into empty results; rewritten with array-path cycle detection + deduped edges; impact returns 500 assets instantly, lineage resolves full chains.
+- S58 profiling crashed on nullable single-value frames (math.isnan on pd.NA, infinite 30s retry); added NA-safe coercion + regression tests.
+- S59 gemini failure path wrote a plain-dict FAILURE state then raised, breaking Celery JSON result decode (KeyError chains); removed the manual update_state so the raised exception round-trips.
+- S60 Alt+Enter launcher had no number-key selection (typing digits only filtered to nothing); added 1-9 quick-add with visible badges, cleared stale search per open, removed dead contradictory keybinding table.
+- Manual browser pass: login, dashboard, builder, catalog + blast-radius panel, runs, run detail, files, schedules, templates, wasm, storage, command palette, AI modal — all render with zero console errors.
 - E2E repairs: shared demo session (global-setup storageState), ~15 stale selectors/paths/shapes fixed, rate-limit-tolerant helpers, paste-instead-of-type for CodeMirror.
 
 ## Follow-ups (P2/P3, scheduled post-harden)
