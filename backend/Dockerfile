@@ -8,8 +8,7 @@ WORKDIR /app
 
 # Layer cache optimization: install deps before copying source
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source (context is backend/, copy into /app/backend/)
 COPY . ./backend/

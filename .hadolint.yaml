@@ -1,0 +1,15 @@
+# Hadolint configuration for PipelineIQ.
+#
+# Ignored rules (documented rationale — reviewed 2026-10-29):
+# - DL3008 (pin apt versions): images track Debian bookworm/slim security
+#   updates intentionally; exact pins would rot and break rebuilds when the
+#   snapshot moves. Base images themselves are pinned (python:3.11-slim,
+#   alpine:3.20, nginx:1.25-alpine).
+# - DL3015 (apt --no-install-recommends): build layers already end with
+#   rm -rf /var/lib/apt/lists; recommended packages are wanted here
+#   (gcc toolchain + libpq headers for psycopg2).
+# - DL3018 (pin apk versions): same rationale as DL3008 for alpine:3.20.
+ignored:
+  - DL3008
+  - DL3015
+  - DL3018
