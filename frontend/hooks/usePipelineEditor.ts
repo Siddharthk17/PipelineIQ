@@ -201,6 +201,7 @@ export function usePipelineEditor({
   const parseYamlToGraph = useDebouncedCallback((nextYaml: string) => {
     try {
       console.error("[parse-body] running, yaml len", nextYaml.length);
+      console.error("[parse-body] yaml head", JSON.stringify(nextYaml.slice(0, 160)));
       const parsed = yamlToGraph(nextYaml);
       console.error("[parse-body] parsed nodes", parsed.nodes.length);
       parsedFromYamlRef.current = true;
