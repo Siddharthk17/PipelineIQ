@@ -608,7 +608,6 @@ export function usePipelineEditor({
 
   useEffect(() => {
     if (!collab) return;
-    console.error("[sync-effect] nodes", nodes.length);
     collab.syncNodesToYjs(nodes);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync on node changes, not collab identity changes
   }, [nodes, collab?.syncNodesToYjs]);
