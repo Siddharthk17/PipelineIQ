@@ -216,6 +216,7 @@ export function useCollaborativePipeline({
 
   useEffect(() => {
     const observer = () => {
+      console.error("[ynodes-observer] fired, yNodes", yNodes.size, "localSyncing", localSyncingRef.current);
       if (localSyncingRef.current) return
 
       yjsSyncingRef.current = true
