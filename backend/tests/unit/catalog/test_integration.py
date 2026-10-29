@@ -148,7 +148,7 @@ class TestCatalogRepository:
         upsert_asset_relationship(db=test_db, source_id=mid_id, target_id=tgt_id, relation="transforms")
         test_db.commit()
 
-        results = get_blast_radius(test_db, asset_name="customer_id")
+        results = get_blast_radius(test_db, asset_name="customer_id", is_admin=True)
 
         names = [r["name"] for r in results]
         assert "customer_id" in names
@@ -165,7 +165,7 @@ class TestCatalogRepository:
         upsert_data_asset(db=test_db, asset_type="file", name="file_a.csv", namespace=NS_MINIO_UPLOADS)
         test_db.commit()
 
-        col_results = get_blast_radius(test_db, asset_name="col_a", asset_type="column")
+        col_results = get_blast_radius(test_db, asset_name="col_a", asset_type="column", is_admin=True)
         assert len(col_results) >= 1
         assert all(r["asset_type"] == "column" for r in col_results)
 
@@ -180,7 +180,7 @@ class TestCatalogRepository:
         upsert_asset_relationship(db=test_db, source_id=src_id, target_id=tgt_id, relation="transforms")
         test_db.commit()
 
-        results = get_upstream_lineage(test_db, asset_name="computed_total")
+        results = get_upstream_lineage(test_db, asset_name="computed_total", is_admin=True)
 
         names = [r["name"] for r in results]
         assert "computed_total" in names
@@ -519,7 +519,7 @@ class TestAssetRegistrationIntegration:
             lineage_graph=G,
         )
 
-        results = get_blast_radius(test_db, asset_name="source.csv")
+        results = get_blast_radius(test_db, asset_name="source.csv", is_admin=True)
         assert len(results) >= 1
 
         results2 = get_blast_radius(test_db, asset_name="output_col")

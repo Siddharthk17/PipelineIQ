@@ -484,7 +484,7 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
                 run_id=str(pipeline_run.id),
                 pipeline_name=pipeline_run.name or "unknown",
                 lineage_graph=graph,
-                owner_id=str(pipeline_run.user_id) if pipeline_run.user_id else None,
+                owner_id=pipeline_run.user_id,
             )
             db.commit()
         except Exception as e:
@@ -896,7 +896,7 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
             pipeline_name=pipeline_run.name or "unknown",
             pipeline_yaml=pipeline_run.yaml_config or "",
             lineage_graph=summary.lineage.graph,
-            owner_id=str(pipeline_run.user_id) if pipeline_run.user_id else None,
+            owner_id=pipeline_run.user_id,
         )
     except Exception as exc:
         logger.error("Catalog registration failed for run %s: %s", pipeline_run.id, exc)
