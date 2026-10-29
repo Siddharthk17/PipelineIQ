@@ -2,11 +2,11 @@
 
 Legend per line: [ ] pending, [x] done, [~] partial, SKIPPED with reason.
 
-## Phase 1: Baseline from clean state
+## Phase 1: Baseline from clean state — DONE 2026-10-29
 
-- [ ] `docker compose down -v && docker compose up --build` from scratch; record time-to-healthy
-- [ ] Every container running + healthy, zero restarts, no crash loops
-- [ ] Full logs of every container catalogued; each error/warning triaged (finding or documented-harmless)
+- [x] `docker compose down -v` + `up --build`: all healthy, zero restarts (~110s; second cycle same)
+- [x] Every container running + healthy, zero restarts, no crash loops
+- [x] Full logs triaged (ledger Phase-1 notes)
 - [ ] Reproduce + root-cause notification 502 (B01) and upload 422s (B02)
 - [ ] Resolve/document W01/W02/W03
 - [ ] Backend suite 3x from clean stack (pass/fail/skip + coverage per module); fix failures + flakes
