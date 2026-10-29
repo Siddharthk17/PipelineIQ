@@ -24,6 +24,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.openapi.docs import get_redoc_html
 from fastapi.responses import HTMLResponse, JSONResponse, ORJSONResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
+from redis.exceptions import RedisError
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 from slowapi import _rate_limit_exceeded_handler as _slowapi_rate_limit_handler
@@ -258,6 +259,32 @@ async def _rate_limit_exceeded_handler(
 
 
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.exception_handler(RedisError)
+async def redis_unavailable_handler(request: Request, exc: RedisError) -> JSONResponse:
+    """Cache/queue outages are 503s, not 500s (S-new).
+
+    The rate limiter, revocation checks, and SSE cache all read Redis on
+    the request path. When Redis is unreachable the honest answer is
+    "temporarily unavailable, retry shortly" — and reads that never touch
+    Redis (e.g. /health) keep working.
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger = structlog.get_logger()
+    logger.warning(
+        "redis_unavailable",
+        path=request.url.path,
+        error=str(exc)[:200],
+    )
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "error_type": "ServiceUnavailable",
+            "message": "A backing service is temporarily unavailable. Retry shortly.",
+            "request_id": request_id,
+        },
+    )
 
 
 @app.exception_handler(ClientDisconnected)
