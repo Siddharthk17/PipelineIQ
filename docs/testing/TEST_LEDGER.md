@@ -204,3 +204,42 @@ NOTE-W01: celery_config routes tasks.generate_pipeline_ai/repair_ai/completion_c
 | S54 | e2e->confirmed | typing long YAML in the builder crashes React (#185 Maximum update depth) and YAML->canvas sync never runs: CodeMirror is simultaneously controlled (value={code}) and yjs-bound (yCollab), the two sources fight over the document | P1 | VERIFIED | 3 E2E repros of #185 on char-by-char typing; removed yCollab text binding (graph/cursor/presence sync retained); machine-gun typing clean, paste->visual shows nodes, cross-user canvas convergence passes | FIX-COMMIT | frontend/components/widgets/PipelineEditorWidget.tsx, e2e/03-pipeline-builder.spec.ts, e2e/collaboration/multiplayer.spec.ts |
 | S55 | e2e->confirmed | yjs collaboration silently never connects on cookie-restored sessions (page reload, shared E2E sessions): provider only created when React token state set (fresh UI login only); page2 never receives nodes though relay is healthy | P1 | VERIFIED | redis updates key empty after page1 edit despite local node render; connect when token OR logged-in user (server already falls back to HttpOnly cookie), omit literal 'undefined' token param, dep fixes | FIX-COMMIT | frontend/hooks/useCollaborativePipeline.ts |
 | S56 | chaos->confirmed | redis-cache outage 500s the whole API (limiter reads Redis on request path) instead of an honest 503 | P2 | VERIFIED | stopped redis-cache: login 500; added RedisError -> 503 ServiceUnavailable handler; login 503 with request_id, health still 200; unit test pins 503 | FIX-COMMIT | backend/main.py, backend/tests/unit/api/test_main.py |
+| S20i | authz | versions.py no-grant branch returned 403 (same run-UUID oracle class as S50) | P2 | VERIFIED | no test asserted 403 on this path; changed no-grant to 404, insufficient-level keeps 403; api+versioning suites green | FIX-COMMIT | backend/api/versions.py |
+
+## Stage 2 reconciliation (2026-10-29): closing Stage-1 SUSPECTED rows
+
+Rows below keep their original IDs; status here supersedes the Stage-1 row.
+
+| FZ03 | api | debug crash endpoint now admin-only (`Depends(get_current_admin)`); unauthenticated probe -> 401, not 500 | P2 | CLOSED | live probe /debug/sentry-test -> 401 | — | — |
+| S46 | ratelimit | limiter honors X-Real-IP (nginx sets it, app reads it with peer-IP fallback); direct-exposure caveat documented in code | P1 | CLOSED | backend/utils/rate_limiter.py client_ip_key + docstring; E2E rate-limit behavior verified throughout suite runs | — | — |
+| B01 | api | notification test endpoint returns 200 + delivered:false on downstream failure (no 502 path remains for slack/email; unknown types 400) | P1 | CLOSED | live slack test vs example.com -> 200 delivered:false | — | — |
+| S31 | frontend | collab token null after refresh — fixed by S55 (cookie-session connect) | P1 | CLOSED | superseded by S55 | — | — |
+| S32 | infra | JWT secret naming split unified in compose (JWT_SECRET=${SECRET_KEY}, AUTH_JWT_SECRET=${SECRET_KEY}) | P2 | CLOSED | docker-compose.yml:720,795; y-websocket + edge verify the same value | — | — |
+| S33 | frontend | SSE auth fragility — EventSource same-origin sends cookies; reconnect/polling covered by live SSE E2E | P1 | CLOSED | e2e/04-pipeline-run.spec.ts SSE test green; J1 run watch green | — | — |
+| S34 | frontend | page guards — middleware bounces unauthenticated globally; catalog/wasm redirect to /login | P2 | CLOSED | e2e/01-auth redirect test green; catalog/wasm E2E green authenticated | — | — |
+| S36 | frontend | a11y gaps — files delete buttons (97 icon-only), runs scroll region, template/palette contrast fixed; axe suite pins 7 pages | P3 | VERIFIED | e2e/13-accessibility.spec.ts 7/7 green (wcag2a/wcag2aa serious+critical) | FIX-COMMIT | e2e/13-accessibility.spec.ts |
+| S39 | frontend | E2E API drift — all specs migrated to /api/v1 + real response shapes + shared demo session | P1 | VERIFIED | e2e/01-12, trace, subdirs, journeys all green | FIX-COMMIT | e2e/global-setup.ts |
+| S40 | frontend | upload contract — current uploadFile handles direct (PUT+confirm) and multipart fallback correctly | P2 | CLOSED | J1 (multipart) + J3 (presigned) green against live stack | — | — |
+| S19 | api | templates list is public-by-design (static built-ins, no user data); debug endpoint admin-gated | P1 | CLOSED | unauth probes: /api/v1/templates/ 200 (static), /debug/sentry-test 401 | — | — |
+| S28 | db | orphan-file backfill assigned legacy rows to first user at migration time (no owner info existed); new uploads always owner-stamped; N+1 remains a perf follow-up, not a leak | P1 | CLOSED | cb3e11c88344 reads as one-time legacy assignment; file APIs owner-filter (J4 verified) | — | — |
+| S35 | frontend | run-detail error swallowing fixed (live polling + visible error_message, S49 actionable errors) | P2 | VERIFIED | J1/J2 assert visible status + error text | FIX-COMMIT | e2e/journeys/j1+j2 |
+| S37 | frontend | collab seed staleness — yjs state sync converges late joiners; cross-user canvas convergence proven live | P2 | VERIFIED | e2e/collaboration multiplayer test 2 green | FIX-COMMIT | e2e/collaboration/multiplayer.spec.ts |
+| S43dup | config | duplicate of row 188 (CLOSED) | P3 | CLOSED | see S43 CLOSED | — | — |
+| W01dup | infra | duplicate of row 168 (RESOLVED documented) | P2 | CLOSED | see W01 RESOLVED | — | — |
+
+## Stage 2 follow-ups (not reproduced; full suites green; scheduled post-harden)
+
+| S05 | workers | non-atomic Redis lock release (GET+DELETE) in schedules/storage tasks | P2 | FOLLOW-UP | code pattern confirmed by reading; no incident observed; needs atomic Lua + contention test | — | — |
+| S06 | engine | transform/stream_consume parse OK without executor | P1 | FOLLOW-UP | parser accepts; runtime path untested — needs negative-path test or parser rejection | — | — |
+| S07 | engine | WASM SIGALRM thread-safety | P2 | FOLLOW-UP | week8 e2e green; prefork risk untested | — | — |
+| S08 | storage | ArrowBus cross-worker manifest hydration | P1 | FOLLOW-UP | single-worker E2E green; multi-worker retry path needs a dedicated test | — | — |
+| S09 | storage | ArrowBus put/evict races | P2 | FOLLOW-UP | needs concurrency test | — | — |
+| S15 | engine | validate-rule payload KeyErrors | P2 | FOLLOW-UP | parser checks added for sort; validate rules need same treatment | — | — |
+| S16 | engine | fill_nulls/sample late failures | P2 | FOLLOW-UP | needs negative-path tests | — | — |
+| S17 | observability | storage event logging on write DB in hot path | P2 | FOLLOW-UP | perf follow-up, not correctness | — | — |
+| S21 | api | mass-assignment/store validation (notification events, webhook events, schedule yaml, template mappings, column policies) | P2 | FOLLOW-UP | partial coverage via E2E; needs schema-level audit | — | — |
+| S22 | api | error-text leaks (lineage 404 text, S3 str(e)) | P2 | FOLLOW-UP | S49 established the sanitize pattern; apply repo-wide | — | — |
+| S23 | api | error shape/pagination inconsistencies | P3 | FOLLOW-UP | cosmetic; standardize per-endpoint | — | — |
+| S38 | frontend | graphToYAML empty on cycle wipes editor | P2 | FOLLOW-UP | needs cycle-guard test in builder | — | — |
+| S41 | frontend | hardcoded stats trends, confirm()/alert() usage | P3 | FOLLOW-UP | polish | — | — |
+| S42 | tests | shared-state order dependence (e.g. test_drift flaked once in full runs) | P2 | FOLLOW-UP | full backend suite green (1018); isolate state per test | — | — |

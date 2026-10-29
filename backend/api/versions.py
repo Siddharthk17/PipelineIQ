@@ -38,6 +38,14 @@ def _check_pipeline_permission(
     )
 
     if not permission or permission.permission_level not in required_levels:
+        # No grant at all: 404 (not 403) so the existence of another
+        # user's pipeline cannot be probed via the status code (S50).
+        # Insufficient-level grants stay 403.
+        if not permission:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Pipeline run or pipeline not found, or access denied.",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"User lacks required permissions ({', '.join(required_levels)}) to access pipeline '{pipeline_name}'",
