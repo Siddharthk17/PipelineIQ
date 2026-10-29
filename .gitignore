@@ -76,3 +76,6 @@ Thumbs.db
 *.log
 .vercel
 .worktrees/
+
+# Playwright MCP browser snapshots
+.playwright-mcp/
