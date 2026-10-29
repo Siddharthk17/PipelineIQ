@@ -124,3 +124,9 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 
 - Prod (omit=dev): 8 vulns (1 moderate, 6 high, 1 critical): baseline-browser-mapping(m), browserslist(h), js-yaml(h), nanoid(h), next(critical, via postcss+sharp), postcss(h), sharp(h, libheif+librsvg), source-map-js(h). All transitive via Next toolchain; fix via npm audit fix + rebuild + retest in fix loop.
 - All (incl dev): 17 vulns (5 moderate, 10 high, 2 critical).
+
+## Production build (2026-10-29)
+
+- `next build` in frontend/: PASSES (route table emitted, middleware 34.7kB). First attempt OOM-killed by systemd-oomd (swap >90%%); retry with taskset -c 0-3 + NODE_OPTIONS=--max-old-space-size=2048 succeeded.
+- next.config.ts: eslint.ignoreDuringBuilds=true (lint not enforced at build; CI must enforce separately — verify eslint step is blocking), typescript.ignoreBuildErrors=false (good), output standalone, duplicate /api/:path*/ + /api/:path* rewrites (harmless).
+- OOM note: box has 8GB RAM; full parallel runs (-n 8 pytest, unconstrained next build) get OOM-killed. Use -n 2 and CPU/heap caps. Swap hogs: gunicorn workers, redpanda, celery ( Infine: normal).
