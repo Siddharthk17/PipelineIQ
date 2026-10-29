@@ -1093,25 +1093,6 @@ def export_pipeline_output(
     save_results = [
         sr for sr in pipeline_run.step_results if sr.step_type == "save"]
 
-    # Parse YAML to get save step filenames for S3 key construction
-    stored_paths: list[str] = []
-    try:
-        parsed_pipeline = get_parsed_pipeline(pipeline_run.yaml_config)
-        for step in parsed_pipeline.steps:
-            if getattr(step, "step_type", None) == "save":
-                filename = str(getattr(step, "filename", "")).strip()
-                if filename:
-                    filename = os.path.basename(filename)
-                    ext = ".csv"  # Default extension
-                    if filename.endswith(".json"):
-                        ext = ".json"
-                        filename = filename[:-5]
-                    # Construct stored_path pattern used by save step
-                    stored_pattern = f"{filename}_*{ext}"
-                    stored_paths.append(stored_pattern)
-    except Exception:
-        logger.warning("Could not parse YAML for export, run_id=%s", run_id)
-
     # Prefer concrete local artifacts when present, even if S3 storage is enabled.
     output_dir = settings.UPLOAD_DIR
     import glob as glob_module
@@ -1183,7 +1164,11 @@ def export_pipeline_output(
         )
 
     if settings.STORAGE_TYPE == "s3":
-        if not stored_paths:
+        s3_keys = [
+            sr.output_object_name for sr in save_results
+            if sr.output_object_name
+        ]
+        if not s3_keys:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Could not determine output file path",
@@ -1193,16 +1178,13 @@ def export_pipeline_output(
             from backend.services.storage_service import storage_service
             from fastapi.responses import StreamingResponse
 
-            for pattern in stored_paths:
-                base_name = pattern.replace("*", "").rstrip("_.")
-                s3_key = f"{settings.UPLOAD_DIR}/{base_name}"
-
+            for s3_key in s3_keys:
                 try:
                     if storage_service.exists(s3_key):
                         file_obj = storage_service.download(s3_key)
                         media_type = (
                             "text/csv"
-                            if base_name.endswith(".csv")
+                            if s3_key.endswith(".csv")
                             else "application/json"
                         )
                         return StreamingResponse(

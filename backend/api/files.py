@@ -120,7 +120,7 @@ def _validated_pending_stored_path(file_id: str, pending: dict) -> str:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Pending upload storage path is invalid",
         )
-    return str(settings.UPLOAD_DIR / expected_name)
+    return expected_name
 
 
 @router.post(
@@ -158,7 +158,7 @@ async def request_upload_url(
 
     file_id = str(uuid.uuid4())
     extension = Path(filename).suffix.lower()
-    stored_path = settings.UPLOAD_DIR / f"{file_id}{extension}"
+    stored_path = f"{file_id}{extension}"
 
     request_path = request.url.path
     is_legacy_api = request_path.startswith("/api/files/")
