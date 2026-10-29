@@ -25,7 +25,7 @@ test("J6 delete dataset and pipeline, history survives", async ({ request }) => 
     await request.get(`${API}/api/v1/pipelines/${runId}`, { headers })
   ).json();
   expect(run.status).toBe("COMPLETED");
-  expect(run.run_id).toBe(runId);
+  expect(run.id).toBe(runId);
 
   // The deleted file is gone from listings.
   const list = await (await request.get(`${API}/api/v1/files/`, { headers })).json();

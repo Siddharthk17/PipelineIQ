@@ -291,7 +291,20 @@ def _check_pipeline_permission(
     if user.role == "admin":
         return
 
-    from backend.models import PipelinePermission
+    from backend.models import PipelineContract, PipelinePermission
+
+    # Owning the contract for a pipeline name is ownership of the pipeline
+    # itself (mirrors _ensure_pipeline_contract_access in contracts.py).
+    own_contract = (
+        db.query(PipelineContract.id)
+        .filter(
+            PipelineContract.pipeline_name == pipeline_name,
+            PipelineContract.user_id == user.id,
+        )
+        .first()
+    )
+    if own_contract:
+        return
 
     permission = (
         db.query(PipelinePermission)
@@ -345,9 +358,11 @@ def _check_pipeline_permission(
                 )
                 return
 
+        # No grant at all: 404 (not 403) so the existence of another
+        # user's pipeline/run cannot be probed via the status code.
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User lacks required permissions ({', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pipeline run or pipeline not found, or access denied.",
         )
 
     if permission.permission_level not in required_levels:

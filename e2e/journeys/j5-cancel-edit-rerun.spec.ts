@@ -26,7 +26,7 @@ test("J5 cancel a run, edit config, rerun", async ({ request }) => {
     "    - name: agg",
     "      type: aggregate",
     "      input: src",
-    "      group_by: region",
+    "      group_by: [region]",
     "      aggregations:",
     "        amount: sum",
     "    - name: out",
@@ -67,7 +67,9 @@ test("J5 cancel a run, edit config, rerun", async ({ request }) => {
 
   // History shows both runs.
   const history = await (
-    await request.get(`${API}/api/v1/files/${fileId}/runs`, { headers })
+    await request.get(`${API}/api/v1/pipelines/`, { headers })
   ).json();
-  expect(history.runs.length).toBeGreaterThanOrEqual(1);
+  const ids = (history.runs ?? history).map((r: { id: string; run_id: string }) => r.id ?? r.run_id);
+  expect(ids).toContain(runId);
+  expect(ids).toContain(run2);
 });

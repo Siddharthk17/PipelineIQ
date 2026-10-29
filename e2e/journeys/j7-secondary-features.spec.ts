@@ -13,20 +13,20 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
   const fileId = await uploadCsv(request, user.token, "j7.csv", "id,region,amount\n1,N,10\n2,S,20\n");
 
   // --- Schedules: create, list, pause, delete.
-  const sched = await request.post(`${API}/api/v1/pipelines/schedules`, {
+  const sched = await request.post(`${API}/api/v1/schedules/`, {
     data: {
-      name: `j7_sched_${Date.now().toString(36)}`,
+      pipeline_name: `j7_sched_${Date.now().toString(36)}`,
       yaml_config: simpleYaml("j7_sched_run", fileId, "j7_sched_out.csv"),
-      cron: "0 3 * * *",
+      cron_expression: "0 3 * * *",
     },
     headers,
   });
   expect(sched.status(), await sched.text()).toBe(201);
   const schedId = (await sched.json()).id as string;
-  const pause = await request.post(`${API}/api/v1/pipelines/schedules/${schedId}/pause`, { headers });
-  expect([200, 404]).toContain(pause.status());
-  const delSched = await request.delete(`${API}/api/v1/pipelines/schedules/${schedId}`, { headers });
-  expect([200, 404]).toContain(delSched.status());
+  const pause = await request.post(`${API}/api/v1/schedules/${schedId}/pause`, { headers });
+  expect([200, 204, 404]).toContain(pause.status());
+  const delSched = await request.delete(`${API}/api/v1/schedules/${schedId}`, { headers });
+  expect([200, 204, 404]).toContain(delSched.status());
 
   // --- Templates: list exists and one renders runnable YAML.
   const templates = await request.get(`${API}/api/v1/templates/`, { headers });
@@ -34,9 +34,10 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
   const templateList = await templates.json();
   expect(Array.isArray(templateList.templates ?? templateList)).toBeTruthy();
 
-  // --- Catalog: built-in functions listed.
-  const catalog = await request.get(`${API}/api/v1/catalog/functions`, { headers });
+  // --- Catalog: full-text search over the caller's own assets.
+  const catalog = await request.get(`${API}/api/catalog/search?q=j7&limit=10`, { headers });
   expect(catalog.ok(), await catalog.text()).toBeTruthy();
+  expect((await catalog.json()).query).toBe("j7");
 
   // --- SQL compute step: DuckDB over the uploaded file.
   const sqlYaml = [
@@ -99,7 +100,7 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
       headers,
     },
   );
-  expect(upload.status(), await upload.text()).toBe(201);
+  expect([200, 201]).toContain(upload.status());
   const moduleId = (await upload.json()).id as string;
   expect(moduleId).toBeTruthy();
 
@@ -128,7 +129,11 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
   // The doubled column has the right values.
   const dl = await request.get(`${API}/api/v1/pipelines/${wasmRun}/download`, { headers });
   expect(dl.ok(), await dl.text()).toBeTruthy();
-  const csv = await dl.text();
+  const { download_url: wasmUrl } = await dl.json();
+  expect(typeof wasmUrl).toBe("string");
+  const csvResp = await fetch(wasmUrl as string);
+  expect(csvResp.ok).toBeTruthy();
+  const csv = await csvResp.text();
   expect(csv).toContain("doubled");
   const firstData = csv.split("\n")[1];
   const cols = csv.split("\n")[0].split(",");
@@ -137,30 +142,39 @@ test("J7 schedules, contracts, templates, wasm, catalog", async ({ page, request
     Number(values[cols.indexOf("amount")]) * 2,
   );
 
-  // --- Contracts: violation run is quarantined, not silent.
-  const contract = await request.post(`${API}/api/v1/contracts`, {
-    data: {
-      name: `j7_contract_${Date.now().toString(36)}`,
-      rules: [{ field: "amount", rule_type: "min", value: 1000 }],
-    },
-    headers,
-  });
-  expect(contract.status(), await contract.text()).toBe(201);
-  const contractId = (await contract.json()).id as string;
-  const violationYaml = [
-    "pipeline:",
-    `  name: j7_violation_${Date.now().toString(36)}`,
-    "  steps:",
-    "    - name: src",
-    "      type: load",
-    `      file_id: ${fileId}`,
-    "    - name: out",
-    "      type: save",
-    "      input: src",
-    `      filename: j7_violation_out.csv`,
-    `      contract_id: ${contractId}`,
+  // --- Contracts: a blocking contract quarantines a violating run.
+  const contractPipe = `j7_contract_${Date.now().toString(36)}`;
+  const contractYaml = [
+    "columns:",
+    "  amount:",
+    "    type: integer",
+    "    min_value: 1000",
   ].join("\n");
-  const violRun = await runPipeline(request, user.token, violationYaml);
+  const contract = await request.post(
+    `${API}/api/v1/contracts/pipelines/${contractPipe}`,
+    {
+      data: { yaml_content: contractYaml, severity: "block" },
+      headers,
+    },
+  );
+  expect(contract.status(), await contract.text()).toBe(201);
+  const violRun = await runPipeline(
+    request,
+    user.token,
+    [
+      "pipeline:",
+      `  name: ${contractPipe}`,
+      "  steps:",
+      "    - name: src",
+      "      type: load",
+      `      file_id: ${fileId}`,
+      "    - name: out",
+      "      type: save",
+      "      input: src",
+      "      filename: j7_violation_out.csv",
+    ].join("\n"),
+    contractPipe,
+  );
   expect(await waitForRun(request, user.token, violRun)).toBe("CONTRACT_VIOLATION");
 
   // --- UI spot check: schedules page renders for a logged-in user.

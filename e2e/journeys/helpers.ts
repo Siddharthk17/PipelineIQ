@@ -17,9 +17,16 @@ export async function registerUser(
   const tag = `${prefix}_${Date.now().toString(36)}`;
   const email = `${tag}@pipelineiq.test`;
   const password = "Testpass123!";
-  const reg = await request.post(`${API}/auth/register`, {
+  // Registration is rate-limited; back off and retry on 429.
+  let reg = await request.post(`${API}/auth/register`, {
     data: { email, username: tag, password },
   });
+  for (let i = 0; i < 8 && reg.status() === 429; i++) {
+    await new Promise((r) => setTimeout(r, 10_000));
+    reg = await request.post(`${API}/auth/register`, {
+      data: { email, username: tag, password },
+    });
+  }
   expect(reg.ok(), await reg.text()).toBeTruthy();
   const login = await request.post(`${API}/auth/login`, {
     data: { email, password },
@@ -70,8 +77,11 @@ export async function waitForRun(
 ): Promise<string> {
   const start = Date.now();
   for (;;) {
+    // Per-request timeout: a hung socket must fail fast, never burn the
+    // whole test budget (seen once after an API container restart).
     const resp = await request.get(`${API}/api/v1/pipelines/${runId}`, {
       headers: { Authorization: `Bearer ${token}` },
+      timeout: 15_000,
     });
     expect(resp.ok()).toBeTruthy();
     const run = await resp.json();
