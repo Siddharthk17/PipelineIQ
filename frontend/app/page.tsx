@@ -20,6 +20,9 @@ export default function Dashboard() {
   const [isThemeBuilderOpen, setIsThemeBuilderOpen] = useState(false);
   const [isLauncherOpen, setIsLauncherOpen] = useState(false);
   const [isKeybindingsOpen, setIsKeybindingsOpen] = useState(false);
+  // Remount the launcher on every open so it always starts with a clean
+  // search instead of carrying over the previous query.
+  const [launcherSession, setLauncherSession] = useState(0);
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -48,7 +51,10 @@ export default function Dashboard() {
   }, []);
 
   useKeybindings(
-    () => setIsLauncherOpen(true),
+    () => {
+      setLauncherSession((n) => n + 1);
+      setIsLauncherOpen(true);
+    },
     () => setIsCommandOpen(true),
     () => setIsThemeBuilderOpen(true),
     () => setIsKeybindingsOpen(true)
@@ -99,6 +105,7 @@ export default function Dashboard() {
       </div>
 
       <TerminalLauncher
+        key={`launcher-${launcherSession}`}
         isOpen={isLauncherOpen}
         onClose={() => setIsLauncherOpen(false)}
       />
