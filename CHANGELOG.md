@@ -3,7 +3,7 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
-## [Unreleased]
+## [12.7.3]
 
 ### Fixed
 - Direct browser uploads over 10 MB work again: presigned S3 URLs are now signed with SigV4 (MinIO rejected the old SigV2 signatures).
