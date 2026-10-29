@@ -94,6 +94,7 @@ export default function FilesPage() {
                 </div>
                 <button
                   type="button"
+                  aria-label={`Delete ${file.original_filename}`}
                   onClick={async () => {
                     await deleteFile(file.id);
                     setFiles((prev) => prev.filter((f) => f.id !== file.id));

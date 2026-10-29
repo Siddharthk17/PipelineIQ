@@ -59,11 +59,17 @@ export function RunHistoryWidget() {
           onClick={() => invalidatePipelineRuns()}
           className="p-1 rounded hover:bg-[var(--interactive-hover)] text-[var(--text-secondary)]"
           title="Refresh"
+          aria-label="Refresh run history"
         >
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto pr-2">
+      <div
+        className="flex-1 overflow-y-auto pr-2"
+        tabIndex={0}
+        role="region"
+        aria-label="Pipeline run history"
+      >
         {/* Streaming runs as cards */}
         {streamingRuns.length > 0 && (
           <div className="px-2 pt-2">

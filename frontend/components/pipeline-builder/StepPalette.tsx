@@ -68,7 +68,7 @@ export function StepPalette({ onDragStart, onAddStep }: StepPaletteProps) {
                             <span className="mr-1.5">{definition.icon}</span>
                             {definition.label}
                           </p>
-                          <p className="text-[11px] text-[var(--text-secondary)]">{definition.description}</p>
+                          <p className="text-[11px] text-[var(--text-primary)]">{definition.description}</p>
                         </div>
                         {!definition.backendSupported && (
                           <span
