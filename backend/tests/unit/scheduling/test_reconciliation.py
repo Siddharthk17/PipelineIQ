@@ -36,13 +36,12 @@ def _user_and_run(test_db, status, age_minutes, task_id="celery-task-1"):
 
 def test_wedged_run_times_out(test_db):
     run = _user_and_run(test_db, PipelineStatus.RUNNING, 60, "dead-task")
-    with patch.object(recon, "_task_state", return_value="FAILURE"):
-        with patch(
-            "backend.tasks.reconciliation._publish_terminal_event",
-            create=True,
-        ):
-            result = recon.reconcile_stuck_runs(
-                db=test_db, timeout=timedelta(minutes=30))
+    with patch.object(recon, "_task_state", return_value="FAILURE"), patch(
+        "backend.tasks.reconciliation._publish_terminal_event",
+        create=True,
+    ):
+        result = recon.reconcile_stuck_runs(
+            db=test_db, timeout=timedelta(minutes=30))
     assert result == {"checked": 1, "timed_out": 1}
     test_db.refresh(run)
     assert run.status == PipelineStatus.TIMEOUT
