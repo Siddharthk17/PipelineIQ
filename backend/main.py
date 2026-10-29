@@ -542,7 +542,6 @@ app.include_router(streaming_router)
 from backend.routers.catalog import router as catalog_router
 from backend.routers.catalog_pipelines import router as catalog_pipelines_router
 from backend.routers.column_policies import router as column_policies_router
-from backend.routers.contracts import router as contracts_router
 from backend.routers.lineage_export import router as lineage_export_router
 from backend.routers.runs import router as runs_router
 from backend.routers.storage import router as storage_router
@@ -552,7 +551,6 @@ app.include_router(lineage_export_router)
 app.include_router(column_policies_router)
 app.include_router(catalog_pipelines_router)
 app.include_router(storage_router)
-app.include_router(contracts_router)
 app.include_router(runs_router)
 
 if settings.ENVIRONMENT != "production":
