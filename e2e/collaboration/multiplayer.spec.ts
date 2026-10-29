@@ -19,6 +19,9 @@ async function loginWithRetry(page: import("@playwright/test").Page, email: stri
 }
 
 test.describe("Multiplayer Collaboration", () => {
+  // Each test registers + logs in fresh users (API + 2 UI logins); under
+  // the 5/min auth limiter the retries need a generous budget.
+  test.describe.configure({ timeout: 300_000 });
   test("Two browser contexts can open the same pipeline builder simultaneously", async ({
     browser,
     user,
@@ -79,7 +82,9 @@ test.describe("Multiplayer Collaboration", () => {
 
     const yamlContent = [
       "pipeline:",
-      "  name: collaboration_test",
+      // Keep the default room name: renaming migrates this client to a
+      // different yjs room, which would strand the collaborator.
+      "  name: my_pipeline",
       "  steps:",
       "    - name: load_data",
       "      type: load",
