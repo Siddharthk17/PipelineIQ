@@ -80,13 +80,17 @@ class Settings(BaseSettings):
     WORKER_MAX_ROWS_TO_SCAN: int = 10_000_000
 
     API_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: list[str] = [
-        "http://localhost",
+    CORS_ORIGINS: list[str] = [        "http://localhost",
         "http://localhost:80",
         "http://localhost:3000",
         "https://pipeline-iq0.vercel.app",
         "https://pipelineiq-api.onrender.com",
     ]
+    TRUSTED_HOSTS: str = (
+        "localhost,127.0.0.1,testserver,api,frontend,nginx,"
+        "host.docker.internal,pipelineiq-api.onrender.com,"
+        "pipeline-iq0.vercel.app"
+    )
 
     # Caching
 

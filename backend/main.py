@@ -20,6 +20,7 @@ import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.openapi.docs import get_redoc_html
 from fastapi.responses import HTMLResponse, JSONResponse, ORJSONResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -415,6 +416,17 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+)
+
+# Added last so it runs first: reject requests with an unexpected Host
+# header before any routing, auth, or URL building happens (Host header
+# attacks would otherwise poison absolute URLs built from request.base_url,
+# e.g. the presigned-upload confirm/download endpoints).
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=[
+        host.strip() for host in settings.TRUSTED_HOSTS.split(",") if host.strip()
+    ],
 )
 
 
