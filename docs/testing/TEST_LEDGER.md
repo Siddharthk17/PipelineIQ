@@ -113,3 +113,9 @@ Reproduce with failing test -> root-cause -> smallest fix -> keep regression tes
 - eslint (frontend): 20 errors, 3 warnings. Real: react-hooks/refs-during-render (usePipelineEditor.ts:588 collabRef, useCollaborativePipeline authTokenRef), setState-in-effect, display-name, purity. Config gap: .next-build/ output linted (needs ignore).
 - bandit: 0 High, 83 Medium, 2171 Low. Medium = B608 SQL-string building (sql_builder by design w/ validator; catalog.py:359,617 raw SQL to review; tests), B113 requests-without-timeout (tests only), B310 (tests). Low = B101 asserts (tests), S110 try-pass.
 - pip-audit: pyjwt 2.10.1 (5 advisories, fix 2.14/2.15), starlette 0.35.1 (multiple, fix up to 1.x), opentelemetry-api 1.42.0 (CVE-2026-114603, fix 1.45.1). Upgrades must stay compatible with fastapi 0.109.
+
+## Secrets + Docker lint (2026-10-29)
+
+- hadolint: Dockerfile DL3008/DL3015 (unpinned apt, no --no-install-recommends); backend/Dockerfile DL3013 (pip from requirements file but flagged: uses requirements.txt so acceptable w/ pinned file); pgbouncer/Dockerfile DL3018 (unpinned apk). frontend/nginx/y-websocket clean.
+- gitleaks working tree: .env hits are the ignored local dev file (gitignored, never committed); .next*/.next-build hits are build-chunk hashes (false positives, build dirs untracked... verify gitignored); scripts/run_tests.py:5, run_stress.py:4, security_tests.py:3 hardcoded JWTs (tracked, expired 2026-04 but must remove).
+- gitleaks history (173 commits): 5 hits. tests/{security_tests,run_tests,run_stress}.py JWTs in old commit (files moved to scripts/, still present -> same fix). AGENTS.md:1500 + A.md:1654 generic-api-key are doc placeholders ("eyJhbGciOi...") -> false positives, files removed from HEAD.
