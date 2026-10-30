@@ -29,6 +29,7 @@ from backend.pipeline.exceptions import (
     UnsupportedFileFormatError,
 )
 from backend.pipeline.lineage import LineageRecorder
+from backend.utils.string_utils import format_bytes
 from backend.pipeline.parser import (
     AggregateStepConfig,
     DeduplicateStepConfig,
@@ -830,10 +831,10 @@ class StepExecutor:
 
         if save_result:
             logger.info(
-                "Save step '%s': %d rows, %d columns → %s (%s, %.1f KB)",
+                "Save step '%s': %d rows, %d columns → %s (%s, %s)",
                 config.name, save_result.row_count, len(columns),
                 save_result.filename, save_result.format,
-                save_result.size_bytes / 1024)
+                format_bytes(save_result.size_bytes))
         else:
             logger.info(
                 "Save step '%s': %d rows, %d columns → fallback path",

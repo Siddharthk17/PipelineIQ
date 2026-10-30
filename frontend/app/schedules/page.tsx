@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSchedules } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { BackToDashboard } from "@/components/layout/BackToDashboard";
 import type { PipelineSchedule } from "@/lib/api";
 import { Calendar, Clock, Pause, Play } from "lucide-react";
 
@@ -35,19 +36,16 @@ export default function SchedulesPage() {
 
   return (
     <main className="flex h-screen w-screen flex-col bg-[var(--bg-base)] text-[var(--text-primary)]">
-      <div className="flex items-center justify-between border-b border-[var(--widget-border)] px-6 py-4">
+      <div className="border-b border-[var(--widget-border)] px-6 py-4">
+        <div className="flex items-center gap-3 mb-2">
+          <BackToDashboard />
+        </div>
         <div>
           <h1 className="text-xl font-semibold">Schedules</h1>
           <p className="text-sm text-[var(--text-secondary)]">
             Recurring pipeline runs configured via cron expressions
           </p>
         </div>
-        <button
-          onClick={() => router.push("/")}
-          className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)]"
-        >
-          Back
-        </button>
       </div>
 
       <div className="flex-1 overflow-auto p-6">

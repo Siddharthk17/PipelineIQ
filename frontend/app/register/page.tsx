@@ -32,8 +32,22 @@ export default function RegisterPage() {
       setError("passwords do not match");
       return;
     }
+    // Mirror the backend password policy so weak passwords fail fast here
+    // instead of bouncing off the API with a 422.
     if (password.length < 8) {
       setError("password must be at least 8 characters");
+      return;
+    }
+    if (!/[A-Z]/.test(password)) {
+      setError("password must contain at least one uppercase letter");
+      return;
+    }
+    if (!/[0-9]/.test(password)) {
+      setError("password must contain at least one number");
+      return;
+    }
+    if (!/[!@#$%^&*()_+\-=[\]{}|;':",./<>?`~]/.test(password)) {
+      setError("password must contain at least one special character");
       return;
     }
 

@@ -555,6 +555,7 @@ export interface CatalogPipeline {
   last_run_id: string;
   last_run_status: string;
   last_run_at: string;
+  description?: string;
   schedule: {
     active: boolean;
     cron_human: string | null;

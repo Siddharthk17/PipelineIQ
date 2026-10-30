@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
-import { ArrowLeft, Database } from "lucide-react";
+import { Database } from "lucide-react";
+import { BackToDashboard } from "@/components/layout/BackToDashboard";
 
 type AssetType = "file" | "column" | "pipeline" | "topic" | null;
 
@@ -40,7 +40,6 @@ const DEPTH_COLORS: Record<number, string> = {
 };
 
 export default function CatalogPage() {
-  const router = useRouter();
   const { user, isLoading } = useAuth();
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<AssetType>(null);
@@ -115,13 +114,7 @@ export default function CatalogPage() {
     <main className="h-screen w-screen bg-[var(--bg-base)] p-3" data-testid="catalog-page">
       <div className="mb-4">
         <div className="flex items-center gap-3 mb-2">
-          <button
-            onClick={() => router.push("/")}
-            className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--interactive-hover)] transition-colors"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            Dashboard
-          </button>
+          <BackToDashboard />
         </div>
         <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
           <Database className="w-6 h-6 text-[var(--accent-primary)]" />

@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useEffect, useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { BackToDashboard } from "@/components/layout/BackToDashboard";
 import { motion, AnimatePresence } from "motion/react";
 import {
   HardDrive,
@@ -675,7 +675,6 @@ function ActionsPanel({
 }
 
 export default function StorageAnalyticsPage() {
-  const router = useRouter();
   const { isLoading: authLoading } = useAuth();
   const queryClient = useQueryClient();
 
@@ -715,12 +714,14 @@ export default function StorageAnalyticsPage() {
   const [cleanResult, setCleanResult] = useState<number | null>(null);
 
   const handleEvict = () => {
+    if (evictMutation.isPending) return;
     evictMutation.mutate(undefined, {
       onSuccess: (data) => setEvictResult(data.evicted),
     });
   };
 
   const handleClean = () => {
+    if (cleanMutation.isPending) return;
     cleanMutation.mutate(undefined, {
       onSuccess: (data) => setCleanResult(data.deleted),
     });
@@ -742,16 +743,20 @@ export default function StorageAnalyticsPage() {
   return (
     <div className="h-screen overflow-hidden" style={{ backgroundColor: "var(--bg-primary)" }}>
       <div className="mx-auto flex h-full w-full max-w-[1400px] flex-col gap-3 px-4 py-3">
-        <header className="flex shrink-0 items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-[var(--text-primary)]">
-              Storage Analytics
-            </h1>
-            <p className="text-xs text-[var(--text-tertiary)]">
-              Tier health, bucket utilization, lifecycle policies
-            </p>
-          </div>
+        <header className="flex shrink-0 flex-col gap-1">
           <div className="flex items-center gap-3">
+            <BackToDashboard />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-lg font-semibold text-[var(--text-primary)]">
+                Storage Analytics
+              </h1>
+              <p className="text-xs text-[var(--text-tertiary)]">
+                Tier health, bucket utilization, lifecycle policies
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
             {health?.warnings && health.warnings.length > 0 ? (
               <div className="flex items-center gap-1.5 text-xs">
                 <AlertTriangle size={12} color="var(--warning)" />
@@ -773,12 +778,7 @@ export default function StorageAnalyticsPage() {
             >
               <RefreshCw size={14} style={{ color: "var(--text-secondary)" }} />
             </button>
-            <button
-              onClick={() => router.push("/")}
-              className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--interactive-hover)]"
-            >
-              Back to Dashboard
-            </button>
+            </div>
           </div>
         </header>
 

@@ -232,13 +232,16 @@ export function PipelineEditorWidget({ initialMode = "yaml", initialPipelineName
       abortControllerRef.current = controller;
       validateTimerRef.current = setTimeout(() => {
         const now = Date.now();
-        if (now - lastValidateTimestampRef.current < 3000) {
-          return;
-        }
-        lastValidateTimestampRef.current = now;
-        setIsValidating(true);
-        setLastYamlConfig(yaml);
-        validateMutation.mutate(yaml);
+        const wait = Math.max(0, 3000 - (now - lastValidateTimestampRef.current));
+        // Never drop a validation: if the last run was recent, re-arm for
+        // the remaining cooldown instead of silently skipping (which left
+        // stale "0 Errors" on screen until the user clicked Validate).
+        validateTimerRef.current = setTimeout(() => {
+          lastValidateTimestampRef.current = Date.now();
+          setIsValidating(true);
+          setLastYamlConfig(yaml);
+          validateMutation.mutate(yaml);
+        }, wait);
       }, 1500);
     },
     [validateMutation, setLastYamlConfig],

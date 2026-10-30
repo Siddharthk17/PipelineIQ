@@ -3,11 +3,10 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { listCatalogPipelines, getPipelineDescription } from "@/lib/api";
-import type { CatalogPipeline, PipelineDescription } from "@/lib/types";
+import { listCatalogPipelines } from "@/lib/api";
+import type { CatalogPipeline } from "@/lib/types";
 import { ApiError } from "@/lib/api";
 import {
-  ArrowLeft,
   Zap,
   Search,
   Clock,
@@ -19,6 +18,7 @@ import {
   RefreshCw,
   Calendar,
 } from "lucide-react";
+import { BackToDashboard } from "@/components/layout/BackToDashboard";
 
 const STATUS_ICONS: Record<string, React.ReactNode> = {
   COMPLETED: <CheckCircle className="h-3.5 w-3.5 text-green-400" />,
@@ -65,8 +65,6 @@ export default function PipelineCatalogPage() {
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [descriptions, setDescriptions] = useState<Record<string, string>>({});
-  const [loadingDescription, setLoadingDescription] = useState<Record<string, boolean>>({});
 
   const loadPipelines = useCallback(async (q?: string, status?: string) => {
     try {
@@ -115,30 +113,6 @@ export default function PipelineCatalogPage() {
     [statusFilter]
   );
 
-  const handleLoadDescription = useCallback(
-    async (name: string) => {
-      if (descriptions[name] || loadingDescription[name]) return;
-      setLoadingDescription((prev) => ({ ...prev, [name]: true }));
-      try {
-        const result = await getPipelineDescription(name);
-        setDescriptions((prev) => ({ ...prev, [name]: result.description }));
-      } catch {
-        setDescriptions((prev) => ({ ...prev, [name]: "Description unavailable" }));
-      } finally {
-        setLoadingDescription((prev) => ({ ...prev, [name]: false }));
-      }
-    },
-    [descriptions, loadingDescription]
-  );
-
-  useEffect(() => {
-    pipelines.forEach((p) => {
-      if (!descriptions[p.pipeline_name] && !loadingDescription[p.pipeline_name]) {
-        handleLoadDescription(p.pipeline_name);
-      }
-    });
-  }, [pipelines, descriptions, loadingDescription, handleLoadDescription]);
-
   if (isLoading || !user || pageLoading) {
     return (
       <main className="flex h-screen items-center justify-center bg-[var(--bg-base)]">
@@ -153,13 +127,7 @@ export default function PipelineCatalogPage() {
     <main className="h-screen w-screen overflow-auto bg-[var(--bg-base)] p-4" data-testid="pipeline-catalog-page">
       <div className="mb-4">
         <div className="flex items-center gap-3 mb-2">
-          <button
-            onClick={() => router.push("/")}
-            className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--interactive-hover)] transition-colors"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            Dashboard
-          </button>
+          <BackToDashboard />
         </div>
         <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
           <Zap className="h-6 w-6 text-[var(--accent-primary)]" />
@@ -268,16 +236,9 @@ export default function PipelineCatalogPage() {
                 )}
               </div>
 
-              {loadingDescription[pipeline.pipeline_name] ? (
-                <div className="flex items-center gap-2 py-2">
-                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--text-muted)] border-t-[var(--text-secondary)]" />
-                  <span className="text-[10px] text-[var(--text-muted)]">Generating description...</span>
-                </div>
-              ) : (
-                <p className="text-xs text-[var(--text-secondary)] leading-relaxed line-clamp-3">
-                  {descriptions[pipeline.pipeline_name] ?? "No description available"}
-                </p>
-              )}
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed line-clamp-3">
+                {pipeline.description ?? "No description available"}
+              </p>
 
               {pipeline.schedule?.next_run_at && (
                 <div className="mt-3 flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]">

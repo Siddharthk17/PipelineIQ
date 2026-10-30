@@ -78,3 +78,15 @@ def truncate_string(
     if len(text) <= max_length:
         return text
     return text[: max_length - len(suffix)] + suffix
+
+
+def format_bytes(num_bytes: int) -> str:
+    """Human-readable byte size that never hides small files as '0.0 KB'."""
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    size = float(num_bytes) / 1024
+    for unit in ("KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"  # pragma: no cover - unreachable

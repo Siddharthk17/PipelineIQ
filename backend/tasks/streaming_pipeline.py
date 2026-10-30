@@ -109,6 +109,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         dlq_producer = make_dlq_producer()
 
         executor = SmartExecutor()
+        executor._current_run_id = run_id
         recorder = LineageRecorder()
 
         stats = {

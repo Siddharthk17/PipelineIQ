@@ -326,6 +326,7 @@ services:
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+      - CELERY_CONCURRENCY=${CELERY_WORKERS_CRITICAL:-2}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -395,6 +396,7 @@ services:
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+      - CELERY_CONCURRENCY=${CELERY_WORKERS_DEFAULT:-3}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -464,6 +466,7 @@ services:
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+      - CELERY_CONCURRENCY=${CELERY_WORKERS_BULK:-2}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -536,6 +539,7 @@ services:
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+      - CELERY_CONCURRENCY=1
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -1071,7 +1075,7 @@ services:
       --queues=streaming
       --concurrency=8
       --prefetch-multiplier=1
-      --hostname=streaming@%%h
+      --hostname=streaming@%h
       --loglevel=info
     env_file:
       - .env

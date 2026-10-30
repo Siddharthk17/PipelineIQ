@@ -9,6 +9,7 @@ import { RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import type { PipelineRun } from "@/lib/types";
 import type { RunDownload } from "@/lib/api";
 import { Download } from "lucide-react";
+import { BackToDashboard } from "@/components/layout/BackToDashboard";
 
 export default function RunDetailPage({ params }: { params: Promise<{ runId: string }> }) {
   const router = useRouter();
@@ -82,6 +83,11 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
 
   return (
     <main className="flex h-screen w-screen flex-col bg-[var(--bg-base)] text-[var(--text-primary)]">
+      <div className="border-b border-[var(--widget-border)] px-6 pt-4">
+        <div className="flex items-center gap-3 mb-2">
+          <BackToDashboard />
+        </div>
+      </div>
       <div className="flex items-center justify-between border-b border-[var(--widget-border)] px-6 py-4">
         <div className="flex items-center gap-3">
           <RunStatusBadge status={run.status} />
@@ -118,12 +124,6 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
               </span>
             </button>
           )}
-          <button
-            onClick={() => router.push("/")}
-            className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)]"
-          >
-            Back to Dashboard
-          </button>
           <button
             onClick={() => router.push("/runs")}
             className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)]"

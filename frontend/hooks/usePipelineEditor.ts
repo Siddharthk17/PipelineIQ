@@ -337,7 +337,6 @@ export function usePipelineEditor({
       }
 
       const definition = STEP_DEFINITIONS[stepType];
-      let createdNodeId: string | null = null;
 
       setNodes((existingNodes) => {
         const siblingCount =
@@ -345,7 +344,6 @@ export function usePipelineEditor({
         const nodeId = `${stepType}_${Date.now()}_${Math.random()
           .toString(36)
           .slice(2, 8)}`;
-        createdNodeId = nodeId;
         const label = `${definition.label}_${siblingCount}`;
 
         const newNode: BuilderNode = {
@@ -363,9 +361,9 @@ export function usePipelineEditor({
         return [...existingNodes, newNode];
       });
 
-      if (createdNodeId) {
-        setConfiguringNodeId(createdNodeId);
-      }
+      // Do not auto-open the config panel here: it floats over the canvas
+      // and would cover the node that was just added, hiding its action
+      // buttons. The user opens it deliberately via the node's gear button.
       if (!definition.backendSupported) {
         showToast(`${definition.label} is visual-only and may fail backend validation.`);
       }

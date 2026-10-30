@@ -379,11 +379,13 @@ export async function getLineageGraph(runId: string): Promise<ReactFlowGraph> {
 }
 
 export async function getColumnLineage(runId: string, step: string, column: string): Promise<ColumnLineage> {
-  return fetchApi<ColumnLineage>(`/lineage/${runId}/column?step=${step}&column=${column}`);
+  const lineageParams = new URLSearchParams({ step, column });
+  return fetchApi<ColumnLineage>(`/lineage/${runId}/column?${lineageParams.toString()}`);
 }
 
 export async function getImpactAnalysis(runId: string, step: string, column: string): Promise<ImpactAnalysis> {
-  return fetchApi<ImpactAnalysis>(`/lineage/${runId}/impact?step=${step}&column=${column}`);
+  const impactParams = new URLSearchParams({ step, column });
+  return fetchApi<ImpactAnalysis>(`/lineage/${runId}/impact?${impactParams.toString()}`);
 }
 
 export async function checkHealth(): Promise<{ status: string; version: string; db: string; redis: string }> {
@@ -415,20 +417,20 @@ export async function getPipelinePlan(yamlConfig: string): Promise<ExecutionPlan
 }
 
 export async function getPipelineVersions(pipelineName: string): Promise<PipelineVersion[]> {
-  const data = await fetchApi<{ pipeline_name: string; total_versions: number; versions: PipelineVersion[] }>(`/versions/${pipelineName}`);
+  const data = await fetchApi<{ pipeline_name: string; total_versions: number; versions: PipelineVersion[] }>(`/versions/${encodeURIComponent(pipelineName)}`);
   return data.versions;
 }
 
 export async function getPipelineVersion(name: string, version: number): Promise<PipelineVersion> {
-  return fetchApi<PipelineVersion>(`/versions/${name}/${version}`);
+  return fetchApi<PipelineVersion>(`/versions/${encodeURIComponent(name)}/${version}`);
 }
 
 export async function getPipelineDiff(name: string, v1: number, v2: number): Promise<PipelineDiff> {
-  return fetchApi<PipelineDiff>(`/versions/${name}/diff/${v1}/${v2}`);
+  return fetchApi<PipelineDiff>(`/versions/${encodeURIComponent(name)}/diff/${v1}/${v2}`);
 }
 
 export async function restorePipelineVersion(name: string, version: number): Promise<{ yaml_config: string }> {
-  return fetchApi<{ yaml_config: string }>(`/versions/${name}/restore/${version}`, {
+  return fetchApi<{ yaml_config: string }>(`/versions/${encodeURIComponent(name)}/restore/${version}`, {
     method: "POST",
   });
 }
@@ -776,13 +778,13 @@ export async function deleteWasmModule(id: string): Promise<void> {
 
 export async function getAllContracts(pipelineName: string): Promise<ContractDef[]> {
   const data = await fetchApi<ContractListResponse>(
-    `/contracts/pipelines/${pipelineName}`,
+    `/contracts/pipelines/${encodeURIComponent(pipelineName)}`,
   );
   return data.contracts;
 }
 
 export async function getContract(pipelineName: string, contractId: string): Promise<ContractDef> {
-  return fetchApi<ContractDef>(`/contracts/pipelines/${pipelineName}/${contractId}`);
+  return fetchApi<ContractDef>(`/contracts/pipelines/${encodeURIComponent(pipelineName)}/${encodeURIComponent(contractId)}`);
 }
 
 export async function createContract(
@@ -791,7 +793,7 @@ export async function createContract(
   severity: string = "warn",
   consumers: string[] = [],
 ): Promise<ContractDef> {
-  return fetchApi<ContractDef>(`/contracts/pipelines/${pipelineName}`, {
+  return fetchApi<ContractDef>(`/contracts/pipelines/${encodeURIComponent(pipelineName)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ yaml_content: yamlContent, severity, consumers }),
@@ -805,7 +807,7 @@ export async function updateContract(
   severity: string = "warn",
   consumers: string[] = [],
 ): Promise<ContractDef> {
-  return fetchApi<ContractDef>(`/contracts/pipelines/${pipelineName}/${contractId}`, {
+  return fetchApi<ContractDef>(`/contracts/pipelines/${encodeURIComponent(pipelineName)}/${encodeURIComponent(contractId)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ yaml_content: yamlContent, severity, consumers }),
@@ -813,20 +815,20 @@ export async function updateContract(
 }
 
 export async function deleteContract(pipelineName: string, contractId: string): Promise<void> {
-  await fetchApi<void>(`/contracts/pipelines/${pipelineName}/${contractId}`, {
+  await fetchApi<void>(`/contracts/pipelines/${encodeURIComponent(pipelineName)}/${encodeURIComponent(contractId)}`, {
     method: "DELETE",
   });
 }
 
 export async function getContractStatus(pipelineName: string): Promise<ContractStatusResponse> {
-  return fetchApi<ContractStatusResponse>(`/contracts/pipelines/${pipelineName}/status`);
+  return fetchApi<ContractStatusResponse>(`/contracts/pipelines/${encodeURIComponent(pipelineName)}/status`);
 }
 
 export async function getContractViolations(
   pipelineName: string,
 ): Promise<ContractViolation[]> {
   const data = await fetchApi<ContractViolationResponse>(
-    `/contracts/pipelines/${pipelineName}/breaches`,
+    `/contracts/pipelines/${encodeURIComponent(pipelineName)}/breaches`,
   );
   return data.violations;
 }
