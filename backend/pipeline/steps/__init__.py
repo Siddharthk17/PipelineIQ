@@ -9,5 +9,6 @@ a single-file module to a package.
 from backend.pipeline.steps._core import StepConfig as StepConfig
 from backend.pipeline.steps._core import StepExecutionResult as StepExecutionResult
 from backend.pipeline.steps._core import StepExecutor as StepExecutor
+from backend.pipeline.steps._core import StepType as StepType
 
-__all__ = ["StepConfig", "StepExecutionResult", "StepExecutor"]
+__all__ = ["StepConfig", "StepExecutionResult", "StepExecutor", "StepType"]
