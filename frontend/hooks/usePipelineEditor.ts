@@ -11,7 +11,7 @@ import {
 import { useDebouncedCallback } from "use-debounce";
 import type { UploadedFile } from "@/lib/types";
 import { STEP_DEFINITIONS, getDefaultStepConfig, isVisualStepType, type VisualStepType } from "@/lib/stepDefinitions";
-import { graphToYAML, type BuilderEdge, type BuilderGraph, type BuilderNode, yamlToGraph } from "@/lib/yamlGraphSync";
+import { graphToYAML, parseYamlWithDiagnostics, type BuilderEdge, type BuilderGraph, type BuilderNode } from "@/lib/yamlGraphSync";
 import { topologicalSort } from "@/lib/topologicalSort";
 import { useCollaborativePipeline, type CollaboratorState } from "./useCollaborativePipeline";
 
@@ -22,6 +22,7 @@ interface UsePipelineEditorOptions {
   collaborative?: boolean;
   currentUser?: { id: string; name: string; email?: string };
   authToken?: string;
+  initialPipelineName?: string;
 }
 
 export interface ConnectionValidationResult {
@@ -164,10 +165,11 @@ export function usePipelineEditor({
   collaborative = false,
   currentUser,
   authToken,
+  initialPipelineName,
 }: UsePipelineEditorOptions) {
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<BuilderNode>([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<BuilderEdge>([]);
-  const [pipelineName, setPipelineName] = useState("my_pipeline");
+  const [pipelineName, setPipelineName] = useState(initialPipelineName || "my_pipeline");
   const [configuringNodeId, setConfiguringNodeId] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -175,6 +177,7 @@ export function usePipelineEditor({
   const parsedFromYamlRef = useRef(false);
   const emittedFromGraphRef = useRef(false);
   const initializedFromYamlRef = useRef(false);
+  const parseOkRef = useRef(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const yamlTextRef = useRef(yamlText);
 
@@ -200,7 +203,17 @@ export function usePipelineEditor({
 
   const parseYamlToGraph = useDebouncedCallback((nextYaml: string) => {
     try {
-      const parsed = yamlToGraph(nextYaml);
+      const { graph: parsed, error } = parseYamlWithDiagnostics(nextYaml);
+      if (error) {
+        // Loud failure, non-destructive: surfaced in the Visual tab via
+        // parseError, and the last good nodes stay on the canvas. Clearing
+        // them here would let the next drag emit a graph that silently
+        // wipes the user's YAML.
+        parseOkRef.current = false;
+        setParseError(error);
+        return;
+      }
+      parseOkRef.current = true;
       parsedFromYamlRef.current = true;
       initializedFromYamlRef.current = true;
       setNodes(parsed.nodes);
@@ -209,6 +222,7 @@ export function usePipelineEditor({
       setParseError(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to parse YAML";
+      parseOkRef.current = false;
       setParseError(message);
     }
   }, 300);
@@ -234,7 +248,6 @@ export function usePipelineEditor({
       return;
     }
     parseYamlToGraph(yamlText);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [yamlText, parseYamlToGraph]);
 
   useEffect(() => {
@@ -245,8 +258,13 @@ export function usePipelineEditor({
       parsedFromYamlRef.current = false;
       return;
     }
+    if (!parseOkRef.current) {
+      // The graph is stale (last YAML parse failed): emitting it would
+      // overwrite the user's YAML with an out-of-date graph. Wait for a
+      // successful parse first.
+      return;
+    }
     emitGraphToYaml({ pipelineName, nodes, edges });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edges, emitGraphToYaml, nodes, pipelineName]);
 
   const selectedNodeId = useMemo(
@@ -319,7 +337,6 @@ export function usePipelineEditor({
       }
 
       const definition = STEP_DEFINITIONS[stepType];
-      let createdNodeId: string | null = null;
 
       setNodes((existingNodes) => {
         const siblingCount =
@@ -327,7 +344,6 @@ export function usePipelineEditor({
         const nodeId = `${stepType}_${Date.now()}_${Math.random()
           .toString(36)
           .slice(2, 8)}`;
-        createdNodeId = nodeId;
         const label = `${definition.label}_${siblingCount}`;
 
         const newNode: BuilderNode = {
@@ -345,9 +361,9 @@ export function usePipelineEditor({
         return [...existingNodes, newNode];
       });
 
-      if (createdNodeId) {
-        setConfiguringNodeId(createdNodeId);
-      }
+      // Do not auto-open the config panel here: it floats over the canvas
+      // and would cover the node that was just added, hiding its action
+      // buttons. The user opens it deliberately via the node's gear button.
       if (!definition.backendSupported) {
         showToast(`${definition.label} is visual-only and may fail backend validation.`);
       }
@@ -584,8 +600,16 @@ export function usePipelineEditor({
     },
     onNodeConfigure: handleConfigure,
   });
-  const collabRef = useRef(collab);
-  collabRef.current = collab;
+  const collabRef = useRef<ReturnType<typeof useCollaborativePipeline> | null>(
+    null,
+  );
+  useEffect(() => {
+    // Latest-ref pattern: emitGraphToYaml is debounced on node/edge changes
+    // and must always see the current collab without re-subscribing when
+    // collab identity changes. Assignment here is intentional.
+    // eslint-disable-next-line react-hooks/immutability -- latest-ref is updated post-commit, never during render
+    collabRef.current = collab;
+  });
 
   const effectiveOnNodesChange = useCallback(
     (changes: NodeChange<BuilderNode>[]) => {

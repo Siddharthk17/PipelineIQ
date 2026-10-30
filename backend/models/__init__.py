@@ -7,14 +7,13 @@ column length limits. Uses JSONB on PostgreSQL and JSON on SQLite.
 import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
-from typing import List, Optional
+from typing import Optional
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
-    Enum as SQLEnum,
     Float,
     ForeignKey,
     Index,
@@ -24,19 +23,23 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
-    func,
     event,
+    func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
+from sqlalchemy import (
+    Enum as SQLEnum,
+)
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from backend.database import Base
 from backend.models._base import PgJSONB, _enum_values, _generate_uuid
 
 # Re-export contract and policy models from their canonical modules
-from backend.models.column_policy import ColumnPolicy  # noqa: F401
-from backend.models.data_contract import ContractSeverity, PipelineContract  # noqa: F401
-from backend.models.contract_breach import ContractViolationRecord  # noqa: F401
+from backend.models.column_policy import ColumnPolicy as ColumnPolicy
+from backend.models.contract_breach import ContractViolationRecord as ContractViolationRecord
+from backend.models.data_contract import ContractSeverity as ContractSeverity
+from backend.models.data_contract import PipelineContract as PipelineContract
 
 
 @event.listens_for(Engine, "connect")
@@ -97,7 +100,7 @@ class PipelineRun(Base):
 
     __tablename__ = "pipeline_runs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[PipelineStatus] = mapped_column(
@@ -107,27 +110,27 @@ class PipelineRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    started_at: Mapped[Optional[datetime]] = mapped_column(
+    started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
+    completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    total_rows_in: Mapped[Optional[int]] = mapped_column(
+    total_rows_in: Mapped[int | None] = mapped_column(
         Integer, nullable=True)
-    total_rows_out: Mapped[Optional[int]] = mapped_column(
+    total_rows_out: Mapped[int | None] = mapped_column(
         Integer, nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    user_id: Mapped[Optional[str]] = mapped_column(
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_id: Mapped[str | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    celery_task_id: Mapped[Optional[str]] = mapped_column(
+    celery_task_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True)
-    trace_id: Mapped[Optional[str]] = mapped_column(
+    trace_id: Mapped[str | None] = mapped_column(
         String(32), nullable=True)
     trigger: Mapped[str] = mapped_column(
         String(20), nullable=False, default="manual")
-    schedule_id: Mapped[Optional[str]] = mapped_column(Uuid, ForeignKey(
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey(
         "pipeline_schedules.id", ondelete="SET NULL"), nullable=True)
 
     __table_args__ = (
@@ -135,7 +138,7 @@ class PipelineRun(Base):
         Index("ix_pipeline_runs_status_created", "status", "created_at"),
     )
 
-    step_results: Mapped[List["StepResult"]] = relationship(
+    step_results: Mapped[list["StepResult"]] = relationship(
         "StepResult",
         back_populates="pipeline_run",
         order_by="StepResult.step_index",
@@ -147,7 +150,7 @@ class PipelineRun(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
-    healing_attempts: Mapped[List["HealingAttempt"]] = relationship(
+    healing_attempts: Mapped[list["HealingAttempt"]] = relationship(
         "HealingAttempt",
         back_populates="pipeline_run",
         order_by="HealingAttempt.attempt_number",
@@ -155,7 +158,7 @@ class PipelineRun(Base):
     )
 
     @property
-    def duration_ms(self) -> Optional[int]:
+    def duration_ms(self) -> int | None:
         """Calculate total execution duration in milliseconds."""
         if self.started_at and self.completed_at:
             delta = self.completed_at - self.started_at
@@ -172,9 +175,9 @@ class StepResult(Base):
 
     __tablename__ = "step_results"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    pipeline_run_id: Mapped[str] = mapped_column(
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id"), nullable=False
     )
     step_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -183,28 +186,28 @@ class StepResult(Base):
     status: Mapped[StepStatus] = mapped_column(
         SQLEnum(StepStatus), nullable=False, default=StepStatus.PENDING
     )
-    rows_in: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    rows_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    columns_in: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
-    columns_out: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
-    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    warnings: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    trace_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-    span_id: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
-    started_at: Mapped[Optional[datetime]] = mapped_column(
+    rows_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rows_out: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    columns_in: Mapped[list | None] = mapped_column(PgJSONB, nullable=True)
+    columns_out: Mapped[list | None] = mapped_column(PgJSONB, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    warnings: Mapped[list | None] = mapped_column(PgJSONB, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    span_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
+    completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    engine: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    download_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    output_filename: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    output_format: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    output_object_name: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
-    row_count_out: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    output_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    engine: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    download_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    output_format: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    output_object_name: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    row_count_out: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -224,9 +227,9 @@ class LineageGraph(Base):
 
     __tablename__ = "lineage_graphs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    pipeline_run_id: Mapped[str] = mapped_column(
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id"), nullable=False, unique=True
     )
     graph_data: Mapped[dict] = mapped_column(PgJSONB, nullable=False)
@@ -245,9 +248,9 @@ class HealingAttempt(Base):
 
     __tablename__ = "healing_attempts"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    run_id: Mapped[str] = mapped_column(
+    run_id: Mapped[uuid.UUID] = mapped_column(
         "pipeline_run_id",
         Uuid, ForeignKey("pipeline_runs.id"), nullable=False, index=True
     )
@@ -256,14 +259,14 @@ class HealingAttempt(Base):
         SQLEnum(HealingAttemptStatus),
         nullable=False,
         default=HealingAttemptStatus.CREATED)
-    pipeline_name: Mapped[Optional[str]] = mapped_column(
+    pipeline_name: Mapped[str | None] = mapped_column(
         String(500), nullable=True)
-    failed_step: Mapped[Optional[str]] = mapped_column(
+    failed_step: Mapped[str | None] = mapped_column(
         "failed_step_name", String(255), nullable=True
     )
-    error_type: Mapped[Optional[str]] = mapped_column(
+    error_type: Mapped[str | None] = mapped_column(
         String(100), nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     old_schema = mapped_column(PgJSONB, nullable=True)
     new_schema = mapped_column(PgJSONB, nullable=True)
     removed_columns = mapped_column(PgJSONB, nullable=True)
@@ -274,29 +277,29 @@ class HealingAttempt(Base):
     applied: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
-    confidence: Mapped[Optional[float]] = mapped_column(
+    confidence: Mapped[float | None] = mapped_column(
         Numeric(5, 4), nullable=True)
-    healed_at: Mapped[Optional[datetime]] = mapped_column(
+    healed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    classification_reason: Mapped[Optional[str]
+    classification_reason: Mapped[str | None
                                   ] = mapped_column(Text, nullable=True)
-    proposed_yaml: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    diff_lines: Mapped[Optional[list]] = mapped_column(PgJSONB, nullable=True)
-    ai_valid: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
-    ai_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    parser_valid: Mapped[Optional[bool]] = mapped_column(
+    proposed_yaml: Mapped[str | None] = mapped_column(Text, nullable=True)
+    diff_lines: Mapped[list | None] = mapped_column(PgJSONB, nullable=True)
+    ai_valid: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ai_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parser_valid: Mapped[bool | None] = mapped_column(
         Boolean, nullable=True)
-    sandbox_passed: Mapped[Optional[bool]
+    sandbox_passed: Mapped[bool | None
                            ] = mapped_column(Boolean, nullable=True)
-    validation_errors: Mapped[Optional[list]
+    validation_errors: Mapped[list | None
                               ] = mapped_column(PgJSONB, nullable=True)
-    validation_warnings: Mapped[Optional[list]
+    validation_warnings: Mapped[list | None
                                 ] = mapped_column(PgJSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
+    completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -318,7 +321,7 @@ class UploadedFile(Base):
 
     __tablename__ = "uploaded_files"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_path: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -330,17 +333,17 @@ class UploadedFile(Base):
     version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    previous_version_id: Mapped[Optional[str]] = mapped_column(
+    previous_version_id: Mapped[str | None] = mapped_column(
         Uuid, ForeignKey("uploaded_files.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
-    schema_snapshots: Mapped[List["SchemaSnapshot"]] = relationship(
+    schema_snapshots: Mapped[list["SchemaSnapshot"]] = relationship(
         "SchemaSnapshot", back_populates="file", cascade="all, delete-orphan"
     )
 
@@ -350,12 +353,12 @@ class SchemaSnapshot(Base):
 
     __tablename__ = "schema_snapshots"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    file_id: Mapped[str] = mapped_column(
+    file_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("uploaded_files.id"), nullable=False
     )
-    run_id: Mapped[Optional[str]] = mapped_column(
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id"), nullable=True
     )
     columns: Mapped[list] = mapped_column(PgJSONB, nullable=False)
@@ -375,7 +378,7 @@ class PipelineVersion(Base):
 
     __tablename__ = "pipeline_versions"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     pipeline_name: Mapped[str] = mapped_column(
         String(255), nullable=False, index=True)
@@ -384,10 +387,10 @@ class PipelineVersion(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    run_id: Mapped[Optional[str]] = mapped_column(
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id"), nullable=True
     )
-    change_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    change_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (UniqueConstraint("pipeline_name", "version_number"),)
 
@@ -397,7 +400,7 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     email: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, index=True
@@ -427,14 +430,14 @@ class Webhook(Base):
 
     __tablename__ = "webhooks"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     name: Mapped[str] = mapped_column(String(200), nullable=False, default="Webhook")
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
-    secret: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     events = mapped_column(
         PgJSONB,
         nullable=False,
@@ -459,27 +462,27 @@ class WebhookDelivery(Base):
 
     __tablename__ = "webhook_deliveries"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    webhook_id: Mapped[str] = mapped_column(
+    webhook_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("webhooks.id", ondelete="CASCADE"), nullable=False
     )
-    run_id: Mapped[Optional[str]] = mapped_column(Uuid, nullable=True)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     payload = mapped_column(PgJSONB, nullable=False)
-    response_status: Mapped[Optional[int]
+    response_status: Mapped[int | None
                             ] = mapped_column(Integer, nullable=True)
-    response_body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    response_body: Mapped[str | None] = mapped_column(Text, nullable=True)
     attempt_number: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1)
-    delivered_at: Mapped[Optional[datetime]] = mapped_column(
+    delivered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    failed_at: Mapped[Optional[datetime]] = mapped_column(
+    failed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -492,19 +495,19 @@ class AuditLog(Base):
 
     __tablename__ = "audit_logs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    user_id: Mapped[Optional[str]] = mapped_column(
+    user_id: Mapped[str | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     action: Mapped[str] = mapped_column(String(100), nullable=False)
-    resource_type: Mapped[Optional[str]] = mapped_column(
+    resource_type: Mapped[str | None] = mapped_column(
         String(50), nullable=True)
-    resource_id: Mapped[Optional[str]] = mapped_column(Uuid, nullable=True)
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     details = mapped_column(PgJSONB, nullable=True, default=dict)
-    ip_address: Mapped[Optional[str]] = mapped_column(
+    ip_address: Mapped[str | None] = mapped_column(
         String(45), nullable=True)
-    user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -530,26 +533,26 @@ class PipelineSchedule(Base):
 
     __tablename__ = "pipeline_schedules"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     pipeline_name: Mapped[str] = mapped_column(String(500), nullable=False)
     yaml_config: Mapped[str] = mapped_column(Text, nullable=False)
     cron_expression: Mapped[str] = mapped_column(String(100), nullable=False)
-    cron_human: Mapped[Optional[str]] = mapped_column(
+    cron_human: Mapped[str | None] = mapped_column(
         String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
-    last_run_at: Mapped[Optional[datetime]] = mapped_column(
+    last_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    next_run_at: Mapped[Optional[datetime]] = mapped_column(
+    next_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    last_run_status: Mapped[Optional[str]] = mapped_column(
+    last_run_status: Mapped[str | None] = mapped_column(
         String(20), nullable=True)
     total_runs: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0")
@@ -572,19 +575,19 @@ class ScheduleRun(Base):
 
     __tablename__ = "schedule_runs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    schedule_id: Mapped[str] = mapped_column(Uuid, ForeignKey(
+    schedule_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey(
         "pipeline_schedules.id", ondelete="CASCADE"), nullable=False)
-    run_id: Mapped[Optional[str]] = mapped_column(Uuid, ForeignKey(
+    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey(
         "pipeline_runs.id", ondelete="SET NULL"), nullable=True)
     triggered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    duration_seconds: Mapped[Optional[int]
+    status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    duration_seconds: Mapped[int | None
                              ] = mapped_column(Integer, nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class NotificationConfig(Base):
@@ -592,9 +595,9 @@ class NotificationConfig(Base):
 
     __tablename__ = "notification_configs"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     type: Mapped[NotificationType] = mapped_column(
@@ -625,11 +628,11 @@ class PipelinePermission(Base):
 
     __tablename__ = "pipeline_permissions"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     pipeline_name: Mapped[str] = mapped_column(
         String(255), nullable=False, index=True)
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     permission_level: Mapped[PermissionLevel] = mapped_column(
@@ -651,9 +654,9 @@ class FileProfile(Base):
 
     __tablename__ = "file_profiles"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    file_id: Mapped[str] = mapped_column(
+    file_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
         ForeignKey("uploaded_files.id", ondelete="CASCADE"),
         nullable=False,
@@ -665,12 +668,12 @@ class FileProfile(Base):
     profile = mapped_column(PgJSONB, nullable=False, default=dict)
     row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     col_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    completeness_pct: Mapped[Optional[float]] = mapped_column(
+    completeness_pct: Mapped[float | None] = mapped_column(
         Numeric(5, 2), nullable=True
     )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending")
-    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class WasmModule(Base):
@@ -682,11 +685,11 @@ class WasmModule(Base):
 
     __tablename__ = "wasm_modules"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     name: Mapped[str] = mapped_column(
         String(255), unique=True, nullable=False, index=True)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     storage_key: Mapped[str] = mapped_column(
         String(512), nullable=False, unique=True)
     file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -700,7 +703,7 @@ class WasmModule(Base):
         Integer, nullable=False, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true")
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -715,7 +718,7 @@ class StreamingStats(Base):
 
     __tablename__ = "streaming_stats"
 
-    run_id: Mapped[str] = mapped_column(
+    run_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), primary_key=True
     )
     batches_processed: Mapped[int] = mapped_column(
@@ -726,17 +729,17 @@ class StreamingStats(Base):
         BigInteger, nullable=False, server_default="0")
     messages_dlq: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default="0")
-    throughput_per_sec: Mapped[Optional[float]] = mapped_column(
+    throughput_per_sec: Mapped[float | None] = mapped_column(
         Float, nullable=True)
-    consumer_lag: Mapped[Optional[int]] = mapped_column(
+    consumer_lag: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True)
-    last_batch_at: Mapped[Optional[datetime]] = mapped_column(
+    last_batch_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False)
-    topic: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    consumer_group: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    avg_batch_latency_ms: Mapped[Optional[float]] = mapped_column(
+    topic: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    consumer_group: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    avg_batch_latency_ms: Mapped[float | None] = mapped_column(
         Float, nullable=True)
 class DataAsset(Base):
     """A data asset in the global catalog: file, column, pipeline, or topic."""
@@ -748,9 +751,9 @@ class DataAsset(Base):
     asset_type: Mapped[str] = mapped_column(String(20), nullable=False)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     namespace: Mapped[str] = mapped_column(String(500), nullable=False)
-    metadata_: Mapped[Optional[dict]] = mapped_column(
+    metadata_: Mapped[dict | None] = mapped_column(
         "metadata", PgJSONB, nullable=True, server_default="{}")
-    owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -779,8 +782,8 @@ class AssetRelationship(Base):
     target_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("data_assets.id", ondelete="CASCADE"), nullable=False)
     relation: Mapped[str] = mapped_column(String(20), nullable=False)
-    pipeline_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(Uuid, nullable=True)
+    pipeline_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False)
 

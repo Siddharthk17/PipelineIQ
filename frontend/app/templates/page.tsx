@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getTemplates } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { BackToDashboard } from "@/components/layout/BackToDashboard";
 import type { PipelineTemplate } from "@/lib/types";
 import { FileCode } from "lucide-react";
 
@@ -35,19 +36,16 @@ export default function TemplatesPage() {
 
   return (
     <main className="flex h-screen w-screen flex-col bg-[var(--bg-base)] text-[var(--text-primary)]">
-      <div className="flex items-center justify-between border-b border-[var(--widget-border)] px-6 py-4">
+      <div className="border-b border-[var(--widget-border)] px-6 py-4">
+        <div className="flex items-center gap-3 mb-2">
+          <BackToDashboard />
+        </div>
         <div>
           <h1 className="text-xl font-semibold">Templates</h1>
           <p className="text-sm text-[var(--text-secondary)]">
             Pre-built pipeline templates for common data workflows
           </p>
         </div>
-        <button
-          onClick={() => router.push("/")}
-          className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)]"
-        >
-          Back
-        </button>
       </div>
 
       <div className="flex-1 overflow-auto p-6">
@@ -71,8 +69,8 @@ export default function TemplatesPage() {
                   <FileCode className="h-4 w-4 text-[var(--accent-primary)]" />
                   <p className="text-sm font-medium">{template.name}</p>
                 </div>
-                <p className="text-xs text-[var(--text-secondary)]">{template.description}</p>
-                <span className="mt-3 inline-block rounded border border-[var(--widget-border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)]">
+                <p className="text-xs text-[var(--text-primary)]">{template.description}</p>
+                <span className="mt-3 inline-block rounded border border-[var(--widget-border)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[10px] text-[var(--text-primary)]">
                   {template.category}
                 </span>
               </div>

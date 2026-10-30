@@ -9,6 +9,7 @@ child processes via `worker_process_init` to avoid fork-safety
 issues with gRPC channels and singleton instrumentors.
 """
 
+import contextlib
 import ssl
 
 import sentry_sdk
@@ -18,7 +19,6 @@ from sentry_sdk.integrations.celery import CeleryIntegration
 
 from backend.config import settings
 from backend.execution.duckdb_executor import close_worker_duckdb, initialize_worker_duckdb
-
 
 celery_app = Celery(
     "pipelineiq",
@@ -51,6 +51,9 @@ celery_app.autodiscover_tasks(
 celery_app.autodiscover_tasks(
     ["backend.tasks"],
     related_name="storage_maintenance")
+celery_app.autodiscover_tasks(
+    ["backend.tasks"],
+    related_name="reconciliation")
 
 def _init_sentry_for_worker() -> None:
     """Initialize Sentry after Celery forks the worker process."""
@@ -98,8 +101,6 @@ def _init_worker_process(**kwargs) -> None:
 def _close_worker_process(**kwargs) -> None:
     """Flush OTel spans and close DuckDB on worker shutdown."""
     from backend.telemetry import force_flush
-    try:
+    with contextlib.suppress(Exception):
         force_flush()
-    except Exception:
-        pass
     close_worker_duckdb()

@@ -1,10 +1,9 @@
 """Webhook CRUD and delivery endpoints."""
 
-import hmac
 import hashlib
+import hmac
 import logging
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
 import httpx
 import orjson
@@ -15,9 +14,9 @@ from sqlalchemy.orm import Session
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User, Webhook, WebhookDelivery
-from backend.utils.uuid_utils import as_uuid as _as_uuid
 from backend.services.audit_service import log_action
 from backend.utils.url_security import UnsafeURL, validate_public_http_url
+from backend.utils.uuid_utils import as_uuid as _as_uuid
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
@@ -27,8 +26,8 @@ router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 class WebhookCreate(BaseModel):
     url: str
-    secret: Optional[str] = None
-    events: Optional[List[str]] = None
+    secret: str | None = None
+    events: list[str] | None = None
 
     @field_validator("url")
     @classmethod
@@ -53,11 +52,11 @@ class WebhookResponse(BaseModel):
 class DeliveryResponse(BaseModel):
     id: str
     event_type: str
-    response_status: Optional[int]
+    response_status: int | None
     attempt_number: int
-    delivered_at: Optional[datetime]
-    failed_at: Optional[datetime]
-    error_message: Optional[str]
+    delivered_at: datetime | None
+    failed_at: datetime | None
+    error_message: str | None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -65,8 +64,8 @@ class DeliveryResponse(BaseModel):
 
 class TestWebhookResponse(BaseModel):
     delivered: bool
-    response_status: Optional[int] = None
-    error: Optional[str] = None
+    response_status: int | None = None
+    error: str | None = None
 
 # Endpoints
 
@@ -125,7 +124,7 @@ def create_webhook(
     )
 
 
-@router.get("/", response_model=List[WebhookResponse])
+@router.get("/", response_model=list[WebhookResponse])
 def list_webhooks(
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
@@ -170,7 +169,7 @@ def delete_webhook(
     db.commit()
 
 
-@router.get("/{webhook_id}/deliveries", response_model=List[DeliveryResponse])
+@router.get("/{webhook_id}/deliveries", response_model=list[DeliveryResponse])
 def list_deliveries(
     webhook_id: str,
     db: Session = get_read_db_dependency(),
@@ -222,15 +221,15 @@ def test_webhook(
         raise HTTPException(status_code=403, detail="Not your webhook")
     try:
         validate_public_http_url(webhook.url)
-    except UnsafeURL:
+    except UnsafeURL as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Webhook URL is not allowed",
-        )
+        ) from exc
 
     payload = {
         "event": "test",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "data": {"message": "This is a test webhook from PipelineIQ"},
     }
     body = orjson.dumps(payload)

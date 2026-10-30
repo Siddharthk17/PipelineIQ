@@ -6,7 +6,6 @@ import yaml
 from backend.ai.healing_prompts import validate_healing_patch
 from backend.execution.patch_applier import apply_patch
 
-
 PIPELINE_YAML = """
 pipeline:
   name: revenue_pipeline

@@ -1,73 +1,81 @@
 import { expect, test } from "@playwright/test";
 
+test.use({ storageState: "e2e/.auth/demo.json" });
+
 const baseUrl = process.env.E2E_BASE_URL;
 const apiUrl = process.env.E2E_API_URL ?? baseUrl;
 const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
 const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
-async function login(page: import("@playwright/test").Page): Promise<void> {
+async function login(page: import("@playwright/test").Page) {
   test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
-  await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
-  await page.getByTestId("email-input").fill(email);
-  await page.getByTestId("password-input").fill(password);
-  await page.getByTestId("login-btn").click();
-  await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 15_000 });
+  // Session comes from global-setup storageState (one demo login for the
+  // whole suite, sparing the 5/min auth limiter); just verify it works.
+  await page.goto(`${baseUrl}/files`, { waitUntil: "domcontentloaded" });
+  // The app may bounce through /login while the session restores; wait for
+  // it to settle on an authenticated page.
+  await page.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 15_000 });
+}
+
+async function authed(page: import("@playwright/test").Page) {
+  await login(page);
+  return page.request;
 }
 
 test.describe("Data Contracts", () => {
-  test("Create a data contract via API", async ({ page }) => {
-    await login(page);
+  test("Create, read and delete a data contract via API", async ({ page }) => {
+    const api = await authed(page);
+    const pipelineName = `e2e_contract_${Date.now()}`;
 
-    const resp = await page.request.post(`${apiUrl}/api/contracts`, {
+    const createResp = await api.post(`${apiUrl}/api/v1/contracts/pipelines/${pipelineName}`, {
       data: {
-        pipeline_name: "e2e_contract_test",
-        output_schema: {
-          region: { type: "object" },
-          amount_sum: { type: "float64" },
-        },
-        consumers: [],
+        yaml_content: "contracts:\n  - column: amount\n    rule: not_null\n",
         severity: "warn",
       },
       headers: { "Content-Type": "application/json" },
     });
+    expect(createResp.ok(), await createResp.text()).toBeTruthy();
+    const created = await createResp.json();
+    expect(created.id).toBeTruthy();
+    expect(created.version).toBe(1);
 
-    if (resp.ok()) {
-      const data = await resp.json();
-      expect(data.id).toBeTruthy();
-      await page.request.delete(`${apiUrl}/api/contracts/${data.id}`);
-    }
+    const listResp = await api.get(`${apiUrl}/api/v1/contracts/pipelines/${pipelineName}`);
+    expect(listResp.ok()).toBeTruthy();
+    const listed = await listResp.json();
+    expect(listed.total).toBeGreaterThanOrEqual(1);
+
+    const statusResp = await api.get(`${apiUrl}/api/v1/contracts/pipelines/${pipelineName}/${created.id}`);
+    expect(statusResp.ok(), await statusResp.text()).toBeTruthy();
+
+    const delResp = await api.delete(
+      `${apiUrl}/api/v1/contracts/pipelines/${pipelineName}/${created.id}`,
+    );
+    expect([200, 204].includes(delResp.status())).toBeTruthy();
   });
 
-  test("Contract breach is detected when output schema mismatches", async ({ page }) => {
-    await login(page);
+  test("Contract breach is detected when output violates the contract", async ({ page }) => {
+    const api = await authed(page);
 
-    const csvContent = "id,region,amount\n1,North,100\n2,South,200";
-    const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
+    const csvContent = "id,region,amount\n1,North,100\n2,South,50";
+    const uploadResp = await api.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "breach_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
     });
-    if (!uploadResp.ok()) {
-      test.skip(true, "File upload not available");
-      return;
-    }
-    const { file_id: fileId } = await uploadResp.json();
+    expect(uploadResp.ok(), await uploadResp.text()).toBeTruthy();
+    const { id: fileId } = await uploadResp.json();
 
-    const contractResp = await page.request.post(`${apiUrl}/api/contracts`, {
+    const pipelineName = `breach_${Date.now()}`;
+    const contractResp = await api.post(`${apiUrl}/api/v1/contracts/pipelines/${pipelineName}`, {
       data: {
-        pipeline_name: `breach_${Date.now()}`,
-        output_schema: { nonexistent_column: { type: "float64" } },
-        severity: "warn",
+        yaml_content: "columns:\n  amount:\n    type: integer\n    min_value: 1000\n",
+        severity: "block",
       },
       headers: { "Content-Type": "application/json" },
     });
-    if (!contractResp.ok()) {
-      test.skip(true, "Contract creation not supported");
-      return;
-    }
-    const contract = await contractResp.json();
+    expect(contractResp.ok(), await contractResp.text()).toBeTruthy();
 
     const yaml = [
       "pipeline:",
-      `  name: breach_test_${Date.now()}`,
+      `  name: ${pipelineName}`,
       "  steps:",
       "    - name: load",
       "      type: load",
@@ -75,36 +83,30 @@ test.describe("Data Contracts", () => {
       "    - name: save",
       "      type: save",
       "      input: load",
-      "      format: csv",
       "      filename: breach_output",
     ].join("\n");
 
-    const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
+    const runResp = await api.post(`${apiUrl}/api/v1/pipelines/run`, {
       data: { yaml_config: yaml },
       headers: { "Content-Type": "application/json" },
     });
-    if (!runResp.ok()) {
-      test.skip(true, "Pipeline run not supported");
-      return;
-    }
+    expect(runResp.ok(), await runResp.text()).toBeTruthy();
     const { run_id: runId } = await runResp.json();
 
     const start = Date.now();
-    while (Date.now() - start < 60_000) {
-      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`);
+    let status = "";
+    while (Date.now() - start < 120_000) {
+      const statusResp = await api.get(`${apiUrl}/api/v1/pipelines/${runId}`);
       const statusData = await statusResp.json();
-      if (["COMPLETED", "HEALED", "CONTRACT_VIOLATION", "FAILED"].includes(statusData.status)) break;
+      status = statusData.status;
+      if (["COMPLETED", "HEALED", "CONTRACT_VIOLATION", "FAILED"].includes(status)) break;
       await page.waitForTimeout(2_000);
     }
+    expect(status).toBe("CONTRACT_VIOLATION");
 
-    const breachesResp = await page.request.get(`${apiUrl}/api/contracts/${contract.id}/breaches`);
-    if (breachesResp.ok()) {
-      const breaches = await breachesResp.json();
-      if (breaches.total > 0) {
-        expect(breaches.breaches[0]).toHaveProperty("breach_type");
-      }
-    }
-
-    await page.request.delete(`${apiUrl}/api/contracts/${contract.id}`);
+    const breachesResp = await api.get(`${apiUrl}/api/v1/contracts/runs/${runId}`);
+    expect(breachesResp.ok(), await breachesResp.text()).toBeTruthy();
+    const breaches = await breachesResp.json();
+    expect(JSON.stringify(breaches)).toContain("amount");
   }, 150_000);
 });

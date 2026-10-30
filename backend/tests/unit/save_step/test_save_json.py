@@ -1,6 +1,5 @@
 """Tests for the JSON save step output."""
-import math
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import orjson
 import pyarrow as pa

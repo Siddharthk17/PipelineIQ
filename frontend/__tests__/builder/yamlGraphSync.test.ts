@@ -1,6 +1,6 @@
 import yaml from "js-yaml";
 import { describe, expect, it } from "vitest";
-import { graphToYAML, yamlToGraph, type BuilderEdge, type BuilderNode } from "@/lib/yamlGraphSync";
+import { graphToYAML, parseYamlWithDiagnostics, yamlToGraph, type BuilderEdge, type BuilderNode } from "@/lib/yamlGraphSync";
 
 function makeNode(id: string, type: BuilderNode["data"]["type"], overrides?: Partial<BuilderNode["data"]>): BuilderNode {
   return {
@@ -239,5 +239,46 @@ describe("graphToYAML", () => {
     const parsed = yaml.load(result) as { pipeline: { steps: Array<{ file_id: string }> } };
     expect(parsed.pipeline.steps[0].file_id).toBe("file-uuid-123");
     expect(result).not.toContain('""file-uuid-123""');
+  });
+});
+
+describe("parseYamlWithDiagnostics", () => {
+  it("parses duplicated mapping keys last-wins instead of failing", () => {
+    const duplicated = [
+      "pipeline:",
+      "  name: my_pipeline",
+      "  steps:",
+      "    - name: load_file",
+      "      type: load",
+      "      file_id: old-id",
+      "pipeline:",
+      "  name: my_pipeline",
+      "  steps:",
+      "    - name: load_file",
+      "      type: load",
+      "      file_id: new-id",
+      "    - name: save_file",
+      "      type: save",
+    ].join("\n");
+    const { graph, error } = parseYamlWithDiagnostics(duplicated);
+    expect(error).toBeNull();
+    expect(graph.nodes).toHaveLength(2);
+  });
+
+  it("reports genuinely invalid YAML instead of failing silently", () => {
+    const { graph, error } = parseYamlWithDiagnostics("not: valid: yaml: [{{");
+    expect(error).not.toBeNull();
+    expect(graph.nodes).toHaveLength(0);
+  });
+
+  it("reports non-mapping YAML with a clear message", () => {
+    const { error } = parseYamlWithDiagnostics("- just\n- a\n- list");
+    expect(error).not.toBeNull();
+  });
+
+  it("parses empty input to an empty graph without error", () => {
+    const { graph, error } = parseYamlWithDiagnostics("   \n");
+    expect(error).toBeNull();
+    expect(graph.nodes).toHaveLength(0);
   });
 });

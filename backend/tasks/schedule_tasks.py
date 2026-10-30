@@ -7,7 +7,7 @@ Also creates ScheduleRun records and updates schedule statistics.
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from croniter import croniter
 
@@ -48,11 +48,11 @@ def check_schedules() -> dict:
     db = SessionLocal()
     triggered = 0
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         due_schedules = (
             db.query(PipelineSchedule)
             .filter(
-                PipelineSchedule.is_active == True,  # noqa: E712
+                PipelineSchedule.is_active,
                 PipelineSchedule.next_run_at <= now,
             )
             .order_by(PipelineSchedule.next_run_at.asc())
@@ -98,7 +98,7 @@ def check_schedules() -> dict:
                 schedule.total_runs += 1
                 cron = croniter(schedule.cron_expression, now)
                 schedule.next_run_at = cron.get_next(
-                    datetime).replace(tzinfo=timezone.utc)
+                    datetime).replace(tzinfo=UTC)
                 db.commit()
 
                 triggered += 1
@@ -106,15 +106,14 @@ def check_schedules() -> dict:
                     "Schedule %s triggered pipeline run %s",
                     schedule.id, pipeline_run.id,
                 )
-            except Exception as exc:
-                logger.error(
-                    "Failed to trigger schedule %s: %s",
-                    schedule.id,
-                    exc)
+            except Exception:
+                logger.exception(
+                    "Failed to trigger schedule %s",
+                    schedule.id)
                 db.rollback()
 
-    except Exception as exc:
-        logger.error("Error checking schedules: %s", exc)
+    except Exception:
+        logger.exception("Error checking schedules")
     finally:
         try:
             redis = get_cache_redis()

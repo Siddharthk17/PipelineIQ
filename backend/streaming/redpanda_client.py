@@ -9,13 +9,13 @@ Includes:
 - Redis fallback queue for zero data loss during outages
 - Topic name validation to prevent invalid topic creation
 """
-import orjson
 import logging
 import os
 import re
 import time
 from enum import Enum
 
+import orjson
 from confluent_kafka import Consumer, Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
@@ -120,8 +120,10 @@ class CircuitBreaker:
         self._failure_count += 1
         self._total_failures += 1
         self._last_failure_time = time.monotonic()
-        if self._failure_count >= self._failure_threshold:
-            if self._state != CircuitState.OPEN:
+        if (
+            self._failure_count >= self._failure_threshold
+            and self._state != CircuitState.OPEN
+        ):
                 self._state = CircuitState.OPEN
                 logger.warning(
                     "Circuit breaker → OPEN (failures=%d, threshold=%d)",
@@ -147,7 +149,6 @@ _FALLBACK_MAX_SIZE = 100_000  # Max messages in fallback before dropping oldest
 def _get_redis_client():
     """Lazy Redis client for fallback queue. Returns None if Redis unavailable."""
     try:
-        import redis
         from backend.db.redis_pools import get_pubsub_redis
         return get_pubsub_redis()
     except Exception:
@@ -177,12 +178,13 @@ def fallback_enqueue(topic: str, value: bytes, key: bytes | None = None) -> bool
         r.ltrim(_FALLBACK_QUEUE_KEY, 0, _FALLBACK_MAX_SIZE - 1)
         size = r.llen(_FALLBACK_QUEUE_KEY)
         logger.warning("Fallback queue: %d messages (topic=%s)", size, topic)
-        return True
-    except Exception as exc:
-        logger.error("Fallback enqueue failed: %s", exc)
+    except Exception:
+        logger.exception("Fallback enqueue failed")
         return False
 
 
+    else:
+        return True
 def fallback_drain(producer: Producer, batch_size: int = 100) -> int:
     """Drain fallback queue back into Redpanda. Call after broker recovers.
 
@@ -207,17 +209,17 @@ def fallback_drain(producer: Producer, batch_size: int = 100) -> int:
                         key=item.get("key", "").encode() if item.get("key") else None,
                     )
                     drained += 1
-                except Exception as exc:
-                    logger.error("Failed to drain fallback message: %s", exc)
+                except Exception:
+                    logger.exception("Failed to drain fallback message")
             producer.poll(0)
 
         producer.flush(timeout=10)
         if drained > 0:
             logger.info("Drained %d messages from fallback queue", drained)
-        return drained
-    except Exception as exc:
-        logger.error("Fallback drain failed: %s", exc)
+    except Exception:
+        logger.exception("Fallback drain failed")
         return 0
+    return drained
 
 
 def fallback_queue_size() -> int:
@@ -401,10 +403,9 @@ def produce_with_fallback(
         producer.produce(topic=topic, value=value, key=key, headers=headers)
         producer.poll(0)
         cb.record_success()
-        return True
-    except Exception as exc:
+    except Exception:
         cb.record_failure()
-        logger.error("Producer failed (failures=%d): %s", cb.total_failures, exc)
+        logger.exception("Producer failed (failures=%d)", cb.total_failures)
         # Try fallback
         if fallback_enqueue(topic, value, key):
             return False
@@ -412,6 +413,8 @@ def produce_with_fallback(
         raise
 
 
+    else:
+        return True
 def try_drain_fallback(producer: Producer | None = None) -> int:
     """Attempt to drain fallback queue if circuit breaker recovered.
 

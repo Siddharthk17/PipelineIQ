@@ -14,6 +14,7 @@ Run with: pytest tests/e2e/test_week9_streaming_e2e.py -v
 Requires: Redpanda running on localhost:9092, PostgreSQL, Redis, Celery worker-streaming
 """
 
+import contextlib
 import json
 import os
 import socket
@@ -40,20 +41,22 @@ def _redpanda_available():
         host, port = RP_BROKERS.split(":")
         sock = socket.create_connection((host, int(port)), timeout=2)
         sock.close()
-        return True
     except (ConnectionRefusedError, OSError, ValueError):
         return False
 
 
+    else:
+        return True
 def _api_server_available():
     """Check if the PipelineIQ API server is reachable."""
     try:
         resp = requests.get(f"{BASE_URL}/health", timeout=2)
-        return resp.status_code in (200, 404, 401, 403)
     except (ConnectionRefusedError, OSError, ValueError, requests.RequestException):
         return False
 
 
+    else:
+        return resp.status_code in (200, 404, 401, 403)
 @pytest.fixture(scope="session", autouse=True)
 def skip_if_no_redpanda():
     """Skip all streaming E2E tests if Redpanda is not running."""
@@ -167,10 +170,9 @@ def unique_topic():
     topic = f"test-week9-{uuid.uuid4().hex[:8]}"
     yield topic
     # Per-test teardown: delete topic even if test fails
-    try:
+    # (Session-level cleanup catches it if this fails.)
+    with contextlib.suppress(Exception):
         _docker_rpk_delete_topic(topic)
-    except Exception:
-        pass  # Session-level cleanup will catch it
 
 
 @pytest.fixture
@@ -384,7 +386,8 @@ class TestStreamingCeleryTask:
 
     def test_streaming_task_registered(self):
         from backend.celery_app import celery_app
-        from backend.tasks import streaming_pipeline  # noqa: F401 — ensure task is registered
+        from backend.tasks import streaming_pipeline
+        assert streaming_pipeline.__name__.endswith("streaming_pipeline")
         assert "tasks.run_streaming_pipeline" in celery_app.tasks
 
     def test_streaming_task_has_no_time_limit(self):
@@ -492,13 +495,15 @@ class TestStreamingStatsModel:
     def _db_available(self):
         """Check if database is reachable (not just URL pattern)."""
         try:
-            from backend.database import engine
             from sqlalchemy import inspect
+
+            from backend.database import engine
             inspect(engine).get_table_names()
-            return True
         except Exception:
             return False
 
+        else:
+            return True
     def test_streaming_stats_model_importable(self):
         from backend.models import StreamingStats
         assert StreamingStats.__tablename__ == "streaming_stats"
@@ -506,15 +511,17 @@ class TestStreamingStatsModel:
     def test_streaming_stats_table_exists(self):
         if not self._db_available():
             pytest.skip("Database not reachable")
-        from backend.database import engine
         from sqlalchemy import inspect
+
+        from backend.database import engine
         assert "streaming_stats" in inspect(engine).get_table_names()
 
     def test_streaming_stats_columns(self):
         if not self._db_available():
             pytest.skip("Database not reachable")
-        from backend.database import engine
         from sqlalchemy import inspect
+
+        from backend.database import engine
         cols = {c["name"] for c in inspect(engine).get_columns("streaming_stats")}
         expected = {"run_id", "batches_processed", "messages_processed",
                     "messages_failed", "messages_dlq", "throughput_per_sec",
@@ -525,16 +532,18 @@ class TestStreamingStatsModel:
     def test_streaming_stats_run_id_is_pk(self):
         if not self._db_available():
             pytest.skip("Database not reachable")
-        from backend.database import engine
         from sqlalchemy import inspect
+
+        from backend.database import engine
         pk = inspect(engine).get_pk_constraint("streaming_stats")
         assert "run_id" in pk["constrained_columns"]
 
     def test_streaming_stats_foreign_key(self):
         if not self._db_available():
             pytest.skip("Database not reachable")
-        from backend.database import engine
         from sqlalchemy import inspect
+
+        from backend.database import engine
         fks = inspect(engine).get_foreign_keys("streaming_stats")
         assert any("run_id" in fk["constrained_columns"] and fk["referred_table"] == "pipeline_runs"
                    for fk in fks)
@@ -753,14 +762,14 @@ class TestEdgeCases:
 
     def test_streaming_pipeline_task_imports(self):
         from backend.tasks.streaming_pipeline import (
-            run_streaming_pipeline, _deserialize, _publish, _send_dlq,
-            _handle_pause, _set_status, _init_stats, _update_stats, _sse_progress,
+            run_streaming_pipeline,
         )
         assert run_streaming_pipeline is not None
 
     def test_deserialize_json_messages(self):
-        from backend.tasks.streaming_pipeline import _deserialize
         from unittest.mock import MagicMock
+
+        from backend.tasks.streaming_pipeline import _deserialize
         m1, m2 = MagicMock(), MagicMock()
         m1.value.return_value = b'{"id": 1, "name": "Alice"}'
         m2.value.return_value = b'{"id": 2, "name": "Bob"}'
@@ -769,8 +778,9 @@ class TestEdgeCases:
         assert df.iloc[0]["id"] == 1
 
     def test_deserialize_raw_messages(self):
-        from backend.tasks.streaming_pipeline import _deserialize
         from unittest.mock import MagicMock
+
+        from backend.tasks.streaming_pipeline import _deserialize
         m = MagicMock()
         m.value.return_value = b"raw text"
         df, _malformed = _deserialize([m], "raw")
@@ -778,8 +788,9 @@ class TestEdgeCases:
         assert df.iloc[0]["raw"] == "raw text"
 
     def test_deserialize_skips_null_values(self):
-        from backend.tasks.streaming_pipeline import _deserialize
         from unittest.mock import MagicMock
+
+        from backend.tasks.streaming_pipeline import _deserialize
         m1, m2 = MagicMock(), MagicMock()
         m1.value.return_value = None
         m2.value.return_value = b'{"id": 1}'
@@ -787,8 +798,9 @@ class TestEdgeCases:
         assert len(df) == 1
 
     def test_deserialize_handles_invalid_json(self):
-        from backend.tasks.streaming_pipeline import _deserialize
         from unittest.mock import MagicMock
+
+        from backend.tasks.streaming_pipeline import _deserialize
         m1, m2 = MagicMock(), MagicMock()
         m1.value.return_value = b'{"valid": true}'
         m2.value.return_value = b'not json'

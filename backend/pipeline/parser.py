@@ -10,7 +10,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any
 
 import yaml
 
@@ -19,8 +19,8 @@ from backend.execution.sql_builder import validate_sql_step_query
 from backend.pipeline.exceptions import InvalidYAMLError, MissingRequiredFieldError
 from backend.utils.string_utils import (
     find_closest_column,
-    is_valid_identifier,
     is_safe_filename,
+    is_valid_identifier,
 )
 
 logger = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ class StepConfig:
 
     name: str
     step_type: StepType
-    contract: Optional[dict] = None  # data contract constraints, validated post-execution
+    contract: dict | None = None  # data contract constraints, validated post-execution
 
 
 @dataclass
@@ -113,7 +113,7 @@ class LoadStepConfig(StepConfig):
     """Configuration for a file load step."""
 
     file_id: str = ""
-    alias: Optional[str] = None
+    alias: str | None = None
 
 
 @dataclass
@@ -123,7 +123,7 @@ class FilterStepConfig(StepConfig):
     input: str = ""
     column: str = ""
     operator: FilterOperator = FilterOperator.EQUALS
-    value: Optional[Union[str, int, float]] = None
+    value: str | int | float | None = None
 
 
 @dataclass
@@ -131,7 +131,7 @@ class SelectStepConfig(StepConfig):
     """Configuration for a column projection (select) step."""
 
     input: str = ""
-    columns: List[str] = field(default_factory=list)
+    columns: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -139,7 +139,7 @@ class RenameStepConfig(StepConfig):
     """Configuration for a column rename step."""
 
     input: str = ""
-    mapping: Dict[str, str] = field(default_factory=dict)
+    mapping: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -157,8 +157,8 @@ class AggregateStepConfig(StepConfig):
     """Configuration for a group-by aggregation step."""
 
     input: str = ""
-    group_by: List[str] = field(default_factory=list)
-    aggregations: List[Dict[str, str]] = field(default_factory=list)
+    group_by: list[str] = field(default_factory=list)
+    aggregations: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -168,6 +168,7 @@ class SortStepConfig(StepConfig):
     input: str = ""
     by: str = ""
     order: SortOrder = SortOrder.ASC
+    ascending: object = None
 
 
 @dataclass
@@ -183,7 +184,7 @@ class ValidateStepConfig(StepConfig):
     """Configuration for data quality validation step."""
 
     input: str = ""
-    rules: List[dict] = field(default_factory=list)
+    rules: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -191,7 +192,7 @@ class PivotStepConfig(StepConfig):
     """Configuration for a pivot step (long to wide)."""
 
     input: str = ""
-    index: List[str] = field(default_factory=list)
+    index: list[str] = field(default_factory=list)
     columns: str = ""
     values: str = ""
     aggfunc: str = "sum"
@@ -203,8 +204,8 @@ class UnpivotStepConfig(StepConfig):
     """Configuration for an unpivot step (wide to long)."""
 
     input: str = ""
-    id_vars: List[str] = field(default_factory=list)
-    value_vars: List[str] = field(default_factory=list)
+    id_vars: list[str] = field(default_factory=list)
+    value_vars: list[str] = field(default_factory=list)
     var_name: str = "variable"
     value_name: str = "value"
 
@@ -214,7 +215,7 @@ class DeduplicateStepConfig(StepConfig):
     """Configuration for a deduplicate step."""
 
     input: str = ""
-    subset: Optional[List[str]] = None
+    subset: list[str] | None = None
     keep: str = "first"
 
 
@@ -224,7 +225,7 @@ class FillNullsStepConfig(StepConfig):
 
     input: str = ""
     strategy: str = "constant"
-    columns: List[str] = field(default_factory=list)
+    columns: list[str] = field(default_factory=list)
     constant_value: Any = None
 
 
@@ -233,10 +234,10 @@ class SampleStepConfig(StepConfig):
     """Configuration for a sample step."""
 
     input: str = ""
-    n: Optional[int] = None
-    fraction: Optional[float] = None
+    n: int | None = None
+    fraction: float | None = None
     random_state: int = 42
-    stratify_by: Optional[str] = None
+    stratify_by: str | None = None
 
 
 @dataclass
@@ -258,7 +259,7 @@ class WasmComputeStepConfig(StepConfig):
     input: str = ""
     wasm_file_id: str = ""
     function: str = ""
-    input_columns: List[str] = field(default_factory=list)
+    input_columns: list[str] = field(default_factory=list)
     output_column: str = ""
 
 
@@ -288,7 +289,7 @@ class StreamPublishStepConfig(StepConfig):
     input: str = ""
     topic: str = ""
     serialize: str = "json"
-    key_column: Optional[str] = None
+    key_column: str | None = None
 
 
 @dataclass
@@ -296,25 +297,25 @@ class PipelineConfig:
     """Fully typed pipeline configuration parsed from YAML."""
 
     name: str
-    description: Optional[str]
-    steps: List[StepConfig]
+    description: str | None
+    steps: list[StepConfig]
 
 
 @dataclass
 class ValidationError:
     """A single validation error found during pipeline config validation."""
 
-    step_name: Optional[str]
+    step_name: str | None
     field: str
     message: str
-    suggestion: Optional[str] = None
+    suggestion: str | None = None
 
 
 @dataclass
 class ValidationWarning:
     """A non-blocking warning about the pipeline configuration."""
 
-    step_name: Optional[str]
+    step_name: str | None
     message: str
 
 
@@ -323,11 +324,11 @@ class ValidationResult:
     """Aggregated result of pipeline configuration validation."""
 
     is_valid: bool
-    errors: List[ValidationError] = field(default_factory=list)
-    warnings: List[ValidationWarning] = field(default_factory=list)
+    errors: list[ValidationError] = field(default_factory=list)
+    warnings: list[ValidationWarning] = field(default_factory=list)
 
 
-_STEP_CONFIG_MAP: Dict[StepType, type] = {
+_STEP_CONFIG_MAP: dict[StepType, type] = {
     StepType.LOAD: LoadStepConfig,
     StepType.FILTER: FilterStepConfig,
     StepType.SELECT: SelectStepConfig,
@@ -394,15 +395,15 @@ class PipelineParser:
     def validate(
         self,
         config: PipelineConfig,
-        registered_file_ids: Set[str],
+        registered_file_ids: set[str],
     ) -> ValidationResult:
         """Run all validation checks on a parsed pipeline configuration.
 
         Returns a ValidationResult with errors and warnings rather than raising,
         so all issues can be reported at once.
         """
-        errors: List[ValidationError] = []
-        warnings: List[ValidationWarning] = []
+        errors: list[ValidationError] = []
+        warnings: list[ValidationWarning] = []
 
         self._check_pipeline_name(config, errors)
         self._check_has_steps(config, errors)
@@ -463,9 +464,7 @@ class PipelineParser:
                 continue
             if line.startswith('-'):
                 continue
-            if line.startswith('+'):
-                result.append(line[1:])
-            elif line.startswith(' '):
+            if line.startswith('+') or line.startswith(' '):
                 result.append(line[1:])
             else:
                 result.append(line)
@@ -522,7 +521,7 @@ class PipelineParser:
             # type
             return StepConfig(
                 name=step_name,
-                step_type=step_type_str)  # type: ignore[arg-type]
+                step_type=step_type_str)
 
         config = self._build_typed_step(step_name, step_type, step_raw)
         raw_contract = step_raw.get("contract")
@@ -627,7 +626,7 @@ class PipelineParser:
                 step_type=step_type,
                 input=raw.get("input", ""),
                 strategy=raw.get("strategy", "constant"),
-                constant_value=raw.get("constant_value", None),
+                constant_value=raw.get("constant_value"),
                 columns=raw.get("columns", []),
             )
         if step_type == StepType.SAMPLE:
@@ -694,7 +693,7 @@ class PipelineParser:
         try:
             operator = FilterOperator(operator_str)
         except ValueError:
-            operator = operator_str  # type: ignore[assignment]
+            operator = operator_str
 
         return FilterStepConfig(
             name=name,
@@ -713,7 +712,7 @@ class PipelineParser:
         try:
             how = JoinHow(how_str)
         except ValueError:
-            how = how_str  # type: ignore[assignment]
+            how = how_str
 
         # YAML parses bare 'on' as boolean True; check both keys
         on_value = raw.get("on", "") or raw.get(True, "")
@@ -733,9 +732,9 @@ class PipelineParser:
         """Build a SortStepConfig, safely parsing the sort order."""
         order_str = raw.get("order", "asc")
         try:
-            order = SortOrder(order_str)
+            order = SortOrder(str(order_str).lower())
         except ValueError:
-            order = order_str  # type: ignore[assignment]
+            order = order_str
 
         return SortStepConfig(
             name=name,
@@ -743,10 +742,11 @@ class PipelineParser:
             input=raw.get("input", ""),
             by=raw.get("by", ""),
             order=order,
+            ascending=raw.get("ascending"),
         )
 
     def _check_pipeline_name(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check 1: Pipeline name is present, non-empty, no whitespace-only."""
         if not config.name or not config.name.strip():
@@ -759,7 +759,7 @@ class PipelineParser:
             )
 
     def _check_has_steps(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check 2: At least one step exists."""
         if not config.steps:
@@ -772,7 +772,7 @@ class PipelineParser:
             )
 
     def _check_step_count_limit(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check 13: Step count does not exceed MAX_PIPELINE_STEPS."""
         if len(config.steps) > settings.MAX_PIPELINE_STEPS:
@@ -788,10 +788,10 @@ class PipelineParser:
             )
 
     def _check_duplicate_step_names(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check 3: No duplicate step names."""
-        seen: Dict[str, int] = {}
+        seen: dict[str, int] = {}
         for step in config.steps:
             seen[step.name] = seen.get(step.name, 0) + 1
         for name, count in seen.items():
@@ -804,7 +804,7 @@ class PipelineParser:
                     ))
 
     def _check_step_name_format(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check 12: Step names only contain alphanumeric characters and underscores."""
         for step in config.steps:
@@ -821,7 +821,7 @@ class PipelineParser:
                 )
 
     def _check_step_types(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check 4: Every step has a valid type."""
         valid_types = [t.value for t in StepType]
@@ -838,7 +838,7 @@ class PipelineParser:
                     ))
 
     def _check_required_step_fields(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Validate required step fields before semantic reference checks."""
         for step in config.steps:
@@ -939,13 +939,22 @@ class PipelineParser:
                         message="Aggregate step must specify at least one group_by column",
                     ))
 
-            if isinstance(step, SortStepConfig) and not step.by.strip():
-                errors.append(
-                    ValidationError(
-                        step_name=step_name,
-                        field="by",
-                        message="Sort step must specify a non-empty 'by' column",
-                    ))
+            if isinstance(step, SortStepConfig):
+                by_vals = step.by if isinstance(step.by, list) else [step.by]
+                if not any(str(b).strip() for b in by_vals):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="by",
+                            message="Sort step must specify a non-empty 'by' column",
+                        ))
+                if not isinstance(step.order, SortOrder):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="order",
+                            message="Sort step 'order' must be 'asc' or 'desc'",
+                        ))
 
             if isinstance(step, ValidateStepConfig) and not step.rules:
                 errors.append(
@@ -1066,8 +1075,9 @@ class PipelineParser:
                         )
                     )
 
-            if isinstance(step, TransformStepConfig):
-                if not step.expression or not step.expression.strip():
+            if isinstance(step, TransformStepConfig) and (
+                not step.expression or not step.expression.strip()
+            ):
                     errors.append(
                         ValidationError(
                             step_name=step_name,
@@ -1076,8 +1086,9 @@ class PipelineParser:
                         )
                     )
 
-            if isinstance(step, StreamConsumeStepConfig):
-                if not step.topic or not step.topic.strip():
+            if isinstance(step, StreamConsumeStepConfig) and (
+                not step.topic or not step.topic.strip()
+            ):
                     errors.append(
                         ValidationError(
                             step_name=step_name,
@@ -1086,8 +1097,9 @@ class PipelineParser:
                         )
                     )
 
-            if isinstance(step, StreamPublishStepConfig):
-                if not step.topic or not step.topic.strip():
+            if isinstance(step, StreamPublishStepConfig) and (
+                not step.topic or not step.topic.strip()
+            ):
                     errors.append(
                         ValidationError(
                             step_name=step_name,
@@ -1097,10 +1109,10 @@ class PipelineParser:
                     )
 
     def _check_step_references(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check 5: All input/left/right references point to earlier steps."""
-        seen_steps: List[str] = []
+        seen_steps: list[str] = []
         for step in config.steps:
             self._validate_step_reference(step, seen_steps, errors)
             seen_steps.append(step.name)
@@ -1108,11 +1120,11 @@ class PipelineParser:
     def _validate_step_reference(
         self,
         step: StepConfig,
-        available_steps: List[str],
-        errors: List[ValidationError],
+        available_steps: list[str],
+        errors: list[ValidationError],
     ) -> None:
         """Validate all reference fields on a single step config."""
-        refs_to_check: List[tuple] = []
+        refs_to_check: list[tuple] = []
 
         if isinstance(step, JoinStepConfig):
             refs_to_check.append(("left", step.left))
@@ -1140,13 +1152,17 @@ class PipelineParser:
     def _check_load_file_ids(
         self,
         config: PipelineConfig,
-        registered_file_ids: Set[str],
-        errors: List[ValidationError],
+        registered_file_ids: set[str],
+        errors: list[ValidationError],
     ) -> None:
         """Check 6: Every load step's file_id exists in registered_file_ids."""
         for step in config.steps:
-            if isinstance(step, LoadStepConfig):
-                if step.file_id and step.file_id.strip() and step.file_id not in registered_file_ids:
+            if (
+                isinstance(step, LoadStepConfig)
+                and step.file_id
+                and step.file_id.strip()
+                and step.file_id not in registered_file_ids
+            ):
                     errors.append(
                         ValidationError(
                             step_name=step.name,
@@ -1156,13 +1172,14 @@ class PipelineParser:
                         ))
 
     def _check_filter_operators(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check 7: Every filter step has a valid operator."""
         valid_ops = [op.value for op in FilterOperator]
         for step in config.steps:
-            if isinstance(step, FilterStepConfig):
-                if not isinstance(step.operator, FilterOperator):
+            if isinstance(step, FilterStepConfig) and not isinstance(
+                step.operator, FilterOperator
+            ):
                     errors.append(
                         ValidationError(
                             step_name=step.name,
@@ -1177,8 +1194,8 @@ class PipelineParser:
     def _check_join_configs(
         self,
         config: PipelineConfig,
-        errors: List[ValidationError],
-        warnings: List[ValidationWarning],
+        errors: list[ValidationError],
+        warnings: list[ValidationWarning],
     ) -> None:
         """Check 8: Every join step specifies a valid 'how' method."""
         valid_hows = [h.value for h in JoinHow]
@@ -1204,7 +1221,7 @@ class PipelineParser:
                     )
 
     def _check_aggregate_configs(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Checks 9 & 10: Aggregation step has aggregations with valid functions."""
         for step in config.steps:
@@ -1217,10 +1234,7 @@ class PipelineParser:
                             message="Aggregate step must define at least one aggregation",
                         ))
                 for agg in step.aggregations:
-                    if isinstance(agg, dict):
-                        func_name = agg.get("function", "")
-                    else:
-                        func_name = str(agg)
+                    func_name = agg.get("function", "") if isinstance(agg, dict) else str(agg)
                     if func_name not in VALID_AGGREGATION_FUNCTIONS:
                         errors.append(
                             ValidationError(
@@ -1230,8 +1244,8 @@ class PipelineParser:
     def _check_has_save_step(
         self,
         config: PipelineConfig,
-        errors: List[ValidationError],
-        warnings: List[ValidationWarning],
+        errors: list[ValidationError],
+        warnings: list[ValidationWarning],
     ) -> None:
         """Check 11: At least one save step or stream_publish step exists."""
         has_save = any(isinstance(step, SaveStepConfig)
@@ -1247,7 +1261,7 @@ class PipelineParser:
                         "but not persisted to an output file."), ))
 
     def _check_save_filenames(
-        self, config: PipelineConfig, errors: List[ValidationError]
+        self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check that all save step filenames are safe and don't allow path traversal."""
         for step in config.steps:
@@ -1271,7 +1285,7 @@ class PipelineParser:
     def _check_validate_rules(
         self,
         config: PipelineConfig,
-        errors: List[ValidationError],
+        errors: list[ValidationError],
     ) -> None:
         """Check 12: Validate step rules use supported check types."""
         from backend.pipeline.validators import SUPPORTED_CHECKS
@@ -1290,7 +1304,7 @@ class PipelineParser:
     def _check_sql_steps(
         self,
         config: PipelineConfig,
-        errors: List[ValidationError],
+        errors: list[ValidationError],
     ) -> None:
         """Validate SQL step safety and placeholder usage."""
         for step in config.steps:

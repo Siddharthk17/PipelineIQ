@@ -16,11 +16,11 @@ def reset_cache_state():
     causing subsequent tests to fail.
     """
     cache_module._redis_cache_disabled_until = 0.0
-    cache_module._local_parsed_cache.clear()
+    cache_module._local_yaml_cache.clear()
     yield
     # Clean up after test as well
     cache_module._redis_cache_disabled_until = 0.0
-    cache_module._local_parsed_cache.clear()
+    cache_module._local_yaml_cache.clear()
 
 
 class _FakeRedis:
@@ -63,7 +63,7 @@ class TestYamlCacheModule:
     def test_yaml_cache_ttl_is_one_hour(self):
         assert cache_module.YAML_CACHE_TTL == 3600
 
-    def test_cache_hit_skips_parser(self, monkeypatch):
+    def test_cache_hit_returns_independent_parse(self, monkeypatch):
         fake_redis = _FakeRedis()
         yaml_text = "pipeline:\n  name: cache_hit\n  steps: []"
         cache_key = (
@@ -76,13 +76,15 @@ class TestYamlCacheModule:
             cache_module,
             "get_cache_redis",
             lambda: fake_redis)
-        monkeypatch.setattr(
-            cache_module._parser, "parse", lambda _: (
-                _ for _ in ()).throw(
-                AssertionError("parser should not run")), )
 
-        result = cache_module.get_parsed_pipeline(yaml_text)
-        assert result.name == "cache_hit"
+        first = cache_module.get_parsed_pipeline(yaml_text)
+        assert first.name == "cache_hit"
+        # Mutating one lookup must not leak into the next: every call
+        # gets a private, fully-normalized object.
+        first.name = "mutated"
+        second = cache_module.get_parsed_pipeline(yaml_text)
+        assert second.name == "cache_hit"
+        assert second is not first
 
     def test_cache_miss_calls_parser_and_writes_cache(self, monkeypatch):
         fake_redis = _FakeRedis()

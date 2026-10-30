@@ -1,17 +1,44 @@
 import os
+import posixpath
 import shutil
 import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import BinaryIO
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
+
 from backend.config import settings
+
+# MinIO rejects SigV2 query-auth (AWSAccessKeyId/Signature/Expires).
+# botocore may default to SigV2 for HTTP/IP endpoints, so pin SigV4.
+_SIGV4 = Config(signature_version="s3v4")
+
+
+def _validate_storage_key(key: str) -> str:
+    """Normalize a storage key and refuse anything escaping the key space.
+
+    Keys are relative POSIX paths (for example ``outputs/<run_id>/out.csv``).
+    Absolute paths, ``..`` segments and null bytes are rejected so a key can
+    never address an object outside its own hierarchy.
+    """
+    if not isinstance(key, str) or not key or "\x00" in key:
+        raise ValueError(f"Invalid storage key: {key!r}")
+    normalized = posixpath.normpath(key.replace("\\", "/"))
+    if normalized in (".", "") or normalized.startswith("/"):
+        raise ValueError(f"Invalid storage key: {key!r}")
+    if any(part in ("", ".", "..") for part in normalized.split("/")):
+        raise ValueError(f"Invalid storage key: {key!r}")
+    return normalized
 
 
 class StorageProvider(ABC):
     """Abstract base class for file storage providers."""
+
+
+
 
     @abstractmethod
     def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
@@ -44,13 +71,13 @@ class StorageProvider(ABC):
     @abstractmethod
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         """Return a presigned URL for direct upload to storage. Return None if not supported."""
 
     @abstractmethod
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         """Return a presigned URL for direct download from storage. Return None if not supported."""
 
 
@@ -62,12 +89,17 @@ class LocalStorageProvider(StorageProvider):
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _get_full_path(self, path: str) -> Path:
-        # Prevent path traversal by taking only the filename
-        filename = os.path.basename(path)
-        return self.base_dir / filename
+        key = _validate_storage_key(path)
+        full_path = self.base_dir / key
+        resolved_base = self.base_dir.resolve()
+        if full_path.resolve() != resolved_base and (
+                resolved_base not in full_path.resolve().parents):
+            raise ValueError(f"Storage key escapes base directory: {path!r}")
+        return full_path
 
     def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
         full_path = self._get_full_path(destination_path)
+        full_path.parent.mkdir(parents=True, exist_ok=True)
         with open(full_path, "wb") as f:
             shutil.copyfileobj(file_obj, f)
         return str(full_path)
@@ -78,6 +110,7 @@ class LocalStorageProvider(StorageProvider):
             destination_path: str,
             max_size: int) -> int:
         full_path = self._get_full_path(destination_path)
+        full_path.parent.mkdir(parents=True, exist_ok=True)
         total_read = 0
         with open(full_path, "wb") as output:
             async for chunk in stream:
@@ -114,12 +147,12 @@ class LocalStorageProvider(StorageProvider):
 
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         return None
 
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         return None
 
 
@@ -132,11 +165,36 @@ class S3StorageProvider(StorageProvider):
             aws_access_key_id=settings.S3_ACCESS_KEY,
             aws_secret_access_key=settings.S3_SECRET_KEY,
             endpoint_url=settings.S3_ENDPOINT_URL,
+            config=_SIGV4,
         )
         self.bucket = settings.S3_BUCKET
+        self._presign_client = None
+
+    def _get_presign_client(self):
+        """Boto client pointed at the browser-reachable endpoint.
+
+        Presigned URLs embed the endpoint host in the signature, so they
+        must be signed for the URL the browser will actually fetch — not
+        the internal docker hostname used for server-side operations.
+        """
+        if self._presign_client is None:
+            endpoint = (
+                settings.S3_PUBLIC_ENDPOINT_URL or settings.S3_ENDPOINT_URL
+            )
+            if endpoint == settings.S3_ENDPOINT_URL:
+                self._presign_client = self.s3
+            else:
+                self._presign_client = boto3.client(
+                    "s3",
+                    aws_access_key_id=settings.S3_ACCESS_KEY,
+                    aws_secret_access_key=settings.S3_SECRET_KEY,
+                    endpoint_url=endpoint,
+                    config=_SIGV4,
+                )
+        return self._presign_client
 
     def upload(self, file_obj: BinaryIO, destination_path: str) -> str:
-        key = os.path.basename(destination_path)
+        key = _validate_storage_key(destination_path)
         self.s3.upload_fileobj(file_obj, self.bucket, key)
         return key
 
@@ -145,9 +203,9 @@ class S3StorageProvider(StorageProvider):
             stream,
             destination_path: str,
             max_size: int) -> int:
-        key = os.path.basename(destination_path)
+        key = _validate_storage_key(destination_path)
         total_read = 0
-        temp_file_path: Optional[str] = None
+        temp_file_path: str | None = None
 
         try:
             with tempfile.NamedTemporaryFile(delete=False) as temp_file:
@@ -171,7 +229,7 @@ class S3StorageProvider(StorageProvider):
                 os.unlink(temp_file_path)
 
     def download(self, path: str) -> BinaryIO:
-        key = os.path.basename(path)
+        key = _validate_storage_key(path)
         import io
 
         buffer = io.BytesIO()
@@ -180,28 +238,29 @@ class S3StorageProvider(StorageProvider):
         return buffer
 
     def delete(self, path: str) -> None:
-        key = os.path.basename(path)
+        key = _validate_storage_key(path)
         self.s3.delete_object(Bucket=self.bucket, Key=key)
 
     def exists(self, path: str) -> bool:
-        key = os.path.basename(path)
+        key = _validate_storage_key(path)
         try:
             self.s3.head_object(Bucket=self.bucket, Key=key)
-            return True
         except ClientError:
             return False
 
+        else:
+            return True
     def get_size(self, path: str) -> int:
-        key = os.path.basename(path)
+        key = _validate_storage_key(path)
         response = self.s3.head_object(Bucket=self.bucket, Key=key)
         return response["ContentLength"]
 
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
-    ) -> Optional[str]:
-        key = os.path.basename(destination_path)
+    ) -> str | None:
+        key = _validate_storage_key(destination_path)
         try:
-            return self.s3.generate_presigned_url(
+            return self._get_presign_client().generate_presigned_url(
                 ClientMethod="put_object",
                 Params={"Bucket": self.bucket, "Key": key},
                 ExpiresIn=expiration,
@@ -211,10 +270,10 @@ class S3StorageProvider(StorageProvider):
 
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
-    ) -> Optional[str]:
-        key = os.path.basename(source_path)
+    ) -> str | None:
+        key = _validate_storage_key(source_path)
         try:
-            return self.s3.generate_presigned_url(
+            return self._get_presign_client().generate_presigned_url(
                 ClientMethod="get_object",
                 Params={"Bucket": self.bucket, "Key": key},
                 ExpiresIn=expiration,
@@ -256,13 +315,13 @@ class StorageService:
 
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         return self.provider.get_presigned_upload_url(
             destination_path, expiration)
 
     def get_presigned_download_url(
         self, source_path: str, expiration: int = 3600
-    ) -> Optional[str]:
+    ) -> str | None:
         return self.provider.get_presigned_download_url(
             source_path, expiration)
 

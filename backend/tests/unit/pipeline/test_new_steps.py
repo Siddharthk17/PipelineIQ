@@ -1,17 +1,19 @@
 """Unit tests for new pipeline step types: pivot, unpivot, deduplicate, fill_nulls, sample."""
 
-import pytest
 import pandas as pd
-from backend.pipeline.steps import StepExecutor
+import pytest
+
+from backend.pipeline.exceptions import ColumnNotFoundError
+from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import (
-    PivotStepConfig,
-    UnpivotStepConfig,
     DeduplicateStepConfig,
     FillNullsStepConfig,
+    PivotStepConfig,
     SampleStepConfig,
     StepType,
+    UnpivotStepConfig,
 )
-from backend.pipeline.lineage import LineageRecorder
+from backend.pipeline.steps import StepExecutor
 
 
 @pytest.fixture
@@ -138,7 +140,7 @@ class TestPivotStep:
             columns="quarter",
             values="revenue",
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ColumnNotFoundError):
             executor.execute({"load1": long_df}, step, recorder)
 
     def test_pivot_no_multiindex_in_output(self, executor, long_df, recorder):
@@ -235,7 +237,7 @@ class TestUnpivotStep:
             id_vars=["nonexistent"],
             value_vars=["q1_revenue"],
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ColumnNotFoundError):
             executor.execute({"load1": wide_df}, step, recorder)
 
     def test_unpivot_output_is_dataframe(self, executor, wide_df, recorder):
@@ -310,7 +312,7 @@ class TestDeduplicateStep:
             input="load1",
             subset=["nonexistent"],
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ColumnNotFoundError):
             executor.execute({"load1": df_with_dupes}, step, recorder)
 
     def test_dedup_index_reset(self, executor, df_with_dupes, recorder):
@@ -423,7 +425,7 @@ class TestFillNullsStep:
             columns=["nonexistent"],
             constant_value=0,
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ColumnNotFoundError):
             executor.execute({"load1": df_with_nulls}, step, recorder)
 
     def test_only_specified_columns_filled(
@@ -583,7 +585,7 @@ class TestSampleStep:
             n=100,
             stratify_by="nonexistent",
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ColumnNotFoundError):
             executor.execute({"load1": large_df}, step, recorder)
 
     def test_sample_output_is_dataframe(self, executor, large_df, recorder):

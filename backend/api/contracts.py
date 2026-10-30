@@ -13,8 +13,8 @@ from backend.auth import get_current_user
 from backend.database import get_db
 from backend.models import (
     ContractViolationRecord,
-    PipelinePermission,
     PipelineContract,
+    PipelinePermission,
     PipelineRun,
     User,
 )
@@ -25,6 +25,7 @@ from backend.schemas import (
     ContractStatusResponse,
     ContractUpdateRequest,
 )
+from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +42,14 @@ def _ensure_pipeline_contract_access(
 ) -> None:
     if current_user.role == "admin":
         return
-    if (
-        db.query(PipelineRun)
-        .filter(PipelineRun.name == pipeline_name, PipelineRun.user_id == current_user.id)
-        .first()
-    ):
-        return
+    # NOTE: pipeline identity is name-based. A run that merely shares a
+    # name with someone else's pipeline grants nothing — ownership comes
+    # only from the contract record itself or an explicit permission row.
     if (
         db.query(PipelineContract)
         .filter(
             PipelineContract.pipeline_name == pipeline_name,
-            PipelineContract.user_id == str(current_user.id),
+            PipelineContract.user_id == current_user.id,
         )
         .first()
     ):
@@ -71,6 +69,9 @@ def _ensure_pipeline_contract_access(
         or db.query(PipelineContract)
         .filter(PipelineContract.pipeline_name == pipeline_name)
         .first()
+        or db.query(PipelinePermission)
+        .filter(PipelinePermission.pipeline_name == pipeline_name)
+        .first()
     ):
         return
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this pipeline")
@@ -79,7 +80,7 @@ def _ensure_pipeline_contract_access(
 def _contract_query(db: Session, current_user: User):
     query = db.query(PipelineContract)
     if current_user.role != "admin":
-        query = query.filter(PipelineContract.user_id == str(current_user.id))
+        query = query.filter(PipelineContract.user_id == current_user.id)
     return query
 
 
@@ -151,7 +152,7 @@ def create_contract(
         yaml_content=body.yaml_content,
         severity=body.severity,
         consumers=body.consumers,
-        user_id=str(current_user.id),
+        user_id=current_user.id,
     )
     db.add(contract)
     db.commit()
@@ -247,7 +248,7 @@ def update_contract(
         yaml_content=body.yaml_content,
         severity=body.severity,
         consumers=body.consumers,
-        user_id=str(current_user.id),
+        user_id=current_user.id,
         is_active=True,
     )
     db.add(new_contract)
@@ -328,7 +329,7 @@ def get_contract_status(
     if active and last_run:
         total_violations = (
             db.query(ContractViolationRecord)
-            .filter(ContractViolationRecord.run_id == str(last_run.id))
+            .filter(ContractViolationRecord.run_id == last_run.id)
             .count()
         )
 
@@ -362,7 +363,7 @@ def list_pipeline_breaches(
 
     violations = (
         db.query(ContractViolationRecord)
-        .filter(ContractViolationRecord.run_id == str(last_run.id))
+        .filter(ContractViolationRecord.run_id == last_run.id)
         .order_by(
             ContractViolationRecord.step_index,
             ContractViolationRecord.severity.desc(),
@@ -402,8 +403,9 @@ def list_run_violations(
     current_user: User = Depends(get_current_user),
 ):
     """List all contract violations for a given pipeline run."""
+    validate_uuid_format(run_id)
     run = db.query(PipelineRun).filter(
-        PipelineRun.id == run_id).first()
+        PipelineRun.id == as_uuid(run_id)).first()
     if not run:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -454,7 +456,8 @@ def list_step_violations(
     current_user: User = Depends(get_current_user),
 ):
     """List contract violations for a specific step within a run."""
-    run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    validate_uuid_format(run_id)
+    run = db.query(PipelineRun).filter(PipelineRun.id == as_uuid(run_id)).first()
     if not run:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

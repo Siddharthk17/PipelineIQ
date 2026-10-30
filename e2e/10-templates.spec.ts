@@ -1,17 +1,20 @@
 import { expect, test } from "@playwright/test";
 
+test.use({ storageState: "e2e/.auth/demo.json" });
+
 const baseUrl = process.env.E2E_BASE_URL;
 const apiUrl = process.env.E2E_API_URL ?? baseUrl;
 const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
 const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
-async function login(page: import("@playwright/test").Page): Promise<void> {
+async function login(page: import("@playwright/test").Page) {
   test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
-  await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
-  await page.getByTestId("email-input").fill(email);
-  await page.getByTestId("password-input").fill(password);
-  await page.getByTestId("login-btn").click();
-  await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 15_000 });
+  // Session comes from global-setup storageState (one demo login for the
+  // whole suite, sparing the 5/min auth limiter); just verify it works.
+  await page.goto(`${baseUrl}/files`, { waitUntil: "domcontentloaded" });
+  // The app may bounce through /login while the session restores; wait for
+  // it to settle on an authenticated page.
+  await page.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 15_000 });
 }
 
 test.describe("Pipeline Templates", () => {
@@ -34,9 +37,9 @@ test.describe("Pipeline Templates", () => {
       test.skip(true, "File upload not available");
       return;
     }
-    const { file_id: fileId } = await uploadResp.json();
+    const { id: fileId } = await uploadResp.json();
 
-    const resp = await page.request.post(`${apiUrl}/api/templates/customer_segmentation/fork`, {
+    const resp = await page.request.post(`${apiUrl}/api/v1/templates/customer_segmentation/fork`, {
       data: {
         pipeline_name: `e2e_forked_${Date.now()}`,
         file_mappings: { orders_file_id: fileId },
@@ -52,7 +55,7 @@ test.describe("Pipeline Templates", () => {
   test("Fork template with missing placeholder returns 400", async ({ page }) => {
     await login(page);
 
-    const resp = await page.request.post(`${apiUrl}/api/templates/sales_revenue_report/fork`, {
+    const resp = await page.request.post(`${apiUrl}/api/v1/templates/sales_revenue_report/fork`, {
       data: {
         pipeline_name: "bad_fork",
         file_mappings: {},

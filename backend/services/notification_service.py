@@ -7,10 +7,10 @@ matching notification configs for pipeline events.
 import logging
 import smtplib
 import ssl
-from typing import Any, Optional
+from email.message import EmailMessage
+from typing import Any
 
 import httpx
-from email.message import EmailMessage
 from sqlalchemy.orm import Session
 
 from backend.config import settings
@@ -48,8 +48,8 @@ def send_slack_notification(webhook_url: str, message: str) -> bool:
     except UnsafeURL:
         logger.warning("Slack notification blocked: unsafe webhook URL")
         return False
-    except httpx.HTTPError as exc:
-        logger.error("Slack notification error: %s", exc)
+    except httpx.HTTPError:
+        logger.exception("Slack notification error")
         return False
 
 
@@ -101,12 +101,13 @@ def send_email_notification(
                     server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
                 server.send_message(message)
         logger.info("Email notification sent to %s", ", ".join(recipients))
-        return True
-    except Exception as exc:
-        logger.error("Email notification error: %s", exc)
+    except Exception:
+        logger.exception("Email notification error")
         return False
 
 
+    else:
+        return True
 def _normalize_email_recipients(config: dict) -> list[str]:
     value = (config or {}).get("email_to")
     if isinstance(value, str):
@@ -139,9 +140,9 @@ def notify_pipeline_event(
     db: Session,
     event_type: str,
     pipeline_name: str,
-    run_id: Optional[str] = None,
-    status: Optional[str] = None,
-    error_message: Optional[str] = None,
+    run_id: str | None = None,
+    status: str | None = None,
+    error_message: str | None = None,
     user_id: str = "",
 ) -> dict[str, Any]:
     """Find matching notification configs and send notifications.
@@ -210,16 +211,16 @@ def notify_pipeline_event(
 def _build_message(
     event_type: str,
     pipeline_name: str,
-    run_id: Optional[str],
-    status: Optional[str],
-    error_message: Optional[str],
+    run_id: str | None,
+    status: str | None,
+    error_message: str | None,
 ) -> str:
     """Build a human-readable notification message."""
     emoji = {
         "pipeline_completed": "✅",
         "pipeline_failed": "❌"}.get(
         event_type,
-        "ℹ️")
+        "ℹ️")  # noqa: RUF001 -- intentional emoji in user-facing Slack text
     parts = [f"{emoji} *Pipeline Event: {event_type}*"]
     parts.append(f"• Pipeline: {pipeline_name}")
     if run_id:

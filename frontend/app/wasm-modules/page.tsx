@@ -9,6 +9,7 @@ import {
   validateWasmModule,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { BackToDashboard } from "@/components/layout/BackToDashboard";
 import type { WasmModule, WasmModuleExport } from "@/lib/types";
 import { Copy, FileCode, Loader2, Trash2, Upload, XCircle, CheckCircle2 } from "lucide-react";
 
@@ -34,13 +35,7 @@ export default function WasmModulesPage() {
     }
   }, [isLoading, router, user]);
 
-  useEffect(() => {
-    if (user) {
-      fetchModules();
-    }
-  }, [user]);
-
-  const fetchModules = async () => {
+  const fetchModules = useCallback(async () => {
     setLoading(true);
     try {
       const data = await listWasmModules();
@@ -50,7 +45,15 @@ export default function WasmModulesPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      void (async () => {
+        await fetchModules();
+      })();
+    }
+  }, [user, fetchModules]);
 
   const handleFileSelect = useCallback(
     async (file: File) => {
@@ -133,19 +136,16 @@ export default function WasmModulesPage() {
   return (
     <main data-testid="wasm-manager-page" className="flex h-screen w-screen flex-col bg-[var(--bg-base)] text-[var(--text-primary)]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--widget-border)] px-6 py-4">
+      <div className="border-b border-[var(--widget-border)] px-6 py-4">
+        <div className="flex items-center gap-3 mb-2">
+          <BackToDashboard />
+        </div>
         <div>
           <h1 className="text-xl font-semibold">Wasm Modules</h1>
           <p className="text-sm text-[var(--text-secondary)]">
             Upload custom WebAssembly functions to use in pipeline wasm_compute steps.
           </p>
         </div>
-        <button
-          onClick={() => router.push("/")}
-          className="rounded border border-[var(--widget-border)] px-3 py-1.5 text-xs transition-colors hover:bg-[var(--interactive-hover)]"
-        >
-          Back to Dashboard
-        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-6">

@@ -6,25 +6,30 @@ result retrieval, cancellation, and export.
 
 import logging
 import os
+from datetime import UTC
+
 import orjson
-from typing import Optional
-from kombu.exceptions import OperationalError as KombuOperationalError
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session, selectinload
 
 from backend.auth import get_current_user
 from backend.config import settings
+from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import ContractViolationRecord, HealingAttempt, PipelineRun, PipelineStatus, SchemaSnapshot, StepResult, UploadedFile, User
-from datetime import timezone
-from backend.pipeline.parser import PipelineParser, StepType
-from backend.pipeline.cache import get_parsed_pipeline
-from backend.pipeline.planner import generate_execution_plan
-from backend.services.pipeline_validation import (
-    collect_schema_validation_errors,
-    serialize_validation_errors,
+from backend.models import (
+    HealingAttempt,
+    PipelineRun,
+    PipelineStatus,
+    SchemaSnapshot,
+    StepResult,
+    UploadedFile,
+    User,
 )
+from backend.pipeline.cache import get_parsed_pipeline
+from backend.pipeline.parser import PipelineParser, StepType
+from backend.pipeline.planner import generate_execution_plan
 from backend.schemas import (
     HealingAttemptResponse,
     PipelineRunListResponse,
@@ -37,16 +42,21 @@ from backend.schemas import (
     ValidationErrorDetail,
     ValidationWarningDetail,
 )
+from backend.services.audit_service import log_action
+from backend.services.pipeline_validation import (
+    collect_schema_validation_errors,
+    serialize_validation_errors,
+)
 from backend.tasks.pipeline_tasks import execute_pipeline_task
 from backend.tasks.streaming_pipeline import run_streaming_pipeline
-from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
 from backend.utils.rate_limiter import limiter
-from backend.services.audit_service import log_action
+from backend.utils.sse_security import sign_sse_payload
 from backend.utils.uuid_utils import (
-    validate_uuid_format as _validate_uuid_format,
     as_uuid as _as_uuid,
 )
-from backend.utils.sse_security import sign_sse_payload
+from backend.utils.uuid_utils import (
+    validate_uuid_format as _validate_uuid_format,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +180,7 @@ def validate_pipeline(
     """Validate a pipeline configuration against registered files."""
     config = get_parsed_pipeline(body.yaml_config)
 
-    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    registered_ids = _owned_file_ids(db, current_user)
     result = _pipeline_parser.validate(config, registered_ids)
     if result.is_valid:
         result.errors.extend(collect_schema_validation_errors(config, db))
@@ -211,7 +221,31 @@ def plan_pipeline(
     current_user: User = Depends(get_current_user),
 ):
     """Generate a dry-run execution plan for a pipeline."""
-    plan = generate_execution_plan(body.yaml_config, db)
+    config = get_parsed_pipeline(body.yaml_config)
+    validation_result = _pipeline_parser.validate(
+        config, _owned_file_ids(db, current_user))
+    if not validation_result.is_valid:
+        capped = validation_result.errors[:25]
+        truncated = len(validation_result.errors) - len(capped)
+        error_list = serialize_validation_errors(capped)
+        if truncated > 0:
+            error_list.append({
+                "step_name": "",
+                "field": "",
+                "message": f"... and {truncated} more errors (truncated)",
+                "suggestion": "Fix the errors above first, then re-validate.",
+            })
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "message": "Pipeline configuration is invalid",
+                "errors": error_list,
+            },
+        )
+    plan = generate_execution_plan(
+        body.yaml_config, db,
+        user_id=current_user.id, is_admin=current_user.role == "admin",
+    )
 
     return {
         "pipeline_name": plan.pipeline_name,
@@ -242,6 +276,19 @@ def plan_pipeline(
     }
 
 
+def _owned_file_ids(db: Session, user: User) -> set[str]:
+    """IDs of files the user may reference in a pipeline.
+
+    Admins may use any file; everyone else is limited to their own uploads.
+    Referencing another user's file behaves exactly like referencing a
+    missing file (404), so no ownership information leaks.
+    """
+    query = db.query(UploadedFile.id)
+    if user.role != "admin":
+        query = query.filter(UploadedFile.user_id == user.id)
+    return {str(row[0]) for row in query.all()}
+
+
 def _check_pipeline_permission(
     db: Session,
     user: User,
@@ -253,7 +300,20 @@ def _check_pipeline_permission(
     if user.role == "admin":
         return
 
-    from backend.models import PipelinePermission
+    from backend.models import PipelineContract, PipelinePermission
+
+    # Owning the contract for a pipeline name is ownership of the pipeline
+    # itself (mirrors _ensure_pipeline_contract_access in contracts.py).
+    own_contract = (
+        db.query(PipelineContract.id)
+        .filter(
+            PipelineContract.pipeline_name == pipeline_name,
+            PipelineContract.user_id == user.id,
+        )
+        .first()
+    )
+    if own_contract:
+        return
 
     permission = (
         db.query(PipelinePermission)
@@ -271,25 +331,47 @@ def _check_pipeline_permission(
             pipeline_name,
             grant_owner,
         )
-        if grant_owner and user.role != "viewer":
-            # First time this pipeline is run/created - grant ownership
-            new_perm = PipelinePermission(
-                pipeline_name=pipeline_name,
-                user_id=user.id,
-                permission_level="owner",
-            )
-            db.add(new_perm)
-            db.commit()
-            logger.info(
-                "Granted owner permission to user %s for pipeline %s",
-                user.id,
-                pipeline_name,
-            )
-            return
+        if grant_owner:
+            # Self-serve creation: the first user of a brand-new pipeline name
+            # becomes its owner. Names already in use by anyone else stay
+            # off-limits — otherwise anyone could co-opt another user's
+            # pipeline, contracts and versions just by reusing its name.
+            from backend.models import PermissionLevel, PipelineContract, PipelinePermission
 
+            name_in_use = (
+                db.query(PipelineRun.id)
+                .filter(PipelineRun.name == pipeline_name)
+                .first()
+                or db.query(PipelineContract.id)
+                .filter(PipelineContract.pipeline_name == pipeline_name)
+                .first()
+                or db.query(PipelinePermission.id)
+                .filter(PipelinePermission.pipeline_name == pipeline_name)
+                .first()
+            )
+            if not name_in_use:
+                # First time this pipeline is run/created - grant ownership
+                # to whoever created it. Global roles do not matter here:
+                # per-pipeline ownership governs pipeline access.
+                new_perm = PipelinePermission(
+                    pipeline_name=pipeline_name,
+                    user_id=user.id,
+                    permission_level=PermissionLevel.OWNER,
+                )
+                db.add(new_perm)
+                db.commit()
+                logger.info(
+                    "Granted owner permission to user %s for pipeline %s",
+                    user.id,
+                    pipeline_name,
+                )
+                return
+
+        # No grant at all: 404 (not 403) so the existence of another
+        # user's pipeline/run cannot be probed via the status code.
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User lacks required permissions ({', '.join(required_levels)}) to perform this action on pipeline '{pipeline_name}'",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pipeline run or pipeline not found, or access denied.",
         )
 
     if permission.permission_level not in required_levels:
@@ -351,7 +433,7 @@ def run_pipeline(
 
     # Verify all referenced file IDs exist in the database and general config
     # is valid
-    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    registered_ids = _owned_file_ids(db, current_user)
     validation_result = _pipeline_parser.validate(config, registered_ids)
 
     if not validation_result.is_valid:
@@ -377,9 +459,9 @@ def run_pipeline(
             for e in validation_result.errors
         ]
         logger.warning(
-            "❌ 400 BAD REQUEST on POST /api/v1/pipelines/run — YAML validation failed"
+            "400 Bad Request on POST /api/v1/pipelines/run - YAML validation failed"
         )
-        logger.warning("❌ VALIDATION ERRORS: %s", error_details)
+        logger.warning("Validation errors: %s", error_details)
 
         # Otherwise, return all validation errors as 400
         raise HTTPException(
@@ -455,7 +537,7 @@ async def run_pipeline_legacy(
     _check_pipeline_permission(
         db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
     )
-    registered_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()}
+    registered_ids = _owned_file_ids(db, current_user)
     validation_result = _pipeline_parser.validate(config, registered_ids)
     if not validation_result.is_valid:
         raise HTTPException(
@@ -494,7 +576,7 @@ def list_pipeline_runs(
     response: Response,
     page: int = 1,
     limit: int = 20,
-    status_filter: Optional[str] = None,
+    status_filter: str | None = None,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> PipelineRunListResponse:
@@ -753,8 +835,43 @@ def get_healing_history(
 def _ensure_utc(dt):
     """Attach UTC tzinfo to naive datetimes from SQLite."""
     if dt is not None and dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
+
+
+def _iter_chunks(file_obj):
+    while True:
+        chunk = file_obj.read(8192)
+        if not chunk:
+            break
+        yield chunk
+
+
+def _download_s3_export_object(s3_key: str):
+    """Download one S3 export object as a streaming response.
+
+    Returns None when the object is missing or unreadable so the caller
+    can try the next candidate key.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from backend.services.storage_service import storage_service
+
+    try:
+        if not storage_service.exists(s3_key):
+            return None
+        file_obj = storage_service.download(s3_key)
+    except Exception as e:
+        logger.warning("Failed to download %s from S3: %s", s3_key, e)
+        return None
+    media_type = "text/csv" if s3_key.endswith(".csv") else "application/json"
+    return StreamingResponse(
+        _iter_chunks(file_obj),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{os.path.basename(s3_key)}"'
+        },
+    )
 
 
 def _run_to_response(pipeline_run: PipelineRun) -> PipelineRunResponse:
@@ -958,7 +1075,10 @@ def preview_pipeline_step(
             detail=f"step_index {step_index} out of range (0..{len(config.steps) - 1})",
         )
 
-    plan = generate_execution_plan(body.yaml_config, db)
+    plan = generate_execution_plan(
+        body.yaml_config, db,
+        user_id=current_user.id, is_admin=current_user.role == "admin",
+    )
 
     step_info = None
     if step_index < len(plan.steps):
@@ -1033,12 +1153,13 @@ def get_run_download_url(
     step_result = save_steps[0]
 
     fresh_url = step_result.download_url
-    try:
-        from backend.execution.steps.save_step import refresh_download_url
-        fresh_url = refresh_download_url(step_result.output_object_name)
-    except Exception as exc:
-        logger.warning(
-            "Could not refresh presigned URL, using stored URL: %s", exc)
+    if step_result.output_object_name:
+        try:
+            from backend.execution.steps.save_step import refresh_download_url
+            fresh_url = refresh_download_url(step_result.output_object_name)
+        except Exception as exc:
+            logger.warning(
+                "Could not refresh presigned URL, using stored URL: %s", exc)
 
     return {
         "run_id": run_id,
@@ -1068,6 +1189,7 @@ def export_pipeline_output(
     When STORAGE_TYPE=s3, returns a presigned S3 URL for direct download.
     """
     from pathlib import Path
+
     from fastapi.responses import FileResponse
 
     _validate_uuid_format(run_id)
@@ -1092,25 +1214,6 @@ def export_pipeline_output(
     # Get all save step results to find stored paths (if available)
     save_results = [
         sr for sr in pipeline_run.step_results if sr.step_type == "save"]
-
-    # Parse YAML to get save step filenames for S3 key construction
-    stored_paths: list[str] = []
-    try:
-        parsed_pipeline = get_parsed_pipeline(pipeline_run.yaml_config)
-        for step in parsed_pipeline.steps:
-            if getattr(step, "step_type", None) == "save":
-                filename = str(getattr(step, "filename", "")).strip()
-                if filename:
-                    filename = os.path.basename(filename)
-                    ext = ".csv"  # Default extension
-                    if filename.endswith(".json"):
-                        ext = ".json"
-                        filename = filename[:-5]
-                    # Construct stored_path pattern used by save step
-                    stored_pattern = f"{filename}_*{ext}"
-                    stored_paths.append(stored_pattern)
-    except Exception:
-        logger.warning("Could not parse YAML for export, run_id=%s", run_id)
 
     # Prefer concrete local artifacts when present, even if S3 storage is enabled.
     output_dir = settings.UPLOAD_DIR
@@ -1183,52 +1286,35 @@ def export_pipeline_output(
         )
 
     if settings.STORAGE_TYPE == "s3":
-        if not stored_paths:
+        s3_keys = [
+            sr.output_object_name for sr in save_results
+            if sr.output_object_name
+        ]
+        if not s3_keys:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Could not determine output file path",
             )
 
         try:
-            from backend.services.storage_service import storage_service
-            from fastapi.responses import StreamingResponse
-
-            for pattern in stored_paths:
-                base_name = pattern.replace("*", "").rstrip("_.")
-                s3_key = f"{settings.UPLOAD_DIR}/{base_name}"
-
-                try:
-                    if storage_service.exists(s3_key):
-                        file_obj = storage_service.download(s3_key)
-                        media_type = (
-                            "text/csv"
-                            if base_name.endswith(".csv")
-                            else "application/json"
-                        )
-                        return StreamingResponse(
-                            iter(lambda: file_obj.read(8192), b""),
-                            media_type=media_type,
-                            headers={
-                                "Content-Disposition": f'attachment; filename="{os.path.basename(s3_key)}"'
-                            },
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "Failed to download %s from S3: %s", s3_key, e)
-                    continue
-
+            candidates = [
+                _download_s3_export_object(s3_key) for s3_key in s3_keys
+            ]
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("S3 export error for run_id=%s", run_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to download file from S3 storage: {e!s}",
+            ) from e
+        found = next((r for r in candidates if r is not None), None)
+        if found is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Output file not found in S3 storage",
             )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error("S3 export error for run_id=%s: %s", run_id, e)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to download file from S3 storage: {str(e)}",
-            )
+        return found
 
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -1298,9 +1384,10 @@ def estimate_run_cost(
 ):
     from backend.cost.estimator import estimate_pipeline_cost
 
+    owned = _owned_file_ids(db, current_user)
     estimate = estimate_pipeline_cost(
         pipeline_yaml=pipeline_yaml,
-        file_ids=file_ids,
+        file_ids=[fid for fid in file_ids if str(fid) in owned],
         db=db,
     )
 

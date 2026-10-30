@@ -4,7 +4,6 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { EditorView } from "@codemirror/view";
-import { yCollab } from "y-codemirror.next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   validatePipeline,
@@ -32,6 +31,7 @@ import { ValidationResult, ExecutionPlan, PipelinePreview } from "@/lib/types";
 import { StepDAG } from "./StepDAG";
 import { ConfigPanel, PipelineCanvas, StepPalette } from "@/components/pipeline-builder";
 import { AIGeneratePipelineModal } from "@/components/widgets/AIPipelineModals";
+import { TemplateForkModal } from "@/components/widgets/TemplateForkModal";
 import { usePipelineEditor } from "@/hooks/usePipelineEditor";
 import { useAuth } from "@/lib/auth-context";
 import { CollaboratorPresence } from "@/components/collaboration/CollaboratorPresence";
@@ -42,6 +42,7 @@ import {
   hasNonEmptyFileId,
   removeFileIdLines,
   upsertFileIdInFirstLoadStep,
+  withPipelineName,
 } from "@/lib/pipeline-yaml";
 import { PreRunCostCard } from "@/components/widgets/PreRunCostCard";
 import {
@@ -51,14 +52,26 @@ import {
 
 interface PipelineEditorWidgetProps {
   initialMode?: "yaml" | "visual";
+  initialPipelineName?: string;
+  initialTemplateId?: string | null;
 }
 
-export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWidgetProps) {
+export function PipelineEditorWidget({ initialMode = "yaml", initialPipelineName, initialTemplateId = null }: PipelineEditorWidgetProps) {
+  const [templateId, setTemplateId] = useState<string | null>(initialTemplateId);
   const queryClient = useQueryClient();
   const { lastYamlConfig, setLastYamlConfig, setActiveRunId, setActiveRun } = usePipelineStore();
   const { activeTheme } = useThemeStore();
   const { user, token } = useAuth();
-  const [code, setCode] = useState(lastYamlConfig || DEFAULT_PIPELINE_YAML);
+  const [code, setCode] = useState(() => {
+    // An explicit ?pipeline= deep link wins over the persisted editor
+    // content: the room, the YAML name, and the canvas must all agree from
+    // the first paint, otherwise the parse effect renames the pipeline back
+    // and rejoins the shared default room.
+    if (initialPipelineName) {
+      return withPipelineName(DEFAULT_PIPELINE_YAML, initialPipelineName);
+    }
+    return lastYamlConfig || DEFAULT_PIPELINE_YAML;
+  });
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [plan, setPlan] = useState<ExecutionPlan | null>(null);
@@ -73,7 +86,36 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
   const [aiGenerateError, setAIGenerateError] = useState<string | null>(null);
   const [aiColumnSuggestions, setAiColumnSuggestions] = useState<Record<string, string>>({});
   const [runError, setRunError] = useState<string | null>(null);
-  const [runCooldownUntil, setRunCooldownUntil] = useState<number>(0);
+  const [isRunCoolingDown, setIsRunCoolingDown] = useState(false);
+  const runCooldownTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const timer = runCooldownTimerRef.current;
+    return () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, []);
+
+  const startRunCooldown = useCallback((ms: number) => {
+    if (runCooldownTimerRef.current !== null) {
+      window.clearTimeout(runCooldownTimerRef.current);
+    }
+    setIsRunCoolingDown(true);
+    runCooldownTimerRef.current = window.setTimeout(() => {
+      runCooldownTimerRef.current = null;
+      setIsRunCoolingDown(false);
+    }, ms);
+  }, []);
+
+  const clearRunCooldown = useCallback(() => {
+    if (runCooldownTimerRef.current !== null) {
+      window.clearTimeout(runCooldownTimerRef.current);
+      runCooldownTimerRef.current = null;
+    }
+    setIsRunCoolingDown(false);
+  }, []);
   const [showCostCard, setShowCostCard] = useState(false);
 
   const formatRunError = useCallback((error: unknown): string => {
@@ -140,8 +182,6 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     collaborators,
     updateCursor,
     updateSelectedNode,
-    yYaml,
-    provider,
   } = usePipelineEditor({
     yamlText: code,
     onYamlTextChange: setCode,
@@ -149,14 +189,19 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     collaborative: true,
     currentUser: user ? { id: user.id, name: user.username, email: user.email } : undefined,
     authToken: token ?? undefined,
+    initialPipelineName,
   });
 
+  // The yjs text binding is deliberately left out here. The editor is
+  // React-controlled via `value={code}`, and binding yCollab(yYaml) at the
+  // same time makes the two sources fight over the document. Keep
+  // collaboration at the graph level (nodes/edges/cursors/presence sync
+  // through yjs; each side re-emits YAML from its own graph).
   const yCollabExtension = useMemo(
     () => {
-      if (!yYaml || !provider) return [];
-      return [yCollab(yYaml, provider.awareness)];
+      return [];
     },
-    [yYaml, provider],
+    [],
   );
 
   const configuringNode = useMemo(
@@ -190,13 +235,16 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
       abortControllerRef.current = controller;
       validateTimerRef.current = setTimeout(() => {
         const now = Date.now();
-        if (now - lastValidateTimestampRef.current < 3000) {
-          return;
-        }
-        lastValidateTimestampRef.current = now;
-        setIsValidating(true);
-        setLastYamlConfig(yaml);
-        validateMutation.mutate(yaml);
+        const wait = Math.max(0, 3000 - (now - lastValidateTimestampRef.current));
+        // Never drop a validation: if the last run was recent, re-arm for
+        // the remaining cooldown instead of silently skipping (which left
+        // stale "0 Errors" on screen until the user clicked Validate).
+        validateTimerRef.current = setTimeout(() => {
+          lastValidateTimestampRef.current = Date.now();
+          setIsValidating(true);
+          setLastYamlConfig(yaml);
+          validateMutation.mutate(yaml);
+        }, wait);
       }, 1500);
     },
     [validateMutation, setLastYamlConfig],
@@ -224,7 +272,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
       runPipeline(args.yamlConfig, args.pipelineName),
     onSuccess: (data, variables) => {
       setRunError(null);
-      setRunCooldownUntil(0);
+      clearRunCooldown();
       const runName =
         variables.pipelineName ||
         extractPipelineName(variables.yamlConfig) ||
@@ -252,12 +300,10 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
       setRunError(formatRunError(error));
       const status = (error as { status?: number })?.status;
       if (typeof status === "number" && status >= 400 && status < 500) {
-        setRunCooldownUntil(Date.now() + 5000);
+        startRunCooldown(5000);
       }
     },
   });
-
-  const isRunCoolingDown = runCooldownUntil > Date.now();
 
   const latestFileId = files?.[0]?.id ?? null;
 
@@ -265,39 +311,30 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     if (!files || files.length > 0) {
       return;
     }
-    setCode((previousCode) => removeFileIdLines(previousCode));
+    void (async () => {
+      setCode((previousCode) => removeFileIdLines(previousCode));
+    })();
   }, [files]);
 
   useEffect(() => {
     if (!latestFileId) {
       return;
     }
-    setCode((previousCode) => {
-      if (hasNonEmptyFileId(previousCode)) {
-        return previousCode;
-      }
-      return upsertFileIdInFirstLoadStep(previousCode, latestFileId);
-    });
+    void (async () => {
+      setCode((previousCode) => {
+        if (hasNonEmptyFileId(previousCode)) {
+          return previousCode;
+        }
+        return upsertFileIdInFirstLoadStep(previousCode, latestFileId);
+      });
+    })();
   }, [latestFileId]);
 
   useEffect(() => {
-    setRunError(null);
+    void (async () => {
+      setRunError(null);
+    })();
   }, [code]);
-
-  useEffect(() => {
-    if (!runCooldownUntil) {
-      return;
-    }
-    const remainingMs = runCooldownUntil - Date.now();
-    if (remainingMs <= 0) {
-      setRunCooldownUntil(0);
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setRunCooldownUntil(0);
-    }, remainingMs);
-    return () => window.clearTimeout(timer);
-  }, [runCooldownUntil]);
 
   const aiSuggestionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -310,13 +347,17 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
 
     const errors = validation?.errors ?? [];
     if (errors.length === 0 || availableColumnsForAutocomplete.length === 0) {
-      setAiColumnSuggestions({});
+      void (async () => {
+        setAiColumnSuggestions({});
+      })();
       return;
     }
 
     const columns = collectMissingColumnCandidates(errors);
     if (columns.length === 0) {
-      setAiColumnSuggestions({});
+      void (async () => {
+        setAiColumnSuggestions({});
+      })();
       return;
     }
 
@@ -511,6 +552,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                     onDeleteNode={handleDeleteNode}
                     onDeleteEdge={handleDeleteEdge}
                     collaborators={collaborators}
+                    hideMinimap={configuringNode !== null}
                     onMouseMove={(e) => {
                       if (updateCursor) {
                         const target = e.currentTarget as HTMLElement;
@@ -538,6 +580,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                   onSave={handleConfigSave}
                   onDelete={handleDeleteNode}
                   onClose={handleConfigClose}
+                  overlay
                 />
               )}
               {builderToastMessage && (
@@ -946,6 +989,18 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
         }}
         onGenerate={handleAIGenerate}
       />
+      {templateId && (
+        <TemplateForkModal
+          templateId={templateId}
+          availableFiles={availableFiles}
+          onApply={(yaml, name) => {
+            setCode(yaml);
+            setPipelineName(name);
+            setTemplateId(null);
+          }}
+          onClose={() => setTemplateId(null)}
+        />
+      )}
     </div>
   );
 }

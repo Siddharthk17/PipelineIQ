@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Optional, cast
+from datetime import UTC, datetime
+from typing import cast
 
 import pyarrow as pa
 from opentelemetry import trace
@@ -47,11 +47,29 @@ class SmartExecutor:
 
     def __init__(
         self,
-        pandas_executor: Optional[StepExecutor] = None,
-        duckdb_executor: Optional[DuckDBExecutor] = None,
+        pandas_executor: StepExecutor | None = None,
+        duckdb_executor: DuckDBExecutor | None = None,
     ) -> None:
         self.pandas_executor = pandas_executor or StepExecutor()
         self.duckdb_executor = duckdb_executor or DuckDBExecutor()
+        self._current_run_id: str | None = None
+
+    @property
+    def _current_run_id(self) -> str | None:
+        """Current pipeline run id, forwarded to the inner executors.
+
+        Steps execute on the composed pandas/duckdb executors, not on this
+        wrapper, so assigning here propagates the id everywhere it is read
+        (previously the inner executors never saw it and every save step
+        minted a random artifact id instead).
+        """
+        return self.__current_run_id
+
+    @_current_run_id.setter
+    def _current_run_id(self, value: str | None) -> None:
+        self.__current_run_id = value
+        self.pandas_executor._current_run_id = value
+        self.duckdb_executor._current_run_id = value
 
     @staticmethod
     def _step_type(step: StepConfig) -> str:
@@ -81,7 +99,7 @@ class SmartExecutor:
         started_at: datetime | None = None,
         completed_at: datetime | None = None,
     ) -> StepExecutionResult:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return StepExecutionResult(
             step_name=step.name,
             step_type=SmartExecutor._step_type_label(step),
@@ -106,7 +124,7 @@ class SmartExecutor:
         started_at: datetime | None = None,
     ) -> StepExecutionResult:
         """Attach OTel trace/span IDs, engine, and timestamps to an existing StepExecutionResult."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         result.engine = engine
         result.trace_id = span_ctx.get("trace_id")
         result.span_id = span_ctx.get("span_id")
@@ -120,11 +138,11 @@ class SmartExecutor:
         table_registry: dict[str, pa.Table],
         recorder: LineageRecorder,
         *,
-        file_paths: Optional[dict[str, str]] = None,
-        file_metadata: Optional[dict[str, dict[str, str]]] = None,
-        extra_tables: Optional[dict[str, pa.Table]] = None,
-        wasm_modules: Optional[dict[str, bytes]] = None,
-        user_role: Optional[str] = None,
+        file_paths: dict[str, str] | None = None,
+        file_metadata: dict[str, dict[str, str]] | None = None,
+        extra_tables: dict[str, pa.Table] | None = None,
+        wasm_modules: dict[str, bytes] | None = None,
+        user_role: str | None = None,
     ) -> StepExecutionResult:
         """Execute a step using Pandas or DuckDB based on compatibility and size."""
         step_type = self._step_type(step)
@@ -151,7 +169,7 @@ class SmartExecutor:
             },
         ) as _step_span:
             span_ctx = current_span_context()
-            step_started = datetime.now(timezone.utc)
+            step_started = datetime.now(UTC)
             try:
                 if step_type == "load":
                     result = self.pandas_executor.execute_load(
@@ -289,7 +307,6 @@ class SmartExecutor:
                 )
                 _step_span.set_attribute("pipelineiq.rows.out", result.rows_out)
                 _step_span.set_status(trace.StatusCode.OK)
-                return result
 
             except Exception as e:
                 _step_span.record_exception(e)
@@ -298,3 +315,6 @@ class SmartExecutor:
                     description=str(e)[:500]
                 )
                 raise
+
+            else:
+                return result

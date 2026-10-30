@@ -11,6 +11,7 @@ interface ConfigPanelProps {
   onSave: (nodeId: string, config: Record<string, unknown>) => void;
   onDelete: (nodeId: string) => void;
   onClose: () => void;
+  overlay?: boolean;
 }
 
 function asString(value: unknown): string {
@@ -268,6 +269,7 @@ export function ConfigPanel({
   onSave,
   onDelete,
   onClose,
+  overlay = false,
 }: ConfigPanelProps) {
   const [draft, setDraft] = useState<Record<string, unknown>>(() => node?.data.config ?? {});
   const [mappingText, setMappingText] = useState(() => {
@@ -337,7 +339,11 @@ export function ConfigPanel({
 
   return (
     <aside
-      className="flex h-full w-72 shrink-0 flex-col border-l bg-[var(--bg-surface)] p-3 text-[var(--text-primary)]"
+      className={
+        overlay
+          ? "absolute bottom-3 right-3 top-3 z-20 flex w-72 flex-col overflow-y-auto rounded-md border bg-[var(--bg-surface)] p-3 text-[var(--text-primary)] shadow-xl"
+          : "flex h-full w-72 shrink-0 flex-col border-l bg-[var(--bg-surface)] p-3 text-[var(--text-primary)]"
+      }
       style={{ borderColor: "var(--widget-border)" }}
       data-testid="config-panel"
     >

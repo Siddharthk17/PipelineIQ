@@ -7,12 +7,12 @@ Revision ID: f9a1b2c3d4e5
 Revises: f8e0c4e0b13d
 Create Date: 2026-05-22
 """
+import contextlib
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import inspect
-
 
 revision: str = "f9a1b2c3d4e5"
 down_revision: Union[str, None] = "f8e0c4e0b13d"
@@ -45,10 +45,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     if _has_column("pipeline_runs", "schedule_id"):
-        try:
+        with contextlib.suppress(Exception):
             op.drop_constraint("fk_pipeline_runs_schedule_id", "pipeline_runs", type_="foreignkey")
-        except Exception:
-            pass
         op.drop_column("pipeline_runs", "schedule_id")
     if _has_column("pipeline_runs", "trigger"):
         op.drop_column("pipeline_runs", "trigger")

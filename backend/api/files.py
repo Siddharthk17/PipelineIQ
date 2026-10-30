@@ -10,11 +10,10 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Optional, BinaryIO
+from typing import BinaryIO, cast
 
 import orjson
 import pandas as pd
-from kombu.exceptions import OperationalError as KombuOperationalError
 from fastapi import (
     APIRouter,
     Body,
@@ -27,6 +26,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
@@ -36,11 +36,6 @@ from backend.db.redis_pools import get_cache_redis
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import SchemaSnapshot, UploadedFile, User
 from backend.pipeline.schema_drift import detect_schema_drift
-from backend.utils.uuid_utils import (
-    validate_uuid_format as _validate_uuid_format,
-    as_uuid as _as_uuid,
-)
-
 from backend.schemas import (
     ColumnDriftResponse,
     FileListResponse,
@@ -49,9 +44,15 @@ from backend.schemas import (
     UploadUrlRequest,
     UploadUrlResponse,
 )
-from backend.utils.rate_limiter import limiter
 from backend.services.audit_service import log_action
 from backend.services.storage_service import storage_service
+from backend.utils.rate_limiter import limiter
+from backend.utils.uuid_utils import (
+    as_uuid as _as_uuid,
+)
+from backend.utils.uuid_utils import (
+    validate_uuid_format as _validate_uuid_format,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +82,9 @@ def _cache_pending_upload(file_id: str, payload: dict) -> None:
             file_id)
 
 
-def _get_pending_upload(file_id: str) -> Optional[dict]:
+def _get_pending_upload(file_id: str) -> dict | None:
     try:
-        raw = get_cache_redis().get(_pending_upload_key(file_id))
+        raw = cast('str | None', get_cache_redis().get(_pending_upload_key(file_id)))
     except RedisError:
         logger.warning(
             "Failed to read pending upload state for file_id=%s",
@@ -120,7 +121,7 @@ def _validated_pending_stored_path(file_id: str, pending: dict) -> str:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Pending upload storage path is invalid",
         )
-    return str(settings.UPLOAD_DIR / expected_name)
+    return expected_name
 
 
 @router.post(
@@ -133,9 +134,9 @@ def _validated_pending_stored_path(file_id: str, pending: dict) -> str:
 async def request_upload_url(
     request: Request,
     response: Response,
-    body: Optional[UploadUrlRequest] = Body(default=None),
-    filename: Optional[str] = Query(default=None),
-    file_size: Optional[int] = Query(default=None, ge=1),
+    body: UploadUrlRequest | None = Body(default=None),
+    filename: str | None = Query(default=None),
+    file_size: int | None = Query(default=None, ge=1),
     current_user: User = Depends(get_current_user),
 ) -> UploadUrlResponse:
     """Negotiate file upload method based on file size."""
@@ -158,7 +159,7 @@ async def request_upload_url(
 
     file_id = str(uuid.uuid4())
     extension = Path(filename).suffix.lower()
-    stored_path = settings.UPLOAD_DIR / f"{file_id}{extension}"
+    stored_path = f"{file_id}{extension}"
 
     request_path = request.url.path
     is_legacy_api = request_path.startswith("/api/files/")
@@ -237,7 +238,7 @@ async def direct_upload_file(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
-        )
+        ) from exc
     if written != expected_size:
         storage_service.delete(str(stored_path))
         raise HTTPException(
@@ -324,24 +325,24 @@ async def upload_file(
     try:
         storage_service.upload(file.file, stored_path)
         written = storage_service.get_size(stored_path)
-        if written == 0:
-            storage_service.delete(stored_path)
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Uploaded file is empty",
-            )
-        if written > settings.MAX_UPLOAD_SIZE:
-            storage_service.delete(stored_path)
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
-            )
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to upload file: {exc}",
+        ) from exc
+    if written == 0:
+        storage_service.delete(stored_path)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+    if written > settings.MAX_UPLOAD_SIZE:
+        storage_service.delete(stored_path)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
         )
 
     return _finalize_uploaded_file(
@@ -511,8 +512,8 @@ def preview_file(
 
     try:
         from backend.security.column_security import (
-            get_column_policies_for_file,
             apply_column_policies,
+            get_column_policies_for_file,
         )
 
         policies = get_column_policies_for_file(
@@ -526,7 +527,7 @@ def preview_file(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Column security policies could not be applied",
-        )
+        ) from exc
 
     return {
         "file_id": file_id,
@@ -536,6 +537,30 @@ def preview_file(
         "columns": list(df.columns),
         "data": df.to_dict(orient="records"),
     }
+
+
+def _decode_csv_bytes(raw: bytes) -> tuple[str, str]:
+    """Decode CSV bytes, trying BOM-aware and legacy encodings in order.
+
+    Tries UTF-8 (with optional BOM), UTF-16 (with BOM, or with NUL bytes
+    present), then Windows-1252. Returns (text, encoding name). Raises
+    UnicodeDecodeError when nothing fits, e.g. for binary garbage.
+    """
+    import codecs
+
+    if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return raw.decode("utf-16"), "utf-16"
+    if b"\x00" in raw:
+        try:
+            return raw.decode("utf-16"), "utf-16"
+        except (UnicodeDecodeError, ValueError):
+            pass
+    for encoding in ("utf-8-sig", "windows-1252"):
+        try:
+            return raw.decode(encoding), encoding
+        except (UnicodeDecodeError, ValueError):
+            continue
+    raise UnicodeDecodeError("csv", raw, 0, 1, "no suitable text encoding")
 
 
 def _validate_file_extension(filename: str) -> None:
@@ -555,34 +580,15 @@ def _validate_file_content(filename: str, stored_path: str) -> None:
     """Perform lightweight content checks before metadata extraction."""
     extension = Path(filename).suffix.lower()
     try:
-        if extension == ".csv":
-            with storage_service.download(stored_path) as handle:
-                sample = handle.read(4096)
-            text = sample.decode("utf-8-sig")
-            if not next(csv.reader(text.splitlines()), None):
-                raise ValueError("CSV file has no header row")
-        elif extension == ".json":
-            with storage_service.download(stored_path) as handle:
-                sample = handle.read(1_048_576)
-            stripped = sample.lstrip()
-            if not stripped.startswith((b"{", b"[")):
-                raise ValueError("JSON file does not start with an object or array")
-            if stripped.startswith(b"{"):
-                first_line = next(
-                    (line.strip() for line in sample.splitlines() if line.strip()),
-                    b"",
-                )
-                orjson.loads(first_line)
-            else:
-                orjson.loads(sample)
-        elif extension == ".parquet":
-            with storage_service.download(stored_path) as handle:
-                if handle.read(4) != b"PAR1":
-                    raise ValueError("Parquet magic header is missing")
-        elif extension == ".xlsx":
-            with storage_service.download(stored_path) as handle:
-                if handle.read(4) != b"PK\x03\x04":
-                    raise ValueError("XLSX ZIP header is missing")
+        with storage_service.download(stored_path) as handle:
+            sample = handle.read(1_048_576 if extension in (".csv", ".json") else 4)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Could not read file '{filename}'",
+        ) from exc
+    try:
+        _check_sample_content(extension, sample)
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -595,10 +601,42 @@ def _validate_file_content(filename: str, stored_path: str) -> None:
         ) from exc
 
 
+def _check_sample_content(extension: str, sample: bytes) -> None:
+    """Raise ValueError when a file sample fails its lightweight checks."""
+    if extension == ".csv":
+        try:
+            text, _ = _decode_csv_bytes(sample)
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                "CSV file is not decodable text "
+                "(tried UTF-8, UTF-16 and Windows-1252)"
+            ) from exc
+        if not next(csv.reader(text.splitlines()), None):
+            raise ValueError("CSV file has no header row")
+    elif extension == ".json":
+        stripped = sample.lstrip()
+        if not stripped.startswith((b"{", b"[")):
+            raise ValueError("JSON file does not start with an object or array")
+        if stripped.startswith(b"{"):
+            first_line = next(
+                (line.strip() for line in sample.splitlines() if line.strip()),
+                b"",
+            )
+            orjson.loads(first_line)
+        else:
+            orjson.loads(sample)
+    elif extension == ".parquet":
+        if sample != b"PAR1":
+            raise ValueError("Parquet magic header is missing")
+    elif extension == ".xlsx":
+        if sample != b"PK\x03\x04":
+            raise ValueError("XLSX ZIP header is missing")
+
+
 def _resolve_upload_request_payload(
-    body: Optional[UploadUrlRequest],
-    filename: Optional[str],
-    file_size: Optional[int],
+    body: UploadUrlRequest | None,
+    filename: str | None,
+    file_size: int | None,
 ) -> UploadUrlRequest:
     """Support both JSON body and query-parameter upload negotiation contracts."""
     if body is not None:
@@ -633,37 +671,25 @@ def _extract_file_metadata(
 def _extract_csv_metadata(
         stored_path: str) -> tuple[int, list[str], dict[str, str]]:
     """Read CSV metadata with bounded memory usage."""
+    import io
+
     try:
         with storage_service.download(stored_path) as handle:
-            # Convert binary stream to text wrapper for csv reader
-            import io
-
-            text_handle = io.TextIOWrapper(
-                handle, encoding="utf-8", newline="")
-            reader = csv.reader(text_handle)
-            header = next(reader, None)
-            if header is None:
-                return 0, [], {}
-            row_count = sum(1 for _ in reader)
-            columns = [str(column) for column in header]
-    except UnicodeDecodeError:
-        try:
-            with storage_service.download(stored_path) as handle:
-                import io
-
-                text_handle = io.TextIOWrapper(
-                    handle, encoding="utf-8-sig", newline="")
-                reader = csv.reader(text_handle)
-                header = next(reader, None)
-                if header is None:
-                    return 0, [], {}
-                row_count = sum(1 for _ in reader)
-                columns = [str(column) for column in header]
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Failed to parse file '{stored_path}': {exc}",
-            ) from exc
+            raw = handle.read()
+        text, encoding = _decode_csv_bytes(raw)
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{stored_path}': not decodable text "
+            "(tried UTF-8, UTF-16 and Windows-1252)",
+        ) from exc
+    try:
+        reader = csv.reader(io.StringIO(text, newline=""))
+        header = next(reader, None)
+        if header is None:
+            return 0, [], {}
+        row_count = sum(1 for _ in reader)
+        columns = [str(column) for column in header]
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -674,8 +700,8 @@ def _extract_csv_metadata(
         return row_count, columns, {}
 
     sample_rows = max(1, min(1000, row_count))
-    with storage_service.download(stored_path) as handle:
-        sample_df = pd.read_csv(handle, nrows=sample_rows)
+    sample_df = pd.read_csv(
+        io.BytesIO(raw), nrows=sample_rows, encoding=encoding)
     dtypes = {column: str(dtype) for column, dtype in sample_df.dtypes.items()}
     return row_count, columns, dtypes
 
@@ -768,7 +794,7 @@ def _build_schema_drift_response(
     original_filename: str,
     columns: list[str],
     dtypes: dict,
-) -> Optional[SchemaDriftResponse]:
+) -> SchemaDriftResponse | None:
     drift_report = None
     previous_snapshot = (
         db.query(SchemaSnapshot)
@@ -932,6 +958,13 @@ def _finalize_uploaded_file(
     )
 
 
+def _unsupported_preview_extension(extension: str) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Cannot parse file with extension '{extension}'",
+    )
+
+
 def _parse_file_preview(
         filename: str,
         handle: BinaryIO,
@@ -940,7 +973,11 @@ def _parse_file_preview(
     extension = Path(filename).suffix.lower()
     try:
         if extension == ".csv":
-            return pd.read_csv(handle, nrows=nrows)
+            import io
+
+            raw = handle.read()
+            text, _ = _decode_csv_bytes(raw)
+            return pd.read_csv(io.StringIO(text), nrows=nrows)
         elif extension == ".json":
             df = pd.read_json(handle)
             return df.head(nrows)
@@ -950,10 +987,7 @@ def _parse_file_preview(
         elif extension == ".xlsx":
             return pd.read_excel(handle, nrows=nrows)
         else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot parse file with extension '{extension}'",
-            )
+            _unsupported_preview_extension(extension)
     except HTTPException:
         raise
     except Exception as exc:
@@ -1086,8 +1120,9 @@ def get_file_profile(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Get the data profile for an uploaded file."""
-    from backend.models import FileProfile
     from sqlalchemy import select
+
+    from backend.models import FileProfile
 
     _validate_uuid_format(file_id)
     file_record = (
@@ -1139,8 +1174,9 @@ def refresh_file_profile(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Manually trigger re-profiling of a file."""
-    from backend.models import FileProfile
     from sqlalchemy import update
+
+    from backend.models import FileProfile
 
     _validate_uuid_format(file_id)
     file_record = (

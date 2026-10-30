@@ -215,7 +215,7 @@ class TestWasmMultipleExports:
 
             result = executor.execute(table, MockStep(), multi_export_wasm)
             values = result.column("result").to_pylist()
-            for got, exp in zip(values, expected):
+            for got, exp in zip(values, expected, strict=False):
                 assert got == pytest.approx(exp), f"{fn_name}: expected {exp}, got {got}"
 
     def test_validation_lists_all_exports(self, multi_export_wasm):

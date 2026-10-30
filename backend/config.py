@@ -8,12 +8,10 @@ setting is missing or invalid, preventing runtime configuration errors.
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 import structlog
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 VALID_LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 WEAK_SECRET_VALUES = frozenset(
@@ -57,7 +55,6 @@ class Settings(BaseSettings):
     )
     DATABASE_WRITE_URL: str = ""
     DATABASE_READ_URL: str = ""
-    READ_REPLICA_HOST: str = "localhost"
     SECRET_KEY: str = ""
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
@@ -79,21 +76,23 @@ class Settings(BaseSettings):
 
     MAX_PIPELINE_STEPS: int = 50
     MAX_ROWS_PER_FILE: int = 1_000_000
-    STEP_TIMEOUT_SECONDS: int = 300
     WORKER_MEMORY_LIMIT_GB: int = 2
     WORKER_MAX_ROWS_TO_SCAN: int = 10_000_000
 
     API_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: List[str] = [
-        "http://localhost",
+    CORS_ORIGINS: list[str] = [        "http://localhost",
         "http://localhost:80",
         "http://localhost:3000",
         "https://pipeline-iq0.vercel.app",
         "https://pipelineiq-api.onrender.com",
     ]
+    TRUSTED_HOSTS: str = (
+        "localhost,127.0.0.1,testserver,api,frontend,nginx,"
+        "host.docker.internal,pipelineiq-api.onrender.com,"
+        "pipeline-iq0.vercel.app"
+    )
 
     # Caching
-    CACHE_TTL_STATS: int = 30
 
     # Rate Limiting
     RATE_LIMIT_PIPELINE_RUN: str = "10/minute"
@@ -102,7 +101,6 @@ class Settings(BaseSettings):
     RATE_LIMIT_READ: str = "120/minute"
 
     # Schema Drift
-    DRIFT_DETECTION_ENABLED: bool = True
 
     # Data Profiling
     PROFILE_MAX_ROWS: int = 1_000_000
@@ -113,7 +111,6 @@ class Settings(BaseSettings):
     AUTONOMOUS_HEALING_MAX_ATTEMPTS: int = 3
 
     # Versioning
-    MAX_VERSIONS_PER_PIPELINE: int = 50
 
     # Flower (Celery monitoring)
     FLOWER_USER: str = "admin"
@@ -128,7 +125,13 @@ class Settings(BaseSettings):
     S3_ACCESS_KEY: str = ""
     S3_SECRET_KEY: str = ""
     S3_BUCKET: str = "pipelineiq-outputs"  # Dedicated bucket for pipeline outputs
-    S3_ENDPOINT_URL: Optional[str] = None  # Required for MinIO
+    S3_ENDPOINT_URL: str | None = None  # Required for MinIO
+    # Publicly reachable base URL used when signing presigned URLs for
+    # browsers. Falls back to S3_ENDPOINT_URL when unset (correct when the
+    # endpoint is already public, e.g. real S3). Local dev needs the host
+    # address, e.g. http://127.0.0.1:9000, since browsers cannot resolve
+    # the internal docker hostname (minio:9000).
+    S3_PUBLIC_ENDPOINT_URL: str | None = None
     WASM_BUCKET: str = "pipelineiq-wasm"
 
     # Sentry
@@ -162,6 +165,7 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = ""
     POSTGRES_USER: str = "pipelineiq"
     POSTGRES_DB: str = "pipelineiq"
+    DB_CONNECT_TIMEOUT_SECONDS: int = 5
 
     @field_validator("LOG_LEVEL")
     @classmethod
@@ -264,16 +268,10 @@ def _configure_logging() -> None:
 
     if settings.ENVIRONMENT == "production":
         # JSON output for production — parseable by Grafana Loki, Datadog, etc.
-        processors = shared_processors + [
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.JSONRenderer(),
-        ]
+        processors: list = [*shared_processors, structlog.processors.StackInfoRenderer(), structlog.processors.format_exc_info, structlog.processors.JSONRenderer()]
     else:
         # Human-readable console output for development
-        processors = shared_processors + [
-            structlog.dev.ConsoleRenderer(colors=True),
-        ]
+        processors = [*shared_processors, structlog.dev.ConsoleRenderer(colors=True)]
 
     structlog.configure(
         processors=processors,

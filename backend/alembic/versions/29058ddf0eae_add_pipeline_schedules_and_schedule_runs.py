@@ -3,9 +3,9 @@
 Revision ID: 29058ddf0eae
 Revises: c5d6e7f8a9b0
 """
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, TIMESTAMP
+from alembic import op
+from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
 
 # revision identifiers, used by Alembic.
 revision = '29058ddf0eae'

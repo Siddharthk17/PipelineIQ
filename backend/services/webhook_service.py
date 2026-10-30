@@ -7,7 +7,7 @@ httpx.AsyncClient. The webhook_deliveries table records every attempt.
 import hashlib
 import hmac
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -64,15 +64,15 @@ def deliver_webhook_sync(
         delivery.response_status = resp.status_code
         delivery.response_body = resp.text[:1000] if resp.text else None
         if 200 <= resp.status_code < 300:
-            delivery.delivered_at = datetime.now(timezone.utc)
+            delivery.delivered_at = datetime.now(UTC)
         else:
-            delivery.failed_at = datetime.now(timezone.utc)
+            delivery.failed_at = datetime.now(UTC)
             delivery.error_message = f"HTTP {resp.status_code}"
     except UnsafeURL:
-        delivery.failed_at = datetime.now(timezone.utc)
+        delivery.failed_at = datetime.now(UTC)
         delivery.error_message = "Webhook URL is not allowed"
     except Exception as e:
-        delivery.failed_at = datetime.now(timezone.utc)
+        delivery.failed_at = datetime.now(UTC)
         delivery.error_message = str(e)[:500]
 
     db.add(delivery)
@@ -107,7 +107,7 @@ def trigger_webhooks_for_run(
 
         payload = {
             "event": event_type,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "data": {
                 "run_id": str(run_id),
                 "pipeline_name": pipeline_name,
@@ -118,16 +118,16 @@ def trigger_webhooks_for_run(
             },
         }
         fire_webhooks_for_event(event_type, payload, user_id)
-
+    except Exception:
+        logger.exception("Webhook trigger failed")
+        return {"status": "failed", "matched_webhooks": 0, "delivered": 0, "failed": 0}
+    else:
         return {
             "status": "enqueued",
             "matched_webhooks": -1,
             "delivered": 0,
             "failed": 0,
         }
-    except Exception as e:
-        logger.error("Webhook trigger failed: %s", e)
-        return {"status": "failed", "matched_webhooks": 0, "delivered": 0, "failed": 0}
 
 
 def deliver_webhook(

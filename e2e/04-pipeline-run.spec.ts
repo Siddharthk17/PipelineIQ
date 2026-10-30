@@ -1,17 +1,20 @@
 import { expect, test } from "@playwright/test";
 
+test.use({ storageState: "e2e/.auth/demo.json" });
+
 const baseUrl = process.env.E2E_BASE_URL;
 const apiUrl = process.env.E2E_API_URL ?? baseUrl;
 const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
 const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
-async function login(page: import("@playwright/test").Page): Promise<void> {
+async function login(page: import("@playwright/test").Page) {
   test.skip(!baseUrl, "Set E2E_BASE_URL to run Playwright tests.");
-  await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
-  await page.getByTestId("email-input").fill(email);
-  await page.getByTestId("password-input").fill(password);
-  await page.getByTestId("login-btn").click();
-  await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 15_000 });
+  // Session comes from global-setup storageState (one demo login for the
+  // whole suite, sparing the 5/min auth limiter); just verify it works.
+  await page.goto(`${baseUrl}/files`, { waitUntil: "domcontentloaded" });
+  // The app may bounce through /login while the session restores; wait for
+  // it to settle on an authenticated page.
+  await page.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 15_000 });
 }
 
 function buildPipelineYAML(fileId: string, pipelineName: string): string {
@@ -44,12 +47,12 @@ test.describe("Pipeline Run Lifecycle", () => {
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "run_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
     });
-    const { file_id: fileId } = await uploadResp.json();
+    const { id: fileId } = await uploadResp.json();
 
     const pipelineName = `e2e_run_${Date.now()}`;
     const yaml = buildPipelineYAML(fileId, pipelineName);
 
-    const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
+    const runResp = await page.request.post(`${apiUrl}/api/v1/pipelines/run`, {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
       headers: { "Content-Type": "application/json" },
     });
@@ -59,7 +62,7 @@ test.describe("Pipeline Run Lifecycle", () => {
 
     const start = Date.now();
     while (Date.now() - start < 120_000) {
-      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`);
+      const statusResp = await page.request.get(`${apiUrl}/api/v1/pipelines/${runId}`);
       const { status } = await statusResp.json();
       if (status === "COMPLETED" || status === "HEALED") return;
       if (status === "FAILED" || status === "TIMEOUT") {
@@ -73,24 +76,25 @@ test.describe("Pipeline Run Lifecycle", () => {
   test("Run detail page shows status and Gantt chart", async ({ page }) => {
     await login(page);
 
-    const csvContent = "id,amount\n1,100\n2,200";
+    const csvContent = "id,amount,status\n1,100,completed\n2,200,completed";
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "gantt_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
     });
-    const { file_id: fileId } = await uploadResp.json();
+    const { id: fileId } = await uploadResp.json();
 
     const pipelineName = `e2e_gantt_${Date.now()}`;
     const yaml = buildPipelineYAML(fileId, pipelineName);
 
-    const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
+    const runResp = await page.request.post(`${apiUrl}/api/v1/pipelines/run`, {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
       headers: { "Content-Type": "application/json" },
     });
+    expect(runResp.ok(), await runResp.text()).toBeTruthy();
     const { run_id: runId } = await runResp.json();
 
     const start = Date.now();
     while (Date.now() - start < 120_000) {
-      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`);
+      const statusResp = await page.request.get(`${apiUrl}/api/v1/pipelines/${runId}`);
       const statusData = await statusResp.json();
       if (statusData.status === "COMPLETED" || statusData.status === "HEALED") break;
       if (statusData.status === "FAILED" || statusData.status === "TIMEOUT") {
@@ -108,19 +112,20 @@ test.describe("Pipeline Run Lifecycle", () => {
   test("Run detail page shows SSE step-by-step progress events", async ({ page }) => {
     await login(page);
 
-    const csvContent = "id,amount\n1,100\n2,200";
+    const csvContent = "id,amount,status\n1,100,completed\n2,200,completed";
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "sse_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
     });
-    const { file_id: fileId } = await uploadResp.json();
+    const { id: fileId } = await uploadResp.json();
 
     const pipelineName = `e2e_sse_${Date.now()}`;
     const yaml = buildPipelineYAML(fileId, pipelineName);
 
-    const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
+    const runResp = await page.request.post(`${apiUrl}/api/v1/pipelines/run`, {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
       headers: { "Content-Type": "application/json" },
     });
+    expect(runResp.ok(), await runResp.text()).toBeTruthy();
     const { run_id: runId } = await runResp.json();
     expect(runId).toBeTruthy();
 
@@ -152,24 +157,25 @@ test.describe("Pipeline Run Lifecycle", () => {
   test("Completed run shows download button", async ({ page }) => {
     await login(page);
 
-    const csvContent = "id,amount\n1,100\n2,200";
+    const csvContent = "id,amount,status\n1,100,completed\n2,200,completed";
     const uploadResp = await page.request.post(`${apiUrl}/api/files/upload`, {
       multipart: { file: { name: "dl_test.csv", mimeType: "text/csv", buffer: Buffer.from(csvContent) } },
     });
-    const { file_id: fileId } = await uploadResp.json();
+    const { id: fileId } = await uploadResp.json();
 
     const pipelineName = `e2e_dl_${Date.now()}`;
     const yaml = buildPipelineYAML(fileId, pipelineName);
 
-    const runResp = await page.request.post(`${apiUrl}/api/pipelines/run`, {
+    const runResp = await page.request.post(`${apiUrl}/api/v1/pipelines/run`, {
       data: { yaml_config: yaml, pipeline_name: pipelineName },
       headers: { "Content-Type": "application/json" },
     });
+    expect(runResp.ok(), await runResp.text()).toBeTruthy();
     const { run_id: runId } = await runResp.json();
 
     const start = Date.now();
     while (Date.now() - start < 120_000) {
-      const statusResp = await page.request.get(`${apiUrl}/api/pipelines/${runId}`);
+      const statusResp = await page.request.get(`${apiUrl}/api/v1/pipelines/${runId}`);
       const statusData = await statusResp.json();
       if (statusData.status === "COMPLETED" || statusData.status === "HEALED") break;
       if (statusData.status === "FAILED" || statusData.status === "TIMEOUT") {

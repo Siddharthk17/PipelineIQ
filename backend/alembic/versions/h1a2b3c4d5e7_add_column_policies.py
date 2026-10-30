@@ -5,10 +5,9 @@ Revises: h1a2b3c4d5e6
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, TIMESTAMP, ARRAY
-
+from alembic import op
+from sqlalchemy.dialects.postgresql import ARRAY, TIMESTAMP, UUID
 
 revision: str = "h1a2b3c4d5e7"
 down_revision: Union[str, None] = "h1a2b3c4d5e6"

@@ -3,9 +3,9 @@
 12 tests covering version creation, diffs, and API endpoints.
 """
 
-from backend.pipeline.versioning import diff_pipelines, save_version
 from sqlalchemy.exc import IntegrityError
 
+from backend.pipeline.versioning import diff_pipelines, save_version
 
 YAML_V1 = """pipeline:
   name: test_pipeline

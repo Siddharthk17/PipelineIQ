@@ -7,17 +7,14 @@ no pipeline execution, just Arrow tables against YAML contract definitions.
 from __future__ import annotations
 
 import pyarrow as pa
-import pytest
 
 from backend.contracts.validator import (
-    ContractViolation,
     ContractValidationResult,
-    TYPE_CATEGORY_MAP,
+    ContractViolation,
     _arrow_type_category,
     _parse_contract,
     validate_against_contract,
 )
-
 
 _SAMPLE_CONTRACT = """
 columns:

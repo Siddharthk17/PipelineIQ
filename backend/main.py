@@ -5,38 +5,37 @@ middleware, route mounting, and health checks. This is the single
 entry point for the application.
 """
 
-from backend.routers.ai import router as ai_router
-from backend.routers.wasm import router as wasm_router
-from backend.routers.streaming import router as streaming_router
 import logging
 import os
 import re
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
 
+import orjson
 import sentry_sdk
 import structlog
-import orjson
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.openapi.docs import get_redoc_html
 from fastapi.responses import HTMLResponse, JSONResponse, ORJSONResponse, Response
 from prometheus_fastapi_instrumentator import Instrumentator
+from redis.exceptions import RedisError
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
-from slowapi import _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler as _slowapi_rate_limit_handler
 from slowapi.errors import RateLimitExceeded
 
-from backend.api.router import api_router, legacy_api_router
-from backend.api.auth import router as auth_router
-from backend.api.webhooks import router as webhooks_router
 from backend.api.audit import router as audit_router
+from backend.api.auth import router as auth_router
+from backend.api.router import api_router, legacy_api_router
+from backend.api.webhooks import router as webhooks_router
 from backend.config import settings
-from backend.database import create_all_tables, write_engine, read_engine
+from backend.database import create_all_tables, read_engine, write_engine
 from backend.db.redis_pools import (
     get_broker_redis,
     get_cache_redis,
@@ -44,10 +43,12 @@ from backend.db.redis_pools import (
     get_yjs_redis,
 )
 from backend.pipeline.exceptions import PipelineIQError
+from backend.routers.ai import router as ai_router
+from backend.routers.streaming import router as streaming_router
+from backend.routers.wasm import router as wasm_router
 from backend.services.storage_service import S3StorageProvider, storage_service
+from backend.telemetry import instrument_all
 from backend.utils.rate_limiter import limiter
-
-from backend.telemetry import instrument_all, instrument_fastapi, setup_telemetry, force_flush
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ logger = logging.getLogger(__name__)
 # Import the shared `ClientDisconnected` from the exceptions module to
 # avoid a circular import between `main.py` and the routers that
 # raise it. (Routers are imported at module load time below.)
-from backend.pipeline.exceptions import ClientDisconnected  # noqa: E402
+from backend.pipeline.exceptions import ClientDisconnected
 
 
 # Silence health check and metrics access log noise
@@ -136,11 +137,10 @@ def _validate_upload_dir() -> None:
         test_file.touch()
         test_file.unlink()
         logger.info("Upload directory validated: %s", upload_dir)
-    except OSError as exc:
-        logger.error(
-            "Upload directory '%s' is not writable: %s",
-            upload_dir,
-            exc)
+    except OSError:
+        logger.exception(
+            "Upload directory '%s' is not writable",
+            upload_dir)
         raise
 
 
@@ -163,6 +163,7 @@ def _run_startup_initialization_once() -> None:
 
         _validate_upload_dir()
         _init_storage_bucket()
+        _ensure_minio_buckets()
         _apply_minio_lifecycle_policies()
         _STARTUP_MARKER_PATH.write_text("initialized\n", encoding="utf-8")
 
@@ -173,11 +174,13 @@ def _init_storage_bucket() -> None:
         return
     try:
         import boto3
+        from botocore.config import Config
         s3_client = boto3.client(
             "s3",
             aws_access_key_id=settings.S3_ACCESS_KEY,
             aws_secret_access_key=settings.S3_SECRET_KEY,
             endpoint_url=settings.S3_ENDPOINT_URL,
+            config=Config(signature_version="s3v4"),
         )
         bucket_name = settings.S3_BUCKET
         try:
@@ -191,6 +194,20 @@ def _init_storage_bucket() -> None:
                 bucket_name)
     except Exception as exc:
         logger.warning("Failed to initialize S3 bucket: %s", exc)
+
+
+def _ensure_minio_buckets() -> None:
+    """Create missing MinIO buckets from the fixed bucket list (idempotent)."""
+    try:
+        from backend.storage.lifecycle import ensure_buckets
+        results = ensure_buckets()
+        for bucket, status in results.items():
+            if status == "created":
+                logger.info("MinIO bucket created: %s", bucket)
+            elif status != "exists":
+                logger.warning("MinIO bucket ensure failed: %s — %s", bucket, status)
+    except Exception as exc:
+        logger.warning("MinIO bucket setup failed (non-fatal): %s", exc)
 
 
 def _apply_minio_lifecycle_policies() -> None:
@@ -238,14 +255,51 @@ if settings.ENVIRONMENT != "production":
     @app.get("/redoc", include_in_schema=False)
     async def redoc_html() -> HTMLResponse:
         return get_redoc_html(
-            openapi_url=app.openapi_url,
+            openapi_url=app.openapi_url or "/openapi.json",
             title=f"{app.title} - ReDoc",
             redoc_js_url="https://cdn.jsdelivr.net/npm/redoc@2/bundles/redoc.standalone.js",
         )
 
 
 app.state.limiter = limiter
+
+
+async def _rate_limit_exceeded_handler(
+    request: Request, exc: Exception
+) -> Response:
+    """Translate slowapi's handler to FastAPI's expected handler signature."""
+    from typing import cast
+
+    return _slowapi_rate_limit_handler(request, cast(RateLimitExceeded, exc))
+
+
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.exception_handler(RedisError)
+async def redis_unavailable_handler(request: Request, exc: RedisError) -> JSONResponse:
+    """Cache/queue outages are 503s, not 500s.
+
+    The rate limiter, revocation checks, and SSE cache all read Redis on
+    the request path. When Redis is unreachable the honest answer is
+    "temporarily unavailable, retry shortly" — and reads that never touch
+    Redis (e.g. /health) keep working.
+    """
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger = structlog.get_logger()
+    logger.warning(
+        "redis_unavailable",
+        path=request.url.path,
+        error=str(exc)[:200],
+    )
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "error_type": "ServiceUnavailable",
+            "message": "A backing service is temporarily unavailable. Retry shortly.",
+            "request_id": request_id,
+        },
+    )
 
 
 @app.exception_handler(ClientDisconnected)
@@ -353,10 +407,10 @@ async def validation_error_handler(
     # Also log to standard logger for Docker log visibility
     import json as _json
     logging.getLogger("pipelineiq").warning(
-        "❌ 422 UNPROCESSABLE ENTITY on %s %s", request.method, request.url
+        "422 Unprocessable Entity on %s %s", request.method, request.url
     )
     logging.getLogger("pipelineiq").error(
-        "❌ MISSING/INVALID FIELDS: %s", _json.dumps(safe_errors, indent=2)
+        "Missing/invalid fields: %s", _json.dumps(safe_errors, indent=2)
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -372,7 +426,7 @@ async def validation_error_handler(
 @app.exception_handler(Exception)
 async def generic_error_handler(
         request: Request,
-        exc: Exception) -> JSONResponse:
+        exc: Exception) -> Response:
     """Handle unexpected errors with a safe error response.
 
     Never exposes internal details to the client. The request_id
@@ -408,6 +462,17 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
+# Added last so it runs first: reject requests with an unexpected Host
+# header before any routing, auth, or URL building happens (Host header
+# attacks would otherwise poison absolute URLs built from request.base_url,
+# e.g. the presigned-upload confirm/download endpoints).
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=[
+        host.strip() for host in settings.TRUSTED_HOSTS.split(",") if host.strip()
+    ],
+)
+
 
 @app.middleware("http")
 async def api_version_middleware(request: Request, call_next):
@@ -416,13 +481,14 @@ async def api_version_middleware(request: Request, call_next):
         response = await call_next(request)
         response.headers["X-API-Version"] = "v1"
         response.headers["X-App-Version"] = settings.APP_VERSION
-        return response
     except RuntimeError as exc:
         if str(exc) == "No response returned.":
             return Response(status_code=499)
         raise
 
 
+    else:
+        return response
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
     """Use Nginx-provided X-Request-ID or generate a new one.
@@ -448,13 +514,14 @@ async def request_id_middleware(request: Request, call_next):
     try:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
-        return response
     except RuntimeError as exc:
         if str(exc) == "No response returned.":
             return Response(status_code=499)
         raise
 
 
+    else:
+        return response
 @app.middleware("http")
 async def timing_middleware(request: Request, call_next):
     """Add X-Process-Time header with request processing duration."""
@@ -463,12 +530,13 @@ async def timing_middleware(request: Request, call_next):
         response = await call_next(request)
         duration_ms = (time.perf_counter() - start) * 1000
         response.headers["X-Process-Time"] = f"{duration_ms:.2f}ms"
-        return response
     except RuntimeError as exc:
         if str(exc) == "No response returned.":
             return Response(status_code=499)
         raise
 
+    else:
+        return response
 @app.middleware("http")
 async def structlog_access_middleware(request: Request, call_next):
     """Log requests in JSON using structlog, avoiding uvicorn access log."""
@@ -516,20 +584,17 @@ app.include_router(wasm_router)
 app.include_router(streaming_router)
 
 from backend.routers.catalog import router as catalog_router
-from backend.routers.lineage_export import router as lineage_export_router
-from backend.routers.column_policies import router as column_policies_router
 from backend.routers.catalog_pipelines import router as catalog_pipelines_router
-
-from backend.routers.storage import router as storage_router
-from backend.routers.contracts import router as contracts_router
+from backend.routers.column_policies import router as column_policies_router
+from backend.routers.lineage_export import router as lineage_export_router
 from backend.routers.runs import router as runs_router
+from backend.routers.storage import router as storage_router
 
 app.include_router(catalog_router)
 app.include_router(lineage_export_router)
 app.include_router(column_policies_router)
 app.include_router(catalog_pipelines_router)
 app.include_router(storage_router)
-app.include_router(contracts_router)
 app.include_router(runs_router)
 
 if settings.ENVIRONMENT != "production":
@@ -623,23 +688,25 @@ def _check_db_health(engine, role: str) -> str:
     try:
         with engine.connect() as conn:
             conn.exec_driver_sql("SELECT 1")
-        return "ok"
-    except Exception as exc:
-        logger.error("Database %s health check failed: %s", role, exc)
+    except Exception:
+        logger.exception("Database %s health check failed", role)
         return "error"
 
 
+    else:
+        return "ok"
 def _check_redis_health(factory, role: str) -> str:
     """Check Redis connectivity by sending a PING command."""
     try:
         client = factory()
         client.ping()
-        return "ok"
     except Exception as exc:
         logger.warning("Redis %s health check failed: %s", role, exc)
         return "error"
 
 
+    else:
+        return "ok"
 def _check_storage_health() -> str:
     """Check local or S3-compatible storage readiness."""
     try:
@@ -652,7 +719,9 @@ def _check_storage_health() -> str:
             probe_path = upload_dir / f".healthcheck_{os.getpid()}"
             probe_path.touch(exist_ok=True)
             probe_path.unlink(missing_ok=True)
-        return "ok"
     except Exception as exc:
         logger.warning("Storage health check failed: %s", exc)
         return "error"
+
+    else:
+        return "ok"

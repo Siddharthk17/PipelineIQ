@@ -3,7 +3,7 @@ Celery task that fires when a schedule's cron expression triggers.
 Creates a new pipeline run and submits it for execution.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from backend.celery_app import celery_app
@@ -34,7 +34,7 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
         dict with run_id and status
     """
     from backend.database import SessionLocal
-    from backend.models import PipelineSchedule, ScheduleRun, PipelineRun, PipelineStatus
+    from backend.models import PipelineRun, PipelineSchedule, PipelineStatus, ScheduleRun
 
     logger.info(f"Scheduled pipeline trigger: schedule_id={schedule_id}")
 
@@ -54,14 +54,17 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
             return {"status": "skipped", "reason": "schedule_inactive"}
 
         # Create a schedule_run record (tracks this firing)
+        from backend.utils.uuid_utils import as_uuid
+
+        schedule_uuid = as_uuid(schedule_id)
         schedule_run = ScheduleRun(
-            schedule_id=schedule_id,
-            triggered_at=datetime.now(timezone.utc),
+            schedule_id=schedule_uuid,
+            triggered_at=datetime.now(UTC),
         )
         db.add(schedule_run)
 
         # Update the schedule's stats
-        schedule.last_run_at = datetime.now(timezone.utc)
+        schedule.last_run_at = datetime.now(UTC)
         schedule.total_runs += 1
         # Note: last_run_status is updated when the run actually completes.
         # We update it here to 'RUNNING' or similar if we want, but normally
@@ -70,7 +73,7 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
         # Submit the pipeline for execution
         from backend.tasks.pipeline_tasks import execute_pipeline_task
 
-        run_id = str(uuid4())
+        run_id = uuid4()
 
         # Create a pipeline_run record
         pipeline_run = PipelineRun(
@@ -80,7 +83,7 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
             yaml_config=schedule.yaml_config,
             user_id=schedule.user_id,
             trigger="scheduled",
-            schedule_id=schedule_id,
+            schedule_id=schedule_uuid,
         )
         db.add(pipeline_run)
         db.commit()
@@ -92,7 +95,7 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
 
         # Submit for asynchronous execution
         execute_pipeline_task.apply_async(
-            args=[run_id],
+            args=[str(run_id)],
             queue="bulk",
         )
 
@@ -100,13 +103,14 @@ def execute_scheduled_pipeline(self, schedule_id: str) -> dict:
             f"Scheduled pipeline submitted: schedule_id={schedule_id}, "
             f"run_id={run_id}"
         )
-        return {"run_id": run_id, "status": "submitted"}
 
     except Exception as exc:
         logger.error(
             f"Failed to execute scheduled pipeline {schedule_id}: {exc}",
             exc_info=True)
         db.rollback()
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
+    else:
+        return {"run_id": str(run_id), "status": "submitted"}
     finally:
         db.close()

@@ -7,7 +7,7 @@ Results are cached in Redis for performance.
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, status, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
@@ -24,8 +24,10 @@ from backend.schemas import (
 )
 from backend.utils.cache import cache_get, cache_set
 from backend.utils.uuid_utils import (
-    validate_uuid_format as _validate_uuid_format,
     as_uuid as _as_uuid,
+)
+from backend.utils.uuid_utils import (
+    validate_uuid_format as _validate_uuid_format,
 )
 
 logger = logging.getLogger(__name__)

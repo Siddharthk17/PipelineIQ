@@ -1,18 +1,16 @@
 import { expect, test } from "@playwright/test";
 
+test.use({ storageState: "e2e/.auth/demo.json" });
+
 const baseUrl = process.env.E2E_BASE_URL;
 const email = process.env.E2E_EMAIL ?? "demo@pipelineiq.app";
 const password = process.env.E2E_PASSWORD ?? "Demo1234!";
 
 async function login(page: import("@playwright/test").Page) {
   test.skip(!baseUrl, "Set E2E_BASE_URL to run AI Playwright tests.");
-
-  await page.goto(`${baseUrl}/login`, { waitUntil: "domcontentloaded" });
-  await page.getByTestId("email-input").fill(email);
-  await page.getByTestId("password-input").fill(password);
-  await page.getByTestId("login-btn").click();
-
-  await page.waitForURL((url) => !url.pathname.endsWith("/login"), { timeout: 20_000 });
+  // Session comes from global-setup storageState; just verify it works.
+  await page.goto(`${baseUrl}/files`, { waitUntil: "domcontentloaded" });
+  await page.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 15_000 });
 }
 
 test.describe("AI pipeline generation", () => {

@@ -3,12 +3,15 @@
   "version": "1.0.0",
   "description": "A data pipeline orchestration engine. Define pipelines in YAML, upload CSV/JSON files, execute transformations with real-time monitoring, and trace every column back to its source through automatic lineage graphs.",
   "main": "index.js",
-  "workspaces": ["frontend", "y-websocket"],
+  "workspaces": [
+    "frontend",
+    "y-websocket"
+  ],
   "directories": {
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npx playwright test --reporter=list",
     "test:e2e": "npx playwright test --reporter=list",
     "test:e2e:ci": "npx playwright test --reporter=list --reporter=junit --output=test-results",
     "test:e2e:report": "npx playwright test --reporter=html && npx playwright show-report",
@@ -47,6 +50,7 @@
   },
   "homepage": "https://github.com/Siddharthk17/PipelineIQ#readme",
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "^1.60.0"
   }
 }

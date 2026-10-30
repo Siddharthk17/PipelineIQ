@@ -60,7 +60,9 @@ export function ColumnPolicyManager({
   }, [fileId]);
 
   useEffect(() => {
-    loadPolicies();
+    void (async () => {
+      await loadPolicies();
+    })();
   }, [loadPolicies]);
 
   const handleCreate = async () => {

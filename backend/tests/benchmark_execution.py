@@ -1,20 +1,21 @@
 import time
 import uuid
+
+import numpy as np
 import pandas as pd
 import pyarrow as pa
-import numpy as np
 
-from backend.execution.smart_executor import SmartExecutor
 from backend.execution.arrow_bus import get_arrow_bus
 from backend.execution.duckdb_executor import DuckDBExecutor
-from backend.pipeline.steps import StepExecutor
+from backend.execution.smart_executor import SmartExecutor
 from backend.pipeline.parser import (
-    StepType,
+    AggregateStepConfig,
     FilterOperator,
     FilterStepConfig,
-    AggregateStepConfig,
     SqlStepConfig,
+    StepType,
 )
+from backend.pipeline.steps import StepExecutor
 
 
 def generate_dataset(rows: int, cols: int = 5):

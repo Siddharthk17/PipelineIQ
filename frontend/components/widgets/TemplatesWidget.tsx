@@ -122,7 +122,9 @@ export function TemplatesWidget() {
   }, []);
 
   useEffect(() => {
-    loadTemplates();
+    void (async () => {
+      await loadTemplates();
+    })();
   }, [loadTemplates]);
 
   const handleSelectTemplate = useCallback(

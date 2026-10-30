@@ -8,7 +8,6 @@ import hashlib
 import logging
 import uuid
 from io import BytesIO
-from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from minio import Minio
@@ -90,10 +89,10 @@ async def validate_wasm_module(
             detail=f"Wasm module exceeds {MAX_WASM_SIZE // (1024*1024)}MB limit",
         )
 
-    errors = []
-    warnings = []
-    exports = []
-    imports = []
+    errors: list[str] = []
+    warnings: list[str] = []
+    exports: list[dict] = []
+    imports: list[str] = []
 
     try:
         exports, imports = _inspect_wasm(wasm_bytes)
@@ -136,7 +135,7 @@ async def validate_wasm_module(
 async def upload_wasm_module(
     name: str,
     file: UploadFile = File(...),
-    description: Optional[str] = None,
+    description: str | None = None,
     fuel_budget: int = 10_000_000,
     db: Session = Depends(get_write_db_dependency),
     current_user: User = Depends(get_current_user),
@@ -159,7 +158,13 @@ async def upload_wasm_module(
             detail=f"Wasm module exceeds {MAX_WASM_SIZE // (1024*1024)}MB limit",
         )
 
-    exports, imports = _inspect_wasm(wasm_bytes)
+    try:
+        exports, imports = _inspect_wasm(wasm_bytes)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid Wasm binary: {exc}",
+        ) from exc
 
     if imports:
         raise HTTPException(

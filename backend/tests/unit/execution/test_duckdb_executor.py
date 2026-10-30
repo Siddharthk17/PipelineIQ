@@ -1,6 +1,5 @@
 """Unit tests for DuckDB execution module."""
 
-from types import SimpleNamespace
 
 import pandas as pd
 import pyarrow as pa
@@ -18,6 +17,7 @@ from backend.pipeline.parser import (
     JoinHow,
     JoinStepConfig,
     SampleStepConfig,
+    SqlStepConfig,
     StepType,
 )
 
@@ -45,7 +45,7 @@ def test_execute_filter_step_on_arrow_table() -> None:
     executor = DuckDBExecutor(local_fallback=False)
     step = FilterStepConfig(
         name="filter_high",
-        step_type="filter",
+        step_type=StepType.FILTER,
         input="load",
         column="amount",
         operator=FilterOperator.GREATER_THAN,
@@ -65,7 +65,7 @@ def test_execute_join_step_uses_left_and_right_tables() -> None:
     executor = DuckDBExecutor(local_fallback=False)
     step = JoinStepConfig(
         name="join_data",
-        step_type="join",
+        step_type=StepType.JOIN,
         left="left",
         right="right",
         on="id",
@@ -92,8 +92,9 @@ def test_execute_join_step_uses_left_and_right_tables() -> None:
 def test_execute_sql_step_template_query() -> None:
     initialize_worker_duckdb()
     executor = DuckDBExecutor(local_fallback=False)
-    step = SimpleNamespace(
-        step_type="sql",
+    step = SqlStepConfig(
+        name="sql_step",
+        step_type=StepType.SQL,
         query="SELECT customer_id, amount * 2 AS amount_x2 FROM {{input}}",
     )
     input_table = pa.Table.from_pandas(

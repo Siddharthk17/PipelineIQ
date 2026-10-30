@@ -3,12 +3,12 @@ Utilities for working with cron expressions.
 Uses `croniter` for validation and next-run calculation.
 Uses a lookup table for human-readable descriptions.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 try:
     from croniter import croniter
-except ImportError:
-    raise ImportError("Run: pip install croniter>=1.4.0")
+except ImportError as exc:
+    raise ImportError("Run: pip install croniter>=1.4.0") from exc
 
 
 # Validation
@@ -25,18 +25,19 @@ def validate_cron(expression: str) -> tuple[bool, str]:
         is_valid = croniter.is_valid(expression.strip())
         if not is_valid:
             return False, f"Invalid cron expression: '{expression}'"
-        return True, ""
     except Exception as e:
         return False, str(e)
 
 
-def get_next_run_at(expression: str, from_time: datetime = None) -> datetime:
+    else:
+        return True, ""
+def get_next_run_at(expression: str, from_time: datetime | None = None) -> datetime:
     """
     Get the next scheduled run time after from_time (default: now).
     Returns a timezone-aware datetime in UTC.
     """
     if from_time is None:
-        from_time = datetime.now(timezone.utc)
+        from_time = datetime.now(UTC)
 
     # croniter works with naive datetimes — strip timezone for calculation
     naive_from = from_time.replace(tzinfo=None)
@@ -44,17 +45,17 @@ def get_next_run_at(expression: str, from_time: datetime = None) -> datetime:
     next_naive = cron.get_next(datetime)
 
     # Re-attach UTC timezone
-    return next_naive.replace(tzinfo=timezone.utc)
+    return next_naive.replace(tzinfo=UTC)
 
 
 def get_next_n_runs(expression: str, n: int = 5) -> list[datetime]:
     """Get the next N scheduled run times (for the schedule preview UI)."""
     results = []
-    from_time = datetime.now(timezone.utc)
+    from_time = datetime.now(UTC)
 
     cron = croniter(expression.strip(), from_time.replace(tzinfo=None))
     for _ in range(n):
-        next_run = cron.get_next(datetime).replace(tzinfo=timezone.utc)
+        next_run = cron.get_next(datetime).replace(tzinfo=UTC)
         results.append(next_run)
 
     return results
@@ -107,11 +108,12 @@ def cron_to_human(expression: str) -> str:
 
         minute, hour, dom, month, dow = parts
         desc = _build_cron_description(minute, hour, dom, month, dow)
-        return desc or f"custom schedule: {normalized}"
     except Exception:
         return f"custom schedule: {normalized}"
 
 
+    else:
+        return desc or f"custom schedule: {normalized}"
 def _build_cron_description(
         minute: str,
         hour: str,

@@ -1,5 +1,4 @@
 """Tests for the template fork and loader API."""
-import pytest
 from backend.templates.loader import fork_template, get_all_templates
 
 

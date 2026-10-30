@@ -6,13 +6,13 @@ The client polls for completion using the task_id.
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency
-from backend.models import User, PipelineRun, UploadedFile
+from backend.models import PipelineRun, UploadedFile, User
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.exceptions import ClientDisconnected
 from backend.utils.uuid_utils import as_uuid
@@ -127,6 +127,26 @@ class ValidateYamlResponse(BaseModel):
     step_count: int = 0
 
 
+AI_UNAVAILABLE_MESSAGE = (
+    "AI features are unavailable: GEMINI_API_KEY is not configured. "
+    "Set it in .env and restart the gemini worker."
+)
+
+
+def _raise_if_ai_unavailable() -> None:
+    """Fail fast when no Gemini key is configured.
+
+    Without a key every AI request is doomed: the endpoint would enqueue a
+    task that fails immediately, spamming ERROR tracebacks in the worker
+    logs while the client hangs and eventually disconnects (499). A 503
+    lets the UI show the real cause instantly.
+    """
+    from backend.clients.gemini_client import gemini_configured
+
+    if not gemini_configured():
+        raise HTTPException(status_code=503, detail=AI_UNAVAILABLE_MESSAGE)
+
+
 # Endpoints
 
 @router.post("/generate", response_model=GeneratePipelineResponse)
@@ -145,6 +165,7 @@ async def generate_pipeline(
 
     Typical response time: 3-8 seconds for Gemini to generate.
     """
+    _raise_if_ai_unavailable()
     # Verify all file_ids belong to the current user
     for file_id in request.file_ids:
         file_record = _get_file_or_404(file_id, current_user.id, db)
@@ -200,10 +221,11 @@ async def repair_failed_run(
     Only runs with status='FAILED' can be repaired.
     Returns the corrected YAML plus a line-by-line diff for the user to review.
     """
+    _raise_if_ai_unavailable()
     try:
         run_uuid = as_uuid(run_id)
-    except (ValueError, TypeError):
-        raise HTTPException(400, "Invalid run_id format")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "Invalid run_id format") from exc
 
     # Get the failed run
     run = db.query(PipelineRun).filter(
@@ -339,15 +361,16 @@ async def validate_yaml(
         return ValidateYamlResponse(valid=False, error=str(e), step_count=0)
 
 
-def _get_file_or_404(file_id: str, user_id: str, db: Session):
+def _get_file_or_404(file_id: str, user_id, db: Session):
     """Get a file record belonging to the user, or return None."""
     try:
         file_uuid = as_uuid(file_id)
+        owner_id = as_uuid(user_id)
     except (ValueError, TypeError):
         return None
 
     return (
         db.query(UploadedFile)
-        .filter(UploadedFile.id == file_uuid, UploadedFile.user_id == user_id)
+        .filter(UploadedFile.id == file_uuid, UploadedFile.user_id == owner_id)
         .first()
     )

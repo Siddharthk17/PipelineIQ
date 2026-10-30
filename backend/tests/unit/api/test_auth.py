@@ -1,10 +1,11 @@
 """Tests for JWT authentication endpoints."""
 
 
+from datetime import UTC
+
 import jwt
 
 from backend.auth import ALGORITHM, get_password_hash, verify_password
-
 
 # Helpers
 
@@ -132,12 +133,13 @@ def test_get_me_with_invalid_token_returns_401(auth_client):
 def test_get_me_with_expired_token_returns_401(auth_client):
     register_user(auth_client, "exp@test.com", "expuser")
     # Create a token that expired 1 second ago
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
+
     from backend.config import settings
 
     payload = {
         "sub": "fake-id",
-        "exp": datetime.now(timezone.utc) - timedelta(seconds=1),
+        "exp": datetime.now(UTC) - timedelta(seconds=1),
     }
     token = jwt.encode(payload, settings.SECRET_KEY, algorithm=ALGORITHM)
     r = auth_client.get("/auth/me", headers=auth_header(token))

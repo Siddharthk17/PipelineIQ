@@ -1,14 +1,16 @@
-import pytest
-import pandas as pd
-import numpy as np
-from fastapi.testclient import TestClient
-from backend.main import app
-from backend.dependencies import get_db, get_read_db, get_write_db
-from sqlalchemy.orm import Session
-from backend.auth import get_current_user
-from backend.models import User, UploadedFile
 import uuid as _uuid
+
+import numpy as np
+import pandas as pd
+import pytest
 import yaml
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from backend.auth import get_current_user
+from backend.dependencies import get_db, get_read_db, get_write_db
+from backend.main import app
+from backend.models import UploadedFile, User
 
 
 def set_current_user(user: User):
@@ -29,12 +31,13 @@ def stress_client(test_db: Session, tmp_path):
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()
     file_settings.UPLOAD_DIR = upload_dir
-    file_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
+    file_settings.ALLOWED_EXTENSIONS = frozenset({".csv", ".json"})
     file_settings.MAX_UPLOAD_SIZE = 500 * 1024 * 1024
     file_settings.MAX_ROWS_PER_FILE = 1000000
 
-    from backend.api.pipelines import execute_pipeline_task
     from unittest.mock import MagicMock
+
+    from backend.api.pipelines import execute_pipeline_task
 
     execute_pipeline_task.delay = MagicMock(
         return_value=MagicMock(id="mock-task-id"))

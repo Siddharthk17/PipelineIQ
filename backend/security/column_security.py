@@ -13,10 +13,12 @@ Policies are cached in Redis for 60 seconds to avoid repeated DB lookups.
 import logging
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import cast
 
 import orjson
 import pandas as pd
+
+from backend.utils.uuid_utils import as_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,7 @@ PII_SEMANTIC_TYPES = frozenset(
 class ColumnPolicyRecord:
     column_name: str
     policy: str
-    mask_pattern: Optional[str]
+    mask_pattern: str | None
     allowed_roles: list[str]
 
 
@@ -94,7 +96,8 @@ def apply_column_policies(
         elif pol.policy == "masked":
             pattern = pol.mask_pattern or "default"
             result[col] = result[col].apply(
-                lambda v: _apply_mask(str(v), pattern) if pd.notna(v) else v
+                lambda v, _pattern=pattern: _apply_mask(str(v), _pattern)
+                if pd.notna(v) else v
             )
             logger.debug(
                 "Column '%s' masked (%s) for role '%s'", col, pattern, user_role
@@ -139,10 +142,11 @@ def _apply_mask(value: str, pattern: str) -> str:
         try:
             n = int(pattern.split(":")[1])
             visible = value[:n]
-            return f"{visible}***"
         except (IndexError, ValueError):
             pass
 
+        else:
+            return f"{visible}***"
     if len(value) <= 3:
         return "***"
     return f"{value[:2]}***{value[-1]}"
@@ -152,20 +156,21 @@ def get_column_policies_for_file(
     file_id: str,
     db,
 ) -> list[ColumnPolicyRecord]:
-    from backend.db.redis_pools import get_cache_redis_binary, get_cache_redis
+    from backend.db.redis_pools import get_cache_redis_binary
     from backend.models.column_policy import ColumnPolicy
 
     cache_key = f"col_policies:{file_id}"
 
     try:
         redis = get_cache_redis_binary()
-        cached = redis.get(cache_key)
+        cached = cast('bytes | None', redis.get(cache_key))
         if cached:
             return _deserialize_policy_records(cached)
     except Exception:
         pass
 
-    policies = db.query(ColumnPolicy).filter(ColumnPolicy.file_id == file_id).all()
+    policies = db.query(ColumnPolicy).filter(
+        ColumnPolicy.file_id == as_uuid(file_id)).all()
 
     records = [
         ColumnPolicyRecord(

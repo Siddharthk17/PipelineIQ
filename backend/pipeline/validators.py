@@ -7,7 +7,7 @@ and sample failing values.
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any
 
 import pandas as pd
 
@@ -17,7 +17,7 @@ class ValidationRuleResult:
     """Result of evaluating a single validation rule."""
 
     rule_name: str
-    column: Optional[str]
+    column: str | None
     check: str
     passed: bool
     severity: str
@@ -34,7 +34,7 @@ class ValidationStepResult:
     passed: bool  # False only if error-severity rules fail
     error_count: int
     warning_count: int
-    rule_results: List[ValidationRuleResult]
+    rule_results: list[ValidationRuleResult]
     output_df: pd.DataFrame  # passed through unchanged
 
 
@@ -47,7 +47,7 @@ SUPPORTED_CHECKS = frozenset({
 
 def execute_validate(
     df: pd.DataFrame,
-    rules: List[dict],
+    rules: list[dict],
     step_name: str,
 ) -> ValidationStepResult:
     """Execute all validation rules against a DataFrame."""
@@ -80,7 +80,14 @@ def _execute_single_rule(df: pd.DataFrame, rule: dict) -> ValidationRuleResult:
             message=f"Column '{column}' not found",
         )
 
-    series = df[column] if column else None
+    series: Any = df[column] if column else None
+    if series is None and check not in ("min_rows", "max_rows"):
+        return ValidationRuleResult(
+            rule_name=f"{column or 'dataset'}.{check}", column=column,
+            check=check, passed=False, severity=severity,
+            failing_count=len(df), total_count=len(df), failing_examples=[],
+            message=f"Check '{check}' requires a column",
+        )
 
     if check == "not_null":
         mask = series.isnull()

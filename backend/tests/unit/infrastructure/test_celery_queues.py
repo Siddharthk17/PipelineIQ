@@ -41,6 +41,15 @@ class TestQueueConfiguration:
     def test_gemini_task_is_registered_on_celery_app(self):
         assert "tasks.call_gemini" in celery_app.tasks
 
+    def test_reconcile_task_is_registered_on_celery_app(self):
+        # Beat fires tasks.reconcile_stuck_runs every 10 minutes; without
+        # autodiscover of backend.tasks.reconciliation the workers log
+        # "Received unregistered task" and discard every occurrence.
+        # Autodiscovery is lazy (runs on worker startup via the
+        # import_modules signal), so trigger it explicitly here.
+        celery_app.loader.import_default_modules()
+        assert "tasks.reconcile_stuck_runs" in celery_app.tasks
+
     def test_schedules_check_routes_to_bulk(self):
         route = task_routes.get("schedules.check")
         assert route is not None

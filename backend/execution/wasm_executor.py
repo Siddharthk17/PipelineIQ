@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 from fastapi import HTTPException
-from wasmtime import Config, Engine, Store, Module, Instance, Linker, Trap
+from wasmtime import Config, Engine, Linker, Module, Store, Trap
 
 logger = logging.getLogger(__name__)
 
@@ -114,14 +114,19 @@ class WasmExecutor:
 
         try:
             wasm_func = instance.exports(store)[function_name]
-        except KeyError:
+        except KeyError as exc:
             available = list(instance.exports(store).keys())
             raise ValueError(
                 f"Function '{function_name}' not found in Wasm module. "
                 f"Exported functions: {available}"
+            ) from exc
+
+        if not callable(wasm_func):
+            raise ValueError(
+                f"Export '{function_name}' is not a callable function"
             )
 
-        columns = list(input_columns) + [output_column]
+        columns = [*list(input_columns), output_column]
         result_arrays: dict[str, list] = {c: [] for c in columns}
         for col in table.schema.names:
             if col not in result_arrays:
@@ -178,12 +183,12 @@ class WasmExecutor:
             finally:
                 signal.alarm(0)
                 signal.signal(signal.SIGALRM, old_handler)
-        except _WasmTimeout:
+        except _WasmTimeout as exc:
             logger.warning("WASM execution timed out after %d seconds", WASM_EXECUTION_TIMEOUT_SECONDS)
             raise HTTPException(
                 status_code=408,
                 detail=f"WASM execution timed out after {WASM_EXECUTION_TIMEOUT_SECONDS}s",
-            )
+            ) from exc
 
         result_table = pa.table(result_arrays)
         ordered_columns = list(table.schema.names)
@@ -199,7 +204,7 @@ class WasmExecutor:
             validation_config = Config()
             validation_config.consume_fuel = True
             validation_engine = Engine(validation_config)
-            module = Module(validation_engine, wasm_bytes)
+            module = Module(validation_engine, bytes(wasm_bytes))
             store = Store(validation_engine)
             store.set_limits(
                 memory_size=MAX_WASM_MEMORY_BYTES,
@@ -243,7 +248,7 @@ class WasmExecutor:
 
         if module_key not in self._module_cache:
             logger.info("Compiling new Wasm module: %s...", module_key[:16])
-            module = Module(self._engine, wasm_bytes)
+            module = Module(self._engine, bytes(wasm_bytes))
             self._module_cache[module_key] = module
             self._module_cache.move_to_end(module_key)
             if len(self._module_cache) > MAX_CACHED_MODULES:

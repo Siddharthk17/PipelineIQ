@@ -23,7 +23,11 @@ def get_run_timing(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    from backend.utils.uuid_utils import as_uuid, validate_uuid_format
+
+    validate_uuid_format(run_id)
+    run = db.query(PipelineRun).filter(
+        PipelineRun.id == as_uuid(run_id)).first()
     if not run:
         raise HTTPException(404, "Run not found")
     if current_user.role != "admin" and str(run.user_id) != str(current_user.id):

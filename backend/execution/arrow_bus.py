@@ -13,14 +13,12 @@ from __future__ import annotations
 
 import io
 import logging
-import os
 import re
 import threading
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
 
 import orjson
 import pyarrow as pa
@@ -49,7 +47,7 @@ class _ArrowLocation:
     key: str
     run_id: str
     tier: str
-    pointer: Optional[str] = None
+    pointer: str | None = None
     size_bytes: int = 0
 
 
@@ -83,7 +81,7 @@ class ArrowDataBus:
         self._manifest_ttl_seconds = max(
             redis_ttl_seconds, manifest_ttl_seconds)
         self._disk_prefix = disk_prefix.strip("/")
-        self._locations: Dict[str, _ArrowLocation] = {}
+        self._locations: dict[str, _ArrowLocation] = {}
         self._lock = threading.RLock()
         self._redis = redis_client
         self._redis_retry_after = 0.0
@@ -349,11 +347,12 @@ class ArrowDataBus:
                         payload_bytes=size_bytes, run_id=run_id, step_name=key,
                         object_name=redis_key, duration_ms=duration_ms,
                     )
-                    return "redis"
                 except RedisError:
                     logger.warning(
                         "Redis unavailable for key '%s', falling back to shm", key)
 
+                else:
+                    return "redis"
         if size_bytes <= self._medium_threshold_bytes and self._shm_available:
             try:
                 shm_path, _ = shm_store.write(
@@ -373,10 +372,11 @@ class ArrowDataBus:
                     payload_bytes=size_bytes, run_id=run_id, step_name=key,
                     object_name=str(shm_path), duration_ms=duration_ms,
                 )
-                return "shm"
             except OSError:
                 logger.warning("Shared-memory write failed for key '%s'", key)
 
+            else:
+                return "shm"
         pointer = self._spill_pointer(run_id, key)
         buffer = io.BytesIO()
         pq.write_table(table, buffer, compression="zstd")
@@ -671,7 +671,7 @@ class ArrowDataBus:
         return parts[0], parts[1]
 
     @property
-    def locations(self) -> Dict[str, dict]:
+    def locations(self) -> dict[str, dict]:
         with self._lock:
             return {
                 key: {
@@ -706,7 +706,7 @@ class ArrowDataBus:
 
 
 _global_bus_lock = threading.Lock()
-_global_bus: Optional[ArrowDataBus] = None
+_global_bus: ArrowDataBus | None = None
 
 
 def get_arrow_bus() -> ArrowDataBus:

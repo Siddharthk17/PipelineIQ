@@ -9,22 +9,22 @@ contexts (scripts, tests).
 """
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from concurrent.futures import ProcessPoolExecutor
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, Query, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from starlette.requests import Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
+from backend.config import settings
 from backend.database import get_db
 from backend.models import User
-from backend.config import settings
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = getattr(
@@ -70,7 +70,7 @@ def get_password_hash(password: str) -> str:
 # ProcessPoolExecutor created at import time) are duplicated across forks and
 # their worker processes become invalid as soon as the parent reaps them,
 # causing "A process in the process pool was terminated abruptly" errors.
-_BCRYPT_POOL: Optional[ProcessPoolExecutor] = None
+_BCRYPT_POOL: ProcessPoolExecutor | None = None
 
 
 def _get_bcrypt_pool() -> ProcessPoolExecutor:
@@ -104,7 +104,6 @@ async def verify_password_async(plain: str, hashed: str) -> bool:
             plain.encode("utf-8"),
             hashed.encode("utf-8"),
         )
-        return result
     except Exception as e:
         msg = str(e)
         if "terminated abruptly" in msg or "broken" in msg:
@@ -118,14 +117,17 @@ async def verify_password_async(plain: str, hashed: str) -> bool:
                     plain.encode("utf-8"),
                     hashed.encode("utf-8"),
                 )
-                return result
-            except Exception as e2:
-                logger.error("Password verification retry error: %s", e2)
+            except Exception:
+                logger.exception("Password verification retry error")
                 return False
-        logger.error("Password verification error: %s", e)
+            else:
+                return result
+        logger.exception("Password verification error")
         return False
 
 
+    else:
+        return result
 async def hash_password_async(plain: str) -> str:
     loop = asyncio.get_event_loop()
     salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
@@ -156,19 +158,17 @@ async def hash_password_async(plain: str) -> str:
 def close_bcrypt_pool() -> None:
     global _BCRYPT_POOL
     if _BCRYPT_POOL is not None:
-        try:
+        with contextlib.suppress(Exception):
             _BCRYPT_POOL.shutdown(wait=False)
-        except Exception:
-            pass
         _BCRYPT_POOL = None
         logger.info("bcrypt ProcessPoolExecutor shut down")
 
 
 def create_access_token(
         data: dict,
-        expires_delta: Optional[timedelta] = None) -> str:
+        expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (
+    expire = datetime.now(UTC) + (
         expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     to_encode.update({"exp": expire, "jti": str(uuid.uuid4())})
@@ -187,8 +187,11 @@ def _is_token_revoked(jti: str | None) -> bool:
 
         return bool(get_cache_redis().exists(_revoked_token_key(jti)))
     except Exception:
-        logger.warning("Token revocation check failed; allowing request")
-        return False
+        logger.error(
+            "Token revocation check failed; denying request",
+            exc_info=True,
+        )
+        return True
 
 
 def revoke_token(token: str) -> None:
@@ -199,18 +202,18 @@ def revoke_token(token: str) -> None:
         exp = payload.get("exp")
         if not jti or not exp:
             return
-        expires_at = datetime.fromtimestamp(int(exp), tz=timezone.utc)
-        ttl = int((expires_at - datetime.now(timezone.utc)).total_seconds())
+        expires_at = datetime.fromtimestamp(int(exp), tz=UTC)
+        ttl = int((expires_at - datetime.now(UTC)).total_seconds())
         if ttl <= 0:
             return
         from backend.db.redis_pools import get_cache_redis
 
         get_cache_redis().setex(_revoked_token_key(str(jti)), ttl, "1")
     except Exception:
-        logger.warning("Token revocation failed", exc_info=True)
+        logger.error("Token revocation failed", exc_info=True)
 
 
-def verify_token(token: str) -> Optional[dict]:
+def verify_token(token: str) -> dict | None:
     try:
         payload = jwt.decode(
             token,
@@ -218,14 +221,15 @@ def verify_token(token: str) -> Optional[dict]:
             algorithms=[ALGORITHM])
         if _is_token_revoked(payload.get("jti")):
             return None
-        return payload
     except jwt.PyJWTError:
         return None
 
 
+    else:
+        return payload
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    request: Request = None,
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects Request; None default keeps direct calls working
     db: Session = Depends(get_db),
 ) -> User:
     token = None
@@ -256,8 +260,8 @@ async def get_current_user(
         import uuid as _uuid
 
         uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=401, detail="Invalid token payload")
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid token payload") from exc
     user = db.query(User).filter(User.id == uid, User.is_active).first()
     if not user:
         raise HTTPException(
@@ -277,12 +281,12 @@ async def get_current_admin(
 
 
 async def get_current_user_sse(
-    token: Optional[str] = Query(
+    token: str | None = Query(
         default=None,
         description="JWT token for SSE EventSource clients that cannot set headers",
     ),
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    request: Request = None,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    request: Request = None,  # type: ignore[assignment]  # FastAPI injects Request; None default keeps direct calls working
     db: Session = Depends(get_db),
 ) -> User:
     raw_token = token
@@ -315,8 +319,8 @@ async def get_current_user_sse(
         import uuid as _uuid
 
         uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=401, detail="Invalid token payload")
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid token payload") from exc
 
     user = db.query(User).filter(User.id == uid, User.is_active).first()
     if not user:
@@ -327,9 +331,9 @@ async def get_current_user_sse(
 
 
 def get_optional_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: Session = Depends(get_db),
-) -> Optional[User]:
+) -> User | None:
     if credentials is None:
         return None
     payload = verify_token(credentials.credentials)

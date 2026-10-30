@@ -9,6 +9,36 @@ export const DEFAULT_PIPELINE_YAML = `pipeline:
       filename: output_file
 `;
 
+export function withPipelineName(yamlConfig: string, name: string): string {
+  const lines = yamlConfig.split(/\r?\n/);
+  let inPipeline = false;
+  let pipelineIndent = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!inPipeline) {
+      const pipelineMatch = line.match(/^(\s*)pipeline:\s*$/);
+      if (pipelineMatch) {
+        inPipeline = true;
+        pipelineIndent = pipelineMatch[1].length;
+      }
+      continue;
+    }
+    if (!line.trim()) {
+      continue;
+    }
+    const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
+    if (indent <= pipelineIndent) {
+      break;
+    }
+    if (/^\s*name:\s*(.+?)\s*$/.test(line)) {
+      lines[i] = `${" ".repeat(indent)}name: ${name}`;
+      break;
+    }
+  }
+  return lines.join("\n");
+}
+
 export function extractPipelineName(yamlConfig: string): string | null {
   const lines = yamlConfig.split(/\r?\n/);
   let inPipeline = false;

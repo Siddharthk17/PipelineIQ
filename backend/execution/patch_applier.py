@@ -24,11 +24,13 @@ def apply_patch(yaml_text: str, patch: dict) -> str:
     if not isinstance(steps, list):
         raise ValueError("Invalid pipeline YAML: missing 'steps' list")
 
-    step_map = {
-        step.get("name"): step
-        for step in steps
-        if isinstance(step, dict) and isinstance(step.get("name"), str)
-    }
+    step_map: dict[str, dict] = {}
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        step_name = step.get("name")
+        if isinstance(step_name, str):
+            step_map[step_name] = step
 
     for patch_item in patch.get("patches", []):
         _apply_patch_item(step_map=step_map, patch_item=patch_item)

@@ -3,8 +3,9 @@
 22 tests covering all 12 check types, severity behavior, and integration.
 """
 
-import pytest
 import pandas as pd
+import pytest
+
 from backend.pipeline.validators import execute_validate
 
 

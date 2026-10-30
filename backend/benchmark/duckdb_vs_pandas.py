@@ -13,14 +13,13 @@ import json
 import platform
 import statistics
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 import duckdb
 import pandas as pd
 import pyarrow as pa
-
 
 BENCHMARK_OPS = ("filter", "aggregate", "join", "sort", "sql_projection")
 LEGACY_OPERATION_NAME = {"aggregate": "aggregation"}
@@ -164,11 +163,18 @@ def _benchmark_size(row_count: int, repeats: int) -> dict:
 
     result: dict[str, dict[str, float]] = {}
     for op in BENCHMARK_OPS:
+        def run_pandas(op_name: str = op) -> object:
+            return _run_pandas(op_name, sales, customers)
+
+        def run_duckdb(op_name: str = op) -> object:
+            return _run_duckdb(
+                op_name, conn, sales_arrow, customers_arrow)
+
         pandas_mean, pandas_median, pandas_p95 = _time_ms(
-            lambda op_name=op: _run_pandas(op_name, sales, customers), repeats
+            run_pandas, repeats
         )
         duckdb_mean, duckdb_median, duckdb_p95 = _time_ms(
-            lambda op_name=op: _run_duckdb(op_name, conn, sales_arrow, customers_arrow),
+            run_duckdb,
             repeats,
         )
         speedup = round(pandas_mean / duckdb_mean, 3) if duckdb_mean > 0 else 0.0
@@ -206,7 +212,7 @@ def run_benchmarks(sizes: list[int], repeats: int) -> dict:
     }
 
     payload = {
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "generated_at_utc": datetime.now(UTC).isoformat(),
         "benchmark": "duckdb_vs_pandas",
         "parameters": {
             "sizes": sizes,

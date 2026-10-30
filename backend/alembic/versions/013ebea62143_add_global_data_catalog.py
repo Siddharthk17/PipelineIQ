@@ -7,9 +7,9 @@ Create Date: 2026-05-20
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB, TIMESTAMP
+from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 
 revision: str = "013ebea62143"
 down_revision: Union[str, None] = "9f1445650ed1"

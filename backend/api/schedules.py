@@ -5,8 +5,8 @@ automatically via Celery Beat.
 """
 
 import logging
-import uuid
-from datetime import datetime, timezone
+import re
+from datetime import datetime
 
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -150,6 +150,64 @@ def create_schedule(
     next_run = _compute_next_run(body.cron_expression)
     human = cron_to_human(body.cron_expression)
 
+    from backend.models import UploadedFile
+    from backend.pipeline.cache import get_parsed_pipeline
+    from backend.pipeline.parser import PipelineParser
+
+    try:
+        parsed = get_parsed_pipeline(body.yaml_config)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Scheduled pipeline YAML is invalid: {exc}",
+        ) from exc
+
+    from backend.api.pipelines import _check_pipeline_permission
+
+    _check_pipeline_permission(
+        db, current_user, body.pipeline_name, ["owner", "runner"],
+        grant_owner=True,
+    )
+    owned_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()} \
+        if current_user.role == "admin" else {
+            str(row[0]) for row in db.query(UploadedFile.id).filter(
+                UploadedFile.user_id == current_user.id).all()
+        }
+    result = PipelineParser().validate(parsed, owned_ids)
+    file_errors = [
+        e for e in result.errors
+        if "not found" in e.message.lower() or "registered" in e.message.lower()
+    ]
+    if file_errors and len(file_errors) == len(result.errors):
+        hint = ""
+        if re.search(r"\{\{\s*\w+\s*\}\}", body.yaml_config):
+            hint = (
+                " The YAML still contains {{placeholder}} template variables. "
+                "Fork the template from the Templates page to fill in real files."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scheduled pipeline references unknown files: "
+            + "; ".join(e.message for e in file_errors) + hint,
+        )
+
+    # Structural checks passed (or failed only on files, handled above):
+    # run the column-schema simulation so a schedule can never be created
+    # for a pipeline that is guaranteed to crash at runtime.
+    from backend.services.pipeline_validation import collect_schema_validation_errors
+
+    schema_errors = collect_schema_validation_errors(parsed, db)
+    all_errors = list(result.errors) + list(schema_errors)
+    if all_errors:
+        non_file_errors = [e for e in all_errors if e not in file_errors]
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Scheduled pipeline failed validation: "
+            + "; ".join(
+                f"{e.step_name}.{e.field}: {e.message}" for e in non_file_errors or all_errors
+            ),
+        )
+
     schedule = PipelineSchedule(
         user_id=current_user.id,
         pipeline_name=body.pipeline_name,
@@ -168,12 +226,6 @@ def create_schedule(
         resource_type="schedule", resource_id=schedule.id,
         details={"pipeline_name": body.pipeline_name, "cron": body.cron_expression},
         request=request)
-
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        register_schedules()
-    except Exception as exc:
-        logger.warning("Schedule saved but Beat registration failed: %s", exc)
 
     logger.info("Schedule created: id=%s, pipeline=%s, cron=%s",
                 schedule.id, body.pipeline_name, body.cron_expression)
@@ -228,12 +280,6 @@ def pause_schedule(
     db.commit()
     db.refresh(schedule)
 
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        register_schedules()
-    except Exception as exc:
-        logger.warning("Beat deregistration failed: %s", exc)
-
     return _schedule_to_response(schedule)
 
 
@@ -257,12 +303,6 @@ def resume_schedule(
     db.commit()
     db.refresh(schedule)
 
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        register_schedules()
-    except Exception as exc:
-        logger.warning("Beat registration failed: %s", exc)
-
     return _schedule_to_response(schedule)
 
 
@@ -278,14 +318,8 @@ def delete_schedule(
 ) -> dict:
     schedule = _get_schedule_or_404(schedule_id, current_user, db)
 
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        db.delete(schedule)
-        db.commit()
-        register_schedules()
-    except Exception:
-        db.delete(schedule)
-        db.commit()
+    db.delete(schedule)
+    db.commit()
 
     log_action(db, "schedule_deleted", user_id=current_user.id,
                resource_type="schedule", resource_id=as_uuid(schedule_id),
@@ -363,12 +397,6 @@ def toggle_schedule(
         schedule.next_run_at = None
     db.commit()
     db.refresh(schedule)
-
-    try:
-        from backend.scheduling.beat_manager import register_schedules
-        register_schedules()
-    except Exception:
-        pass
 
     log_action(db, "schedule_toggled", user_id=current_user.id,
                resource_type="schedule", resource_id=schedule.id,

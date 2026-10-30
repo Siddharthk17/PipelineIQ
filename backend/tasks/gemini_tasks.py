@@ -4,11 +4,11 @@ Runs on the 'gemini' queue with concurrency=1 and rate_limit='50/m'.
 This ensures we never exceed Gemini's free tier limits.
 """
 import hashlib
-import orjson
 import random
 import time
-from typing import Any
+from typing import Any, cast
 
+import orjson
 import structlog
 from celery.utils.log import get_task_logger
 
@@ -188,7 +188,7 @@ def call_gemini_task(
     cache_key = f"gemini:resp:{hashlib.sha256(cache_input.encode()).hexdigest()}"
 
     redis = get_cache_redis()
-    cached = redis.get(cache_key)
+    cached = cast("str | None", redis.get(cache_key))
     if cached:
         slog.info("gemini_cache_hit", cache_key_prefix=cache_key[:16])
         return cached
@@ -240,7 +240,6 @@ def call_gemini_task(
             actual_tokens=actual_tokens,
             response_length=len(result_text),
         )
-        return result_text
 
     except Exception as e:
         if budget_reserved:
@@ -251,20 +250,11 @@ def call_gemini_task(
             # Free tier exhausted - this is a TERMINAL failure, not a success.
             # Raising (instead of returning a sentinel string) ensures Celery
             # marks the task as FAILED rather than mis-reporting it as
-            # succeeded with a poisoned payload. The state update surfaces
-            # the reason to result consumers without putting a sentinel
-            # in the result backend.
+            # succeeded with a poisoned payload. Do not call update_state
+            # with a plain-dict meta first: the JSON result backend decodes
+            # the stored payload as an encoded exception on mark_as_failure,
+            # and a plain dict breaks that read-back (KeyError: exc_type).
             slog.warning("gemini_free_tier_quota_exhausted")
-            self.update_state(
-                state="FAILURE",
-                meta={
-                    "error": "gemini_free_tier_quota_exhausted",
-                    "reason": (
-                        "Google Gemini free-tier quota exhausted. "
-                        "Retries will not recover from a hard quota limit."
-                    ),
-                },
-            )
             raise GeminiQuotaExhaustedError(
                 "Google Gemini free-tier quota exhausted."
             ) from e
@@ -277,7 +267,7 @@ def call_gemini_task(
                 max_retries=self.max_retries,
                 retry_in_seconds=backoff,
             )
-            raise self.retry(exc=e, countdown=backoff)
+            raise self.retry(exc=e, countdown=backoff) from e
 
         if _is_transient_server_error(error_str):
             backoff = _compute_retry_delay(self.request.retries)
@@ -288,16 +278,16 @@ def call_gemini_task(
                 retry_in_seconds=backoff,
                 error=error_str[:200],
             )
-            raise self.retry(exc=e, countdown=backoff)
+            raise self.retry(exc=e, countdown=backoff) from e
 
         # Non-retryable client error: raise a real exception so Celery marks
         # the task as FAILED instead of returning a poisoned sentinel.
+        # (No manual update_state first: a plain-dict meta corrupts the
+        # result-backend read-back on mark_as_failure.)
         slog.error("gemini_client_error", error=error_str[:500])
-        self.update_state(
-            state="FAILURE",
-            meta={"error": "gemini_client_error", "reason": error_str[:500]},
-        )
         raise GeminiClientError(f"Gemini AI service error: {error_str[:500]}") from e
+    else:
+        return result_text
     finally:
         structlog.contextvars.clear_contextvars()
 
@@ -342,7 +332,7 @@ def generate_pipeline_description_task(
         f"gemini:resp:{hashlib.sha256(cache_input.encode()).hexdigest()}"
     )
 
-    cached = redis.get(response_cache_key)
+    cached = cast("str | bytes | None", redis.get(response_cache_key))
     if cached:
         result_text = cached.decode("utf-8") if isinstance(cached, bytes) else cached
         redis.setex(cache_key, RESPONSE_CACHE_TTL * 24, result_text)
@@ -380,7 +370,6 @@ def generate_pipeline_description_task(
         if result_text:
             redis.setex(response_cache_key, RESPONSE_CACHE_TTL, result_text)
             redis.setex(cache_key, RESPONSE_CACHE_TTL * 24, result_text)
-        return result_text
 
     except Exception as exc:
         if budget_reserved:
@@ -393,8 +382,10 @@ def generate_pipeline_description_task(
                 retry_in_seconds=backoff,
                 error=error_str[:200],
             )
-            raise self.retry(exc=exc, countdown=backoff)
+            raise self.retry(exc=exc, countdown=backoff) from exc
         slog.warning("pipeline_description_failed", error=error_str[:200])
         return ""
+    else:
+        return result_text
     finally:
         structlog.contextvars.clear_contextvars()

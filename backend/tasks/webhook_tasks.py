@@ -12,13 +12,13 @@ to the same host.
 import asyncio
 import hashlib
 import hmac
-import orjson
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict
+from datetime import UTC, datetime
+from typing import Any
 
 import httpx
+import orjson
 from celery import Task
 
 from backend.celery_app import celery_app
@@ -44,10 +44,63 @@ class WebhookTask(Task):
                     max_connections=100,
                     max_keepalive_connections=20,
                 ),
-                follow_redirects=True,
-                max_redirects=3,
+                # Redirects are followed manually by _post_with_safe_redirects
+                # so every hop can be re-validated. Never enable httpx-level
+                # redirects here: they would skip the egress allow-list.
+                follow_redirects=False,
             )
         return self._client
+
+
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_MAX_REDIRECT_HOPS = 3
+
+
+def _raise_for_bad_status(response: httpx.Response) -> None:
+    """Raise for retry accounting when a webhook endpoint returns non-2xx."""
+    raise httpx.RequestError(
+        f"Webhook returned {response.status_code}: {response.text[:200]}",
+        request=response.request,
+    )
+
+
+async def _post_with_safe_redirects(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    content: bytes,
+    headers: dict,
+    max_hops: int = _MAX_REDIRECT_HOPS,
+) -> httpx.Response:
+    """POST with manual redirect handling that re-validates every hop.
+
+    httpx-level redirects are disabled because they would fetch whatever
+    Location the server returns, including link-local/metadata addresses
+    that validate_public_http_url forbids. Each hop is resolved against
+    the previous URL and re-validated; an unsafe target raises UnsafeURL
+    without any further request being made.
+    """
+    from urllib.parse import urljoin
+
+    validate_public_http_url(url)
+    method = "POST"
+    body: bytes | None = content
+    for _ in range(max_hops + 1):
+        if method == "POST":
+            resp = await client.post(url, content=body, headers=headers)
+        else:
+            resp = await client.get(url, headers=headers)
+        if resp.status_code not in _REDIRECT_STATUSES:
+            return resp
+        location = resp.headers.get("location")
+        if not location:
+            return resp
+        url = urljoin(url, location)
+        validate_public_http_url(url)
+        if method == "POST" and resp.status_code in (301, 302, 303):
+            method = "GET"
+            body = None
+    raise httpx.RequestError(f"Too many redirects (>{max_hops} hops)")
 
 
 @celery_app.task(
@@ -114,7 +167,8 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
         headers["X-PipelineIQ-Signature"] = f"sha256={signature}"
 
     try:
-        resp = await task.client.post(
+        resp = await _post_with_safe_redirects(
+            task.client,
             webhook.url,
             content=payload_bytes,
             headers=headers,
@@ -142,9 +196,9 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
                 duration_ms=duration_ms,
             )
             if success:
-                delivery.delivered_at = datetime.now(timezone.utc)
+                delivery.delivered_at = datetime.now(UTC)
             else:
-                delivery.failed_at = datetime.now(timezone.utc)
+                delivery.failed_at = datetime.now(UTC)
                 delivery.error_message = f"HTTP {resp.status_code}"
             db.add(delivery)
             db.commit()
@@ -152,11 +206,34 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
             db.close()
 
         if not success:
-            raise httpx.RequestError(
-                f"Webhook returned {resp.status_code}: {resp.text[:200]}"
-            )
+            _raise_for_bad_status(resp)
+    except UnsafeURL as e:
+        duration_ms = int(time.time() * 1000) - start_ms
+        error_str = f"Redirect target blocked: {e}"
 
-        return {"success": True, "status_code": resp.status_code, "duration_ms": duration_ms}
+        db = SessionLocal()
+        try:
+            delivery = WebhookDelivery(
+                webhook_id=webhook_id,
+                run_id=payload.get("data", {}).get("run_id"),
+                event_type=payload.get("event_type", "unknown"),
+                payload=payload,
+                attempt_number=attempt_number,
+                duration_ms=duration_ms,
+            )
+            delivery.failed_at = datetime.now(UTC)
+            delivery.error_message = error_str
+            db.add(delivery)
+            db.commit()
+        finally:
+            db.close()
+
+        logger.warning(
+            "Webhook redirect blocked: url=%s, error=%s",
+            webhook.url[:60],
+            error_str,
+        )
+        return {"success": False, "error": error_str}
 
     except (httpx.RequestError, httpx.TimeoutException) as e:
         duration_ms = int(time.time() * 1000) - start_ms
@@ -172,7 +249,7 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
                 attempt_number=attempt_number,
                 duration_ms=duration_ms,
             )
-            delivery.failed_at = datetime.now(timezone.utc)
+            delivery.failed_at = datetime.now(UTC)
             delivery.error_message = error_str
             db.add(delivery)
             db.commit()
@@ -186,6 +263,12 @@ async def _deliver_async(task: WebhookTask, webhook_id: str, payload: dict) -> d
             error_str,
         )
         raise
+
+    return {
+        "success": True,
+        "status_code": resp.status_code,
+        "duration_ms": duration_ms,
+    }
 
 
 @celery_app.task(
@@ -204,7 +287,7 @@ def deliver_webhooks_task(
     steps_count: int = 0,
     rows_processed: int = 0,
     user_id: str = "",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Deliver webhooks for a pipeline run asynchronously.
 
     Enqueues individual deliver_webhook tasks for each active webhook
@@ -227,7 +310,7 @@ def deliver_webhooks_task(
         event_type = f"pipeline_{status.lower()}"
         payload = {
             "event": event_type,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "data": {
                 "run_id": str(run_id),
                 "pipeline_name": pipeline_name,
@@ -247,15 +330,15 @@ def deliver_webhooks_task(
                     args=[str(wh.id), payload],
                     queue="critical",
                 )
-
+    except Exception as exc:
+        logger.exception("Webhook delivery failed for run %s", run_id)
+        raise self.retry(exc=exc) from exc
+    else:
         return {
             "run_id": run_id,
             "status": "enqueued" if matched > 0 else "skipped",
             "matched_webhooks": matched,
         }
-    except Exception as exc:
-        logger.error("Webhook delivery failed for run %s: %s", run_id, exc)
-        raise self.retry(exc=exc)
 
 
 def fire_webhooks_for_event(

@@ -9,6 +9,7 @@ import { RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import type { PipelineRun } from "@/lib/types";
 import type { RunDownload } from "@/lib/api";
 import { Download } from "lucide-react";
+import { BackToDashboard } from "@/components/layout/BackToDashboard";
 
 export default function RunDetailPage({ params }: { params: Promise<{ runId: string }> }) {
   const router = useRouter();
@@ -30,6 +31,27 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
       .catch(() => {})
       .finally(() => setPageLoading(false));
   }, [isLoading, resolvedParams.runId, router, user]);
+
+  const isTerminal = run === null || [
+    "COMPLETED",
+    "HEALED",
+    "FAILED",
+    "CANCELLED",
+    "CONTRACT_VIOLATION",
+    "TIMEOUT",
+  ].includes(run.status);
+
+  // Poll while the run is active so progress, logs and results appear
+  // without a manual refresh. Polling stops at a terminal status.
+  useEffect(() => {
+    if (isLoading || !user || !run || isTerminal) return;
+    const timer = window.setInterval(() => {
+      getPipelineRun(resolvedParams.runId)
+        .then(setRun)
+        .catch(() => {});
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [isLoading, user, resolvedParams.runId, run, isTerminal]);
 
   const handleDownload = async () => {
     setDownloadLoading(true);
@@ -61,6 +83,11 @@ export default function RunDetailPage({ params }: { params: Promise<{ runId: str
 
   return (
     <main className="flex h-screen w-screen flex-col bg-[var(--bg-base)] text-[var(--text-primary)]">
+      <div className="border-b border-[var(--widget-border)] px-6 pt-4">
+        <div className="flex items-center gap-3 mb-2">
+          <BackToDashboard />
+        </div>
+      </div>
       <div className="flex items-center justify-between border-b border-[var(--widget-border)] px-6 py-4">
         <div className="flex items-center gap-3">
           <RunStatusBadge status={run.status} />

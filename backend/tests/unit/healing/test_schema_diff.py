@@ -7,7 +7,6 @@ from backend.execution.schema_diff import (
     find_rename_candidates,
 )
 
-
 OLD_SCHEMA = {
     "customer_id": {"semantic_type": "integer_id"},
     "customer_name": {"semantic_type": "text"},

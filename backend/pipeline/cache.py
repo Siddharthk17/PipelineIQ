@@ -20,13 +20,12 @@ import hashlib
 import logging
 import os
 import time
-from urllib.parse import urlparse
 from collections import OrderedDict
+from urllib.parse import urlparse
 
 from backend.config import settings
 from backend.db.redis_pools import get_cache_redis
 from backend.pipeline.parser import PipelineParser
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -41,24 +40,28 @@ _DOCKER_INTERNAL_REDIS_HOSTS = {
 
 # Module-level parser instance — stateless, safe to reuse
 _parser = PipelineParser()
-_local_parsed_cache: "OrderedDict[str, object]" = OrderedDict()
+# Raw YAML strings keyed by hash. Each lookup re-parses through the trusted
+# parser so callers always get a private, fully-normalized object (diff
+# markers stripped, quoted values repaired) and can never observe or mutate
+# another caller's PipelineConfig.
+_local_yaml_cache: "OrderedDict[str, str]" = OrderedDict()
 _redis_cache_disabled_until = 0.0
 _REDIS_RETRY_BACKOFF_SECONDS = 5.0
 
 
 def _local_cache_get(cache_key: str):
-    cached = _local_parsed_cache.get(cache_key)
+    cached = _local_yaml_cache.get(cache_key)
     if cached is None:
         return None
-    _local_parsed_cache.move_to_end(cache_key)
+    _local_yaml_cache.move_to_end(cache_key)
     return cached
 
 
-def _local_cache_set(cache_key: str, pipeline_obj: object) -> None:
-    _local_parsed_cache[cache_key] = pipeline_obj
-    _local_parsed_cache.move_to_end(cache_key)
-    while len(_local_parsed_cache) > LOCAL_CACHE_MAX_ENTRIES:
-        _local_parsed_cache.popitem(last=False)
+def _local_cache_set(cache_key: str, yaml_text: str) -> None:
+    _local_yaml_cache[cache_key] = yaml_text
+    _local_yaml_cache.move_to_end(cache_key)
+    while len(_local_yaml_cache) > LOCAL_CACHE_MAX_ENTRIES:
+        _local_yaml_cache.popitem(last=False)
 
 
 def _should_use_redis_cache() -> bool:
@@ -70,10 +73,7 @@ def _should_use_redis_cache() -> bool:
 
     parsed = urlparse(settings.REDIS_CACHE_URL or "")
     host = parsed.hostname or ""
-    if host in _DOCKER_INTERNAL_REDIS_HOSTS and not os.path.exists(
-            "/.dockerenv"):
-        return False
-    return True
+    return not (host in _DOCKER_INTERNAL_REDIS_HOSTS and not os.path.exists("/.dockerenv"))
 
 
 def _redis_call(redis_client, operation: str, *args, **kwargs):
@@ -84,7 +84,6 @@ def _redis_call(redis_client, operation: str, *args, **kwargs):
     try:
         result = getattr(redis_client, operation)(*args, **kwargs)
         _redis_cache_disabled_until = 0.0
-        return result
     except Exception as exc:
         _redis_cache_disabled_until = now + _REDIS_RETRY_BACKOFF_SECONDS
         logger.warning(
@@ -96,6 +95,8 @@ def _redis_call(redis_client, operation: str, *args, **kwargs):
         return None
 
 
+    else:
+        return result
 def get_parsed_pipeline(yaml_text: str):
     """
     Get a parsed pipeline object, using Redis cache to avoid re-parsing.
@@ -120,7 +121,7 @@ def get_parsed_pipeline(yaml_text: str):
 
     local_cached = _local_cache_get(cache_key)
     if local_cached is not None:
-        return local_cached
+        return _parser.parse(local_cached)
 
     if _should_use_redis_cache():
         redis = get_cache_redis()
@@ -131,18 +132,17 @@ def get_parsed_pipeline(yaml_text: str):
             try:
                 if isinstance(cached, bytes):
                     cached = cached.decode("utf-8")
-                raw = yaml.safe_load(cached)
-                pipeline = _parser.build_from_dict(raw)
-                _local_cache_set(cache_key, pipeline)
+                pipeline = _parser.parse(cached)
+                _local_cache_set(cache_key, cached)
                 logger.debug(f"YAML cache HIT: {cache_key[:24]}...")
-                return pipeline
             except Exception as e:
                 logger.warning(
                     f"YAML cache decode failed: {e}. Parsing fresh.")
-
+            else:
+                return pipeline
     # Cache miss — parse the YAML (~5ms)
     pipeline = _parser.parse(yaml_text)
-    _local_cache_set(cache_key, pipeline)
+    _local_cache_set(cache_key, yaml_text)
 
     # Store in cache for future calls
     if _should_use_redis_cache():
@@ -172,7 +172,7 @@ def invalidate_pipeline_cache(yaml_text: str) -> None:
     """
     yaml_hash = hashlib.sha256(yaml_text.encode("utf-8")).hexdigest()
     cache_key = f"{YAML_CACHE_PREFIX}{yaml_hash}"
-    _local_parsed_cache.pop(cache_key, None)
+    _local_yaml_cache.pop(cache_key, None)
     if _should_use_redis_cache():
         redis = get_cache_redis()
         deleted = _redis_call(redis, "delete", cache_key)

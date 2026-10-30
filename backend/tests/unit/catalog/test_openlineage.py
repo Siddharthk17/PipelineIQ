@@ -1,13 +1,13 @@
 """Tests for OpenLineage event builder."""
 import json
+from datetime import UTC, datetime
 
 import networkx as nx
-from datetime import datetime, timezone
 
 from backend.openlineage.builder import (
-    build_openlineage_event,
     OPENLINEAGE_SCHEMA_URL,
     PRODUCER_URL,
+    build_openlineage_event,
 )
 
 
@@ -18,7 +18,7 @@ class TestOpenLineage:
     def test_event_type_complete_for_success(self):
         event = build_openlineage_event(
             run_id="r1", pipeline_name="p1", status="success",
-            started_at=datetime.now(timezone.utc), completed_at=None,
+            started_at=datetime.now(UTC), completed_at=None,
             duration_ms=None, output_row_count=None,
             lineage_graph=nx.DiGraph(), file_ids=[],
         )
@@ -27,7 +27,7 @@ class TestOpenLineage:
     def test_event_type_fail_for_failed(self):
         event = build_openlineage_event(
             run_id="r1", pipeline_name="p1", status="failed",
-            started_at=datetime.now(timezone.utc), completed_at=None,
+            started_at=datetime.now(UTC), completed_at=None,
             duration_ms=None, output_row_count=None,
             lineage_graph=nx.DiGraph(), file_ids=[],
         )
@@ -36,7 +36,7 @@ class TestOpenLineage:
     def test_event_type_complete_for_healed(self):
         event = build_openlineage_event(
             run_id="r1", pipeline_name="p1", status="healed",
-            started_at=datetime.now(timezone.utc), completed_at=None,
+            started_at=datetime.now(UTC), completed_at=None,
             duration_ms=None, output_row_count=None,
             lineage_graph=nx.DiGraph(), file_ids=[],
         )
@@ -45,7 +45,7 @@ class TestOpenLineage:
     def test_event_has_run_id(self):
         event = build_openlineage_event(
             run_id="my-run-id", pipeline_name="p1", status="success",
-            started_at=datetime.now(timezone.utc), completed_at=None,
+            started_at=datetime.now(UTC), completed_at=None,
             duration_ms=None, output_row_count=None,
             lineage_graph=nx.DiGraph(), file_ids=[],
         )
@@ -54,7 +54,7 @@ class TestOpenLineage:
     def test_event_has_job_name_and_namespace(self):
         event = build_openlineage_event(
             run_id="r1", pipeline_name="my_pipeline", status="success",
-            started_at=datetime.now(timezone.utc), completed_at=None,
+            started_at=datetime.now(UTC), completed_at=None,
             duration_ms=None, output_row_count=None,
             lineage_graph=nx.DiGraph(), file_ids=[],
         )
@@ -68,7 +68,7 @@ class TestOpenLineage:
 
         event = build_openlineage_event(
             run_id="r1", pipeline_name="p1", status="success",
-            started_at=datetime.now(timezone.utc), completed_at=None,
+            started_at=datetime.now(UTC), completed_at=None,
             duration_ms=None, output_row_count=None,
             lineage_graph=G, file_ids=[],
         )
@@ -81,7 +81,7 @@ class TestOpenLineage:
 
         event = build_openlineage_event(
             run_id="r1", pipeline_name="p1", status="success",
-            started_at=datetime.now(timezone.utc), completed_at=None,
+            started_at=datetime.now(UTC), completed_at=None,
             duration_ms=None, output_row_count=None,
             lineage_graph=G, file_ids=[],
         )
@@ -91,14 +91,14 @@ class TestOpenLineage:
     def test_event_has_producer_url(self):
         event = build_openlineage_event(
             run_id="r1", pipeline_name="p1", status="success",
-            started_at=datetime.now(timezone.utc), completed_at=None,
+            started_at=datetime.now(UTC), completed_at=None,
             duration_ms=None, output_row_count=None,
             lineage_graph=nx.DiGraph(), file_ids=[],
         )
         assert event["producer"] == PRODUCER_URL
 
     def test_event_time_is_iso_format(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         event = build_openlineage_event(
             run_id="r1", pipeline_name="p1", status="success",
             started_at=now, completed_at=now,
@@ -110,7 +110,7 @@ class TestOpenLineage:
     def test_empty_graph_produces_empty_inputs_outputs(self):
         event = build_openlineage_event(
             run_id="r1", pipeline_name="p1", status="success",
-            started_at=datetime.now(timezone.utc), completed_at=None,
+            started_at=datetime.now(UTC), completed_at=None,
             duration_ms=None, output_row_count=None,
             lineage_graph=nx.DiGraph(), file_ids=[],
         )

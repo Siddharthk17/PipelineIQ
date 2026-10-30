@@ -7,7 +7,6 @@ Detects changes in CSV column structure between uploads:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 
 @dataclass
@@ -16,8 +15,8 @@ class ColumnDrift:
 
     column: str
     drift_type: str  # "added", "removed", "type_changed"
-    old_type: Optional[str]
-    new_type: Optional[str]
+    old_type: str | None
+    new_type: str | None
     severity: str  # "breaking", "warning", "info"
 
 
@@ -26,17 +25,17 @@ class SchemaDriftReport:
     """Complete schema drift report between two snapshots."""
 
     has_drift: bool
-    columns_added: List[str]
-    columns_removed: List[str]
-    type_changes: List[ColumnDrift]
+    columns_added: list[str]
+    columns_removed: list[str]
+    type_changes: list[ColumnDrift]
     summary: str
 
 
 def detect_schema_drift(
-    old_columns: List[str],
-    old_dtypes: Dict[str, str],
-    new_columns: List[str],
-    new_dtypes: Dict[str, str],
+    old_columns: list[str],
+    old_dtypes: dict[str, str],
+    new_columns: list[str],
+    new_dtypes: dict[str, str],
 ) -> SchemaDriftReport:
     """Compare two sets of columns/dtypes for schema drift."""
     old_set = set(old_columns)
@@ -44,7 +43,7 @@ def detect_schema_drift(
 
     columns_added = sorted(new_set - old_set)
     columns_removed = sorted(old_set - new_set)
-    type_changes: List[ColumnDrift] = []
+    type_changes: list[ColumnDrift] = []
 
     for col in sorted(old_set & new_set):
         old_type = old_dtypes.get(col, "")

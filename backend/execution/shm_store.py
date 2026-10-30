@@ -74,11 +74,12 @@ def read(path: Path) -> pa.Table | None:
 def remove(path: Path) -> bool:
     try:
         path.unlink(missing_ok=True)
-        return True
     except OSError:
         return False
 
 
+    else:
+        return True
 def remove_for_run(
     run_id: str,
     shm_dir: Path | None = None,

@@ -201,27 +201,53 @@ function computeNodePositions(nodes: BuilderNode[], edges: BuilderEdge[]): Map<s
   return positions;
 }
 
-export function yamlToGraph(yamlText: string): BuilderGraph {
+export interface YamlParseDiagnostics {
+  graph: BuilderGraph;
+  /** Null when parsing succeeded; human-readable reason otherwise. */
+  error: string | null;
+}
+
+export function parseYamlWithDiagnostics(yamlText: string): YamlParseDiagnostics {
   const emptyGraph: BuilderGraph = { pipelineName: "my_pipeline", nodes: [], edges: [] };
   if (!yamlText.trim()) {
-    return emptyGraph;
+    return { graph: emptyGraph, error: null };
   }
 
   let rawLoaded: unknown;
   try {
-    rawLoaded = yaml.load(yamlText);
-  } catch {
-    return emptyGraph;
+    // json:true tolerates duplicated mapping keys (last wins, like
+    // JSON.parse) instead of throwing. Collaborative editing can otherwise
+    // leave merged duplicates in the doc, which used to fail the whole
+    // parse and silently empty the canvas.
+    rawLoaded = yaml.load(yamlText, { json: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to parse YAML";
+    return { graph: emptyGraph, error: message };
   }
-  if (!rawLoaded || typeof rawLoaded !== "object") {
-    return emptyGraph;
+  if (!rawLoaded || typeof rawLoaded !== "object" || Array.isArray(rawLoaded)) {
+    return { graph: emptyGraph, error: "Pipeline YAML must be a mapping with steps." };
   }
 
   const rawRoot = toRecord(rawLoaded);
   const pipelineRaw = toRecord(rawRoot.pipeline ?? rawRoot);
   const pipelineName = asString(pipelineRaw.name).trim() || "my_pipeline";
   const rawSteps = Array.isArray(pipelineRaw.steps) ? pipelineRaw.steps : [];
+  if (rawSteps.length === 0) {
+    return {
+      graph: { pipelineName, nodes: [], edges: [] },
+      error: null,
+    };
+  }
 
+  const graph = buildGraphFromSteps(pipelineName, rawSteps);
+  return { graph, error: null };
+}
+
+export function yamlToGraph(yamlText: string): BuilderGraph {
+  return parseYamlWithDiagnostics(yamlText).graph;
+}
+
+function buildGraphFromSteps(pipelineName: string, rawSteps: unknown[]): BuilderGraph {
   const nodes: BuilderNode[] = [];
   const edges: BuilderEdge[] = [];
   const stepNameToNodeId = new Map<string, string>();

@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pyarrow as pa
 
 from backend.execution.smart_executor import SmartExecutor
+from backend.pipeline.lineage import LineageRecorder
+from backend.pipeline.parser import (
+    FilterStepConfig,
+    JoinHow,
+    JoinStepConfig,
+    LoadStepConfig,
+    SaveStepConfig,
+    SqlStepConfig,
+    StepType,
+)
 from backend.pipeline.steps import StepExecutionResult
 
 
@@ -39,15 +48,15 @@ def test_load_step_always_routes_to_pandas_load() -> None:
 
     pandas_exec.execute_load.return_value = _result(
         "load_data", "load", output)
-    step = SimpleNamespace(
+    step = LoadStepConfig(
         name="load_data",
-        step_type="load",
+        step_type=StepType.LOAD,
         file_id="file-1")
 
     router.execute(
         step=step,
         table_registry={},
-        recorder=object(),
+        recorder=LineageRecorder(),
         file_paths={"file-1": "/tmp/file.csv"},
         file_metadata={"file-1": {"original_filename": "file.csv"}},
     )
@@ -64,14 +73,14 @@ def test_save_step_stays_on_pandas_even_for_large_input() -> None:
 
     pandas_exec.execute.return_value = _result(
         "save_data", "save", large_table)
-    step = SimpleNamespace(
+    step = SaveStepConfig(
         name="save_data",
-        step_type="save",
+        step_type=StepType.SAVE,
         input="filtered",
         filename="out.csv",
     )
 
-    router.execute(step, {"filtered": large_table}, object())
+    router.execute(step, {"filtered": large_table}, LineageRecorder())
 
     pandas_exec.execute.assert_called_once()
     duckdb_exec.execute_step.assert_not_called()
@@ -84,13 +93,13 @@ def test_sql_step_always_routes_to_duckdb_even_for_small_input() -> None:
     small_table = _table(10)
     duckdb_exec.execute_step.return_value = small_table
 
-    step = SimpleNamespace(
+    step = SqlStepConfig(
         name="sql_step",
-        step_type="sql",
+        step_type=StepType.SQL,
         input="load",
         query="SELECT * FROM {{input}}",
     )
-    router.execute(step, {"load": small_table}, object())
+    router.execute(step, {"load": small_table}, LineageRecorder())
 
     duckdb_exec.execute_step.assert_called_once()
     pandas_exec.execute.assert_not_called()
@@ -103,11 +112,11 @@ def test_large_filter_routes_to_duckdb() -> None:
     large_table = _table(SmartExecutor.DUCKDB_THRESHOLD + 1)
     duckdb_exec.execute_step.return_value = large_table
 
-    step = SimpleNamespace(
+    step = FilterStepConfig(
         name="filter_step",
-        step_type="filter",
+        step_type=StepType.FILTER,
         input="load")
-    router.execute(step, {"load": large_table}, object())
+    router.execute(step, {"load": large_table}, LineageRecorder())
 
     duckdb_exec.execute_step.assert_called_once_with(
         step, large_table, extra_tables=None)
@@ -122,17 +131,17 @@ def test_large_join_routes_to_duckdb_with_join_aliases() -> None:
     right = _table(SmartExecutor.DUCKDB_THRESHOLD + 20)
     duckdb_exec.execute_step.return_value = left
 
-    step = SimpleNamespace(
+    step = JoinStepConfig(
         name="join_step",
-        step_type="join",
+        step_type=StepType.JOIN,
         left="left_input",
         right="right_input",
         on="id",
-        how="inner",
+        how=JoinHow.INNER,
     )
     router.execute(
         step, {
-            "left_input": left, "right_input": right}, object())
+            "left_input": left, "right_input": right}, LineageRecorder())
 
     duckdb_exec.execute_step.assert_called_once()
     call = duckdb_exec.execute_step.call_args

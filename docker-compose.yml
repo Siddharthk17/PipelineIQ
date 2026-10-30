@@ -1,8 +1,11 @@
 services:
-  redis-overcommit-fix:
+  # Reminder only: this container cannot set the host sysctl itself.
+  # On the Docker host, run: sysctl -w vm.overcommit_memory=1
+  # (persist via /etc/sysctl.conf) to avoid Redis background-save failures.
+  redis-overcommit-note:
     image: alpine:3.19
-    container_name: pipelineiq-redis-overcommit-fix
-    command: ["sh", "-c", "echo 'Set vm.overcommit_memory=1 on the Docker host before production startup'"]
+    container_name: pipelineiq-redis-overcommit-note
+    command: ["sh", "-c", "echo 'REMINDER: set vm.overcommit_memory=1 on the Docker host (sysctl -w vm.overcommit_memory=1)'"]
     restart: "no"
     networks:
       - pipelineiq-network
@@ -175,8 +178,9 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
       - OTEL_SERVICE_NAME=pipelineiq-api
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -250,8 +254,9 @@ services:
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
       - OTEL_SERVICE_NAME=pipelineiq-sse
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -314,12 +319,14 @@ services:
       - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+      - CELERY_CONCURRENCY=${CELERY_WORKERS_CRITICAL:-2}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -382,12 +389,14 @@ services:
       - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+      - CELERY_CONCURRENCY=${CELERY_WORKERS_DEFAULT:-3}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -450,12 +459,14 @@ services:
       - REDPANDA_BROKERS=redpanda:9093
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+      - CELERY_CONCURRENCY=${CELERY_WORKERS_BULK:-2}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -521,12 +532,14 @@ services:
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - GEMINI_FALLBACK_MODELS=${GEMINI_FALLBACK_MODELS:-gemini-2.0-flash,gemini-1.5-flash}
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
       - STORAGE_TYPE=${STORAGE_TYPE:-s3}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-pipelineiq-uploads}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - S3_PUBLIC_ENDPOINT_URL=${S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+      - CELERY_CONCURRENCY=1
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -587,7 +600,7 @@ services:
       - REDIS_YJS_URL=redis://:${REDIS_PASSWORD}@redis-yjs:6382/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis-broker:6379/1
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -626,8 +639,8 @@ services:
       --loglevel notice
     ports:
       - "127.0.0.1:6379:6379"
-    volumes:
-      - redis_broker_data:/data
+    # NOTE: intentionally no volume — broker runs with --save "" --appendonly no,
+    # so mounted storage would never be used.
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
       interval: 10s
@@ -670,7 +683,7 @@ services:
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     depends_on:
-      redis-overcommit-fix:
+      redis-overcommit-note:
         condition: service_completed_successfully
     sysctls:
       net.core.somaxconn: 511
@@ -814,6 +827,18 @@ services:
       --inspect_timeout=10000"
     ports:
       - "127.0.0.1:5555:5555"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; socket.create_connection(('127.0.0.1', 5555), timeout=10).close()",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     environment:
       - REDIS_BROKER_URL=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
       - REDIS_PUBSUB_URL=redis://:${REDIS_PASSWORD}@redis-pubsub:6380/0
@@ -859,7 +884,7 @@ services:
       frontend:
         condition: service_healthy
       flower:
-        condition: service_started
+        condition: service_healthy
       grafana:
         condition: service_healthy
     logging:
@@ -1050,7 +1075,7 @@ services:
       --queues=streaming
       --concurrency=8
       --prefetch-multiplier=1
-      --hostname=streaming@%%h
+      --hostname=streaming@%h
       --loglevel=info
     env_file:
       - .env
@@ -1059,7 +1084,7 @@ services:
       - REDPANDA_BROKERS=redpanda:9093
       - CELERY_CONCURRENCY=8
       - OTEL_SERVICE_NAME=pipelineiq-worker
-      - OTEL_SAMPLE_RATE=1.0
+      - OTEL_SAMPLE_RATE=${OTEL_SAMPLE_RATE:-0.1}
     depends_on:
       redis-broker:
         condition: service_healthy
@@ -1078,7 +1103,6 @@ volumes:
   uploads:
   db_data:
   postgres_replica_data_v2:
-  redis_broker_data:
   redis_cache_data:
   redis_yjs_data:
   minio_data:

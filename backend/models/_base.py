@@ -10,7 +10,7 @@ from enum import Enum as PyEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import JSON
 
-from backend.database import Base
+from backend.database import Base as Base
 
 # Dialect-aware JSONB: native JSONB on PostgreSQL, JSON fallback on SQLite
 PgJSONB = JSONB().with_variant(JSON(), "sqlite")

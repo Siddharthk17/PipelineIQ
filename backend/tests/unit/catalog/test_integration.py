@@ -6,23 +6,23 @@ SQLite to verify the entire stack works together.
 """
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import networkx as nx
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.models import DataAsset, AssetRelationship, PipelineRun, PipelineStatus
+from backend.models import AssetRelationship, DataAsset, PipelineRun, PipelineStatus
 from backend.repositories.catalog import (
-    register_run_assets,
-    upsert_data_asset,
-    upsert_asset_relationship,
-    get_blast_radius,
-    get_upstream_lineage,
-    search_assets,
-    list_orphan_assets,
     NS_MINIO_UPLOADS,
     NS_PIPELINE,
+    get_blast_radius,
+    get_upstream_lineage,
+    list_orphan_assets,
+    register_run_assets,
+    search_assets,
+    upsert_asset_relationship,
+    upsert_data_asset,
 )
 
 
@@ -148,7 +148,7 @@ class TestCatalogRepository:
         upsert_asset_relationship(db=test_db, source_id=mid_id, target_id=tgt_id, relation="transforms")
         test_db.commit()
 
-        results = get_blast_radius(test_db, asset_name="customer_id")
+        results = get_blast_radius(test_db, asset_name="customer_id", is_admin=True)
 
         names = [r["name"] for r in results]
         assert "customer_id" in names
@@ -165,7 +165,7 @@ class TestCatalogRepository:
         upsert_data_asset(db=test_db, asset_type="file", name="file_a.csv", namespace=NS_MINIO_UPLOADS)
         test_db.commit()
 
-        col_results = get_blast_radius(test_db, asset_name="col_a", asset_type="column")
+        col_results = get_blast_radius(test_db, asset_name="col_a", asset_type="column", is_admin=True)
         assert len(col_results) >= 1
         assert all(r["asset_type"] == "column" for r in col_results)
 
@@ -180,7 +180,7 @@ class TestCatalogRepository:
         upsert_asset_relationship(db=test_db, source_id=src_id, target_id=tgt_id, relation="transforms")
         test_db.commit()
 
-        results = get_upstream_lineage(test_db, asset_name="computed_total")
+        results = get_upstream_lineage(test_db, asset_name="computed_total", is_admin=True)
 
         names = [r["name"] for r in results]
         assert "computed_total" in names
@@ -215,7 +215,7 @@ class TestCatalogRepository:
 
         upsert_data_asset(db=test_db, asset_type="column", name="fresh_col", namespace=NS_PIPELINE)
 
-        stale_date = datetime.now(timezone.utc) - timedelta(days=100)
+        stale_date = datetime.now(UTC) - timedelta(days=100)
         stale_asset = DataAsset(
             asset_type="column",
             name="stale_col",
@@ -350,9 +350,9 @@ class TestOpenLineageAPI:
             status=PipelineStatus.COMPLETED,
             yaml_config="pipeline:\n  name: ol_test",
             user_id=self.MOCK_USER_ID,
-            created_at=datetime.now(timezone.utc),
-            started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
             total_rows_out=100,
         )
         test_db.add(run)
@@ -393,9 +393,9 @@ class TestOpenLineageAPI:
             status=PipelineStatus.COMPLETED,
             yaml_config="pipeline:\n  name: bulk",
             user_id=self.MOCK_USER_ID,
-            created_at=datetime.now(timezone.utc),
-            started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
         )
         test_db.add(run)
         test_db.commit()
@@ -436,9 +436,9 @@ class TestOpenLineageAPI:
             status=PipelineStatus.FAILED,
             yaml_config="pipeline:\n  name: failed",
             user_id=self.MOCK_USER_ID,
-            created_at=datetime.now(timezone.utc),
-            started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
             error_message="Something broke",
         )
         test_db.add(run)
@@ -519,7 +519,7 @@ class TestAssetRegistrationIntegration:
             lineage_graph=G,
         )
 
-        results = get_blast_radius(test_db, asset_name="source.csv")
+        results = get_blast_radius(test_db, asset_name="source.csv", is_admin=True)
         assert len(results) >= 1
 
         results2 = get_blast_radius(test_db, asset_name="output_col")
@@ -689,7 +689,7 @@ class TestOpenLineageAPIGaps:
         assert resp.text.strip() == ""
 
     def test_openlineage_event_with_lineage_inputs(self, client: TestClient, test_db):
-        from backend.models import User, LineageGraph
+        from backend.models import LineageGraph, User
         mock_user = test_db.query(User).filter(User.id == uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")).first()
         if not mock_user:
             mock_user = User(
@@ -710,15 +710,15 @@ class TestOpenLineageAPIGaps:
             status=PipelineStatus.COMPLETED,
             yaml_config="pipeline:\n  name: lineage_io",
             user_id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-            created_at=datetime.now(timezone.utc),
-            started_at=datetime.now(timezone.utc),
-            completed_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            started_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
             total_rows_out=100,
         )
         test_db.add(run)
 
+
         import networkx as nx
-        import json
         G = nx.DiGraph()
         G.add_node("source_orders.csv")
         G.add_node("final_report.csv")

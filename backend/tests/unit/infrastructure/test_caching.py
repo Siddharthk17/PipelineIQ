@@ -3,8 +3,9 @@
 8 tests covering cache operations and integration.
 """
 
-from unittest.mock import patch, MagicMock
-from backend.utils.cache import cache_get, cache_set, cache_delete, cache_delete_pattern
+from unittest.mock import MagicMock, patch
+
+from backend.utils.cache import cache_delete, cache_delete_pattern, cache_get, cache_set
 
 
 class TestCacheOperations:

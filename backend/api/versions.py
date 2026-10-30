@@ -4,12 +4,13 @@ Provides access to pipeline version history, diffs, and restore.
 """
 
 import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import PipelineVersion, User, PipelinePermission
+from backend.models import PipelinePermission, PipelineVersion, User
 from backend.pipeline.versioning import diff_pipelines, save_version
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,14 @@ def _check_pipeline_permission(
     )
 
     if not permission or permission.permission_level not in required_levels:
+        # No grant at all: return 404 instead of 403 so the existence of
+        # another user's pipeline cannot be probed via the status code.
+        # Insufficient-level grants stay 403.
+        if not permission:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Pipeline run or pipeline not found, or access denied.",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"User lacks required permissions ({', '.join(required_levels)}) to access pipeline '{pipeline_name}'",

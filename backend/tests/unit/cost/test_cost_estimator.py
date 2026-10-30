@@ -154,6 +154,7 @@ class TestBcryptFix:
     @pytest.mark.asyncio
     async def test_verify_password_correct(self):
         import bcrypt
+
         from backend.auth import verify_password_async
 
         hashed = bcrypt.hashpw(b"correctpassword", bcrypt.gensalt()).decode()
@@ -163,6 +164,7 @@ class TestBcryptFix:
     @pytest.mark.asyncio
     async def test_verify_password_incorrect(self):
         import bcrypt
+
         from backend.auth import verify_password_async
 
         hashed = bcrypt.hashpw(b"realpassword", bcrypt.gensalt()).decode()

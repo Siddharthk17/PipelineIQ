@@ -11,6 +11,7 @@ import { FileRegistryWidget } from "../widgets/FileRegistryWidget";
 import { FileUploadWidget } from "../widgets/FileUploadWidget";
 import { PipelineEditorWidget } from "../widgets/PipelineEditorWidget";
 import { RunMonitorWidget } from "../widgets/RunMonitorWidget";
+import { ExecutionTimelineWidget } from "../widgets/ExecutionTimelineWidget";
 import { LineageGraphWidget } from "../widgets/LineageGraphWidget";
 import { RunHistoryWidget } from "../widgets/RunHistoryWidget";
 import { VersionHistoryWidget } from "../widgets/VersionHistoryWidget";
@@ -26,6 +27,7 @@ const WIDGET_COMPONENTS: Record<string, React.FC<any>> = {
   "file-upload": FileUploadWidget,
   "pipeline-editor": PipelineEditorWidget,
   "run-monitor": RunMonitorWidget,
+  "execution-timeline": ExecutionTimelineWidget,
   "lineage-graph": LineageGraphWidget,
   "run-history": RunHistoryWidget,
   "version-history": VersionHistoryWidget,

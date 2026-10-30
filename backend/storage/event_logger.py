@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
 
 from sqlalchemy import create_engine, text
 
@@ -30,17 +29,16 @@ def log_storage_event(
     *,
     event_type: str,
     tier: str,
-    payload_bytes: Optional[int] = None,
-    duration_ms: Optional[float] = None,
-    run_id: Optional[str] = None,
-    step_name: Optional[str] = None,
-    object_name: Optional[str] = None,
+    payload_bytes: int | None = None,
+    duration_ms: float | None = None,
+    run_id: str | None = None,
+    step_name: str | None = None,
+    object_name: str | None = None,
 ) -> None:
     try:
-        with _log_lock:
-            with _event_engine.connect() as conn:
-                conn.execute(
-                    text("""
+        with _log_lock, _event_engine.connect() as conn:
+            conn.execute(
+                text("""
                         INSERT INTO storage_events
                             (run_id, step_name, event_type, tier,
                              payload_bytes, duration_ms, object_name)
@@ -48,16 +46,16 @@ def log_storage_event(
                             (:run_id, :step_name, :event_type, :tier,
                              :payload_bytes, :duration_ms, :object_name)
                     """),
-                    {
-                        "run_id":        run_id,
-                        "step_name":     step_name,
-                        "event_type":    event_type,
-                        "tier":          tier,
-                        "payload_bytes": payload_bytes,
-                        "duration_ms":   int(duration_ms) if duration_ms else None,
-                        "object_name":   object_name,
-                    },
-                )
-                conn.commit()
+                {
+                    "run_id":        run_id,
+                    "step_name":     step_name,
+                    "event_type":    event_type,
+                    "tier":          tier,
+                    "payload_bytes": payload_bytes,
+                    "duration_ms":   int(duration_ms) if duration_ms else None,
+                    "object_name":   object_name,
+                },
+            )
+            conn.commit()
     except Exception:
         logger.debug("Storage event log insert failed (non-fatal)", exc_info=True)

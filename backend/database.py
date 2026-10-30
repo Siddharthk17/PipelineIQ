@@ -7,7 +7,7 @@ and must never be shared across threads or async boundaries.
 Supports both PostgreSQL (production) and SQLite (testing).
 """
 
-from typing import Generator
+from collections.abc import Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -31,6 +31,10 @@ def _build_engine(url: str):
         pool_pre_ping=True,
         pool_recycle=1800,
         pool_timeout=30,
+        # Fail fast when the database is unreachable instead of blocking
+        # request-path work (audit logs, storage events) on TCP timeouts.
+        connect_args={
+            "connect_timeout": settings.DB_CONNECT_TIMEOUT_SECONDS},
     )
 
 

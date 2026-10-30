@@ -4,6 +4,8 @@ from backend.models import PipelineRun, PipelineStatus
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.runner import (
     PipelineExecutionSummary,
+)
+from backend.pipeline.runner import (
     PipelineStatus as RunnerPipelineStatus,
 )
 from backend.tasks.pipeline_tasks import _persist_results

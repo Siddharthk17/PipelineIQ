@@ -124,7 +124,7 @@ pipeline:
     print(f"User 2 accessing User 1 lineage: {resp.status_code}")
     assert resp.status_code in {403, 404}, "User 2 should not see User 1's lineage"
 
-    print("\n✅ Isolation verification successful!")
+    print("\nPASS: isolation verification successful!")
 
 
 if __name__ == "__main__":
@@ -133,6 +133,6 @@ if __name__ == "__main__":
     try:
         test_isolation()
     except Exception as e:
-        print(f"\n❌ Isolation verification failed: {e}")
+        print(f"\nFAIL: isolation verification failed: {e}")
         traceback.print_exc()
         exit(1)

@@ -5,7 +5,8 @@ from backend.execution.healing_agent import HealingResult
 from backend.models import HealingAttempt, HealingAttemptStatus, PipelineRun, PipelineStatus
 from backend.pipeline.exceptions import ColumnNotFoundError, FileReadError
 from backend.pipeline.lineage import LineageRecorder
-from backend.pipeline.runner import PipelineExecutionSummary, PipelineStatus as RunnerPipelineStatus
+from backend.pipeline.runner import PipelineExecutionSummary
+from backend.pipeline.runner import PipelineStatus as RunnerPipelineStatus
 from backend.tasks.pipeline_tasks import _execute_with_autonomous_healing
 
 

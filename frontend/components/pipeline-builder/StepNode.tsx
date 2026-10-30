@@ -1,5 +1,6 @@
 import React, { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Settings, X } from "lucide-react";
 import { STEP_DEFINITIONS } from "@/lib/stepDefinitions";
 import type { BuilderNode } from "@/lib/yamlGraphSync";
 import type { CollaboratorState } from "@/hooks/useCollaborativePipeline";
@@ -179,7 +180,7 @@ function StepNodeComponent({ id, data, selected }: NodeProps<BuilderNode>) {
           className="rounded border px-2 py-1 text-[11px] transition-colors hover:bg-[var(--interactive-hover)]"
           style={{ borderColor: "var(--widget-border)" }}
         >
-          \u2699
+          <Settings className="h-3.5 w-3.5" />
         </button>
         <button
           type="button"
@@ -189,7 +190,7 @@ function StepNodeComponent({ id, data, selected }: NodeProps<BuilderNode>) {
           className="rounded border px-2 py-1 text-[11px] text-[var(--accent-error)] transition-colors hover:bg-[var(--interactive-hover)]"
           style={{ borderColor: "color-mix(in srgb, var(--accent-error) 45%, transparent)" }}
         >
-          \u00D7
+          <X className="h-3.5 w-3.5" />
         </button>
       </div>
     </div>

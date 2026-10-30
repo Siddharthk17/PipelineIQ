@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from minio import Minio
@@ -41,6 +41,34 @@ def _minio_client() -> Minio:
         secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minio123"),
         secure=False,
     )
+
+
+def _is_missing_bucket(exc: Exception) -> bool:
+    message = str(exc)
+    return "NoSuchBucket" in message or "does not exist" in message
+
+
+def ensure_buckets() -> dict[str, str]:
+    """Create any missing buckets from BUCKETS (idempotent).
+
+    The analytics endpoints iterate a fixed bucket list, but nothing
+    created pipelineiq-outputs / pipelineiq-spills at startup, so the
+    storage page showed raw NoSuchBucket errors for them.
+    """
+    client = _minio_client()
+    results: dict[str, str] = {}
+    for bucket in BUCKETS:
+        try:
+            if client.bucket_exists(bucket):
+                results[bucket] = "exists"
+            else:
+                client.make_bucket(bucket)
+                results[bucket] = "created"
+                logger.info("Created MinIO bucket: %s", bucket)
+        except Exception as exc:
+            results[bucket] = f"error: {exc}"
+            logger.warning("Could not ensure MinIO bucket %s: %s", bucket, exc)
+    return results
 
 
 def apply_all_lifecycle_policies() -> dict[str, dict[str, Any]]:
@@ -112,6 +140,8 @@ def get_lifecycle_policies() -> dict[str, dict[str, Any]]:
         except Exception as exc:
             if "NoSuchLifecycleConfiguration" in str(exc):
                 results[bucket] = {"rules": [], "note": "no lifecycle configured"}
+            elif _is_missing_bucket(exc):
+                results[bucket] = {"rules": [], "note": "bucket not created yet"}
             else:
                 results[bucket] = {"error": str(exc)}
 
@@ -131,7 +161,7 @@ def get_bucket_storage_stats() -> dict[str, Any]:
 
             total_bytes = sum(o.size or 0 for o in objects)
             largest = max(objects, key=lambda o: o.size or 0)
-            oldest = min(objects, key=lambda o: o.last_modified or datetime.now(timezone.utc))
+            oldest = min(objects, key=lambda o: o.last_modified or datetime.now(UTC))
             top10 = sorted(objects, key=lambda o: o.size or 0, reverse=True)[:10]
 
             stats[bucket] = {
@@ -153,6 +183,14 @@ def get_bucket_storage_stats() -> dict[str, Any]:
                 ],
             }
         except Exception as exc:
-            stats[bucket] = {"error": str(exc)}
+            if _is_missing_bucket(exc):
+                stats[bucket] = {
+                    "object_count": 0,
+                    "total_bytes": 0,
+                    "total_mb": 0,
+                    "note": "bucket not created yet",
+                }
+            else:
+                stats[bucket] = {"error": str(exc)}
 
     return stats

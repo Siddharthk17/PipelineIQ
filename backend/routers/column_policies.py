@@ -119,8 +119,12 @@ def delete_column_policy(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db),
 ):
+    from backend.utils.uuid_utils import as_uuid, validate_uuid_format
+
+    validate_uuid_format(policy_id)
     policy = (
-        db.query(ColumnPolicy).filter(ColumnPolicy.id == policy_id).first()
+        db.query(ColumnPolicy).filter(
+            ColumnPolicy.id == as_uuid(policy_id)).first()
     )
     if not policy:
         raise HTTPException(404, "Policy not found")

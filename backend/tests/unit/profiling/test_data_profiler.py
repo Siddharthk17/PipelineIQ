@@ -1,14 +1,15 @@
 """Unit tests for the data profiling engine."""
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
+
 from backend.profiling.analyzer import (
-    profile_dataframe,
-    infer_semantic_type,
-    detect_semantic_flags,
     compute_completeness,
     compute_histogram,
+    detect_semantic_flags,
+    infer_semantic_type,
+    profile_dataframe,
 )
 
 
@@ -264,3 +265,15 @@ class TestProfilerEdgeCases:
         s = pd.Series([str(uuid.uuid4()) for _ in range(10)])
         result = infer_semantic_type(s, "record_uuid")
         assert result == "identifier"
+
+    def test_single_value_nullable_column_does_not_crash(self):
+        """std() over one value in a nullable dtype yields pd.NA, not NaN;
+        math.isnan() raises TypeError on it (profiling worker crash loop)."""
+        df = pd.DataFrame({"amount": pd.array([5], dtype="Int64")})
+        result = profile_dataframe(df)
+        assert result["amount"]["std_dev"] == 0.0
+
+    def test_all_null_column_does_not_crash(self):
+        df = pd.DataFrame({"amount": pd.array([None, None], dtype="Int64")})
+        result = profile_dataframe(df)
+        assert result["amount"]["null_count"] == 2

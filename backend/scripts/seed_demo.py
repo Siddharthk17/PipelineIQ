@@ -4,12 +4,13 @@ Run: python -m backend.scripts.seed_demo
 Or:  python scripts/seed_demo.py   (from /app inside Docker)
 """
 
-from backend.auth import get_password_hash
-from backend.models import User
-from backend.database import SessionLocal
-import sys
 import os
+import sys
 import uuid
+
+from backend.auth import get_password_hash
+from backend.database import SessionLocal
+from backend.models import User
 
 # Ensure the project root is on sys.path when run from /app
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -25,7 +26,7 @@ def seed_demo():
     try:
         existing = db.query(User).filter(User.email == DEMO_EMAIL).first()
         if existing:
-            print(f"✓ Demo account already exists (id={existing.id})")
+            print(f"Demo account already exists (id={existing.id})")
             return
 
         user = User(
@@ -38,10 +39,10 @@ def seed_demo():
         )
         db.add(user)
         db.commit()
-        print(f"✓ Demo account created: {DEMO_EMAIL} (role=admin)")
+        print(f"Demo account created: {DEMO_EMAIL} (role=admin)")
     except Exception as e:
         db.rollback()
-        print(f"⚠ Demo seed error: {e}")
+        print(f"WARNING: demo seed error: {e}")
     finally:
         db.close()
 

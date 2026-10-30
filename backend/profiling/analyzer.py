@@ -5,9 +5,25 @@ This separation makes the core logic fully unit testable.
 """
 
 import math
-import pandas as pd
-import numpy as np
 from typing import Any
+
+import numpy as np
+import pandas as pd
+
+
+def _safe_float(value: object) -> float:
+    """Coerce a pandas/numpy scalar to float, mapping NA/NaN/inf to 0.0.
+
+    Nullable extension dtypes yield pd.NA (not NaN) for reductions like
+    std() over a single value, and math.isnan() raises TypeError on it.
+    """
+    try:
+        result = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    if math.isnan(result) or math.isinf(result):
+        return 0.0
+    return result
 
 
 def infer_semantic_type(series: pd.Series, column_name: str) -> str:
@@ -104,10 +120,11 @@ def infer_semantic_type(series: pd.Series, column_name: str) -> str:
         ):
             try:
                 pd.to_datetime(sample.head(50), format="mixed", errors="raise")
-                return "datetime"
             except (ValueError, TypeError):
                 pass
 
+            else:
+                return "datetime"
         uuid_pattern = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         if sample.str.lower().str.match(uuid_pattern).mean() > 0.5 or any(
             x in name_lower
@@ -129,7 +146,7 @@ def infer_semantic_type(series: pd.Series, column_name: str) -> str:
 
 def detect_semantic_flags(series: pd.Series, column_name: str) -> list[str]:
     """Detect boolean flags describing the column's characteristics."""
-    flags = []
+    flags: list[str] = []
     name_lower = column_name.lower()
     non_null = series.dropna()
     total = len(series)
@@ -264,12 +281,10 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
                             "max": round(float(numeric_series.max()), 6),
                             "mean": round(float(numeric_series.mean()), 6),
                             "median": round(float(numeric_series.median()), 6),
-                            "std_dev": round(
-                                float(numeric_series.std())
-                                if not math.isnan(numeric_series.std())
-                                else 0.0,
-                                6,
-                            ),
+                    "std_dev": round(
+                        _safe_float(numeric_series.std()),
+                        6,
+                    ),
                             "p25": round(q1, 6),
                             "p75": round(q3, 6),
                             "outlier_count": int(

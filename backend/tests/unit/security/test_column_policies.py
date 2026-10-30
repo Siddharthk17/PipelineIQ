@@ -4,7 +4,6 @@ Tests the policy enforcement logic using in-memory DataFrames.
 """
 
 import pandas as pd
-import pytest
 
 from backend.security.column_security import (
     ColumnPolicyRecord,

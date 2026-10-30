@@ -1,33 +1,81 @@
+# PipelineIQ: only source, config templates, docs and tests are tracked.
+# Everything generated, local, secret or bulky stays out.
+
+# Secrets and local environment (never commit real credentials)
+.env
+.env.local
+.env*.local
+*.pem
+*.key
+
+# Python bytecode, caches, packaging, virtualenvs
 __pycache__/
 *.py[cod]
 *.pyc
 *.pyo
-*.db
-.env
-.env.local
-.env*.local
-/*.csv
-uploads/
-backend/uploads/
 .pytest_cache/
-.ruff_cache
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
 *.egg-info/
 dist/
 build/
+*.orig
+*.rej
+
+# Coverage
+.coverage
+.coverage.*
 coverage/
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Node and frontend build output
 node_modules/
 .next/
 .next-build/
 frontend/.env.local
-*.log
-.DS_Store
-.venv/
-venv/
+*.tsbuildinfo
+
 # Pre-downloaded pip packages for Docker builds
 backend/vendor/
-fixes_pipelineiq.md
-# Test coverage
-.coverage
-htmlcov/
+
+# Test and report artifacts (regenerable)
+test-results/
+playwright-report/
+.schemathesis/
+.serena/
+e2e/.auth/
+frontend/test-results/
+junit*.xml
+
+# Local data: uploads, databases, scratch CSVs
+/*.csv
+*.db
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+dump.rdb
+uploads/
+backend/uploads/
+
+# IDE and OS noise
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
 .vercel
 .worktrees/
+
+# Playwright MCP browser snapshots
+.playwright-mcp/

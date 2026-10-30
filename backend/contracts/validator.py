@@ -150,8 +150,8 @@ def _parse_contract(yaml_content: str) -> dict:
     """Parse contract YAML into a validated dict."""
     try:
         data = yaml.safe_load(yaml_content)
-    except yaml.YAMLError as exc:
-        logger.error("Failed to parse contract YAML: %s", exc)
+    except yaml.YAMLError:
+        logger.exception("Failed to parse contract YAML")
         return {}
 
     if not isinstance(data, dict):
@@ -265,8 +265,8 @@ def validate_against_contract(
             field_idx = output_table.schema.get_field_index(col_name)
             col = output_table.column(field_idx)
             if min_val is not None:
-                below = pc.less(col, min_val)
-                below_count = pc.sum(below).as_py() or 0
+                below = pc.less(col, min_val)  # type: ignore[attr-defined]  # pyarrow stubs omit these compute kernels (verified present at runtime)
+                below_count = pc.sum(below).as_py() or 0  # type: ignore[attr-defined]  # pyarrow stubs omit these compute kernels (verified present at runtime)
                 if below_count > 0:
                     violations.append(
                         ContractViolation(
@@ -279,8 +279,8 @@ def validate_against_contract(
                         )
                     )
             if max_val is not None:
-                above = pc.greater(col, max_val)
-                above_count = pc.sum(above).as_py() or 0
+                above = pc.greater(col, max_val)  # type: ignore[attr-defined]  # pyarrow stubs omit these compute kernels (verified present at runtime)
+                above_count = pc.sum(above).as_py() or 0  # type: ignore[attr-defined]  # pyarrow stubs omit these compute kernels (verified present at runtime)
                 if above_count > 0:
                     violations.append(
                         ContractViolation(
@@ -297,7 +297,7 @@ def validate_against_contract(
         if allowed is not None:
             field_idx = output_table.schema.get_field_index(col_name)
             col = output_table.column(field_idx)
-            unique_vals = pc.unique(col).to_pylist()
+            unique_vals = pc.unique(col).to_pylist()  # type: ignore[attr-defined]  # pyarrow stubs omit these compute kernels (verified present at runtime)
             allowed_set = set(str(v) for v in allowed)
             disallowed = [v for v in unique_vals if str(v) not in allowed_set]
             if disallowed:
@@ -316,7 +316,7 @@ def validate_against_contract(
         if unique is True:
             field_idx = output_table.schema.get_field_index(col_name)
             col = output_table.column(field_idx)
-            unique_count = pc.count_distinct(col).as_py() or 0
+            unique_count = pc.count_distinct(col).as_py() or 0  # type: ignore[attr-defined]  # pyarrow stubs omit these compute kernels (verified present at runtime)
             non_null_count = len(col) - col.null_count
             if unique_count < non_null_count:
                 violations.append(

@@ -1,7 +1,7 @@
 """Audit logging service — records all user actions."""
 
+import contextlib
 import logging
-from typing import Optional
 from uuid import UUID
 
 from fastapi import Request
@@ -13,14 +13,29 @@ from backend.models import AuditLog
 logger = logging.getLogger(__name__)
 
 
+def _coerce_uuid(value: UUID | str | None) -> UUID | None:
+    """Best-effort UUID coercion for audit references.
+
+    Audit logging must never break the request it records, so
+    unparseable values degrade to None instead of raising.
+    """
+    if value is None or isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (ValueError, AttributeError):
+        logger.warning("Dropping unparseable audit id: %r", value)
+        return None
+
+
 def log_action(
     db: Session,
     action: str,
-    user_id: Optional[UUID] = None,
-    resource_type: Optional[str] = None,
-    resource_id: Optional[UUID] = None,
-    details: Optional[dict] = None,
-    request: Optional[Request] = None,
+    user_id: UUID | str | None = None,
+    resource_type: str | None = None,
+    resource_id: UUID | str | None = None,
+    details: dict | None = None,
+    request: Request | None = None,
 ) -> None:
     """Record an audit log entry.
 
@@ -36,24 +51,20 @@ def log_action(
     audit_db = SessionLocal()
     try:
         entry = AuditLog(
-            user_id=user_id,
+            user_id=_coerce_uuid(user_id),
             action=action,
             resource_type=resource_type,
-            resource_id=resource_id,
+            resource_id=_coerce_uuid(resource_id),
             details=details or {},
             ip_address=ip,
             user_agent=ua,
         )
         audit_db.add(entry)
         audit_db.commit()
-    except Exception as exc:
-        logger.error("Failed to write audit log: %s", exc)
-        try:
+    except Exception:
+        logger.exception("Failed to write audit log")
+        with contextlib.suppress(Exception):
             audit_db.rollback()
-        except Exception:
-            pass
     finally:
-        try:
+        with contextlib.suppress(Exception):
             audit_db.close()
-        except Exception:
-            pass

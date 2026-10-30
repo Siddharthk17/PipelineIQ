@@ -10,18 +10,18 @@ business logic with no infrastructure coupling.
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Dict, List, Optional
 
 import networkx as nx
 import pyarrow as pa
 
-from backend.execution.arrow_bus import get_arrow_bus, ArrowDataBus
+from backend.execution.arrow_bus import ArrowDataBus, get_arrow_bus
 from backend.execution.duckdb_executor import DuckDBExecutor
 from backend.execution.smart_executor import SmartExecutor
-from backend.pipeline.exceptions import StepExecutionError
 from backend.pipeline.contracts import validate_step_contract
+from backend.pipeline.exceptions import StepExecutionError
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import (
     PipelineConfig,
@@ -62,11 +62,11 @@ class StepProgressEvent:
     step_index: int
     total_steps: int
     status: StepStatus
-    rows_in: Optional[int] = None
-    rows_out: Optional[int] = None
-    duration_ms: Optional[int] = None
-    error_message: Optional[str] = None
-    contract_violations: Optional[list] = None
+    rows_in: int | None = None
+    rows_out: int | None = None
+    duration_ms: int | None = None
+    error_message: str | None = None
+    contract_violations: list | None = None
 
 
 # Callback type for progress reporting — dependency inversion
@@ -80,15 +80,56 @@ class PipelineExecutionSummary:
     run_id: str
     pipeline_name: str
     status: PipelineStatus
-    step_results: List[StepExecutionResult]
+    step_results: list[StepExecutionResult]
     lineage: LineageRecorder
     total_duration_ms: int
     total_rows_processed: int
-    error: Optional[StepExecutionError] = None
+    error: StepExecutionError | None = None
 
 
 def _noop_progress_callback(event: StepProgressEvent) -> None:
     """Default no-op progress callback used when none is provided."""
+
+
+def _step_inputs(step) -> list[str]:
+    """Step names this step reads from the table registry."""
+    refs = [
+        getattr(step, "input", None),
+        getattr(step, "left", None),
+        getattr(step, "right", None),
+    ]
+    return [ref for ref in refs if ref]
+
+
+def _compute_consumer_counts(steps) -> dict[str, int]:
+    """Count how many future steps read each step's output table."""
+    counts: dict[str, int] = {}
+    for step in steps:
+        for ref in _step_inputs(step):
+            counts[ref] = counts.get(ref, 0) + 1
+    return counts
+
+
+def _store_and_evict(
+    table_registry: dict,
+    step_name: str,
+    table,
+    consumed: list[str],
+    remaining: dict[str, int],
+) -> None:
+    """Store a step output and evict inputs no future step needs.
+
+    Bounds batch-run memory: intermediate tables are dropped as soon as
+    their last consumer has run, instead of accumulating every step's
+    output for the whole run.
+    """
+    table_registry[step_name] = table
+    for ref in consumed:
+        if ref not in remaining:
+            continue
+        remaining[ref] -= 1
+        if remaining[ref] <= 0 and ref != step_name:
+            table_registry.pop(ref, None)
 
 
 class PipelineRunner:
@@ -115,23 +156,24 @@ class PipelineRunner:
     def execute(
         self,
         config: PipelineConfig,
-        file_paths: Dict[str, str],
-        file_metadata: Dict[str, Dict[str, str]],
-        run_id: Optional[str] = None,
-        progress_callback: Optional[ProgressCallback] = None,
-        lineage_callback: Optional[Callable[[nx.DiGraph], None]] = None,
-        wasm_modules: Optional[Dict[str, bytes]] = None,
-        user_role: Optional[str] = None,
+        file_paths: dict[str, str],
+        file_metadata: dict[str, dict[str, str]],
+        run_id: str | None = None,
+        progress_callback: ProgressCallback | None = None,
+        lineage_callback: Callable[[nx.DiGraph], None] | None = None,
+        wasm_modules: dict[str, bytes] | None = None,
+        user_role: str | None = None,
     ) -> PipelineExecutionSummary:
         """Execute a complete pipeline from a parsed configuration."""
         run_id = run_id or str(uuid.uuid4())
         callback = progress_callback or _noop_progress_callback
         recorder = LineageRecorder()
         bus = get_arrow_bus()
-        table_registry: Dict[str, pa.Table] = {}
-        step_results: List[StepExecutionResult] = []
+        table_registry: dict[str, pa.Table] = {}
+        step_results: list[StepExecutionResult] = []
         total_rows_processed: int = 0
         pipeline_start = time.perf_counter()
+        consumers = _compute_consumer_counts(config.steps)
 
         logger.info(
             "Pipeline '%s' (run_id=%s) starting with %d steps",
@@ -158,7 +200,13 @@ class PipelineRunner:
                     user_role=user_role,
                 )
                 step_results.append(result)
-                table_registry[step.name] = result.output_table
+                _store_and_evict(
+                    table_registry,
+                    step.name,
+                    result.output_table,
+                    _step_inputs(step),
+                    consumers,
+                )
                 total_rows_processed += result.rows_in
 
         except StepExecutionError as exc:
@@ -196,15 +244,15 @@ class PipelineRunner:
         index: int,
         total_steps: int,
         run_id: str,
-        table_registry: Dict[str, pa.Table],
+        table_registry: dict[str, pa.Table],
         recorder: LineageRecorder,
-        file_paths: Dict[str, str],
-        file_metadata: Dict[str, Dict[str, str]],
+        file_paths: dict[str, str],
+        file_metadata: dict[str, dict[str, str]],
         callback: ProgressCallback,
-        lineage_callback: Optional[Callable[[nx.DiGraph], None]],
+        lineage_callback: Callable[[nx.DiGraph], None] | None,
         bus: ArrowDataBus,
-        wasm_modules: Optional[Dict[str, bytes]] = None,
-        user_role: Optional[str] = None,
+        wasm_modules: dict[str, bytes] | None = None,
+        user_role: str | None = None,
     ) -> StepExecutionResult:
         """Execute a single step with progress event emission."""
         callback(
@@ -304,7 +352,7 @@ class PipelineRunner:
         self,
         run_id: str,
         config: PipelineConfig,
-        step_results: List[StepExecutionResult],
+        step_results: list[StepExecutionResult],
         recorder: LineageRecorder,
         total_rows_processed: int,
         total_duration_ms: int,

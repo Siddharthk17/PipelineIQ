@@ -177,7 +177,9 @@ export function SchedulesWidget() {
   }, []);
 
   useEffect(() => {
-    loadSchedules();
+    void (async () => {
+      await loadSchedules();
+    })();
   }, [loadSchedules]);
 
   const handleToggle = useCallback((id: string) => {
@@ -191,6 +193,7 @@ export function SchedulesWidget() {
   }, []);
 
   const handleCreate = useCallback(async () => {
+    if (creating) return;
     if (!newSchedule.pipeline_name || !newSchedule.yaml_config) {
       setCreateError("Please fill in all fields");
       return;
@@ -207,7 +210,7 @@ export function SchedulesWidget() {
     } finally {
       setCreating(false);
     }
-  }, [newSchedule, loadSchedules]);
+  }, [newSchedule, loadSchedules, creating]);
 
   const schedulesArray = Array.isArray(schedules) ? schedules : [];
   const activeSchedules = schedulesArray.filter((s) => s.is_active);

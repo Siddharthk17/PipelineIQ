@@ -27,6 +27,10 @@ class TestAIEndpoints:
             "backend.routers.ai.generate_pipeline_from_description",
             _fake_generate_pipeline_from_description,
         )
+        # Fail-fast 503 requires a configured key; the generation layer
+        # itself is mocked, so a dummy key preserves the test intent.
+        monkeypatch.setattr(
+            "backend.config.settings.GEMINI_API_KEY", "test-key")
 
         response = client.post(
             "/api/ai/generate",
@@ -73,6 +77,8 @@ class TestAIEndpoints:
             "backend.routers.ai.repair_pipeline_from_error",
             _fake_repair_pipeline_from_error,
         )
+        monkeypatch.setattr(
+            "backend.config.settings.GEMINI_API_KEY", "test-key")
 
         response = client.post(f"/api/ai/runs/{run_id}/repair")
 
@@ -116,3 +122,21 @@ class TestAIEndpoints:
         data = response.json()
         assert data["valid"] is True
         assert data["step_count"] == 1
+
+    def test_generate_without_api_key_fails_fast_with_503(
+        self, client, sales_csv_bytes, monkeypatch
+    ):
+        """No key -> instant 503, no task enqueued, no worker traceback."""
+        monkeypatch.setattr("backend.config.settings.GEMINI_API_KEY", "")
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+
+        response = client.post(
+            "/api/ai/generate",
+            json={
+                "description": "Build a simple ETL pipeline for the uploaded sales file",
+                "file_ids": [file_id],
+            },
+        )
+
+        assert response.status_code == 503
+        assert "GEMINI_API_KEY" in response.json()["detail"]

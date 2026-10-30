@@ -11,9 +11,8 @@ Create Date: 2026-05-21 15:36:44.327802
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "f8e0c4e0b13d"
 down_revision: Union[str, None] = "0014_otel_and_contracts"

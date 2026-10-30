@@ -108,7 +108,7 @@ def test_validate_healing_patch_rejects_missing_confidence():
 
 
 def test_validate_healing_patch_rejects_confidence_out_of_range():
-    is_valid, error = validate_healing_patch(
+    is_valid, _error = validate_healing_patch(
         {"confidence": 1.5, "change_description": "Fix", "patches": []}
     )
     assert is_valid is False

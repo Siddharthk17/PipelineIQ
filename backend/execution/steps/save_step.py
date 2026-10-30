@@ -17,6 +17,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from backend.config import settings
+from backend.utils.string_utils import format_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,9 @@ def execute_save_step(
     if not run_id:
         import uuid
         run_id = uuid.uuid4().hex
-        logger.debug("Empty run_id, using generated: %s", run_id)
+        logger.warning(
+            "Empty run_id for save step '%s', using generated artifact id: %s",
+            getattr(step, "name", "?"), run_id)
 
     content, content_type = _serialize(table, ext)
 
@@ -85,10 +88,10 @@ def execute_save_step(
     )
 
     logger.info(
-        "Saved pipeline output: run_id=%s, filename=%s, size=%.1fKB, rows=%d",
-        run_id, filename, len(content) / 1024, table.num_rows)
+        "Saved pipeline output: run_id=%s, filename=%s, size=%s, rows=%d",
+        run_id, filename, format_bytes(len(content)), table.num_rows)
 
-    download_url = minio.generate_presigned_url(
+    download_url = _get_presign_client(minio).generate_presigned_url(
         "get_object",
         Params={
             "Bucket": bucket,
@@ -108,10 +111,35 @@ def execute_save_step(
     )
 
 
+def _get_presign_client(server_client):
+    """Boto client pointed at the browser-reachable endpoint for signing.
+
+    Presigned URLs embed the endpoint host in the signature, so they must
+    be signed for the URL the browser will fetch, not the internal docker
+    hostname used for server-side operations.
+    """
+    from backend.config import settings as _settings
+
+    public_endpoint = (
+        _settings.S3_PUBLIC_ENDPOINT_URL or _settings.S3_ENDPOINT_URL)
+    if not public_endpoint or public_endpoint == _settings.S3_ENDPOINT_URL:
+        return server_client
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client(
+        "s3",
+        aws_access_key_id=_settings.S3_ACCESS_KEY,
+        aws_secret_access_key=_settings.S3_SECRET_KEY,
+        endpoint_url=public_endpoint,
+        config=Config(signature_version="s3v4"),
+    )
+
+
 def refresh_download_url(object_name: str) -> str:
     """Generate a fresh presigned URL for an existing output file."""
     minio = _get_minio_client()
-    return minio.generate_presigned_url(
+    return _get_presign_client(minio).generate_presigned_url(
         "get_object",
         Params={
             "Bucket": settings.S3_BUCKET,
@@ -163,9 +191,8 @@ def _serialize_json(table: pa.Table) -> tuple[bytes, str]:
     records = df.to_dict(orient="records")
 
     def sanitize(obj):
-        if isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
         return obj
 
     sanitized = [
@@ -199,11 +226,13 @@ def _get_minio_client():
         client = storage_service.provider.s3
     else:
         import boto3
+        from botocore.config import Config
         client = boto3.client(
             "s3",
             aws_access_key_id=settings.S3_ACCESS_KEY,
             aws_secret_access_key=settings.S3_SECRET_KEY,
             endpoint_url=settings.S3_ENDPOINT_URL,
+            config=Config(signature_version="s3v4"),
         )
 
     global _bucket_ensured

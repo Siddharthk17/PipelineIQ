@@ -63,6 +63,11 @@ def _configured_model_candidates() -> list[str]:
     return deduped
 
 
+def gemini_configured() -> bool:
+    """True when a Gemini API key is configured (AI features can run)."""
+    return bool(settings.GEMINI_API_KEY.strip())
+
+
 def _get_gemini_client() -> genai.Client:
     global _GEMINI_CLIENT, _GEMINI_CLIENT_API_KEY
 
@@ -73,7 +78,7 @@ def _get_gemini_client() -> genai.Client:
             "Set it in .env and restart the gemini worker."
         )
 
-    if _GEMINI_CLIENT is None or _GEMINI_CLIENT_API_KEY != api_key:
+    if _GEMINI_CLIENT is None or api_key != _GEMINI_CLIENT_API_KEY:
         _GEMINI_CLIENT = genai.Client(api_key=api_key)
         _GEMINI_CLIENT_API_KEY = api_key
     return _GEMINI_CLIENT

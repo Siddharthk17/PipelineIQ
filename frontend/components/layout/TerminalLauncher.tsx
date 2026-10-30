@@ -13,9 +13,28 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
   
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [search, setSearch] = useState("");
+  const digitBufferRef = useRef("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const digitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const filtered = availableWidgets.filter(w => w.title.toLowerCase().includes(search.toLowerCase()));
+
+  // Keep the highlighted entry visible while arrowing through a long list.
+  useEffect(() => {
+    if (!isOpen) return;
+    const list = listRef.current;
+    const active = list?.querySelector<HTMLElement>(`[data-launcher-index="${selectedIndex}"]`);
+    active?.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex, isOpen]);
+
+  const clearDigitBuffer = () => {
+    if (digitTimerRef.current) {
+      clearTimeout(digitTimerRef.current);
+      digitTimerRef.current = null;
+    }
+    digitBufferRef.current = "";
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -23,14 +42,33 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
     }
   }, [isOpen]);
 
+  useEffect(() => () => {
+    if (digitTimerRef.current) clearTimeout(digitTimerRef.current);
+  }, []);
+
+  const closeAndReset = () => {
+    clearDigitBuffer();
+    onClose();
+  };
+
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearch(e.target.value);
     setSelectedIndex(0);
+    clearDigitBuffer();
+  };
+
+  const commitDigitBuffer = (buffer: string) => {
+    const idx = parseInt(buffer, 10) - 1;
+    clearDigitBuffer();
+    if (filtered[idx]) {
+      addWidget(filtered[idx].id);
+      closeAndReset();
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (filtered.length === 0) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") closeAndReset();
       return;
     }
     if (e.key === "ArrowDown") {
@@ -42,10 +80,36 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
     } else if (e.key === "Enter") {
       if (filtered[selectedIndex]) {
         addWidget(filtered[selectedIndex].id);
-        onClose();
+        closeAndReset();
       }
     } else if (e.key === "Escape") {
-      onClose();
+      closeAndReset();
+    } else if (/^[0-9]$/.test(e.key) && search === "") {
+      // Number keys pick the Nth visible entry when nothing is typed,
+      // so a widget can be added without leaving the keyboard. Multi-digit
+      // chords cover long lists: typing "12" selects the 12th entry. Once
+      // no longer number can extend the buffer into a valid index, the
+      // buffered pick commits immediately; otherwise it waits briefly for
+      // the next digit. While the user is searching, digits are treated
+      // as search text instead.
+      e.preventDefault();
+      // Read the buffer from a ref so digits typed faster than React's
+      // re-render batching still accumulate correctly.
+      const buffer = digitBufferRef.current + e.key;
+      const idx = parseInt(buffer, 10) - 1;
+      if (!filtered[idx]) {
+        clearDigitBuffer();
+        return;
+      }
+      setSelectedIndex(idx);
+      const canExtend = filtered.length >= (idx + 1) * 10;
+      if (!canExtend) {
+        commitDigitBuffer(buffer);
+        return;
+      }
+      digitBufferRef.current = buffer;
+      if (digitTimerRef.current) clearTimeout(digitTimerRef.current);
+      digitTimerRef.current = setTimeout(() => commitDigitBuffer(buffer), 700);
     }
   };
 
@@ -58,7 +122,7 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
-            onClick={onClose}
+            onClick={closeAndReset}
           />
           <motion.div
             initial={{ opacity: 0, y: -20, scale: 0.95 }}
@@ -81,22 +145,26 @@ export function TerminalLauncher({ isOpen, onClose }: { isOpen: boolean; onClose
                 placeholder="launch..."
               />
             </div>
-            <div className="max-h-[400px] overflow-y-auto p-2">
+            <div ref={listRef} className="max-h-[400px] overflow-y-auto p-2">
               {filtered.length === 0 ? (
                 <div className="p-4 text-[var(--text-secondary)]">No modules found.</div>
               ) : (
                 filtered.map((w, idx) => (
                   <div
                     key={w.id}
+                    data-launcher-index={idx}
                     className={`flex items-center px-4 py-2 cursor-pointer transition-colors ${
                       idx === selectedIndex ? "bg-[var(--accent-primary)] text-[var(--bg-base)] font-bold" : "text-[var(--text-primary)] hover:bg-[var(--interactive-hover)]"
                     }`}
                     onClick={() => {
                       addWidget(w.id);
-                      onClose();
+                      closeAndReset();
                     }}
                   >
                     <span className="w-8">{idx === selectedIndex ? ">" : " "}</span>
+                    <kbd className="mr-2 min-w-6 rounded border border-[var(--widget-border)] px-1 text-center text-[10px] opacity-70">
+                      {idx + 1}
+                    </kbd>
                     <span>{w.title}</span>
                   </div>
                 ))

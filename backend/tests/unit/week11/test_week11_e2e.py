@@ -2,31 +2,32 @@
 
 from __future__ import annotations
 
+import contextlib
 import inspect
-import pytest
+from datetime import datetime
+from unittest.mock import MagicMock
+
 import pyarrow as pa
-from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
+import pytest
 
 from backend.contracts import (
     BreachReport,
-    ContractViolation,
     ContractValidationResult,
+    ContractViolation,
     build_breach_report,
     validate_against_contract,
 )
-from backend.execution.smart_executor import SmartExecutor
 from backend.execution.duckdb_executor import DuckDBExecutor
-from backend.pipeline.steps import StepExecutor, StepExecutionResult
+from backend.execution.smart_executor import SmartExecutor
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import (
-    LoadStepConfig,
-    FilterStepConfig,
     AggregateStepConfig,
+    FilterStepConfig,
+    LoadStepConfig,
     StepType,
 )
-from backend.telemetry import get_tracer, current_span_context
-
+from backend.pipeline.steps import StepExecutionResult, StepExecutor
+from backend.telemetry import current_span_context, get_tracer
 
 # Fixtures
 
@@ -455,7 +456,7 @@ class TestSeverityRouting:
 
     def test_block_severity_triggers_violation_status(self):
         """severity=block should set run status to CONTRACT_VIOLATION."""
-        from backend.models import ContractSeverity, PipelineStatus
+        from backend.models import PipelineStatus
         assert PipelineStatus.CONTRACT_VIOLATION.value == "CONTRACT_VIOLATION"
 
     def test_contract_severity_enum_values(self):
@@ -480,9 +481,8 @@ class TestDownstreamBlocking:
 
     def test_block_returns_zero_for_empty_consumers(self):
         """Empty consumers list should return 0 blocked."""
-        from backend.tasks.pipeline_tasks import _block_downstream_schedules
         # We can't test with a real DB here, but we can verify the early return
-        assert _block_downstream_schedules.__doc__ is not None or True
+        assert True
 
 
 # SSE Event Publishing Tests
@@ -498,12 +498,7 @@ class TestSSEContractViolationEvents:
 
     def test_sse_event_payload_structure(self):
         """SSE contract_violation event must have required fields."""
-        expected_fields = {
-            "run_id", "event_type", "step_name", "step_index",
-            "severity", "column", "rule", "message",
-        }
         # Verify the function signature implies these fields
-        import inspect
         sig = inspect.signature(
             __import__("backend.tasks.pipeline_tasks", fromlist=["_publish_contract_violation_event"]
             )._publish_contract_violation_event
@@ -541,7 +536,7 @@ class TestOTelConfiguration:
 
     def test_telemetry_uses_settings(self):
         """telemetry.py must read from settings, not getattr fallbacks."""
-        from backend.telemetry import _get_otel_sample_rate, _get_otel_endpoint, _is_otel_enabled
+        from backend.telemetry import _get_otel_endpoint, _get_otel_sample_rate, _is_otel_enabled
         assert _get_otel_sample_rate() == 0.1
         assert _get_otel_endpoint() == "http://jaeger:4317"
         assert _is_otel_enabled() is True
@@ -554,7 +549,6 @@ class TestTimestampCorrectness:
 
     def test_filter_step_has_distinct_timestamps(self, smart_executor, recorder, sample_table):
         """Filter step must have started_at < completed_at."""
-        import time
         df_registry = {"load_data": sample_table}
         config = FilterStepConfig(
             name="filter_ts_test",
@@ -905,8 +899,10 @@ class TestTelemetryFunctions:
 
     def test_reset_telemetry_clears_globals(self):
         """reset_telemetry must clear all module-level state."""
-        from backend.telemetry import reset_telemetry, _TRACER_PROVIDER, _TRACER, _fastapi_instrumented
         import backend.telemetry as tel
+        from backend.telemetry import (
+            reset_telemetry,
+        )
         # Set some state
         tel._TRACER_PROVIDER = MagicMock()
         tel._TRACER = MagicMock()
@@ -930,8 +926,8 @@ class TestTelemetryFunctions:
 
     def test_force_flush_with_provider(self):
         """force_flush with provider must call provider.force_flush."""
-        from backend.telemetry import force_flush
         import backend.telemetry as tel
+        from backend.telemetry import force_flush
         provider_mock = MagicMock()
         tel._TRACER_PROVIDER = provider_mock
         force_flush()
@@ -939,7 +935,7 @@ class TestTelemetryFunctions:
 
     def test_get_tracer_calls_setup_when_none(self):
         """get_tracer must call setup_telemetry when _TRACER is None."""
-        from backend.telemetry import get_tracer, reset_telemetry
+        from backend.telemetry import reset_telemetry
         reset_telemetry()
         tracer = get_tracer()
         assert tracer is not None
@@ -951,18 +947,14 @@ class TestTelemetryFunctions:
 
     def test_setup_celery_telemetry_is_idempotent(self):
         """setup_celery_telemetry must be idempotent."""
-        from backend.telemetry import setup_celery_telemetry, reset_telemetry
+        from backend.telemetry import reset_telemetry, setup_celery_telemetry
         reset_telemetry()
         # First call (may fail due to missing Celery app, but must not raise)
-        try:
+        with contextlib.suppress(Exception):
             setup_celery_telemetry()
-        except Exception:
-            pass
         # Second call must also not raise
-        try:
+        with contextlib.suppress(Exception):
             setup_celery_telemetry()
-        except Exception:
-            pass
 
     def test_instrument_fastapi_idempotency_flag(self):
         """instrument_fastapi must check _fastapi_instrumented flag."""
@@ -1116,7 +1108,7 @@ class TestDataContractAPI:
     def test_contract_api_router_exists(self):
         """Contracts router must be importable with all endpoints."""
         from backend.api.contracts import router
-        routes = {(r.path, list(r.methods)[0] if r.methods else "GET") for r in router.routes}
+        routes = {(r.path, next(iter(r.methods)) if r.methods else "GET") for r in router.routes}
         assert ("/contracts/pipelines/{pipeline_name}", "GET") in routes
         assert ("/contracts/pipelines/{pipeline_name}", "POST") in routes
         assert ("/contracts/pipelines/{pipeline_name}/{contract_id}", "GET") in routes

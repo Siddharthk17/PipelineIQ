@@ -78,9 +78,10 @@ def estimate_pipeline_cost(
     file_ids: list[str],
     db,
 ) -> CostEstimate:
-    from backend.pipeline.cache import get_parsed_pipeline
-    from backend.models.file_profile import FileProfile
     from sqlalchemy import text
+
+    from backend.models import FileProfile
+    from backend.pipeline.cache import get_parsed_pipeline
 
     try:
         pipeline = get_parsed_pipeline(pipeline_yaml)

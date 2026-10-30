@@ -6,8 +6,6 @@ and string truncation used throughout the pipeline engine.
 
 import difflib
 import re
-from typing import List, Optional
-
 
 # Regex pattern for valid pipeline/step identifiers: alphanumeric + underscores
 _IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -16,9 +14,9 @@ _SANITIZE_PATTERN = re.compile(r"[^a-zA-Z0-9_]")
 
 def find_closest_column(
     target: str,
-    candidates: List[str],
+    candidates: list[str],
     cutoff: float = 0.6,
-) -> Optional[str]:
+) -> str | None:
     """Find the closest column name using fuzzy string matching.
 
     Uses difflib.get_close_matches to suggest the most likely intended
@@ -58,9 +56,7 @@ def is_safe_filename(filename: str) -> bool:
     """
     if not filename:
         return False
-    if ".." in filename or "/" in filename or "\\" in filename:
-        return False
-    return True
+    return not (".." in filename or "/" in filename or "\\" in filename)
 
 
 def truncate_string(
@@ -82,3 +78,15 @@ def truncate_string(
     if len(text) <= max_length:
         return text
     return text[: max_length - len(suffix)] + suffix
+
+
+def format_bytes(num_bytes: int) -> str:
+    """Human-readable byte size that never hides small files as '0.0 KB'."""
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    size = float(num_bytes) / 1024
+    for unit in ("KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"  # pragma: no cover - unreachable

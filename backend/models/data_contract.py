@@ -1,19 +1,20 @@
 """Data contract ORM model — schema expectations for pipeline output."""
-
+import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
-from typing import Optional
 
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Enum as SQLEnum,
     ForeignKey,
     Integer,
     String,
     Text,
     Uuid,
     func,
+)
+from sqlalchemy import (
+    Enum as SQLEnum,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,13 +47,13 @@ class PipelineContract(Base):
 
     __tablename__ = "pipeline_contracts"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     pipeline_name: Mapped[str] = mapped_column(
         String(255), nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     yaml_content: Mapped[str] = mapped_column(Text, nullable=False)
-    output_schema: Mapped[Optional[dict]] = mapped_column(PgJSONB, nullable=True)
+    output_schema: Mapped[dict | None] = mapped_column(PgJSONB, nullable=True)
     severity: Mapped[ContractSeverity] = mapped_column(
         SQLEnum(ContractSeverity, name="contractseverity",
                 values_callable=_enum_values, validate_strings=True),
@@ -60,7 +61,7 @@ class PipelineContract(Base):
         server_default="'warn'")
     consumers: Mapped[list] = mapped_column(
         PgJSONB, nullable=False, default=list, server_default="'[]'")
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     is_active: Mapped[bool] = mapped_column(

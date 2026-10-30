@@ -5,6 +5,7 @@ allowing owners to grant runner or viewer access to other users.
 """
 
 import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
@@ -13,7 +14,7 @@ from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import PermissionLevel, PipelinePermission, User
 from backend.services.audit_service import log_action
-from backend.utils.uuid_utils import validate_uuid_format, as_uuid
+from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +96,11 @@ def grant_permission(
 
     try:
         level = PermissionLevel(body.permission_level)
-    except ValueError:
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid permission level '{body.permission_level}'. Must be 'owner', 'runner', or 'viewer'.",
-        )
+        ) from exc
 
     validate_uuid_format(body.user_id)
     target_user = db.query(User).filter(

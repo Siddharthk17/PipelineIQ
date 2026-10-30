@@ -1,9 +1,14 @@
 """Tests for cron validation and next-run calculation."""
+from datetime import UTC, datetime
+
 import pytest
-from datetime import datetime, timezone
+
 from backend.scheduling.cron_utils import (
-    validate_cron, get_next_run_at, cron_to_human,
-    get_next_n_runs, parse_celery_crontab,
+    cron_to_human,
+    get_next_n_runs,
+    get_next_run_at,
+    parse_celery_crontab,
+    validate_cron,
 )
 
 
@@ -14,19 +19,19 @@ class TestValidateCron:
         assert err == ""
 
     def test_valid_weekly_cron(self):
-        is_valid, err = validate_cron("0 9 * * 1")
+        is_valid, _err = validate_cron("0 9 * * 1")
         assert is_valid is True
 
     def test_valid_hourly_cron(self):
-        is_valid, err = validate_cron("0 * * * *")
+        is_valid, _err = validate_cron("0 * * * *")
         assert is_valid is True
 
     def test_valid_every_minute_cron(self):
-        is_valid, err = validate_cron("* * * * *")
+        is_valid, _err = validate_cron("* * * * *")
         assert is_valid is True
 
     def test_valid_custom_interval(self):
-        is_valid, err = validate_cron("0 */4 * * *")
+        is_valid, _err = validate_cron("0 */4 * * *")
         assert is_valid is True
 
     def test_invalid_cron_too_few_parts(self):
@@ -35,15 +40,15 @@ class TestValidateCron:
         assert len(err) > 0
 
     def test_invalid_cron_bad_hour(self):
-        is_valid, err = validate_cron("0 25 * * *")
+        is_valid, _err = validate_cron("0 25 * * *")
         assert is_valid is False
 
     def test_empty_cron_invalid(self):
-        is_valid, err = validate_cron("")
+        is_valid, _err = validate_cron("")
         assert is_valid is False
 
     def test_cron_with_extra_whitespace_valid(self):
-        is_valid, err = validate_cron("  0 6 * * *  ")
+        is_valid, _err = validate_cron("  0 6 * * *  ")
         assert is_valid is True
 
     def test_invalid_cron_returns_error_message(self):
@@ -54,7 +59,7 @@ class TestValidateCron:
 
 class TestGetNextRunAt:
     def test_next_run_is_in_future(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         next_run = get_next_run_at("0 6 * * *")
         assert next_run > now
 
@@ -63,7 +68,7 @@ class TestGetNextRunAt:
         assert next_run.tzinfo is not None
 
     def test_next_run_respects_from_time(self):
-        from_time = datetime(2024, 1, 1, 5, 0, 0, tzinfo=timezone.utc)
+        from_time = datetime(2024, 1, 1, 5, 0, 0, tzinfo=UTC)
         next_run = get_next_run_at("0 6 * * *", from_time=from_time)
         assert next_run.hour == 6
         assert next_run.date() == from_time.date()

@@ -23,13 +23,11 @@ task_routes = {
     "tasks.profile_file": {"queue": "bulk"},
     "tasks.call_gemini": {"queue": "gemini"},
     "tasks.generate_pipeline_description": {"queue": "gemini"},
-    "tasks.generate_pipeline_ai": {"queue": "gemini"},
-    "tasks.repair_pipeline_ai": {"queue": "gemini"},
     "tasks.execute_scheduled_pipeline": {"queue": "bulk"},
-    "tasks.schedule_run_completion_callback": {"queue": "bulk"},
     "tasks.run_streaming_pipeline": {"queue": "streaming"},
     "tasks.deliver_webhook": {"queue": "critical"},
     "tasks.maintain_storage": {"queue": "bulk"},
+    "tasks.reconcile_stuck_runs": {"queue": "bulk"},
 }
 
 task_serializer = "json"
@@ -47,7 +45,7 @@ task_soft_time_limit = 300
 task_time_limit = 360
 task_default_retry_delay = 30
 # Task-level retry policies are defined per-task via decorators.
-task_annotations = {}
+task_annotations: dict = {}
 
 # Keep result backend short-lived to avoid Redis growth.
 result_expires = 3600
@@ -60,5 +58,9 @@ beat_schedule = {
     "maintain-storage": {
         "task": "tasks.maintain_storage",
         "schedule": 300.0,  # every 5 minutes
+    },
+    "reconcile-stuck-runs": {
+        "task": "tasks.reconcile_stuck_runs",
+        "schedule": 600.0,  # every 10 minutes
     },
 }

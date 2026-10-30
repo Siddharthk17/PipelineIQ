@@ -6,7 +6,6 @@ from backend.ai.autocomplete import (
     suggest_columns_batch,
 )
 
-
 COLUMNS = ["revenue", "customer_id", "region", "created_at", "order_count"]
 
 

@@ -5,7 +5,6 @@ These tests simulate real attacks. They must ALL return safe responses.
 
 import json
 
-
 from backend.tests.conftest import upload_file
 
 

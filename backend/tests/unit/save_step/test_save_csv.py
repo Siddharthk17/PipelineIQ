@@ -1,10 +1,12 @@
 """Tests for the CSV save step output."""
-import pytest
+from unittest.mock import MagicMock, patch
+
 import pandas as pd
 import pyarrow as pa
-from unittest.mock import patch, MagicMock
+import pytest
+
 from backend.config import settings
-from backend.execution.steps.save_step import execute_save_step, SaveResult
+from backend.execution.steps.save_step import SaveResult, execute_save_step
 
 
 def _make_minio_client():

@@ -228,6 +228,55 @@ pipeline:
         assert result.is_valid is False
         assert any("save_output" in e.message for e in result.errors)
 
+    def test_validate_sort_list_by_with_ascending_is_valid(self, parser):
+        """Sort with list `by` and `ascending` validates cleanly (S-new)."""
+        yaml_str = """
+pipeline:
+  name: test
+  steps:
+    - name: load_data
+      type: load
+      file_id: f1
+    - name: sort_data
+      type: sort
+      input: load_data
+      by: [amount]
+      ascending: [false]
+    - name: save_output
+      type: save
+      input: sort_data
+      filename: out.csv
+"""
+        config = parser.parse(yaml_str)
+        sort_step = next(s for s in config.steps if s.step_type.value == "sort")
+        assert sort_step.ascending == [False]
+        result = parser.validate(config, {"f1"})
+        assert result.is_valid is True, [e.message for e in result.errors]
+
+    def test_validate_sort_invalid_order_is_error_not_crash(self, parser):
+        """Invalid sort `order` is a validation error, never a 500 (S-new)."""
+        yaml_str = """
+pipeline:
+  name: test
+  steps:
+    - name: load_data
+      type: load
+      file_id: f1
+    - name: sort_data
+      type: sort
+      input: load_data
+      by: amount
+      order: sideways
+    - name: save_output
+      type: save
+      input: sort_data
+      filename: out.csv
+"""
+        config = parser.parse(yaml_str)
+        result = parser.validate(config, {"f1"})
+        assert result.is_valid is False
+        assert any(e.field == "order" for e in result.errors)
+
     @pytest.mark.parametrize(
         "step_block",
         [

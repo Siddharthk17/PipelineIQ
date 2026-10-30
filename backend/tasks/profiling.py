@@ -5,7 +5,7 @@ Runs on the 'bulk' queue — never blocks the API.
 """
 
 import logging
-from contextlib import closing
+from contextlib import closing, suppress
 from pathlib import Path
 
 import pandas as pd
@@ -96,11 +96,9 @@ def profile_file(self, file_id: str) -> dict:
         logger.error(
             f"Profile failed for file_id={file_id}: {exc}",
             exc_info=True)
-        try:
+        with suppress(Exception):
             _update_profile_status(db, file_id, "failed", error=str(exc)[:500])
-        except Exception:
-            pass
-        raise self.retry(exc=exc)
+        raise self.retry(exc=exc) from exc
 
     finally:
         db.close()

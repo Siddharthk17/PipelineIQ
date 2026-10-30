@@ -4,15 +4,14 @@ These tests are gated behind RUN_INTEGRATION_TESTS=1 and avoid live Gemini calls
 by monkeypatching generation helpers.
 """
 
-from types import SimpleNamespace
 import os
+from types import SimpleNamespace
 
 import pytest
 
 from backend.models import PipelineRun, PipelineStatus
 from backend.tests.conftest import build_simple_pipeline_yaml, upload_file
 from backend.utils.uuid_utils import as_uuid
-
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION_TESTS") != "1",
@@ -51,6 +50,8 @@ pipeline:
             "backend.routers.ai.generate_pipeline_from_description",
             _fake_generate_pipeline_from_description,
         )
+        monkeypatch.setattr(
+            "backend.config.settings.GEMINI_API_KEY", "test-key")
 
         generate_response = client.post(
             "/api/ai/generate",
@@ -99,6 +100,8 @@ pipeline:
             "backend.routers.ai.repair_pipeline_from_error",
             _fake_repair_pipeline_from_error,
         )
+        monkeypatch.setattr(
+            "backend.config.settings.GEMINI_API_KEY", "test-key")
 
         response = client.post(f"/api/ai/runs/{run_id}/repair")
         assert response.status_code == 200

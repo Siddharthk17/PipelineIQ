@@ -8,8 +8,8 @@ Creates the wasm_modules table for storing registered WebAssembly UDF modules.
 Modules are stored in MinIO/S3 with metadata tracked in this table.
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0010"

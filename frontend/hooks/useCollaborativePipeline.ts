@@ -60,8 +60,6 @@ export function useCollaborativePipeline({
   const [doc] = useState(() => new Y.Doc())
 
   const providerRef = useRef<WebsocketProvider | null>(null)
-  const authTokenRef = useRef(authToken)
-  authTokenRef.current = authToken
 
   const authFailedRef = useRef(false)
   const authFailedForRoomRef = useRef<string | null>(null)
@@ -72,7 +70,12 @@ export function useCollaborativePipeline({
   const [yYaml] = useState(() => doc.getText('yaml'))
 
   useEffect(() => {
-    if (!authToken || !pipelineName) {
+    // Connect when we have an explicit token OR a logged-in user: restored
+    // sessions (page reload, shared storageState) carry auth only as the
+    // HttpOnly cookie, which the browser sends on the ws handshake and the
+    // relay verifies as a fallback. Without this, collaboration silently
+    // never connects after any reload.
+    if ((!authToken && !currentUser) || !pipelineName) {
       if (providerRef.current) {
         providerRef.current.destroy()
         providerRef.current = null
@@ -95,7 +98,9 @@ export function useCollaborativePipeline({
       pipelineName,
       doc,
       {
-        params: { token: authToken },
+        // Omit the param entirely when there is no token: sending the
+        // literal string "undefined" would shadow the cookie fallback.
+        params: authToken ? { token: authToken } : {},
         maxBackoffTime: MAX_BACKOFF_TIME,
         connect: true,
       },
@@ -129,14 +134,17 @@ export function useCollaborativePipeline({
       }
       setProvider(null)
     }
-  }, [authToken, pipelineName, doc])
+    // currentUser is an inline object (new identity every render); depend
+    // on its stable id instead to avoid a destroy/reconnect storm.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authToken, currentUser?.id, pipelineName, doc])
 
   useEffect(() => {
     if (authFailedRef.current && authFailedForRoomRef.current === pipelineName) {
       authFailedRef.current = false
       authFailedForRoomRef.current = null
     }
-  }, [authToken, pipelineName])
+  }, [authToken, currentUser?.id, pipelineName])
 
   const awareness = provider?.awareness ?? null
 

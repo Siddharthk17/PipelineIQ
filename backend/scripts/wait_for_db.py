@@ -26,14 +26,15 @@ def db_ready() -> bool:
     try:
         conn = psycopg2.connect(DATABASE_URL, connect_timeout=3)
         conn.close()
-        return True
     except psycopg2.OperationalError:
         return False
 
 
+    else:
+        return True
 def main() -> int:
     last_error = None
-    delay = RETRY_DELAY
+    delay: float = RETRY_DELAY
     for attempt in range(1, MAX_RETRIES + 1):
         if db_ready():
             print(f"Database ready on attempt {attempt}/{MAX_RETRIES}")
