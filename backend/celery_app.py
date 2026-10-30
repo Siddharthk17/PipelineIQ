@@ -51,6 +51,9 @@ celery_app.autodiscover_tasks(
 celery_app.autodiscover_tasks(
     ["backend.tasks"],
     related_name="storage_maintenance")
+celery_app.autodiscover_tasks(
+    ["backend.tasks"],
+    related_name="reconciliation")
 
 def _init_sentry_for_worker() -> None:
     """Initialize Sentry after Celery forks the worker process."""

@@ -5,6 +5,7 @@ import {
   hasNonEmptyFileId,
   removeFileIdLines,
   upsertFileIdInFirstLoadStep,
+  withPipelineName,
 } from "@/lib/pipeline-yaml";
 
 describe("pipeline-yaml helpers", () => {
@@ -94,5 +95,18 @@ describe("pipeline-yaml helpers", () => {
       file_id: "another-id"`;
     const updated = removeFileIdLines(yamlWithFileIds);
     expect(updated).not.toContain("file_id:");
+  });
+});
+
+describe("withPipelineName", () => {
+  it("renames the pipeline in the default template", () => {
+    const renamed = withPipelineName(DEFAULT_PIPELINE_YAML, "e2e_builder_x");
+    expect(extractPipelineName(renamed)).toBe("e2e_builder_x");
+    expect(renamed).toContain("load_file");
+  });
+
+  it("leaves yaml without a pipeline name untouched", () => {
+    const yaml = "steps:\n  - name: a\n";
+    expect(withPipelineName(yaml, "x")).toBe(yaml);
   });
 });

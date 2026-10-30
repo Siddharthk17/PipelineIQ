@@ -11,7 +11,7 @@ import {
 import { useDebouncedCallback } from "use-debounce";
 import type { UploadedFile } from "@/lib/types";
 import { STEP_DEFINITIONS, getDefaultStepConfig, isVisualStepType, type VisualStepType } from "@/lib/stepDefinitions";
-import { graphToYAML, type BuilderEdge, type BuilderGraph, type BuilderNode, yamlToGraph } from "@/lib/yamlGraphSync";
+import { graphToYAML, parseYamlWithDiagnostics, type BuilderEdge, type BuilderGraph, type BuilderNode } from "@/lib/yamlGraphSync";
 import { topologicalSort } from "@/lib/topologicalSort";
 import { useCollaborativePipeline, type CollaboratorState } from "./useCollaborativePipeline";
 
@@ -22,6 +22,7 @@ interface UsePipelineEditorOptions {
   collaborative?: boolean;
   currentUser?: { id: string; name: string; email?: string };
   authToken?: string;
+  initialPipelineName?: string;
 }
 
 export interface ConnectionValidationResult {
@@ -164,10 +165,11 @@ export function usePipelineEditor({
   collaborative = false,
   currentUser,
   authToken,
+  initialPipelineName,
 }: UsePipelineEditorOptions) {
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<BuilderNode>([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<BuilderEdge>([]);
-  const [pipelineName, setPipelineName] = useState("my_pipeline");
+  const [pipelineName, setPipelineName] = useState(initialPipelineName || "my_pipeline");
   const [configuringNodeId, setConfiguringNodeId] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -175,6 +177,7 @@ export function usePipelineEditor({
   const parsedFromYamlRef = useRef(false);
   const emittedFromGraphRef = useRef(false);
   const initializedFromYamlRef = useRef(false);
+  const parseOkRef = useRef(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const yamlTextRef = useRef(yamlText);
 
@@ -200,7 +203,17 @@ export function usePipelineEditor({
 
   const parseYamlToGraph = useDebouncedCallback((nextYaml: string) => {
     try {
-      const parsed = yamlToGraph(nextYaml);
+      const { graph: parsed, error } = parseYamlWithDiagnostics(nextYaml);
+      if (error) {
+        // Loud failure, non-destructive: surfaced in the Visual tab via
+        // parseError, and the last good nodes stay on the canvas. Clearing
+        // them here would let the next drag emit a graph that silently
+        // wipes the user's YAML.
+        parseOkRef.current = false;
+        setParseError(error);
+        return;
+      }
+      parseOkRef.current = true;
       parsedFromYamlRef.current = true;
       initializedFromYamlRef.current = true;
       setNodes(parsed.nodes);
@@ -209,6 +222,7 @@ export function usePipelineEditor({
       setParseError(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to parse YAML";
+      parseOkRef.current = false;
       setParseError(message);
     }
   }, 300);
@@ -242,6 +256,12 @@ export function usePipelineEditor({
     }
     if (parsedFromYamlRef.current) {
       parsedFromYamlRef.current = false;
+      return;
+    }
+    if (!parseOkRef.current) {
+      // The graph is stale (last YAML parse failed): emitting it would
+      // overwrite the user's YAML with an out-of-date graph. Wait for a
+      // successful parse first.
       return;
     }
     emitGraphToYaml({ pipelineName, nodes, edges });

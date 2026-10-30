@@ -41,6 +41,7 @@ import {
   hasNonEmptyFileId,
   removeFileIdLines,
   upsertFileIdInFirstLoadStep,
+  withPipelineName,
 } from "@/lib/pipeline-yaml";
 import { PreRunCostCard } from "@/components/widgets/PreRunCostCard";
 import {
@@ -50,14 +51,24 @@ import {
 
 interface PipelineEditorWidgetProps {
   initialMode?: "yaml" | "visual";
+  initialPipelineName?: string;
 }
 
-export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWidgetProps) {
+export function PipelineEditorWidget({ initialMode = "yaml", initialPipelineName }: PipelineEditorWidgetProps) {
   const queryClient = useQueryClient();
   const { lastYamlConfig, setLastYamlConfig, setActiveRunId, setActiveRun } = usePipelineStore();
   const { activeTheme } = useThemeStore();
   const { user, token } = useAuth();
-  const [code, setCode] = useState(lastYamlConfig || DEFAULT_PIPELINE_YAML);
+  const [code, setCode] = useState(() => {
+    // An explicit ?pipeline= deep link wins over the persisted editor
+    // content: the room, the YAML name, and the canvas must all agree from
+    // the first paint, otherwise the parse effect renames the pipeline back
+    // and rejoins the shared default room.
+    if (initialPipelineName) {
+      return withPipelineName(DEFAULT_PIPELINE_YAML, initialPipelineName);
+    }
+    return lastYamlConfig || DEFAULT_PIPELINE_YAML;
+  });
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [isValidating, setIsValidating] = useState(false);
   const [plan, setPlan] = useState<ExecutionPlan | null>(null);
@@ -175,6 +186,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
     collaborative: true,
     currentUser: user ? { id: user.id, name: user.username, email: user.email } : undefined,
     authToken: token ?? undefined,
+    initialPipelineName,
   });
 
   // The yjs text binding is deliberately left out here. The editor is
@@ -534,6 +546,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                     onDeleteNode={handleDeleteNode}
                     onDeleteEdge={handleDeleteEdge}
                     collaborators={collaborators}
+                    hideMinimap={configuringNode !== null}
                     onMouseMove={(e) => {
                       if (updateCursor) {
                         const target = e.currentTarget as HTMLElement;
@@ -561,6 +574,7 @@ export function PipelineEditorWidget({ initialMode = "yaml" }: PipelineEditorWid
                   onSave={handleConfigSave}
                   onDelete={handleDeleteNode}
                   onClose={handleConfigClose}
+                  overlay
                 />
               )}
               {builderToastMessage && (

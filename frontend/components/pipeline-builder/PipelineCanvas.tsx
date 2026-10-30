@@ -31,6 +31,7 @@ interface PipelineCanvasProps {
   collaborators?: CollaboratorState[];
   onMouseMove?: (event: ReactMouseEvent) => void;
   onSelectionChange?: (selectedIds: { nodes: string[]; edges: string[] }) => void;
+  hideMinimap?: boolean;
 }
 
 const nodeTypes = {
@@ -50,6 +51,7 @@ export function PipelineCanvas({
   collaborators,
   onMouseMove,
   onSelectionChange,
+  hideMinimap = false,
 }: PipelineCanvasProps) {
   const [instance, setInstance] = useState<ReactFlowInstance<BuilderNode, BuilderEdge> | null>(
     null,
@@ -166,14 +168,16 @@ export function PipelineCanvas({
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} color="var(--widget-border)" />
         <Controls className="!border-[var(--widget-border)] !bg-[var(--bg-surface)] !fill-[var(--text-primary)]" />
-        <MiniMap
-          nodeColor="var(--text-secondary)"
-          maskColor="rgba(15, 23, 42, 0.4)"
-          style={{
-            background: "var(--bg-surface)",
-            border: "1px solid var(--widget-border)",
-          }}
-        />
+        {!hideMinimap && (
+          <MiniMap
+            nodeColor="var(--text-secondary)"
+            maskColor="rgba(15, 23, 42, 0.4)"
+            style={{
+              background: "var(--bg-surface)",
+              border: "1px solid var(--widget-border)",
+            }}
+          />
+        )}
       </ReactFlow>
 
       {nodes.length === 0 && (
