@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { listCatalogPipelines } from "@/lib/api";
@@ -65,6 +65,7 @@ export default function PipelineCatalogPage() {
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [pageLoading, setPageLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const didMountRef = useRef(true);
 
   const loadPipelines = useCallback(async (q?: string, status?: string) => {
     try {
@@ -92,6 +93,12 @@ export default function PipelineCatalogPage() {
 
   useEffect(() => {
     if (!user) return;
+    // The mount effect above already loaded the initial list; skip the
+    // first debounced run so we don't fire a duplicate request.
+    if (didMountRef.current) {
+      didMountRef.current = false;
+      return;
+    }
     const timer = window.setTimeout(() => {
       loadPipelines(query || undefined, statusFilter || undefined);
     }, 300);

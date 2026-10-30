@@ -54,6 +54,23 @@ class SmartExecutor:
         self.duckdb_executor = duckdb_executor or DuckDBExecutor()
         self._current_run_id: str | None = None
 
+    @property
+    def _current_run_id(self) -> str | None:
+        """Current pipeline run id, forwarded to the inner executors.
+
+        Steps execute on the composed pandas/duckdb executors, not on this
+        wrapper, so assigning here propagates the id everywhere it is read
+        (previously the inner executors never saw it and every save step
+        minted a random artifact id instead).
+        """
+        return self.__current_run_id
+
+    @_current_run_id.setter
+    def _current_run_id(self, value: str | None) -> None:
+        self.__current_run_id = value
+        self.pandas_executor._current_run_id = value
+        self.duckdb_executor._current_run_id = value
+
     @staticmethod
     def _step_type(step: StepConfig) -> str:
         step_type = getattr(step, "step_type", "")

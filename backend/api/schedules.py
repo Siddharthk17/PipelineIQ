@@ -5,6 +5,7 @@ automatically via Celery Beat.
 """
 
 import logging
+import re
 from datetime import datetime
 
 from croniter import croniter
@@ -173,11 +174,38 @@ def create_schedule(
                 UploadedFile.user_id == current_user.id).all()
         }
     result = PipelineParser().validate(parsed, owned_ids)
-    if not result.is_valid:
+    file_errors = [
+        e for e in result.errors
+        if "not found" in e.message.lower() or "registered" in e.message.lower()
+    ]
+    if file_errors and len(file_errors) == len(result.errors):
+        hint = ""
+        if re.search(r"\{\{\s*\w+\s*\}\}", body.yaml_config):
+            hint = (
+                " The YAML still contains {{placeholder}} template variables. "
+                "Fork the template from the Templates page to fill in real files."
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Scheduled pipeline references unknown files: "
-            + "; ".join(e.message for e in result.errors),
+            + "; ".join(e.message for e in file_errors) + hint,
+        )
+
+    # Structural checks passed (or failed only on files, handled above):
+    # run the column-schema simulation so a schedule can never be created
+    # for a pipeline that is guaranteed to crash at runtime.
+    from backend.services.pipeline_validation import collect_schema_validation_errors
+
+    schema_errors = collect_schema_validation_errors(parsed, db)
+    all_errors = list(result.errors) + list(schema_errors)
+    if all_errors:
+        non_file_errors = [e for e in all_errors if e not in file_errors]
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Scheduled pipeline failed validation: "
+            + "; ".join(
+                f"{e.step_name}.{e.field}: {e.message}" for e in non_file_errors or all_errors
+            ),
         )
 
     schedule = PipelineSchedule(

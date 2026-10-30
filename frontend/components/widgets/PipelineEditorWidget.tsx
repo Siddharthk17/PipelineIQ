@@ -31,6 +31,7 @@ import { ValidationResult, ExecutionPlan, PipelinePreview } from "@/lib/types";
 import { StepDAG } from "./StepDAG";
 import { ConfigPanel, PipelineCanvas, StepPalette } from "@/components/pipeline-builder";
 import { AIGeneratePipelineModal } from "@/components/widgets/AIPipelineModals";
+import { TemplateForkModal } from "@/components/widgets/TemplateForkModal";
 import { usePipelineEditor } from "@/hooks/usePipelineEditor";
 import { useAuth } from "@/lib/auth-context";
 import { CollaboratorPresence } from "@/components/collaboration/CollaboratorPresence";
@@ -52,9 +53,11 @@ import {
 interface PipelineEditorWidgetProps {
   initialMode?: "yaml" | "visual";
   initialPipelineName?: string;
+  initialTemplateId?: string | null;
 }
 
-export function PipelineEditorWidget({ initialMode = "yaml", initialPipelineName }: PipelineEditorWidgetProps) {
+export function PipelineEditorWidget({ initialMode = "yaml", initialPipelineName, initialTemplateId = null }: PipelineEditorWidgetProps) {
+  const [templateId, setTemplateId] = useState<string | null>(initialTemplateId);
   const queryClient = useQueryClient();
   const { lastYamlConfig, setLastYamlConfig, setActiveRunId, setActiveRun } = usePipelineStore();
   const { activeTheme } = useThemeStore();
@@ -986,6 +989,18 @@ export function PipelineEditorWidget({ initialMode = "yaml", initialPipelineName
         }}
         onGenerate={handleAIGenerate}
       />
+      {templateId && (
+        <TemplateForkModal
+          templateId={templateId}
+          availableFiles={availableFiles}
+          onApply={(yaml, name) => {
+            setCode(yaml);
+            setPipelineName(name);
+            setTemplateId(null);
+          }}
+          onClose={() => setTemplateId(null)}
+        />
+      )}
     </div>
   );
 }

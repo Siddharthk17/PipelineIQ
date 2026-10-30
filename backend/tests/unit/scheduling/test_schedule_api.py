@@ -78,3 +78,72 @@ class TestCronValidation:
                 yaml_config="pipeline:\n  name: test\n  steps: []",
                 cron_expression="not-a-cron",
             )
+
+
+class TestScheduleColumnValidation:
+    def test_rejects_schedule_with_unknown_columns(self, client, sales_csv_bytes):
+        from backend.tests.conftest import upload_file
+
+        file_id = upload_file(client, sales_csv_bytes, "sales.csv")
+        yaml_config = (
+            "pipeline:\n"
+            "  name: bad_sched\n"
+            "  steps:\n"
+            "    - name: load_orders\n"
+            "      type: load\n"
+            f"      file_id: {file_id}\n"
+            "    - name: aggregate_customer_metrics\n"
+            "      type: aggregate\n"
+            "      input: load_orders\n"
+         "      group_by: [customer_segment]\n"
+        "      aggregations:\n"
+        "        - column: revenue_total\n"
+        "          function: sum\n"
+        )
+        response = client.post(
+            "/api/v1/schedules/",
+            json={
+                "pipeline_name": "bad_sched",
+                "yaml_config": yaml_config,
+                "cron_expression": "0 3 * * *",
+            },
+        )
+        assert response.status_code == 422, f"Got {response.status_code}: {response.text}"
+        assert "customer_segment" in response.text
+
+    def test_rejects_schedule_with_unknown_file(self, client):
+        response = client.post(
+            "/api/v1/schedules/",
+            json={
+                "pipeline_name": "missing_file_sched",
+                "yaml_config": (
+                    "pipeline:\n"
+                    "  name: missing_file_sched\n"
+                    "  steps:\n"
+                    "    - name: load_orders\n"
+                    "      type: load\n"
+                    "      file_id: 00000000-0000-4000-8000-000000000000\n"
+                ),
+                "cron_expression": "0 3 * * *",
+            },
+        )
+        assert response.status_code == 404, f"Got {response.status_code}: {response.text}"
+
+    def test_rejects_template_placeholders_with_fork_hint(self, client):
+        response = client.post(
+            "/api/v1/schedules/",
+            json={
+                "pipeline_name": "template_sched",
+                "yaml_config": (
+                    "pipeline:\n"
+                    "  name: template_sched\n"
+                    "  steps:\n"
+                    "    - name: load_orders\n"
+                    "      type: load\n"
+                    "      file_id: '{{orders_file_id}}'\n"
+                ),
+                "cron_expression": "0 3 * * *",
+            },
+        )
+        assert response.status_code == 404, f"Got {response.status_code}: {response.text}"
+        assert "Fork the template" in response.text

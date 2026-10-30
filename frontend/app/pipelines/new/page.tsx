@@ -9,14 +9,22 @@ export default function NewPipelinePage() {
   const router = useRouter();
   const { user, isLoading } = useAuth();
   // Deep-link support: ?pipeline=<name> starts the builder in a pipeline
-  // room of that name instead of the default shared one. E2E tests use a
+  // room of that name instead of the shared default one. E2E tests use a
   // unique name per test so concurrent sessions never share canvas state.
+  // ?template=<id> opens the template fork dialog instead.
   // Read once on mount (client-only; guarded for SSR).
-  const [initialPipelineName] = useState<string | undefined>(() => {
-    if (typeof window === "undefined") return undefined;
-    const match = /[?&]pipeline=([A-Za-z0-9_-]+)/.exec(window.location.search);
-    return match ? match[1] : undefined;
+  const [initialParams] = useState<{ pipelineName?: string; templateId?: string }>(() => {
+    if (typeof window === "undefined") return {};
+    const params = new URLSearchParams(window.location.search);
+    const pipeline = params.get("pipeline") || undefined;
+    const template = params.get("template") || undefined;
+    return {
+      pipelineName: pipeline && /^[A-Za-z0-9_-]+$/.test(pipeline) ? pipeline : undefined,
+      templateId: template && /^[A-Za-z0-9_-]+$/.test(template) ? template : undefined,
+    };
   });
+  const initialPipelineName = initialParams.pipelineName;
+  const initialTemplateId = initialParams.templateId;
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -38,7 +46,8 @@ export default function NewPipelinePage() {
         <PipelineEditorWidget
           initialMode="visual"
           initialPipelineName={initialPipelineName}
-          key={initialPipelineName ?? "default"}
+          initialTemplateId={initialTemplateId ?? null}
+          key={`${initialPipelineName ?? "default"}:${initialTemplateId ?? "none"}`}
         />
       </div>
     </main>

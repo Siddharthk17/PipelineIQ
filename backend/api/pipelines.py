@@ -225,12 +225,21 @@ def plan_pipeline(
     validation_result = _pipeline_parser.validate(
         config, _owned_file_ids(db, current_user))
     if not validation_result.is_valid:
+        capped = validation_result.errors[:25]
+        truncated = len(validation_result.errors) - len(capped)
+        error_list = serialize_validation_errors(capped)
+        if truncated > 0:
+            error_list.append({
+                "step_name": "",
+                "field": "",
+                "message": f"... and {truncated} more errors (truncated)",
+                "suggestion": "Fix the errors above first, then re-validate.",
+            })
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "message": "Pipeline configuration is invalid",
-                "errors": serialize_validation_errors(
-                    validation_result.errors),
+                "errors": error_list,
             },
         )
     plan = generate_execution_plan(

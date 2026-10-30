@@ -230,4 +230,27 @@ test.describe("Visual Pipeline Builder", () => {
     await page.getByTestId("mode-yaml-btn").click();
     await page.waitForSelector(".cm-editor, [data-testid='yaml-editor']", { timeout: 5_000 });
   });
+
+  test("Template deep-link opens the fork dialog and fills the editor", async ({ page }) => {
+    await login(page);
+    // Unique room so no other session can interfere with the forked result.
+    await page.goto(`${baseUrl}/pipelines/new?template=data_quality_audit&pipeline=e2e_builder_tpl_${Date.now().toString(36)}`, { waitUntil: "domcontentloaded" });
+
+    const dialog = page.getByRole("dialog", { name: "Use template" });
+    await expect(dialog).toBeVisible({ timeout: 10_000 });
+
+    // Every required file placeholder needs a real file before submitting.
+    const selects = dialog.locator("select");
+    const count = await selects.count();
+    expect(count).toBeGreaterThan(0);
+    for (let i = 0; i < count; i++) {
+      const options = selects.nth(i).locator("option");
+      // First option is the "Select a file…" placeholder; pick the first real file.
+      await selects.nth(i).selectOption({ index: 1 });
+      void options;
+    }
+
+    await dialog.getByRole("button", { name: "Use template" }).click();
+    await expect(dialog).toBeHidden({ timeout: 10_000 });
+  });
 });
