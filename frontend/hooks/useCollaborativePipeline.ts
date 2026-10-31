@@ -13,7 +13,18 @@ import {
   type SerializedEdge,
 } from '@/lib/yjsUtils'
 
-const YJS_SERVER_URL = process.env.NEXT_PUBLIC_YJS_URL || 'ws://localhost:1234'
+function defaultYjsUrl(): string {
+  // Baked-in NEXT_PUBLIC_YJS_URL wins when set; otherwise derive from the
+  // page origin so deployed hosts don't fall back to the caller's localhost.
+  // Local `npm run dev` (:3000) keeps talking directly to the dev websocket.
+  if (typeof window === "undefined") return "ws://localhost:1234";
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") return "ws://localhost:1234";
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/yjs`;
+}
+
+const YJS_SERVER_URL = process.env.NEXT_PUBLIC_YJS_URL || defaultYjsUrl();
 const SYNC_DEBOUNCE_MS = 300
 const AUTH_FAILURE_CLOSE_CODE = 4001
 const MAX_BACKOFF_TIME = 30000
