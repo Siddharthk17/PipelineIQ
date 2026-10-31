@@ -1,0 +1,51 @@
+name: Bug report
+description: Report a reproducible problem with PipelineIQ.
+title: "[bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please fill in everything below — issues without a reproduction may be closed as `needs-info`. For vulnerabilities, use a **private Security Advisory** instead (see SECURITY.md).
+  - type: input
+    id: commit
+    attributes:
+      label: Commit SHA
+      description: Output of `git rev-parse --short HEAD`, or the deployed version.
+      placeholder: e.g. 3ee6f7d
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How do you run the stack?
+      options:
+        - Docker Compose (local)
+        - Docker Compose (remote VM)
+        - Kubernetes (k8s/)
+        - Local dev (backend venv + npm dev)
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Smallest pipeline YAML, API request/response, or exact test command that triggers the bug.
+      placeholder: |
+        curl -X POST http://localhost/auth/login -H 'Content-Type: application/json' -d '...'
+        Expected: 200. Got: ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: `docker compose logs --tail=50 <service>`. Redact SECRET_KEY, passwords, tokens, and JWTs.
+      render: shell
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
