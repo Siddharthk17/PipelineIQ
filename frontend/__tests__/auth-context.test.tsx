@@ -33,6 +33,7 @@ describe("AuthProvider", () => {
       status: 401,
       statusText: "Unauthorized",
       json: () => Promise.resolve({ detail: "Not authenticated" }),
+      text: () => Promise.resolve(JSON.stringify({ detail: "Not authenticated" })),
     } as Response);
 
     render(
@@ -56,6 +57,7 @@ describe("AuthProvider", () => {
         status: 401,
         statusText: "Unauthorized",
         json: () => Promise.resolve({ detail: "Not authenticated" }),
+      text: () => Promise.resolve(JSON.stringify({ detail: "Not authenticated" })),
       } as Response)
       // apiLogin call
       .mockResolvedValueOnce({
@@ -95,6 +97,7 @@ describe("AuthProvider", () => {
         status: 401,
         statusText: "Unauthorized",
         json: () => Promise.resolve({ detail: "Not authenticated" }),
+      text: () => Promise.resolve(JSON.stringify({ detail: "Not authenticated" })),
       } as Response)
       // apiLogin (demo)
       .mockResolvedValueOnce({
@@ -134,6 +137,7 @@ describe("AuthProvider", () => {
         status: 401,
         statusText: "Unauthorized",
         json: () => Promise.resolve({ detail: "Not authenticated" }),
+      text: () => Promise.resolve(JSON.stringify({ detail: "Not authenticated" })),
       } as Response)
       // apiLogin
       .mockResolvedValueOnce({

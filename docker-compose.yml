@@ -792,10 +792,12 @@ services:
       args:
         NEXT_PUBLIC_API_URL: "/api/v1"
         NEXT_PUBLIC_APP_VERSION: "${APP_VERSION:-12.7.3}"
+        NEXT_PUBLIC_YJS_URL: "${NEXT_PUBLIC_YJS_URL:-}"
     container_name: pipelineiq-frontend
     environment:
       - NEXT_PUBLIC_API_URL=/api/v1
       - NEXT_PUBLIC_APP_VERSION=${APP_VERSION:-12.7.3}
+      - NEXT_PUBLIC_YJS_URL=${NEXT_PUBLIC_YJS_URL:-}
       - AUTH_JWT_SECRET=${SECRET_KEY}
     depends_on:
       api:
@@ -823,6 +825,7 @@ services:
       celery --broker=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
       -A backend.celery_app:celery_app flower
       --port=5555
+      --url_prefix=flower
       --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
       --inspect_timeout=10000"
     ports:
@@ -907,6 +910,7 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
       - "--web.enable-lifecycle"
+      - "--web.route-prefix=/prometheus"
     ports:
       - "127.0.0.1:9090:9090"
     healthcheck:
@@ -923,6 +927,8 @@ services:
     image: jaegertracing/all-in-one:1.57
     container_name: pipelineiq-jaeger
     mem_limit: 200m
+    command:
+      - "--query.base-path=/jaeger"
     environment:
       - COLLECTOR_OTLP_ENABLED=true
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
@@ -933,7 +939,7 @@ services:
       - "127.0.0.1:4317:4317"
       - "127.0.0.1:4318:4318"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:16686"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:16686/jaeger/"]
       interval: 10s
       timeout: 5s
       retries: 10

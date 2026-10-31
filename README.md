@@ -1427,6 +1427,8 @@ Variables (`token`, `file_id`, `run_id`, `webhook_id`) are auto-extracted from r
 
 ## Contributing
 
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (environment setup, test gates, commit and PR conventions), and note our [Code of Conduct](CODE_OF_CONDUCT.md) and [Security Policy](SECURITY.md).
+
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'feat: add amazing feature'`)

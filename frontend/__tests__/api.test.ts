@@ -92,11 +92,28 @@ describe("fetchApi (via public functions)", () => {
       status: 400,
       statusText: "Bad Request",
       json: () => Promise.resolve({ detail: "invalid" }),
+      text: () => Promise.resolve(JSON.stringify({ detail: "invalid" })),
     } as unknown as Response);
 
     await expect(validatePipeline("bad yaml")).rejects.toMatchObject({
       status: 400,
       message: "invalid",
+    });
+  });
+
+  it("surfaces status on non-JSON error bodies without stream errors", async () => {
+    // Regression: nginx 499/502 pages are HTML; the old json()-then-text()
+    // fallback threw "body stream already read" and masked the real failure.
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: false,
+      status: 499,
+      statusText: "Client Closed Request",
+      text: () => Promise.resolve("<html>client closed</html>"),
+    } as unknown as Response);
+
+    await expect(validatePipeline("bad yaml")).rejects.toMatchObject({
+      status: 499,
+      message: "<html>client closed</html>",
     });
   });
 
@@ -114,6 +131,17 @@ describe("fetchApi (via public functions)", () => {
             },
           ],
         }),
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            details: [
+              {
+                loc: ["body", "yaml_config"],
+                msg: "Field required",
+              },
+            ],
+          })
+        ),
     } as unknown as Response);
 
     await expect(validatePipeline("pipeline:\n")).rejects.toMatchObject({
@@ -138,6 +166,19 @@ describe("fetchApi (via public functions)", () => {
             },
           ],
         }),
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            message: "Schema mismatch detected before execution",
+            errors: [
+              {
+                step_name: "rename_columns",
+                field: "mapping",
+                message: "Column 'old_name' was not found in input 'load_data'.",
+              },
+            ],
+          })
+        ),
     } as unknown as Response);
 
     await expect(runPipeline("pipeline:\n  name: test\n", "test")).rejects.toMatchObject({
@@ -155,6 +196,7 @@ describe("fetchApi (via public functions)", () => {
       status: 401,
       statusText: "Unauthorized",
       json: () => Promise.resolve({ detail: "expired" }),
+      text: () => Promise.resolve(JSON.stringify({ detail: "expired" })),
     } as unknown as Response);
 
     await expect(getFiles()).rejects.toThrow(ApiError);
@@ -181,6 +223,7 @@ describe("fetchApi (via public functions)", () => {
       status: 401,
       statusText: "Unauthorized",
       json: () => Promise.resolve({ detail: "expired" }),
+      text: () => Promise.resolve(JSON.stringify({ detail: "expired" })),
     } as unknown as Response);
 
     await expect(getFiles()).rejects.toThrow(ApiError);
@@ -211,6 +254,7 @@ describe("fetchApi (via public functions)", () => {
       status: 401,
       statusText: "Unauthorized",
       json: () => Promise.resolve({ detail: "expired" }),
+      text: () => Promise.resolve(JSON.stringify({ detail: "expired" })),
     } as unknown as Response);
 
     await expect(getFiles()).rejects.toThrow(ApiError);
@@ -348,6 +392,7 @@ describe("checkHealth", () => {
       status: 500,
       statusText: "Internal Server Error",
       json: () => Promise.resolve({ message: "backend unavailable" }),
+      text: () => Promise.resolve(JSON.stringify({ message: "backend unavailable" })),
     } as Response);
 
     await expect(checkHealth()).rejects.toMatchObject({

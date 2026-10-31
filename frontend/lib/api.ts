@@ -190,11 +190,20 @@ async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: Req
         window.location.href = "/login";
       }
     }
-    let detail;
+    // Read the body exactly once as text, then interpret it. The previous
+    // json()-then-text() fallback consumed an already-read stream for
+    // non-JSON error bodies (nginx 499/502 pages, proxy HTML), throwing
+    // "body stream already read" and masking the real failure.
+    let detail: unknown;
     try {
-      detail = await res.json();
+      const text = await res.text();
+      try {
+        detail = text ? JSON.parse(text) : res.statusText;
+      } catch {
+        detail = text || res.statusText || "Request failed";
+      }
     } catch {
-      detail = await res.text();
+      detail = res.statusText || "Request failed";
     }
     throw new ApiError(
       res.status,
