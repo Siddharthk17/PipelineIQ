@@ -28,13 +28,16 @@ EXAMPLE_FILE="$ROOT/.env.example"
 
 HOST_OVERRIDE=""
 ASSUME_YES=0
+RUN_UP=0
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/bootstrap.sh [--host HOST] [--yes]
+Usage: ./scripts/bootstrap.sh [--host HOST] [--up] [--yes]
 
   --host HOST   Public hostname or IP of this deployment
                 (default: auto-detect via GCP metadata, else first IPv4)
+  --up          After bootstrapping, also build + start the stack
+                (same as running 'make up' afterwards)
   --yes         Non-interactive; assume yes for optional steps
   -h, --help    Show this help
 EOF
@@ -43,6 +46,7 @@ EOF
 while [ $# -gt 0 ]; do
   case "$1" in
     --host) HOST_OVERRIDE="${2:?--host requires a value}"; shift 2 ;;
+    --up) RUN_UP=1; shift ;;
     --yes) ASSUME_YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
@@ -64,10 +68,10 @@ fi
 # 1. Base packages + Docker Engine
 # --------------------------------------------------------------------------
 
-if ! command_exists git || ! command_exists curl || ! command_exists openssl || ! command_exists python3; then
-  log "Installing base packages (git, curl, openssl, python3)..."
+if ! command_exists git || ! command_exists curl || ! command_exists openssl || ! command_exists python3 || ! command_exists make; then
+  log "Installing base packages (git, curl, openssl, python3, make)..."
   $SUDO apt-get update -qq
-  $SUDO apt-get install -y -qq git curl openssl ca-certificates python3
+  $SUDO apt-get install -y -qq git curl openssl ca-certificates python3 make
 fi
 
 if ! command_exists docker; then
@@ -264,3 +268,12 @@ cat <<EOF
    docker compose up -d --force-recreate worker-gemini api
 ==============================================
 EOF
+
+if [ "$RUN_UP" -eq 1 ]; then
+  log "starting the full stack..."
+  if command_exists make && [ -f "$ROOT/Makefile" ]; then
+    ( cd "$ROOT" && make up )
+  else
+    ( cd "$ROOT" && $SUDO docker compose up -d --build )
+  fi
+fi

@@ -26,13 +26,13 @@ SVC ?=
 logs:
 	docker compose logs --tail=100 -f $(SVC)
 
-# Container + public endpoint status.
+# Container + public endpoint status (informational; never fails the run).
 status:
 	docker compose ps --format "table {{.Name}}\t{{.Status}}"
 	@echo "--- public endpoints ---"
 	@for p in "/" "/docs" "/openapi.json" "/redoc" "/flower/" "/grafana/login" "/jaeger/" "/prometheus/graph" "/health" "/readyz"; do \
 		printf "%-18s " "$$p"; curl -s -o /dev/null -w "%{http_code}\n" "http://localhost$$p"; \
-	done
+	done || true
 
 # Wait for a healthy API, then prove auth + key routes end to end.
 verify:

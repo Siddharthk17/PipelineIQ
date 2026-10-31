@@ -70,7 +70,11 @@ cd PipelineIQ
 make setup && make up
 ```
 
-`make setup` (`scripts/bootstrap.sh`, safe to re-run) installs Docker if missing, creates `.env` from `.env.example`, generates every required secret (existing values are never touched), detects the public host, wires `TRUSTED_HOSTS`, and enables `vm.overcommit_memory=1`. `make up` builds, starts, and verifies the stack. A demo account is seeded automatically (`demo@pipelineiq.app` / `Demo1234!`).
+Or a single script that does both (clone → running):
+```bash
+./scripts/bootstrap.sh --up
+```
+You only ever touch `.env` by hand if you want to override the detected public IP (`PUBLIC_HOST`) or add your `GEMINI_API_KEY` — everything else is generated. `make setup` (`scripts/bootstrap.sh`, safe to re-run) installs Docker if missing, creates `.env` from `.env.example`, generates every required secret (existing values are never touched), detects the public host, wires `TRUSTED_HOSTS`, and enables `vm.overcommit_memory=1`. `make up` builds, starts, and verifies the stack. A demo account is seeded automatically (`demo@pipelineiq.app` / `Demo1234!`).
 
 On a **new cloud VM**, open port 80 first (example for GCP):
 `gcloud compute firewall-rules create pipelineiq-http --allow=tcp:80 --source-ranges=0.0.0.0/0 --target-tags=pipelineiq`
