@@ -914,7 +914,9 @@ services:
     ports:
       - "127.0.0.1:9090:9090"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9090/-/ready"]
+      # NOTE: --web.route-prefix moves /-/ready under /prometheus/; probe the
+      # prefixed path first, fall back to root for prefix-less configurations.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9090/prometheus/-/ready || wget -q -O- http://localhost:9090/-/ready"]
       interval: 10s
       timeout: 5s
       retries: 10
