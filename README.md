@@ -62,29 +62,30 @@ Data teams waste time stitching together ad-hoc scripts, manual exports, and fra
 
 ### Run Everything with Docker Compose (21 Services)
 
+One-command deploy on any Ubuntu/Debian host (fresh GCP VM included):
+
 ```bash
 git clone https://github.com/Siddharthk17/PipelineIQ.git
 cd PipelineIQ
-cp .env.example .env
-# Edit .env — set POSTGRES_PASSWORD and SECRET_KEY at minimum
-# On Linux hosts, also run: sudo sysctl -w vm.overcommit_memory=1
-# (persists via /etc/sysctl.conf) to avoid Redis background-save failures.
-docker compose up --build -d
+make setup && make up
 ```
 
-Wait ~45 seconds for all services to initialize. A demo account is seeded automatically.
+`make setup` (`scripts/bootstrap.sh`, safe to re-run) installs Docker if missing, creates `.env` from `.env.example`, generates every required secret (existing values are never touched), detects the public host, wires `TRUSTED_HOSTS`, and enables `vm.overcommit_memory=1`. `make up` builds, starts, and verifies the stack. A demo account is seeded automatically (`demo@pipelineiq.app` / `Demo1234!`).
 
-| Service | URL | Purpose |
-|---------|-----|---------|
-| Application (via Nginx) | http://localhost | Full app behind reverse proxy |
-| Swagger API Docs | http://localhost:8000/docs | Interactive API playground (direct API port; hidden behind the reverse proxy) |
-| ReDoc API Docs | http://localhost:8000/redoc | Alternative API browser (direct API port; hidden behind the reverse proxy) |
-| Celery Flower | http://localhost:5555 | Worker monitoring dashboard (basic auth: FLOWER_USER / FLOWER_PASSWORD) |
-| Grafana | http://localhost/grafana | 10-panel observability dashboard |
-| Prometheus | http://localhost:9090 | Metrics scraping |
-| Jaeger Tracing | http://localhost:16686 | Distributed tracing UI |
-| Redpanda Console | http://localhost:8090 | Streaming topic management |
-| MinIO Console | http://localhost:9001 | S3-compatible storage admin |
+On a **new cloud VM**, open port 80 first (example for GCP):
+`gcloud compute firewall-rules create pipelineiq-http --allow=tcp:80 --source-ranges=0.0.0.0/0 --target-tags=pipelineiq`
+(attach the `pipelineiq` network tag to the VM, or tick "Allow HTTP traffic" at creation). Prefer a static external IP so reboots don't move you.
+
+| Service | URL (host = your machine or VM IP) | Purpose |
+|---------|------------------------------------|---------|
+| Application (via Nginx) | http://HOST/ | Full app behind reverse proxy |
+| Swagger API Docs | http://HOST/docs | Interactive API playground (also `/redoc`, `/openapi.json`) |
+| Celery Flower | http://HOST/flower/ | Worker monitoring (basic auth: `FLOWER_USER` / `FLOWER_PASSWORD`) |
+| Grafana | http://HOST/grafana | Observability dashboards (login: `GRAFANA_USER` / `GRAFANA_PASSWORD`) |
+| Prometheus | http://HOST/prometheus/graph | Metrics UI behind the proxy |
+| Jaeger Tracing | http://HOST/jaeger/ | Distributed tracing UI |
+| Yjs collaboration | http://HOST/yjs/ (WebSocket) | Live multi-user pipeline editing |
+| MinIO Console | http://HOST:9001 | S3-compatible storage admin (loopback-only) |
 
 ### Backend Only (Development)
 
