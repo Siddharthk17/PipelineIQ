@@ -765,7 +765,7 @@ services:
       - pipelineiq-network
 
   minio:
-    image: quay.io/minio/minio:${MINIO_IMAGE_TAG:-latest}
+    image: pgsty/minio:${MINIO_IMAGE_TAG:-latest}
     container_name: pipelineiq-minio
     command: server /data --console-address ":9001"
     environment:
