@@ -37,7 +37,7 @@ Report privately via **GitHub Security Advisories** (preferred):
 These are intentional and **not** vulnerabilities — please do not report them:
 
 - **Demo credentials** (`demo@pipelineiq.app` / `Demo1234!`) are published in the README and seeded by `backend/scripts/seed_demo.py`. They exist for the public demo only; rotate or remove the demo user in any private deployment.
-- **Public-by-design routes** (`/docs`, `/redoc`, `/openapi.json`, `/flower/`, `/grafana/`, `/prometheus/graph`) are exposed through Nginx intentionally. Flower and Grafana sit behind their own authentication.
+- **Public-by-design routes** (`/docs`, `/redoc`, `/openapi.json`, `/flower/`, `/grafana/`, `/prometheus/`, `/jaeger/`) are exposed through Nginx intentionally. Flower and Grafana sit behind their own authentication; Jaeger, Prometheus, and the API docs carry no login — do not expose them on untrusted networks if their contents are sensitive.
 - **Rate limits** on auth endpoints (`5/minute` on login/register) are a baseline, not a substitute for WAF/proxy-level throttling in production.
 
 In-scope areas we especially care about: JWT issuance/validation and revocation (`backend/auth.py`), SSRF/path-traversal in file handling and pipeline inputs, WASM sandbox escapes (`backend/execution/wasm_executor.py`), SQL injection in DuckDB/SQL steps, privilege escalation (viewer → admin), secret leakage in logs or API responses, and container/Compose hardening (`nginx/`, `docker-compose.yml`, `k8s/`).
