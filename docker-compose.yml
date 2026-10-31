@@ -960,7 +960,7 @@ services:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USER}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_SERVER_ROOT_URL=http://localhost/grafana/
+      - GF_SERVER_ROOT_URL=http://${PUBLIC_HOST:-localhost}/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_DATABASE_WAL=true
     ports:

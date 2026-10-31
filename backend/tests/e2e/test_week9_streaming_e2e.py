@@ -11,7 +11,7 @@ Tests cover:
 8. Edge cases (error handling, DLQ replay, partition reassignment, consumer close)
 
 Run with: pytest tests/e2e/test_week9_streaming_e2e.py -v
-Requires: Redpanda running on localhost:9092, PostgreSQL, Redis, Celery worker-streaming
+Requires: Redpanda running on 127.0.0.1:9092, PostgreSQL, Redis, Celery worker-streaming
 """
 
 import contextlib
@@ -28,8 +28,11 @@ import requests
 # Project root detection for file path tests
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
-# Redpanda connection for host-side tests
-RP_BROKERS = "localhost:9092"
+# Redpanda connection for host-side tests.
+# NOTE: numeric IPv4 loopback on purpose — compose publishes 127.0.0.1:9092
+# and "localhost" may resolve to ::1 first on newer runners/GHA, where nothing
+# listens (refused connections + delivery stalls).
+RP_BROKERS = "127.0.0.1:9092"
 
 # Track all topics created during test session for guaranteed cleanup
 _CREATED_TOPICS: list[str] = []
@@ -609,13 +612,21 @@ class TestEndToEndStreamingLifecycle:
     def test_full_streaming_pipeline_flow(self, headers, unique_topic, producer):
         """Create topic → produce → verify → check partitions."""
         _docker_rpk_create_topic(unique_topic, partitions=8)
-        time.sleep(1)
+        # 8-partition leader election on a loaded CI runner needs settle time.
+        time.sleep(5)
 
         for i in range(20):
             producer.produce(topic=unique_topic,
                              value=json.dumps({"id": i, "status": "active"}).encode(),
                              key=str(i).encode())
-        assert producer.flush(timeout=10) == 0
+        # Single-shot flushes flake when the broker stalls (slow leader
+        # election / oversubscribed runner). Retry to a deadline; the
+        # assertion stays strict — all 20 must be acknowledged.
+        deadline = time.time() + 60
+        remaining = producer.flush(timeout=10)
+        while remaining and time.time() < deadline:
+            remaining = producer.flush(timeout=10)
+        assert remaining == 0
 
         # Verify messages received
         c = _rp_consumer(f"e2e-verify-{uuid.uuid4().hex[:8]}", auto_offset_reset="earliest")
