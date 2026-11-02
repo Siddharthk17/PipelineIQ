@@ -29,16 +29,18 @@ EXAMPLE_FILE="$ROOT/.env.example"
 HOST_OVERRIDE=""
 ASSUME_YES=0
 RUN_UP=0
+INSTALL_CRON=1
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/bootstrap.sh [--host HOST] [--up] [--yes]
+Usage: ./scripts/bootstrap.sh [--host HOST] [--up] [--yes] [--no-cron]
 
   --host HOST   Public hostname or IP of this deployment
                 (default: auto-detect via GCP metadata, else first IPv4)
   --up          After bootstrapping, also build + start the stack
                 (same as running 'make up' afterwards)
   --yes         Non-interactive; assume yes for optional steps
+  --no-cron     Skip installing the nightly backup + demo-reseed cron jobs
   -h, --help    Show this help
 EOF
 }
@@ -48,6 +50,7 @@ while [ $# -gt 0 ]; do
     --host) HOST_OVERRIDE="${2:?--host requires a value}"; shift 2 ;;
     --up) RUN_UP=1; shift ;;
     --yes) ASSUME_YES=1; shift ;;
+    --no-cron) INSTALL_CRON=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -64,9 +67,7 @@ if [ "$(id -u)" -ne 0 ]; then
   if command_exists sudo; then SUDO="sudo"; else warn "not root and no sudo; privileged steps will print manual instructions"; fi
 fi
 
-# --------------------------------------------------------------------------
 # 1. Base packages + Docker Engine
-# --------------------------------------------------------------------------
 
 if ! command_exists git || ! command_exists curl || ! command_exists openssl || ! command_exists python3 || ! command_exists make; then
   log "Installing base packages (git, curl, openssl, python3, make)..."
@@ -103,9 +104,7 @@ if ! $SUDO docker compose version >/dev/null 2>&1; then
   die "docker compose plugin not found; install it and re-run"
 fi
 
-# --------------------------------------------------------------------------
 # 2. .env from .env.example + secret generation (fill gaps only)
-# --------------------------------------------------------------------------
 
 [ -f "$EXAMPLE_FILE" ] || die "$EXAMPLE_FILE not found; are you in the repo root?"
 if [ ! -f "$ENV_FILE" ]; then
@@ -171,9 +170,7 @@ ensure_secret GRAFANA_PASSWORD 16
 RPW="$(get_var REPLICATION_PASSWORD || true)"; PPW="$(get_var POSTGRES_PASSWORD)"
 if is_placeholder "$RPW" || [ "$RPW" != "$PPW" ]; then set_var REPLICATION_PASSWORD "$PPW"; log "set REPLICATION_PASSWORD (matches Postgres)"; fi
 
-# --------------------------------------------------------------------------
 # 3. Public host detection → PUBLIC_HOST + TRUSTED_HOSTS
-# --------------------------------------------------------------------------
 
 detect_host() {
   if [ -n "$HOST_OVERRIDE" ]; then printf '%s' "$HOST_OVERRIDE"; return; fi
@@ -216,9 +213,7 @@ fi
 
 chmod 600 "$ENV_FILE" 2>/dev/null || true
 
-# --------------------------------------------------------------------------
 # 4. Host sysctl for Redis (vm.overcommit_memory=1)
-# --------------------------------------------------------------------------
 
 if [ "$(cat /proc/sys/vm/overcommit_memory 2>/dev/null || echo "?")" != "1" ]; then
   # Best-effort: never abort the bootstrap over this (warn + manual command).
@@ -232,15 +227,28 @@ else
   log "vm.overcommit_memory=1 already set."
 fi
 
-# --------------------------------------------------------------------------
-# 5. Next steps
-# --------------------------------------------------------------------------
+# 5. Nightly backup + demo-reseed cron jobs (idempotent, marker-tagged)
+if [ "$INSTALL_CRON" -eq 1 ] && command_exists crontab && command_exists docker; then
+  {
+    crontab -l 2>/dev/null | grep -v "pipelineiq-backup\|pipelineiq-reseed" || true
+    # NOTE: cron runs with a minimal PATH and no shell interpolation surprises:
+    # the backup line keeps its own retention, the reseed script logs itself.
+    printf '%s\n' "0 2 * * * cd $ROOT && ./scripts/backup.sh >> $ROOT/var-backup.log 2>&1 # pipelineiq-backup"
+    printf '%s\n' "30 2 * * * cd $ROOT && ./scripts/demo-reseed.sh >> $ROOT/var-reseed.log 2>&1 # pipelineiq-reseed"
+  } | crontab -
+  log "cron jobs installed (02:00 backup, 02:30 demo reseed; re-run to update, --no-cron to skip)."
+elif [ "$INSTALL_CRON" -eq 1 ]; then
+  warn "crontab or docker not found — skipping cron install. Add manually:"
+  warn "  0 2 * * * cd $ROOT && ./scripts/backup.sh # pipelineiq-backup"
+  warn "  30 2 * * * cd $ROOT && ./scripts/demo-reseed.sh # pipelineiq-reseed"
+fi
+
+# 6. Next steps
 
 cat <<EOF
 
-==============================================
  PipelineIQ bootstrap complete
-==============================================
+
  Public host : $HOST
  .env        : $ENV_FILE (600, gaps filled; re-run anytime, values preserved)
 
@@ -266,7 +274,7 @@ cat <<EOF
 
  Optional (enables AI features): set GEMINI_API_KEY in .env, then
    docker compose up -d --force-recreate worker-gemini api
-==============================================
+
 EOF
 
 if [ "$RUN_UP" -eq 1 ]; then
