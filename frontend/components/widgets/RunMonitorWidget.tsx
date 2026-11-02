@@ -9,6 +9,7 @@ import { HealingBanner } from "@/components/widgets/HealingBanner";
 import { GanttChart } from "@/components/runs/GanttChart";
 import { RunStatusBadge } from "@/components/runs/RunStatusBadge";
 import { ContractViolationBadge } from "@/components/pipeline-builder/ContractViolationBadge";
+import { getJaegerUiUrl } from "@/lib/publicUrls";
 
 export function RunMonitorWidget() {
   const { activeRunId, activeRun } = usePipelineStore();
@@ -146,7 +147,7 @@ export function RunMonitorWidget() {
           steps={activeRun.step_results ?? []}
           totalDurationMs={activeRun.duration_ms}
           violations={stepViolations}
-          jaegerUiUrl={process.env.NEXT_PUBLIC_JAEGER_UI_URL ?? "http://localhost:16686"}
+                      jaegerUiUrl={getJaegerUiUrl()}
         />
       ) : (
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
