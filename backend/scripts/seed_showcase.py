@@ -48,9 +48,7 @@ from backend.services.storage_service import storage_service
 RNG = random.Random(20250601)
 
 
-# --------------------------------------------------------------------------
 # Datasets
-# --------------------------------------------------------------------------
 
 STATUSES = ["delivered", "delivered", "delivered", "cancelled", "pending",
             "delivered", "pending", "cancelled"]
@@ -161,9 +159,7 @@ def _dtypes_for(columns, rows):
     return dtypes
 
 
-# --------------------------------------------------------------------------
 # Pipeline archetypes (all produce parser-valid YAML — verified in CI review)
-# --------------------------------------------------------------------------
 
 def _yaml(name, description, steps):
     return yaml.safe_dump(
@@ -421,9 +417,7 @@ def _build_pipeline_yaml(kind, name, fids, wasm_id, topic):
     return _yaml(name, f"Showcase pipeline ({kind})", steps)
 
 
-# --------------------------------------------------------------------------
 # Seeding
-# --------------------------------------------------------------------------
 
 def _ensure_demo_user(db):
     user = db.query(User).filter(User.email == DEMO_EMAIL).first()
