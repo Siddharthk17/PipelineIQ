@@ -1020,7 +1020,7 @@ services:
       - --kafka-addr
       - PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:9093
       - --advertise-kafka-addr
-      - PLAINTEXT://localhost:9092,INTERNAL://redpanda:9093
+      - PLAINTEXT://127.0.0.1:9092,INTERNAL://redpanda:9093
       - --pandaproxy-addr
       - 0.0.0.0:8082
       - --schema-registry-addr
