@@ -361,7 +361,9 @@ jobs:
   # JOB 5: E2E Tests (Playwright)
   e2e-tests:
     name: E2E Tests (Playwright)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, whose system packages Playwright
+    # 1.60.0 cannot install (install --with-deps hard-fails there).
+    runs-on: ubuntu-24.04
     needs: [backend-tests, frontend-check]
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
 
@@ -376,7 +378,9 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        # --with-deps needs an OS Playwright knows; fall back to the
+        # browser-only install (runners already carry the system libs).
+        run: npx playwright install --with-deps chromium || npx playwright install chromium
 
       - name: Run E2E tests
         env:

@@ -12,6 +12,10 @@ pyyaml==6.0.1
 networkx==3.2.1
 celery==5.3.6
 croniter==2.0.1
+# Pinned explicitly: kombu floats under celery's <6.0 cap and its 5.6.x line
+# enforces redis-py>=6.1.0 at runtime — an unpinned kombu + old redis pin
+# broke CI with kombu.exceptions.VersionMismatch (Nov 2026).
+kombu==5.6.2
 redis==6.4.0
 slowapi==0.1.9
 python-multipart==0.0.32
