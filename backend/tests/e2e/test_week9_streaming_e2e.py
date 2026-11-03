@@ -90,6 +90,20 @@ def _rp_admin():
     return RedpandaAdminClient(brokers=RP_BROKERS)
 
 
+def _assert_flushed(producer, timeout=10, deadline=60):
+    """Flush with retries to a deadline; strict: nothing may remain queued.
+
+    Single-shot flushes flake on loaded CI runners (leader election after
+    topic create, broker stalls). Retrying preserves the strict == 0
+    assertion instead of weakening it.
+    """
+    remaining = producer.flush(timeout=timeout)
+    stop_at = time.time() + deadline
+    while remaining and time.time() < stop_at:
+        remaining = producer.flush(timeout=timeout)
+    assert remaining == 0, f"{remaining} message(s) still queued after flush"
+
+
 def _docker_rpk_create_topic(topic, partitions=8):
     """Create topic via rpk inside container (avoids host DNS resolution issue)."""
     # Create main topic
@@ -266,7 +280,7 @@ class TestRedpandaInfrastructure:
         p = _rp_producer()
         p.produce(topic=unique_topic, value=b'{"test": true}')
         p.poll(1)
-        assert p.flush(timeout=5) == 0
+        _assert_flushed(p, timeout=5)
 
     def test_consumer_can_receive(self, unique_topic):
         _docker_rpk_create_topic(unique_topic)
@@ -290,7 +304,7 @@ class TestRedpandaInfrastructure:
         time.sleep(1)
         p = _rp_producer({"acks": "all"})
         p.produce(topic=f"{unique_topic}.dlq", value=b'{"error": "test"}')
-        assert p.flush(timeout=5) == 0
+        _assert_flushed(p, timeout=5)
 
     def test_consumer_close_clean(self, unique_topic):
         _docker_rpk_create_topic(unique_topic)
