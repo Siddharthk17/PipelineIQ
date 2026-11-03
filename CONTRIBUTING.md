@@ -122,6 +122,13 @@ npx tsc --noEmit
 npm run lint
 ```
 
+## Dependency Policy
+
+- Direct dependencies are **pinned** (`backend/requirements.txt`, `package-lock.json`). Do not float a pin to "fix" CI.
+- Transitive dependencies float under their parents' caps — until one breaks CI. When that happens, **pin the offender explicitly** with a comment naming the failure (see `kombu` in `requirements.txt`), so the pair stays coherent.
+- [Dependabot](.github/dependabot.yml) proposes weekly grouped bumps (pip / npm / Docker / Actions, Mondays). Merge them only when CI is green; never merge a red Dependabot PR to "catch up."
+- After adding or changing a pin, run the relevant suite locally (`pytest backend/tests/unit`, `npm test` in `frontend/`) before pushing.
+
 Rules of thumb: no `Any`-typed public API boundaries without reason, no commented-out code, no emoji in logs, no test-result/build-output artifacts committed (they are git-ignored).
 
 ## End-to-End Tests

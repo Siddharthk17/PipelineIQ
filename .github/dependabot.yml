@@ -1,0 +1,137 @@
+# Dependabot: weekly dependency bumps as small, CI-gated PRs.
+#
+# Policy (see CONTRIBUTING.md): direct deps are pinned in requirements.txt /
+# package-lock.json. When a floating transitive dep breaks CI, we pin the
+# offender explicitly (with a comment) instead of chasing it every time —
+# Dependabot then proposes future bumps where tests can vet them.
+#
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Backend Python deps (backend/requirements.txt). Celery/redis/kombu move
+  # as one PR so transport floors (e.g. kombu's redis-py>=6.1.0) stay coherent.
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "Siddharthk17"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      celery-stack:
+        patterns:
+          - "celery"
+          - "kombu"
+          - "billiard"
+          - "vine"
+          - "amqp"
+          - "redis"
+          - "click*"
+
+  # Root npm workspace (Playwright + shared dev deps).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "Siddharthk17"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      root-deps:
+        patterns:
+          - "*"
+
+  # Frontend app.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "Siddharthk17"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      frontend-deps:
+        patterns:
+          - "*"
+
+  # Yjs collaboration server.
+  - package-ecosystem: "npm"
+    directory: "/y-websocket"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 3
+    reviewers:
+      - "Siddharthk17"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # Docker base images (FROM lines).
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "Siddharthk17"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # GitHub Actions versions.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 3
+    reviewers:
+      - "Siddharthk17"
+    labels:
+      - "dependencies"
+      - "automated"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
