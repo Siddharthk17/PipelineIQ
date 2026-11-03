@@ -47,7 +47,7 @@ opentelemetry-sdk==1.45.1
 opentelemetry-exporter-otlp==1.45.1
 opentelemetry-instrumentation==0.66b1
 opentelemetry-instrumentation-fastapi==0.66b1
-opentelemetry-instrumentation-celery==0.66b1
+opentelemetry-instrumentation-celery==0.66b2
 opentelemetry-instrumentation-sqlalchemy==0.66b1
 opentelemetry-instrumentation-redis==0.66b1
 opentelemetry-instrumentation-httpx==0.66b1
