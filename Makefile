@@ -2,7 +2,7 @@
 #
 # Fresh VM?  `make setup && make up` is the entire deploy.
 
-.PHONY: setup up down logs status verify
+.PHONY: setup up down logs status verify reseed backup
 
 # Bootstrap .env/secrets/host config. Safe to re-run (fills gaps only).
 setup:
@@ -46,3 +46,12 @@ verify:
 	done; \
 	unset TOKEN
 	@echo "verify: done (401 on /flower/ and 302s are the healthy answers)"
+
+# Restore the demo account to its pristine showcase state (destructive to
+# demo-owned data only — never touches other users).
+reseed:
+	./scripts/demo-reseed.sh
+
+# Nightly-style PostgreSQL backup with 7-day retention (see scripts/backup.sh).
+backup:
+	./scripts/backup.sh

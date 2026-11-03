@@ -11,6 +11,7 @@ import { TerminalLauncher } from "@/components/layout/TerminalLauncher";
 import { KeybindingsModal } from "@/components/layout/KeybindingsModal";
 import { useKeybindings } from "@/hooks/useKeybindings";
 import { useAuth } from "@/lib/auth-context";
+import LandingPage from "@/components/layout/LandingPage";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -25,10 +26,12 @@ export default function Dashboard() {
   const [launcherSession, setLauncherSession] = useState(0);
 
   useEffect(() => {
-    if (!isLoading && !user) {
-      router.push("/login");
+    // Logged-out visitors land on the public landing page (rendered below),
+    // not a login wall — no redirect needed.
+    if (!isLoading && user) {
+      document.title = "PipelineIQ";
     }
-  }, [isLoading, user, router]);
+  }, [isLoading, user]);
 
   const handleLogout = () => {
     logout();
@@ -60,16 +63,20 @@ export default function Dashboard() {
     () => setIsKeybindingsOpen(true)
   );
 
-  if (isLoading || !user) {
+  if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-screen w-screen bg-[var(--bg-base)]">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-8 h-8 rounded bg-[var(--accent-primary)] text-[var(--bg-base)] font-bold flex items-center justify-center text-lg">P</div>
+          <div className="w-8 h-8 rounded bg-[var(--accent-error)] text-[var(--bg-base)] font-bold flex items-center justify-center text-lg">P</div>
           <span className="text-xl font-bold text-[var(--text-primary)]">PipelineIQ</span>
         </div>
         <div className="w-5 h-5 border-2 border-[var(--text-secondary)] border-t-[var(--accent-primary)] rounded-full animate-spin" />
       </div>
     );
+  }
+
+  if (!user) {
+    return <LandingPage />;
   }
 
   return (

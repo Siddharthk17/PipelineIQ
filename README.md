@@ -93,6 +93,12 @@ On a **new cloud VM**, open port 80 first (example for GCP):
 | Yjs collaboration | http://HOST/yjs/ (WebSocket) | Live multi-user pipeline editing |
 | MinIO Console | http://HOST:9001 | S3-compatible storage admin (loopback-only) |
 
+Live deployment (captured from a real VM):
+
+| Login | Dashboard | API docs | Jaeger tracing |
+|---|---|---|---|
+| ![Login](docs/screenshots/01-login.png) | ![Dashboard](docs/screenshots/02-dashboard.png) | ![API docs](docs/screenshots/03-api-docs.png) | ![Jaeger](docs/screenshots/04-jaeger.png) |
+
 ### Backend Only (Development)
 
 ```bash

@@ -2,22 +2,22 @@
 
 ## Summary
 
-<!-- One or two sentences: what does this change do and why? -->
+One or two sentences: what does this change do and why?
 
 ## Root Cause
 
-<!-- For fixes: what was actually wrong? Link the failing CI run, issue, or log excerpt. Omit for pure features. -->
+For fixes: what was actually wrong? Link the failing CI run, issue, or log excerpt. Omit for pure features.
 
 ## Change
 
-<!-- File-level description of the fix. Call out any behavior, config, or schema changes. -->
+File-level description of the fix. Call out any behavior, config, or schema changes.
 
 -
 -
 
 ## Verification
 
-<!-- Evidence the change works. Check all that apply and paste proof (commands + results). -->
+Evidence the change works. Check all that apply and paste proof (commands + results).
 
 - [ ] Backend: `cd backend && python -m pytest tests/<path> -v --tb=short` — result:
 - [ ] Frontend: `npx tsc --noEmit`, `npm test`, `npm run build` — result:
