@@ -105,7 +105,7 @@ jobs:
           python -m pytest tests/ -v --tb=short --junitxml=test-results.xml
 
       - name: Upload test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: backend-test-results
@@ -396,7 +396,7 @@ jobs:
             e2e/10-templates.spec.ts
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: playwright-report
@@ -524,7 +524,7 @@ jobs:
           GEMINI_API_KEY: ci_fake_gemini_key_for_testing
 
       - name: Upload E2E test results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: e2e-streaming-test-results
