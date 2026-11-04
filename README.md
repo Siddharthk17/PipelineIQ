@@ -907,7 +907,7 @@ All 69 settings with defaults in `.env.example`. `*` marks values you must repla
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DATABASE_URL` * | `postgresql://pipelineiq:your_password@pgbouncer:5432/pipelineiq` | Primary via PgBouncer (write pool) |
+| `DATABASE_URL` * | `postgresql://pipelineiq:...@pgbouncer:5432/pipelineiq` | Primary via PgBouncer (write pool) |
 | `DATABASE_WRITE_URL` | falls back to `DATABASE_URL` | Write endpoint override |
 | `DATABASE_READ_URL` | falls back to write URL | Read-replica endpoint |
 | `POSTGRES_USER` | `pipelineiq` | Database user |
