@@ -112,7 +112,7 @@ CI (`.github/workflows/ci.yml`) runs these jobs; a PR must keep all of them gree
 3. **Code Quality** — `ruff check backend/ --select E9,F63,F82` (blocking syntax/undefined-name checks) and `tsc --noEmit` (blocking). ESLint currently reports informationally.
 4. **Docker Compose Smoke Test** — builds the whole stack and exercises health → login → upload → pipeline run → completion.
 5. **Streaming E2E** — Redpanda-backed streaming suite (runs on every CI run, not only on `main`).
-6. **Playwright E2E** (`e2e/`, 26 spec files, one an empty stub) — Chromium only in CI (`ubuntu-24.04` runner); on `main` pushes and manual dispatch only, 4 specs.
+6. **Playwright E2E** (`e2e/`, 25 spec files) — Chromium only in CI (`ubuntu-24.04` runner); on `main` pushes and manual dispatch only, 4 specs.
 
 ## Lint, Types, and Formatting
 

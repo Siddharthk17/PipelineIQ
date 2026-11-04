@@ -113,7 +113,7 @@ alembic upgrade heads
 python -m pytest tests/unit/pipeline/test_parser.py -v
 ```
 
-Note: the migration history currently has four heads, so plain `alembic upgrade head` fails; `alembic upgrade heads` advances every branch. See [Database](#database).
+Migrations merged to a single head (`a6fc98d90644`), so plain `alembic upgrade head` works. See [Database](#database).
 
 ### Frontend only (development)
 
@@ -332,11 +332,11 @@ Request path: browser → Nginx → API (port 8000) for REST; step timers and ru
 
 ### Celery queues
 
-| Queue | Compose concurrency | k8s replicas | What runs here |
+| Queue | Concurrency (Compose and k8s) | k8s replicas | What runs here |
 |-------|--------------------|--------------|----------------|
 | `critical` | 2 | 1 | `tasks.deliver_webhook`, `tasks.deliver_notifications` |
 | `default` | 3 | 2 | `pipeline.execute` (manual runs) |
-| `bulk` | 2 | 2 | `schedules.check`, `tasks.profile_file`, `tasks.execute_scheduled_pipeline`, `tasks.maintain_storage`, `tasks.reconcile_stuck_runs` |
+| `bulk` | 2 | 2 | `schedules.check`, `tasks.profile_file`, `tasks.maintain_storage`, `tasks.reconcile_stuck_runs` |
 | `gemini` | 1 | 1 | `tasks.call_gemini`, pipeline descriptions (50 calls/min, 900K tokens/min) |
 | `streaming` | 8 | 1 | `tasks.run_streaming_pipeline` (no time limit) |
 
@@ -633,7 +633,7 @@ npm test            # vitest run: stores, hooks, pages, widgets, builder, collab
 npx tsc --noEmit    # blocking type gate (also runs in CI)
 ```
 
-### E2E — Playwright, 26 spec files
+### E2E — Playwright, 25 spec files
 
 ```bash
 npx playwright install --with-deps chromium || npx playwright install chromium
@@ -656,10 +656,10 @@ bash scripts/run-load-tests.sh    # runs all three k6 profiles, defaults to the 
 
 ## Database
 
-PostgreSQL 15. Migrations live in `backend/alembic/versions/` (37 files). The history currently has **four heads**, so `alembic upgrade head` fails with "Multiple head revisions are present". Advance every branch explicitly:
+PostgreSQL 15. Migrations live in `backend/alembic/versions/` (38 files, single head `a6fc98d90644` — a no-op merge of the former `0013` and `k1a2b3c4d5e0` branches, which touch disjoint objects):
 
 ```bash
-alembic upgrade heads                 # upgrade all four heads
+alembic upgrade head                   # run pending migrations (single head)
 alembic history                       # show the branches
 alembic downgrade -1                  # roll back one step
 ```
@@ -823,7 +823,7 @@ PipelineIQ/
 │   │   ├── exceptions.py       # StepExecutionError hierarchy
 │   │   └── definitions.py      # UI metadata per step type
 │   ├── execution/              # DuckDB/Pandas/WASM engines, Arrow bus, healing
-│   ├── tasks/                  # 10 Celery modules (pipeline, streaming, schedules ×2,
+│   ├── tasks/                  # 9 Celery modules (pipeline, streaming, schedules,
 │   │                           #   gemini, webhooks, notifications, profiling,
 │   │                           #   reconciliation, storage maintenance)
 │   ├── scheduling/             # croniter validation + next-run math
@@ -856,7 +856,7 @@ PipelineIQ/
 │   └── Dockerfile              # Multi-stage standalone (ARGs for NEXT_PUBLIC_*)
 ├── y-websocket/                # Yjs relay (server.js, y-redis persistence, JWT gate)
 │   └── __tests__/              # node:test suites (server unit + shared-room regression)
-├── e2e/                        # 26 Playwright specs (auth → journeys) + fixtures + global-setup
+├── e2e/                        # 25 Playwright specs (auth → journeys) + fixtures + global-setup
 ├── k6/                         # load-auth, load-pipeline-api, load-file-upload
 ├── chaos/                      # chaos-scenarios.sh fault injection
 ├── k8s/                        # 17 manifests (namespace → ingress)

@@ -44,9 +44,6 @@ celery_app.autodiscover_tasks(["backend.tasks"], related_name="profiling")
 celery_app.autodiscover_tasks(["backend.tasks"], related_name="gemini_tasks")
 celery_app.autodiscover_tasks(
     ["backend.tasks"],
-    related_name="scheduled_pipeline")
-celery_app.autodiscover_tasks(
-    ["backend.tasks"],
     related_name="streaming_pipeline")
 celery_app.autodiscover_tasks(
     ["backend.tasks"],

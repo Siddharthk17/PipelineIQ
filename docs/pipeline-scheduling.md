@@ -43,7 +43,7 @@ Beat must run exactly one replica (`worker-beat`, Compose and k8s): two Beats wo
 | File | Purpose |
 |------|---------|
 | `backend/tasks/schedule_tasks.py` | `schedules.check`: lock, select, dispatch |
-| `backend/tasks/scheduled_pipeline.py` | Alternate single-schedule fire path (`tasks.execute_scheduled_pipeline`) |
+| `backend/tasks/schedule_tasks.py` | `schedules.check`: lock, select, dispatch |
 | `backend/api/schedules.py` | CRUD, pause/resume, runs, preview, stream_consume rejection |
 | `backend/scheduling/cron_utils.py` | Expression validation, next-run, human text |
 | `backend/celery_config.py` | `beat_schedule` (60 s schedules, 300 s storage, 600 s reconcile) |

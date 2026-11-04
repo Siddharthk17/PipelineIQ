@@ -26,7 +26,7 @@ Policies live in Redis (`redis-cache`, `POLICY_CACHE_TTL = 60`, orjson-serialize
 
 ## PII detection
 
-`backend/profiling/analyzer.py` assigns a `semantic_type` per column (email/phone/ssn/credit_card by regex and Luhn, plus name/address/ip/person patterns) into the stored file profile. The frontend `PIIBanner` (`frontend/components/widgets/PIIBanner.tsx`) renders a yellow "Personal Information Detected" prompt only when handed a non-empty suggestion list, and `ColumnPolicyManager` highlights suggested columns lacking policies. Detection output is advisory; enforcement is the policy table above.
+`backend/profiling/analyzer.py` assigns a `semantic_type` per column (email/phone/ssn/credit_card by regex and Luhn, plus name/address/ip/person patterns) into the stored file profile. The frontend `PIIBanner` (`frontend/components/widgets/PIIBanner.tsx`) renders a yellow "Personal Information Detected" prompt only when handed a non-empty suggestion list, and `ColumnPolicyManager` highlights suggested columns lacking policies. `backend/security/column_security.py` (`PII_SEMANTIC_TYPES`: email, phone, ssn, credit_card, ip_address, person_name, address) derives suggestions from stored profiles, excluding columns that already have policies; the file detail page derives the same set client-side from `GET /api/v1/files/{id}/profile` so the banner appears without waiting on the policy list. Detection output is advisory; enforcement is the policy table above.
 
 ## Endpoints
 

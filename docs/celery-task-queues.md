@@ -6,15 +6,15 @@ Five queues with isolated workers. Routing, concurrency, and the beat schedule a
 
 ## Queues
 
-| Queue | Compose concurrency | k8s replicas | Tasks |
+| Queue | Concurrency (Compose and k8s) | k8s replicas | Tasks |
 |-------|--------------------|--------------|-------|
 | `critical` | 2 (`worker-critical`) + overflow from `worker-default` | 1 | `tasks.deliver_webhook`, `tasks.deliver_notifications` |
 | `default` | 3 (`worker-default`, also drains `critical`) | 2 | `pipeline.execute` (manual runs) |
-| `bulk` | 2 (`worker-bulk`) | 2 | `schedules.check`, `tasks.profile_file`, `tasks.execute_scheduled_pipeline`, `tasks.maintain_storage`, `tasks.reconcile_stuck_runs` |
+| `bulk` | 2 (`worker-bulk`) | 2 | `schedules.check`, `tasks.profile_file`, `tasks.maintain_storage`, `tasks.reconcile_stuck_runs` |
 | `gemini` | 1 (`worker-gemini`, 1 replica) | 1 | `tasks.call_gemini`, pipeline descriptions (50 calls/min, 900K tokens/min budget) |
 | `streaming` | 8 (`worker-streaming`) | 1 | `tasks.run_streaming_pipeline` (no time limit) |
 
- Routes in `celery_config.py` (`task_routes`): webhooks/notifications → `critical`; `pipeline.execute` → `default`; schedules/profile/scheduled/maintenance/reconcile → `bulk`; gemini tasks → `gemini`; streaming → `streaming`. Anything else falls through to `default`.
+ Routes in `celery_config.py` (`task_routes`): webhooks/notifications → `critical`; `pipeline.execute` → `default`; schedules/profile/maintenance/reconcile → `bulk`; gemini tasks → `gemini`; streaming → `streaming`. Anything else falls through to `default`.
 
 ## Worker behavior
 
@@ -39,7 +39,6 @@ Five queues with isolated workers. Routing, concurrency, and the beat schedule a
 | `pipeline_tasks.py` | `pipeline.execute` (name `execute_pipeline_task`) | default/bulk | Full run lifecycle, idempotent on `PENDING` |
 | `streaming_pipeline.py` | `tasks.run_streaming_pipeline` | streaming | Consume → execute → publish loop, DLQ, backpressure at 50K lag, 50-error stop |
 | `schedule_tasks.py` | `schedules.check` | bulk | Tick dispatch (Redis lock, batch 100) |
-| `scheduled_pipeline.py` | `tasks.execute_scheduled_pipeline` | bulk | Single-schedule fire (retry 1×/60 s) |
 | `gemini_tasks.py` | `tasks.call_gemini` + description task | gemini | Budget, retries, response cache |
 | `webhook_tasks.py` | `tasks.deliver_webhook` (+ plural fan-out) | critical | HMAC-signed POST with retries, delivery log |
 | `notification_tasks.py` | `deliver_notifications` | critical | Slack/email per `NotificationConfig` |

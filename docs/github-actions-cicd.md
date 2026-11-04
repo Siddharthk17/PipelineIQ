@@ -15,7 +15,7 @@ Seven GitHub Actions workflows. CI (`ci.yml`) validates every push and PR; `depl
 | Streaming E2E (needs smoke) | `ubuntu-latest` | Full Compose, Redpanda `rpk cluster health` + `worker-streaming` gate, then `tests/e2e/test_week9_streaming_e2e.py` |
 | Playwright E2E (needs backend+frontend) | pinned `ubuntu-24.04` | `playwright install --with-deps chromium` (fallback without `--with-deps`), 4 specs (`01-auth`, `02-file-upload`, `03-pipeline-builder`, `10-templates`) against `PRODUCTION_URL` / `PRODUCTION_API_URL`; `main` pushes and manual dispatch only |
 
-Note: `alembic upgrade head` in the Backend Tests job currently fails — the history has four heads (`0013`, `0014_otel_and_contracts`, `0016_catalog_indexes`, `k1a2b3c4d5e0`). Until a merge migration lands, the correct target is `alembic upgrade heads`. See [Database](../README.md#database).
+Migration history is a single head (`a6fc98d90644`, a no-op merge of the former `0013` and `k1a2b3c4d5e0` branches), so `alembic upgrade head` advances everything.
 
 ## Security — `security.yml`
 

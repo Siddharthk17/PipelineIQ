@@ -22,8 +22,8 @@ spec:
             - -A
             - backend.celery_app
             - worker
-            - --queues=default
-            - --concurrency=4
+            - --queues=critical,default
+            - --concurrency=3
             - --prefetch-multiplier=1
             - --hostname=default@%(h)s
             - --loglevel=info

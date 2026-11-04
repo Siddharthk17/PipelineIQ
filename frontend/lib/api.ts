@@ -291,6 +291,21 @@ export async function getFilePreview(fileId: string): Promise<Record<string, unk
   return data.data;
 }
 
+export interface FileProfileResponse {
+  file_id: string;
+  status: string;
+  computed_at: string | null;
+  row_count: number | null;
+  col_count: number | null;
+  completeness_pct: number | null;
+  profile: Record<string, { semantic_type?: string }> | null;
+  error: string | null;
+}
+
+export async function getFileProfile(fileId: string): Promise<FileProfileResponse> {
+  return fetchApi<FileProfileResponse>(`/files/${fileId}/profile`);
+}
+
 export async function validatePipeline(yamlConfig: string): Promise<ValidationResult> {
   return fetchApi<ValidationResult>("/pipelines/validate", {
     method: "POST",

@@ -35,10 +35,10 @@
 | pipelineiq-api | 2 (HPA: 2-5) | FastAPI via Gunicorn/Uvicorn |
 | sse-service | 1 | Dedicated SSE streaming endpoint |
 | worker-critical | 1 | Critical priority queue, concurrency=2 |
-| worker-default | 2 | Default queue, concurrency=4 |
+| worker-default | 2 | Default + critical overflow, concurrency=3 |
 | worker-bulk | 2 | Bulk processing queue, concurrency=2 |
 | worker-gemini | 1 | Gemini AI queue, concurrency=1 |
-| worker-streaming | 1 | Redpanda streaming queue, concurrency=4 |
+| worker-streaming | 1 | Redpanda streaming queue, concurrency=8 |
 | worker-beat | 1 | Celery Beat scheduler |
 | y-websocket | 1 | Yjs WebSocket CRDT collaboration |
 
