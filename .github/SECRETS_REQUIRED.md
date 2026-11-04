@@ -1,86 +1,48 @@
 # Required GitHub Secrets
 
-The following secrets must be configured in your GitHub repository settings
-(`Settings > Secrets and variables > Actions`) for CI/CD to work.
+Secrets live in repository settings (`Settings > Secrets and variables > Actions`). Workflows that need a missing secret fail with a message naming it or skip gracefully — see the notes below.
 
-## CI Pipeline (`ci.yml`)
+## CI (`ci.yml`)
 
-| Secret | Description | Example |
-|--------|-------------|---------|
-| `POSTGRES_PASSWORD` | PostgreSQL password for test database | `ci_test_password_2024` |
-| `SECRET_KEY` | Application secret key (32+ chars) | `your-long-random-secret-key-here` |
+CI injects hardcoded test values for databases, Redis, and app secrets, so no secrets are required to run the standard jobs. Two secrets are used by optional remote jobs:
 
-> **Important:** The application refuses to start in every environment if `SECRET_KEY` is missing, shorter than 32 characters, or set to a known default. Always set a strong, unique key.
+| Secret | Used In | Purpose |
+|--------|---------|---------|
+| `PRODUCTION_URL` | e2e-tests, uptime | Public frontend URL (E2E runs against the deployed app on `main`/dispatch) |
+| `PRODUCTION_API_URL` | e2e-tests, nightly load tests | Public API URL |
 
-## CD Pipeline (`cd.yml`)
+Without them: the E2E job fails naming the secret; the nightly load job fails; the uptime probe logs a notice and skips (it only monitors when configured).
 
-| Secret | Description | Required |
-|--------|-------------|----------|
-| `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL for backend service | Required for main branch deploys |
+## CD (`cd.yml`)
 
-## Deploy Pipeline (Civo k3s) (`deploy.yml`)
+| Secret | Required For |
+|--------|--------------|
+| `RENDER_DEPLOY_HOOK_URL` | Triggering the Render backend deploy after green CI on `main` |
 
-The following secrets are required to deploy to the Civo k3s production cluster.
-All secrets are injected into Kubernetes via `kubectl create secret generic pipelineiq-secrets --from-literal`.
+The job exits non-zero with a naming message when the hook is unset.
 
-### Infrastructure Secrets
+## Deploy Pipeline — Civo k3s (`deploy.yml`)
 
-| Secret | Description | How to Generate |
-|--------|-------------|-----------------|
-| `KUBE_CONFIG` | Base64-encoded Civo kubeconfig file | `cat ~/.kube/config \| base64 \| tr -d '\n'` |
-| `DATABASE_URL` | PostgreSQL async connection string | `postgresql+asyncpg://pipelineiq:PASSWORD@postgres:5432/pipelineiq` |
-| `DATABASE_WRITE_URL` | PostgreSQL write connection string | Same as DATABASE_URL (single-node k3s) |
-| `DATABASE_READ_URL` | PostgreSQL read connection string | Same as DATABASE_URL (single-node k3s) |
-| `POSTGRES_USER` | PostgreSQL username | `pipelineiq` |
-| `POSTGRES_PASSWORD` | PostgreSQL password | `openssl rand -hex 16` |
-| `POSTGRES_DB` | PostgreSQL database name | `pipelineiq` |
+All secrets are injected into Kubernetes via `kubectl create secret generic pipelineiq-secrets`. Without `KUBE_CONFIG` the workflow runs in dry-run mode (builds and tags the image, skips the cluster).
 
-### Application Secrets
-
-| Secret | Description | How to Generate |
-|--------|-------------|-----------------|
-| `JWT_SECRET` | JWT token signing key | `openssl rand -hex 32` |
-| `SECRET_KEY` | Application secret key for session encryption | `python3 -c "import secrets; print(secrets.token_urlsafe(48))"` |
-| `GEMINI_API_KEY` | Google AI Studio API key for Gemini worker | From https://aistudio.google.com/apikey |
-| `GEMINI_MODEL` | Default Gemini model for AI features | `gemini-2.5-flash` |
-| `GEMINI_FALLBACK_MODELS` | Fallback models on rate limit (429) | `gemini-2.0-flash,gemini-1.5-flash` |
-
-### Storage Secrets
-
-| Secret | Description | How to Generate |
-|--------|-------------|-----------------|
-| `MINIO_ROOT_USER` | MinIO administrator username | `pipelineiq` |
-| `MINIO_ROOT_PASSWORD` | MinIO administrator password | `openssl rand -hex 16` |
-| `S3_ACCESS_KEY` | S3/MinIO access key | Same as MINIO_ROOT_USER |
-| `S3_SECRET_KEY` | S3/MinIO secret key | Same as MINIO_ROOT_PASSWORD |
-
-### How to Set Up
-
-1. Create a Civo account at https://civo.com
-2. Create a k3s cluster: `civo kubernetes create pipelineiq-prod --size g4s.kube.small --nodes 1 --region LON1 --wait`
-3. Download kubeconfig: `civo kubernetes config pipelineiq-prod --save`
-4. Encode kubeconfig: `cat ~/.kube/config | base64 | tr -d '\n'` → paste into `KUBE_CONFIG` secret
-5. Generate all passwords using the commands above
-6. Add all secrets in Settings → Secrets and variables → Actions
-7. Push to main branch to trigger deployment
-
-### Verifying Secrets
-
-```bash
-kubectl get secret pipelineiq-secrets -n pipelineiq -o jsonpath='{.data}' \
-  | python3 -c "import sys,json,base64; d=json.load(sys.stdin); [print(f'{k}: {len(base64.b64decode(v))} chars') for k,v in d.items()]"
-```
-
-Expected output: every key listed above with non-zero character counts.
+| Secret | Used For |
+|--------|----------|
+| `KUBE_CONFIG` | Base64-encoded kubeconfig for the Civo cluster. `cat ~/.kube/config \| base64 \| tr -d '\n'` |
+| `DATABASE_URL`, `DATABASE_WRITE_URL`, `DATABASE_READ_URL` | Postgres connection strings |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Database credentials |
+| `JWT_SECRET`, `SECRET_KEY` | Yjs signing key and app secret. `openssl rand -hex 32` / `python3 -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `GEMINI_API_KEY` (+ `GEMINI_MODEL`, `GEMINI_FALLBACK_MODELS`) | Gemini worker and AI endpoints |
+| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` | Object storage (S3 keys must match the MinIO credentials) |
+| `LOAD_TEST_TOKEN` | Bearer token for authenticated k6 load scenarios |
 
 ## How to Generate
 
 ```bash
-# Generate a secure SECRET_KEY
+# Generate a secure SECRET_KEY (48 url-safe chars)
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 
-# Generate a secure POSTGRES_PASSWORD
-python3 -c "import secrets; print(secrets.token_urlsafe(24))"
+# Generate a secure POSTGRES_PASSWORD (32 hex chars)
+python3 -c "import secrets; print(secrets.token_hex(16))"
 
 # Generate a secure JWT_SECRET
 openssl rand -hex 32

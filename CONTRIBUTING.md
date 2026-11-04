@@ -42,7 +42,7 @@ cd PipelineIQ
 cp .env.example .env
 # Generate a strong secret (32+ bytes hex):
 python3 -c "import secrets; print(secrets.token_hex(32))"
-# Paste it as SECRET_KEY, plus POSTGRES_PASSWORD, REDIS_PASSWORD, etc.
+# Paste it as SECRET_KEY, plus POSTGRES_PASSWORD, REDIS_PASSWORD, and the rest
 
 # 2. Redis needs this on the Docker host (once per boot)
 sudo sysctl -w vm.overcommit_memory=1
@@ -64,8 +64,10 @@ Useful service URLs (all via Nginx on port 80 unless noted):
 | `http://localhost/` | Frontend (Next.js) |
 | `http://localhost/docs`, `/redoc`, `/openapi.json` | FastAPI docs |
 | `http://localhost/flower/` | Celery monitor (basic auth: `FLOWER_USER`/`FLOWER_PASSWORD`) |
-| `http://localhost/grafana/` | Dashboards |
-| `http://localhost/prometheus/graph` | Metrics |
+| `http://localhost/grafana/` | Dashboards (Grafana login in `.env`) |
+| `http://localhost/prometheus/graph` | Metrics UI |
+| `http://localhost/jaeger/` | Distributed tracing UI |
+| `ws://localhost/yjs/` | Live-collaboration socket |
 
 ## Backend Development
 
@@ -77,8 +79,8 @@ pip install -r requirements.txt
 # Point at your Compose Postgres/Redis, or export DATABASE_URL/REDIS_*_URL
 alembic upgrade head
 
-# Run the unit suite (SQLite in-memory + TestClient; Postgres/Redis services
-# are used by CI, see .github/workflows/ci.yml)
+# Run the unit suite (SQLite in memory where possible; several suites need
+# the live stack — start it first, or run in CI where services are provided)
 python -m pytest tests/ -v --tb=short
 ```
 
@@ -88,7 +90,7 @@ Key backend facts:
 - Auth is JWT in an `HttpOnly` cookie (`pipelineiq_token`) plus `Authorization: Bearer` support; token revocation is Redis-backed and **fail-closed** — if Redis is unreachable, tokens are denied. Never weaken this in tests; point `REDIS_CACHE_URL` at a real Redis instead.
 - Audit logging (`backend/services/audit_service.py`) must never break the request it records; keep it that way.
 - Pipeline steps live in `backend/pipeline/` (`parser.py`, `steps/`, `runner.py`, `lineage.py`). `backend/pipeline/steps/__init__.py` re-exports the public surface — if you add an executor-level symbol that tests or routers import, export it there.
-- Celery queues: `critical`, `default`, `bulk`, `gemini`, `streaming`. New periodic tasks must be registered in `backend/celery_app.py` **and** covered by `backend/tests/unit/infrastructure/test_celery_task_registry.py`.
+- Celery queues: `critical`, `default`, `bulk`, `gemini`, `streaming`. New periodic tasks must be registered in `backend/celery_config.py` **and** covered by `backend/tests/unit/infrastructure/test_celery_task_registry.py`.
 
 ## Frontend Development
 
@@ -105,12 +107,12 @@ Environment: `NEXT_PUBLIC_API_URL` is baked at build time (`/api/v1` in Compose)
 
 CI (`.github/workflows/ci.yml`) runs these jobs; a PR must keep all of them green:
 
-1. **Backend Tests** — `cd backend && python -m pytest tests/ -v --tb=short` against PostgreSQL 15 + Redis 7 services. ~1100 tests; do not skip or weaken failing tests — fix the code.
-2. **Frontend** — `npx tsc --noEmit`, `npm test` (Vitest), `npm run build`.
+1. **Backend Tests** — full `pytest tests/` (~1,250 tests collected) against PostgreSQL 15 + Redis 7 services. Do not skip or weaken failing tests — fix the code.
+2. **Frontend** — `npx tsc --noEmit`, `npm test` (Vitest, 23 spec files), `npm run build`.
 3. **Code Quality** — `ruff check backend/ --select E9,F63,F82` (blocking syntax/undefined-name checks) and `tsc --noEmit` (blocking). ESLint currently reports informationally.
 4. **Docker Compose Smoke Test** — builds the whole stack and exercises health → login → upload → pipeline run → completion.
-5. **Streaming E2E** — Redpanda-backed streaming suite (runs on `main`).
-6. **Playwright E2E** (`e2e/`) — Chromium only in CI; runs on `main` pushes and manual dispatch.
+5. **Streaming E2E** — Redpanda-backed streaming suite (runs on every CI run, not only on `main`).
+6. **Playwright E2E** (`e2e/`, 26 spec files) — Chromium only in CI (`ubuntu-24.04` runner); on `main` pushes and manual dispatch only, 4 specs.
 
 ## Lint, Types, and Formatting
 
@@ -136,7 +138,7 @@ Rules of thumb: no `Any`-typed public API boundaries without reason, no commente
 ## End-to-End Tests
 
 ```bash
-npx playwright install --with-deps chromium   # Chromium only; Firefox/WebKit are not set up
+npx playwright install --with-deps chromium || npx playwright install chromium
 npx playwright test e2e/01-auth.spec.ts       # single spec
 ```
 
@@ -154,7 +156,7 @@ E2E specs assume a running stack (`E2E_BASE_URL`, `E2E_API_URL` for remote runs;
 
 1. Fork the repo (external contributors) or create a feature branch (`git checkout -b fix/short-description`).
 2. Make focused changes; add or update tests for every behavior change.
-3. Run the gates locally: backend pytest file(s) + `tsc --noEmit` + relevant Vitest specs. Full-suite runs are slow (bcrypt rounds); at minimum run the suites touching your change plus `backend/tests/unit/api/test_auth.py` for auth-adjacent work.
+3. Run the gates locally: backend pytest file(s) + `tsc --noEmit` + relevant Vitest specs. Full-suite runs need the live stack (Postgres + Redis); at minimum run the suites touching your change plus `backend/tests/unit/api/test_auth.py` for auth-adjacent work.
 4. Open a PR against `main` using the template. Fill in **Summary, Root cause, Change, Verification** — PRs without verification steps will be sent back.
 5. Keep the PR small and single-purpose. CI must be green; do not merge with failing jobs.
 
@@ -196,7 +198,7 @@ For the manual path (no automation available): update `APP_VERSION` in `backend/
 
 - **Contributor**: lands a first merged PR (any size — docs count).
 - **Regular**: 3+ merged PRs with green CI and template-complete descriptions; may review others' PRs.
-- **Maintainer**: sustained quality + ownership of an area (backend engine, frontend, infra, QA); gets merge rights and helps cut releases. Ask in an issue when you feel ready — there is no election, just consistent work.
+- **Maintainer**: sustained quality + ownership of an area (backend engine, frontend, infra, QA); gets merge rights and helps cut releases. Ask in an issue when you feel ready — there is no election, only consistent work.
 
 ## Project Structure
 
@@ -205,15 +207,24 @@ backend/            FastAPI app (api/, auth, pipeline/, execution/, tasks/, db/)
 frontend/           Next.js 15 + TypeScript dashboard (app/, components/, lib/)
 e2e/                Playwright specs (auth, upload, builder, schedules, journeys)
 y-websocket/        Yjs collaboration server
-nginx/              Reverse proxy (public routes: /, /docs, /flower, /grafana, /prometheus)
-prometheus/ grafana/  Observability configs
+nginx/              Reverse proxy (/, /docs, /flower, /grafana, /prometheus, /jaeger, /yjs, /metrics)
+prometheus/ grafana/ promtail/  Observability configs, rules, dashboards, log shipping
 k8s/                Civo k3s manifests
-docs/testing/       Test ledger, plans, reports (source of truth for QA state)
-.github/workflows/  CI (backend, frontend, quality, smoke, streaming, e2e)
+docs/               Per-area guides (see each file's purpose header)
+postman/            API collection (7 folders, 31 requests) + Local environment
+scripts/            bootstrap, backup, restore, demo-reseed, load/chaos runners
+.github/workflows/  CI, security, deploy, nightly, release, uptime
+docker-compose.yml  30 services (primary deployment target)
+render.yaml         Render.com backend blueprint
+alembic.ini         Alembic migration configuration
+pyproject.toml      Ruff + mypy configuration
+pytest.ini          Pytest path and warning filters
+playwright.config.ts Playwright projects, reporters, web server
+.env.example        All 69 settings with defaults
 ```
 
 ## Getting Help
 
 - Bugs and feature requests: [open an issue](../../issues) using the templates.
-- Operational questions: see [RUNBOOK.md](RUNBOOK.md) and `docs/testing/SYSTEM_MAP.md`.
+- Operational questions: see [RUNBOOK.md](RUNBOOK.md) and [docs/system-overview.md](docs/system-overview.md).
 - Security reports: see [SECURITY.md](SECURITY.md) — private advisories only.

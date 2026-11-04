@@ -1,7 +1,7 @@
 # PipelineIQ — Fresh-VM Deployment Guide (GCP, end to end)
 
 Deploy the entire flagship stack on a **brand-new GCP VM** so that afterwards a
-single command brings up everything, all public, just like production:
+single command brings up everything, all public, matching production:
 
 ```bash
 git clone https://github.com/Siddharthk17/PipelineIQ.git

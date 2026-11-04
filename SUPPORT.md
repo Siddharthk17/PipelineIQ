@@ -7,7 +7,7 @@
 | [GitHub Issues](../../issues) (bug report / feature request templates) | Bugs, reproductions, feature proposals |
 | [RUNBOOK.md](RUNBOOK.md) | Operating the stack (bring-up, common failures, recovery) |
 | [README.md](README.md) | Full product and API documentation |
-| `docs/testing/SYSTEM_MAP.md` | Service map, ports, and data flow |
+| [docs/system-overview.md](docs/system-overview.md) | Service map, ports, and data flow |
 | [SECURITY.md](SECURITY.md) | **Vulnerabilities — private advisories only, never public issues** |
 
 There is no chat/Discord support at this time; GitHub Issues is the official support channel and is monitored by the maintainers.
@@ -32,9 +32,9 @@ There is no chat/Discord support at this time; GitHub Issues is the official sup
 |---------|--------------|-------------|
 | Login fails in browser but `curl` login returns 200 | Stale cookies or `TRUSTED_HOSTS` missing your hostname | Incognito window; `grep TRUSTED_HOSTS .env` |
 | `Invalid or expired token` on every API call | Cache Redis unreachable (revocation check is fail-closed) | `REDIS_CACHE_URL` reachable; `docker compose ps redis-*` |
-| `pull access denied` for an image | Upstream registry removed/renamed the repo | Check the tag exists; see `.env` `*_IMAGE_TAG` |
+| `pull access denied` for an image | Upstream registry removed the repo (happened with MinIO) | `git pull` latest; verify the tag exists, never invent a mirror |
 | Redis warnings about memory overcommit | Host `vm.overcommit_memory` not set | `sudo sysctl -w vm.overcommit_memory=1` |
-| 404 on `/docs`, `/flower/`, `/grafana/` | Nginx serving a stale container | `docker compose up -d --build --force-recreate nginx` |
+| 404 on `/docs`, `/flower/`, `/grafana/` or stale behavior | Nginx container predates the config file | `docker compose build nginx && docker compose up -d --force-recreate nginx` |
 
 ## Response Expectations
 
