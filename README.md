@@ -612,16 +612,27 @@ python -m pytest tests/ -v --tb=short
 
 | Area | Files | What is covered |
 |------|-------|-----------------|
-| `tests/unit/api/` | 11 | Auth flows, RBAC, run ownership, rate limits, public endpoints, upload encodings, plan checks |
-| `tests/unit/pipeline/` | 12 | Parser, all 19 step types, validators, versioning, planner, cache/diff |
-| `tests/unit/security/` | 14 | Auth bypass, isolation, trusted hosts, token revocation, column policies, permissions |
-| `tests/unit/ai/` | 9 | Generation, repair prompts, Gemini queue/routing/retry, rate limits, YAML cache/diff |
-| `tests/unit/catalog/` | 8 | Asset registration, isolation, lineage cache, blast-radius CTE, OpenLineage, descriptions |
-| `tests/unit/infrastructure/` | 7 | Celery queue/task registry, worker topology vs Compose, Redis wiring, SSE lifecycle, caching |
-| `tests/unit/execution/` | 6+ | SmartExecutor routing, DuckDB/Pandas parity, save step, error types |
-| `tests/unit/healing/` | 5+ | Classifier, prompts, patch application, sandbox, schema diff |
-| `tests/unit/scheduling/` | 4 | Cron utils, schedule API, stream_consume rejection |
-| `tests/unit/{contracts,webhooks,templates,streaming,storage,wasm,profiling,telemetry,week11,save_step,notifications,cost}` | 1–4 each | Per-area behavior incl. WASM sandbox isolation |
+| `unit/api/` | 10 | Auth flows, RBAC, run ownership, rate limits, public endpoints, upload encodings, plan checks |
+| `unit/pipeline/` | 12 | Parser, all 19 step types, validators, versioning, planner, cache/diff |
+| `unit/security/` | 14 | Auth bypass, isolation, trusted hosts, token revocation, column policies, permissions |
+| `unit/ai/` | 11 | Generation, repair prompts, Gemini queue/routing/retry, rate limits, YAML cache/diff |
+| `unit/catalog/` | 8 | Asset registration, isolation, lineage cache, blast-radius CTE, OpenLineage, descriptions |
+| `unit/infrastructure/` | 7 | Celery queue/task registry, worker topology vs Compose, Redis wiring, SSE lifecycle, caching |
+| `unit/healing/` | 8 | Classifier, prompts, patch application, sandbox, schema diff |
+| `unit/contracts/` | 4 | Contract validation, enforcement, severity mapping, type categories |
+| `unit/execution/` | 4 | SmartExecutor routing, DuckDB/Pandas parity, save step, error types |
+| `unit/scheduling/` | 4 | Cron utils, schedule API, stream_consume rejection |
+| `unit/save_step/` | 4 | Output persistence, presigned URLs, formats |
+| `unit/storage/` | 3 | Arrow bus tiers, spills, eviction, S3 operations |
+| `unit/webhooks/` | 2 | Delivery, HMAC signing, retry logic |
+| `unit/templates/` | 2 | Template listing, fork validation |
+| `unit/streaming/` | 2 | Daemon config, SSE streaming |
+| `unit/wasm/` | 2 | Module validation, sandbox isolation |
+| `unit/profiling/` | 2 | Data profiling, profiler task |
+| `unit/notifications/` | 1 | Notification dispatch |
+| `unit/telemetry/` | 1 | Tracing setup, span attributes |
+| `unit/week11/` | 1 | Regression coverage |
+| `unit/cost/` | 1 | Cost estimation |
 
 `tests/integration/` (8 files: AI, stress, extreme stress, performance, profiling, healing E2E, infrastructure, week8/9/10) runs behind `RUN_INTEGRATION_TESTS=1` against the live Compose stack; `tests/e2e/` holds server-side week-3/8/9/10 suites with their own gates. SQLite in-memory is the default in `conftest.py`; never weaken a fail-closed test (auth revocation, permission checks) to make it pass locally — run those against real Redis/Postgres or in CI.
 
@@ -896,13 +907,18 @@ All 69 settings with defaults in `.env.example`. `*` marks values you must repla
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DATABASE_URL` | `postgresql://pipelineiq:your_password@pgbouncer:5432/pipelineiq` * | Primary via PgBouncer (write pool) |
-| `DATABASE_WRITE_URL` | (falls back to `DATABASE_URL`) | Write endpoint override |
-| `DATABASE_READ_URL` | (falls back to write URL) | Read-replica endpoint |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `pipelineiq` / * / `pipelineiq` | Database credentials |
-| `DB_CONNECT_TIMEOUT_SECONDS` | `5` | Connect timeout |
-| `REPLICATION_USER` / `REPLICATION_PASSWORD` | `replicator` / * | Streaming-replica credentials |
-| `SECRET_KEY` | * (auto-generated unless `production`) | JWT signing + session secret, ≥ 32 bytes |
+| `DATABASE_URL` * | `postgresql://pipelineiq:your_password@pgbouncer:5432/pipelineiq` | Primary via PgBouncer (write pool) |
+| `DATABASE_WRITE_URL` | falls back to `DATABASE_URL` | Write endpoint override |
+| `DATABASE_READ_URL` | falls back to write URL | Read-replica endpoint |
+| `POSTGRES_USER` | `pipelineiq` | Database user |
+| `POSTGRES_PASSWORD` * | `your_password` | Database password — replace before any shared deployment |
+| `POSTGRES_DB` | `pipelineiq` | Database name |
+| `DB_CONNECT_TIMEOUT_SECONDS` | `5` | Connect timeout (seconds) |
+| `REPLICATION_USER` | `replicator` | Streaming-replica user |
+| `REPLICATION_PASSWORD` * | `your_replication_password` | Streaming-replica password — replace before any shared deployment |
+| `SECRET_KEY` * | auto-generated unless `ENVIRONMENT=production` | JWT signing + session secret, ≥ 32 bytes |
+
+`*` = must be replaced before any shared deployment.
 
 ### Redis and Celery
 
