@@ -1004,6 +1004,9 @@ services:
       - GF_DATABASE_WAL=true
       # Outgoing alert mail reuses the app's SMTP settings (empty = alerts
       # evaluate and stay visible in Grafana > Alerting, but no mail sent).
+      # Compose (unlike Grafana file provisioning) supports :- defaults, so
+      # the contact point below always resolves to a valid address.
+      - SMTP_FROM=${SMTP_FROM:-grafana@localhost}
       - GF_SMTP_ENABLED=${SMTP_ENABLED:-false}
       - GF_SMTP_HOST=${SMTP_HOST:-}
       - GF_SMTP_USER=${SMTP_USER:-}

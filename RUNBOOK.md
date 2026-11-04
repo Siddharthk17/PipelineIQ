@@ -42,7 +42,6 @@
 | worker-beat | 1 | Celery Beat scheduler |
 | y-websocket | 1 | Yjs WebSocket CRDT collaboration |
 
----
 
 ## Common Operations
 
@@ -148,7 +147,6 @@ kubectl get configmap pipelineiq-config -n pipelineiq -o yaml
 kubectl get secret pipelineiq-secrets -n pipelineiq -o jsonpath='{.data}' | python3 -c "import sys,json,base64; d=json.load(sys.stdin); [print(f'{k}={len(base64.b64decode(v))} chars') for k,v in d.items()]"
 ```
 
----
 
 ## Disaster Recovery
 
@@ -216,7 +214,6 @@ kubectl get pods -n pipelineiq -o wide
 kubectl rollout restart deployment -n pipelineiq
 ```
 
----
 
 ## Deployment Process
 
@@ -261,7 +258,6 @@ curl -sf https://pipelineiq-api.onrender.com/readyz | python3 -m json.tool
 kubectl get pods -n pipelineiq
 ```
 
----
 
 ## Health Probes
 

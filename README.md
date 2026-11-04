@@ -12,7 +12,6 @@
 **Live demo** → [pipeline-iq0.vercel.app](https://pipeline-iq0.vercel.app)
 Login: `demo@pipelineiq.app` / `Demo1234!`
 
----
 
 ## Table of Contents
 
@@ -36,7 +35,6 @@ Login: `demo@pipelineiq.app` / `Demo1234!`
 - [Contributing](#contributing)
 - [License](#license)
 
----
 
 ## Why PipelineIQ?
 
@@ -50,7 +48,6 @@ Data teams keep pipeline logic in notebooks, cron scripts, and spreadsheets that
 - **Recover** with AI-proposed YAML patches that must pass a sandbox before they apply.
 - **Control access** with per-pipeline roles, column masking/redaction, and an immutable audit log.
 
----
 
 ## Quick Start
 
@@ -125,7 +122,6 @@ npm run dev                  # http://localhost:3000
 
 API calls are same-origin (`/api/*`, `/auth/*`, `/health` rewrite to `NEXT_PUBLIC_API_URL`, default `http://localhost:8000` in `next.config.ts`). Auth state lives only in the `pipelineiq_token` HttpOnly cookie; `lib/api.ts` holds no token client-side.
 
----
 
 ## The Pipeline YAML
 
@@ -169,7 +165,6 @@ curl -s -X POST http://localhost/api/v1/pipelines/run \
 
 The response is `202 Accepted` with a `run_id`. Progress streams at `GET /api/v1/pipelines/{run_id}/stream` (SSE, served by the dedicated `sse-service` on port 8001).
 
----
 
 ## Step Types
 
@@ -235,7 +230,6 @@ The response is `202 Accepted` with a `run_id`. Progress streams at `GET /api/v1
 
 `not_null` · `not_empty` · `greater_than` · `less_than` · `between` · `in_values` · `matches_pattern` · `no_duplicates` · `min_rows` · `max_rows` · `positive` · `date_format`
 
----
 
 ## Features
 
@@ -303,7 +297,6 @@ Each run saves its YAML as a `PipelineVersion`; list/get/diff/restore at `/api/v
 
 The `y-websocket` Node.js relay (`ws` + `y-redis`) syncs Yjs documents between browsers: one document per pipeline room, JWT required on every connection (`?token=` query or the login cookie, ≥ 32-char `JWT_SECRET`, close code 4001 on failure), documents persisted to `redis-yjs` with in-memory fallback. The frontend (`yjs`, `y-websocket`, `y-codemirror.next`) shares the pipeline YAML text and React Flow nodes/edges as Yjs types with a 300 ms sync debounce and feedback guards. Presence (cursors, selection, user colors) rides the ephemeral awareness protocol.
 
----
 
 ## Architecture
 
@@ -360,7 +353,6 @@ Beat is a singleton (`worker-beat`, one replica): two Beat instances would fire 
 | `pipelineiq-spills` | Arrow spill files older than 2 days deleted |
 | `pipelineiq-wasm` | none (long-lived modules) |
 
----
 
 ## Tech Stack
 
@@ -429,7 +421,6 @@ Beat is a singleton (`worker-beat`, one replica): two Beat instances would fire 
 | CI/CD | GitHub Actions (7 workflows) |
 | Load tests | k6 (3 scripts) + `chaos/chaos-scenarios.sh` fault injection |
 
----
 
 ## API Reference
 
@@ -559,7 +550,6 @@ Health and metrics: `GET /livez` and `GET /healthz` (no dependencies), `GET /rea
 
 Health and metrics: `GET /livez` and `GET /healthz` (no dependencies), `GET /readyz` and `GET /health` (Postgres + Redis + storage checks), `GET /metrics` (Prometheus; Nginx restricts it to private ranges).
 
----
 
 ## Frontend
 
@@ -571,7 +561,6 @@ State: four Zustand stores persisted to localStorage (`pipeline`, `widget` with 
 
 Keyboard shortcuts (all rebindable): `Ctrl+K` command palette, `Alt+Enter` terminal launcher, `Alt+Q` close widget, `Alt+T` theme selector/builder, `Alt+K` keybindings editor, `Alt+U` upload file, `Alt+Shift+R` reset layout, `Ctrl+Enter` run pipeline, `Alt+1–5` switch workspace.
 
----
 
 ## Observability
 
@@ -599,7 +588,6 @@ OpenTelemetry auto-instruments FastAPI, SQLAlchemy, Redis, Celery, and HTTPX, an
 
 Structlog emits JSON logs with `request_id` (from `X-Request-ID`, generated when absent) and per-request timing (`X-Process-Time`); health, metrics, and stream polling are excluded from access logs. Promtail ships container logs to Loki (`:3100`). Sentry (FastAPI + Celery + SQLAlchemy, `traces_sample_rate = profiles_sample_rate = 0.1`) activates only when `SENTRY_DSN` is set.
 
----
 
 ## Testing
 
@@ -663,7 +651,6 @@ bash chaos/chaos-scenarios.sh     # fault injection against a live stack
 bash scripts/run-load-tests.sh    # runs all three k6 profiles, defaults to the Render API URL
 ```
 
----
 
 ## Database
 
@@ -704,7 +691,6 @@ alembic downgrade -1                  # roll back one step
 | `DataAsset` | `data_assets` | Catalog assets (`file`/`column`/`pipeline`/`topic`, unique type+namespace+name, trigram index) |
 | `AssetRelationship` | `asset_relationships` | `reads_from`/`writes_to`/`transforms`/`joins` edges |
 
----
 
 ## Deployment
 
@@ -758,7 +744,6 @@ kubectl apply -f k8s/backend/ k8s/workers/ k8s/y-websocket/ k8s/ingress/
 
 API runs 2 replicas behind an HPA (`pipelineiq-api-hpa`); each deployment carries liveness (`/livez`) and readiness (`/readyz`) probes plus resource requests/limits. Migrations run in an init container (`alembic upgrade head`). Details: [docs/kubernetes-deployment.md](docs/kubernetes-deployment.md).
 
----
 
 ## CI/CD
 
@@ -779,7 +764,6 @@ API runs 2 replicas behind an HPA (`pipelineiq-api-hpa`); each deployment carrie
 
 Dependabot proposes weekly grouped bumps (pip / npm root+frontend+y-websocket / Docker / Actions, Mondays, Asia/Kolkata) to reviewer `Siddharthk17`. Direct pins stay pinned; when a transitive dependency breaks CI it gets an explicit pin with a comment naming the failure (see `kombu` in `backend/requirements.txt`).
 
----
 
 ## Project Structure
 
@@ -887,7 +871,6 @@ PipelineIQ/
 
 Approximate size: ~35K lines backend (plus ~20K lines tests) · ~22K lines frontend.
 
----
 
 ## Configuration
 
@@ -1003,7 +986,6 @@ All 69 settings with defaults in `.env.example`. `*` marks values you must repla
 | `MINIO_IMAGE_TAG` | `latest` | MinIO server image tag |
 | `JWT_SECRET` | (must be ≥ 32 chars for y-websocket) | Collab relay signing key; must match the JWT issuer |
 
----
 
 ## Postman Collection
 
@@ -1019,7 +1001,6 @@ All 69 settings with defaults in `.env.example`. `*` marks values you must repla
 | Webhooks | Create, List, Test, Deliveries, Delete |
 | Observability | Health, Metrics, Audit Logs, My Audit Logs |
 
----
 
 ## Contributing
 
@@ -1030,7 +1011,6 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, test gates, and conventions, 
 3. Run the gates: backend pytest file(s), `npx tsc --noEmit`, relevant Vitest specs.
 4. Open a PR against `main` with the template filled in (Summary, Root cause, Change, Verification).
 
----
 
 ## License
 
