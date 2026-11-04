@@ -890,16 +890,18 @@ All 69 settings with defaults in `.env.example`. `*` marks values you must repla
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DATABASE_URL` * | `postgresql://pipelineiq:...@pgbouncer:5432/pipelineiq` | Primary via PgBouncer (write pool) |
-| `DATABASE_WRITE_URL` | falls back to `DATABASE_URL` | Write endpoint override |
-| `DATABASE_READ_URL` | falls back to write URL | Read-replica endpoint |
+| `DATABASE_URL` * | see note [^1] | Primary via PgBouncer (write pool) |
+| `DATABASE_WRITE_URL` | → `DATABASE_URL` | Write endpoint override |
+| `DATABASE_READ_URL` | → write URL | Read-replica endpoint |
 | `POSTGRES_USER` | `pipelineiq` | Database user |
 | `POSTGRES_PASSWORD` * | `your_password` | Database password — replace before any shared deployment |
 | `POSTGRES_DB` | `pipelineiq` | Database name |
 | `DB_CONNECT_TIMEOUT_SECONDS` | `5` | Connect timeout (seconds) |
 | `REPLICATION_USER` | `replicator` | Streaming-replica user |
 | `REPLICATION_PASSWORD` * | `your_replication_password` | Streaming-replica password — replace before any shared deployment |
-| `SECRET_KEY` * | auto-generated unless `ENVIRONMENT=production` | JWT signing + session secret, ≥ 32 bytes |
+| `SECRET_KEY` * | auto-generated (dev only) | JWT signing + session secret, ≥ 32 bytes |
+
+[^1]: `postgresql://pipelineiq:your_password@pgbouncer:5432/pipelineiq` (from `.env.example`).
 
 `*` = must be replaced before any shared deployment.
 
