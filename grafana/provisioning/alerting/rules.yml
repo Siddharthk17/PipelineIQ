@@ -1,0 +1,89 @@
+apiVersion: 1
+# Grafana-managed alerts mirroring prometheus/rules/pipelineiq.yml.
+# Prometheus evaluates the same expressions headlessly; THESE are the ones
+# that notify (email via the SMTP settings below). Keep thresholds in sync
+# with prometheus/rules/pipelineiq.yml when either side changes.
+groups:
+  - orgId: 1
+    name: pipelineiq-golden-signals
+    folder: PipelineIQ
+    interval: 1m
+    rules:
+      - uid: pipelineiq-failed-run-spike
+        title: Pipeline failed-run spike
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(pipelineiq_pipeline_runs_total{status="FAILED"}[5m]))
+              instant: true
+          - refId: B
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: clamp_min(sum(rate(pipelineiq_pipeline_runs_total[5m])), 0.0001)
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              expression: $A / $B
+              type: math
+        annotations:
+          summary: "Failed pipeline runs above 25% for 10 minutes"
+        labels:
+          severity: critical
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+      - uid: pipelineiq-queue-depth-high
+        title: Celery queue depth high
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: max(pipelineiq_celery_queue_depth)
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              expression: $A > 100
+              type: math
+        annotations:
+          summary: "Celery queue depth above 100 for 10 minutes"
+        labels:
+          severity: warning
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+      - uid: pipelineiq-api-5xx-rate
+        title: API 5xx rate high
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(http_requests_total{status=~"5.."}[5m]))
+              instant: true
+          - refId: B
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: clamp_min(sum(rate(http_requests_total[5m])), 0.0001)
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              expression: $A / $B > 0.05
+              type: math
+        annotations:
+          summary: "API 5xx rate above 5% for 5 minutes"
+        labels:
+          severity: critical
+        for: 5m
+        noDataState: OK
+        execErrState: Error

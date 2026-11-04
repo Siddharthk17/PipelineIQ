@@ -55,3 +55,10 @@ reseed:
 # Nightly-style PostgreSQL backup with 7-day retention (see scripts/backup.sh).
 backup:
 	./scripts/backup.sh
+
+# Restore a backup (DESTRUCTIVE — replaces the live database).
+# Usage: make restore BACKUP=backups/pg-2026-01-02-0200.sql.gz
+BACKUP ?=
+restore:
+	@test -n "$(BACKUP)" || (echo "Usage: make restore BACKUP=backups/<file>.sql.gz" >&2; exit 1)
+	./scripts/restore.sh "$(BACKUP)"

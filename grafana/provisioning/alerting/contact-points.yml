@@ -1,0 +1,14 @@
+apiVersion: 1
+# Email contact point for Grafana-managed alerts. Address and SMTP come from
+# the environment (see docker-compose.yml GF_SMTP_* wired from SMTP_*).
+# With SMTP unset, Grafana logs "alert notification skipped" — alerts still
+# evaluate and stay visible in Grafana > Alerting.
+contactPoints:
+  - orgId: 1
+    name: pipelineiq-email
+    receivers:
+      - uid: pipelineiq-email-receiver
+        type: email
+        settings:
+          addresses: ${SMTP_FROM:-grafana@localhost}
+          subject: "[PipelineIQ] {{ .Status }}: {{ .GroupLabels.alertname }}"

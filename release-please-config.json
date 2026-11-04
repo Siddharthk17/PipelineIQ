@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "HEAD",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "changelog-type": "github",
+      "draft": false,
+      "prerelease": false,
+      "include-v-in-tag": true,
+      "pull-request-title-pattern": "chore: release ${version}",
+      "pull-request-header": "Automated release PR — merge to tag and publish the GitHub Release. Do not bump versions by hand; release-please owns every file below.",
+      "extra-files": [
+        "backend/config.py",
+        "frontend/lib/constants.ts",
+        ".env.example",
+        "docker-compose.yml",
+        "k8s/configmap.yaml",
+        "render.yaml",
+        ".github/workflows/ci.yml"
+      ]
+    }
+  }
+}

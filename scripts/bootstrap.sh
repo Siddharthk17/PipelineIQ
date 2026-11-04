@@ -211,6 +211,10 @@ if is_placeholder "$(get_var GEMINI_API_KEY || true)"; then
   warn "GEMINI_API_KEY is empty — AI generation/heuristics return a clear 503 until you set it in .env"
 fi
 
+if is_placeholder "$(get_var SENTRY_DSN || true)"; then
+  warn "SENTRY_DSN is empty — production error tracking is disabled. Set it in .env to get stack traces in Sentry, then recreate api + workers."
+fi
+
 chmod 600 "$ENV_FILE" 2>/dev/null || true
 
 # 4. Host sysctl for Redis (vm.overcommit_memory=1)
