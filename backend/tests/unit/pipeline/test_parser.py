@@ -650,3 +650,47 @@ pipeline:
         result = parser.validate(config, {"f1"})
         assert result.is_valid is False
         assert any("select" in e.message.lower() for e in result.errors)
+
+    def test_validate_transform_step_returns_not_executable_error(self, parser):
+        """transform parses but has no batch executor: validate() must reject it."""
+        yaml_str = """
+pipeline:
+  name: test
+  steps:
+    - name: load_data
+      type: load
+      file_id: f1
+    - name: tweak
+      type: transform
+      input: load_data
+      expression: "row['amount'] * 2"
+    - name: save_output
+      type: save
+      input: tweak
+      filename: out.csv
+"""
+        config = parser.parse(yaml_str)
+        result = parser.validate(config, {"f1"})
+        assert result.is_valid is False
+        assert any("transform" in e.message.lower() for e in result.errors)
+
+    def test_validate_stream_consume_stays_valid_for_streaming_runs(self, parser):
+        """stream_consume must keep validating: the run endpoint routes those
+        pipelines to the streaming daemon instead of the batch executor."""
+        yaml_str = """
+pipeline:
+  name: test
+  steps:
+    - name: ingest
+      type: stream_consume
+      topic: orders
+    - name: save_output
+      type: save
+      input: ingest
+      filename: out.csv
+"""
+        config = parser.parse(yaml_str)
+        result = parser.validate(config, set())
+        assert not any(
+            "stream_consume" in e.message.lower() for e in result.errors
+        ), [e.message for e in result.errors]

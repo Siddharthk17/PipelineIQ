@@ -421,6 +421,7 @@ class PipelineParser:
         self._check_save_filenames(config, errors)
         self._check_validate_rules(config, errors)
         self._check_sql_steps(config, errors)
+        self._check_unsupported_runtime_steps(config, errors)
 
         return ValidationResult(
             is_valid=len(errors) == 0,
@@ -1319,5 +1320,33 @@ class PipelineParser:
                         step_name=step.name,
                         field="query",
                         message=str(exc),
+                    )
+                )
+
+    def _check_unsupported_runtime_steps(
+        self,
+        config: PipelineConfig,
+        errors: list[ValidationError],
+    ) -> None:
+        """Reject step types the batch executors cannot run.
+
+        `transform` parses but has no executor in StepExecutor or
+        SmartExecutor, so it would fail at runtime with a bare ValueError.
+        Reject it here so the author gets an actionable 400 instead.
+        (`stream_consume` is intentionally allowed: the run endpoint routes
+        those pipelines to the streaming daemon.)
+        """
+        for step in config.steps:
+            step_type = getattr(step, "step_type", None)
+            if step_type == StepType.TRANSFORM:
+                errors.append(
+                    ValidationError(
+                        step_name=step.name,
+                        field="type",
+                        message=(
+                            "Step type 'transform' is not executable: "
+                            "no batch executor is registered for it. "
+                            "Use filter, sql, or another executable step type instead."
+                        ),
                     )
                 )

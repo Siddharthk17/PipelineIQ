@@ -147,3 +147,31 @@ class TestScheduleColumnValidation:
         )
         assert response.status_code == 404, f"Got {response.status_code}: {response.text}"
         assert "Fork the template" in response.text
+
+
+class TestScheduleStreamingRejection:
+    def test_rejects_schedule_with_stream_consume(self, client):
+        """stream_consume has no batch executor and scheduled dispatches always
+        go to execute_pipeline_task: reject at creation, not on the worker."""
+        yaml_config = (
+            "pipeline:\n"
+            "  name: stream_sched\n"
+            "  steps:\n"
+            "    - name: ingest\n"
+            "      type: stream_consume\n"
+            "      topic: orders\n"
+            "    - name: save_output\n"
+            "      type: save\n"
+            "      input: ingest\n"
+            "      filename: out.csv\n"
+        )
+        response = client.post(
+            "/api/v1/schedules/",
+            json={
+                "pipeline_name": "stream_sched",
+                "yaml_config": yaml_config,
+                "cron_expression": "0 3 * * *",
+            },
+        )
+        assert response.status_code == 400, f"Got {response.status_code}: {response.text}"
+        assert "stream_consume" in response.text

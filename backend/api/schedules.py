@@ -174,6 +174,22 @@ def create_schedule(
                 UploadedFile.user_id == current_user.id).all()
         }
     result = PipelineParser().validate(parsed, owned_ids)
+    streaming_steps = [
+        s.name for s in parsed.steps
+        if getattr(s, "step_type", None) == "stream_consume"
+    ]
+    if streaming_steps:
+        # Scheduled dispatches always go to execute_pipeline_task, which has
+        # no stream_consume executor (a cron-fired infinite daemon makes no
+        # sense either). Reject at creation with a clear 400 instead of
+        # failing at runtime on the worker.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Scheduled pipelines cannot use 'stream_consume': "
+            + ", ".join(streaming_steps)
+            + " has no batch executor. Run streaming pipelines from the "
+            "Runs page, which routes them to the streaming daemon.",
+        )
     file_errors = [
         e for e in result.errors
         if "not found" in e.message.lower() or "registered" in e.message.lower()

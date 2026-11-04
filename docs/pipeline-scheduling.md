@@ -53,6 +53,8 @@ This ensures schedules survive Beat restarts (pod restarts, deployments) without
 | Delete | `DELETE /{id}` | Deregister → delete record (cascades schedule_runs) |
 | Preview | `GET /{id}/preview` | `get_next_n_runs(5)` → shows next 5 fire times |
 
+`stream_consume` steps are rejected at creation with a 400: scheduled dispatches always go to the batch executor, which cannot run streaming sources. Submit streaming pipelines from the Runs page, which routes them to the streaming daemon.
+
 ---
 
 ## Execution Flow
@@ -69,7 +71,7 @@ This ensures schedules survive Beat restarts (pod restarts, deployments) without
 
 ### Last-Minute Check
 
-The task checks `is_active` again at execution time (not just at registration time). This handles the case where a user pauses a schedule between the Beat trigger and task execution.
+The task checks `is_active` again at execution time (not only at registration time). This handles the case where a user pauses a schedule between the Beat trigger and task execution.
 
 ### Run Tracking
 

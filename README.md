@@ -243,7 +243,7 @@ YAML Config → Parser → Validator → Planner → Runner → Step Executor �
 | `join` | Merge two datasets (inner/left/right/outer) | `left`, `right`, `on`, `how` |
 | `aggregate` | Group-by with 10 aggregation functions | `input`, `group_by`, `aggregations` |
 | `sort` | Order rows ascending or descending | `input`, `by`, `order` |
-| `transform` | Custom expression-based row transform | `input`, `expression` |
+| `transform` | Declared but not executable — validation rejects it with guidance (no batch executor exists) | `input`, `expression` |
 
 ### Reshape Steps
 
@@ -272,7 +272,7 @@ YAML Config → Parser → Validator → Planner → Runner → Step Executor �
 
 | Step | Description | Key Fields |
 |------|-------------|------------|
-| `stream_consume` | Read micro-batches from a topic | `topic`, `consumer_group`, `batch_size` |
+| `stream_consume` | Read micro-batches from a topic (streaming daemon only; rejected in scheduled pipelines) | `topic`, `consumer_group`, `batch_size` |
 | `stream_publish` | Write pipeline output to a topic | `input`, `topic`, `serialize` |
 
 ### Filter Operators (12)
@@ -913,7 +913,7 @@ All shortcuts are rebindable through the Keybindings modal (`Alt+K`). There are 
 | `pipelineiq_pipeline_duration_seconds` | Histogram | — |
 | `pipelineiq_files_uploaded_total` | Counter | — |
 | `pipelineiq_active_users_total` | Gauge | — |
-| `pipelineiq_celery_queue_depth` | Gauge | `queue` (critical, default, bulk) |
+| `pipelineiq_celery_queue_depth` | Gauge | — |
 
 Plus auto-instrumentation from `prometheus_fastapi_instrumentator` (request rate, latency, error rate per endpoint).
 
@@ -922,15 +922,15 @@ Plus auto-instrumentation from `prometheus_fastapi_instrumentator` (request rate
 A 10-panel dashboard auto-provisioned at `/grafana/`:
 
 - Pipeline runs per minute (rate chart by status)
-- API response latency (p50, p95, p99)
+- API latency p95
+- API request rate
 - Pipeline success rate (gauge)
-- Celery queue depth per queue
-- Error rate over time
-- Active connections / SSE streams
-- File uploads over time
-- Worker pool utilization
-- AI healing latency
-- Storage usage (MinIO bucket sizes)
+- Pipeline execution duration p95
+- Files uploaded total
+- Celery queue depth
+- Active HTTP connections
+- HTTP error rate
+- Registered users
 
 ### Distributed Tracing (Jaeger / OpenTelemetry)
 
@@ -982,7 +982,7 @@ python -m pytest tests/ -v --tb=short
 | `tests/unit/scheduling/` | ~8 | Cron utilities, schedule API, Celery Beat registration |
 | `tests/unit/contracts/` | ~8 | Data contract validation, enforcement, type mapping |
 | `tests/unit/webhooks/` | ~8 | Delivery, HMAC signing, retry logic |
-| `tests/unit/security/` | ~10 | Security leak detection, comprehensive auth bypass tests |
+| `tests/unit/security/` | 56 | Auth bypass, isolation, trusted hosts, token revocation |
 | `tests/unit/catalog/` | ~8 | OpenLineage export, lineage cache, blast radius CTE |
 | `tests/unit/streaming/` | ~5 | Streaming unit tests, SSE |
 | `tests/unit/profiling/` | ~5 | Data profiling, profiling tasks |
