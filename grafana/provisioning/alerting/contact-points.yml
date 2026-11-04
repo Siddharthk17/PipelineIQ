@@ -3,6 +3,9 @@ apiVersion: 1
 # the environment (see docker-compose.yml GF_SMTP_* wired from SMTP_*).
 # With SMTP unset, Grafana logs "alert notification skipped" — alerts still
 # evaluate and stay visible in Grafana > Alerting.
+# NOTE: plain ${VAR} only — Grafana does not expand :- defaults, and an
+# empty address fails provisioning and kills the container on boot.
+# Compose always injects SMTP_FROM (default grafana@localhost).
 contactPoints:
   - orgId: 1
     name: pipelineiq-email
@@ -10,5 +13,5 @@ contactPoints:
       - uid: pipelineiq-email-receiver
         type: email
         settings:
-          addresses: ${SMTP_FROM:-grafana@localhost}
+          addresses: ${SMTP_FROM}
           subject: "[PipelineIQ] {{ .Status }}: {{ .GroupLabels.alertname }}"
