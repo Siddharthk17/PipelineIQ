@@ -25,7 +25,7 @@ spec:
             - backend.celery_app
             - worker
             - --queues=streaming
-            - --concurrency=4
+            - --concurrency=8
             - --prefetch-multiplier=1
             - --hostname=streaming@%(h)s
             - --loglevel=info
@@ -40,8 +40,8 @@ spec:
               value: pipelineiq-worker-streaming
           resources:
             requests:
-              memory: "256Mi"
+              memory: "512Mi"
               cpu: "100m"
             limits:
-              memory: "1Gi"
+              memory: "2Gi"
               cpu: "500m"

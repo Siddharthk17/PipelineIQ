@@ -2,11 +2,23 @@
 
 import { useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
-import { getFile, getFilePreview } from "@/lib/api";
+import { getFile, getFilePreview, getFileProfile } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { PIIBanner } from "@/components/widgets/PIIBanner";
 import { ColumnPolicyManager } from "@/components/widgets/ColumnPolicyManager";
 import type { UploadedFile } from "@/lib/types";
+
+// Semantic types that warrant a column-security policy. Mirrors
+// PII_SEMANTIC_TYPES in backend/security/column_security.py.
+const PII_SEMANTIC_TYPES = new Set([
+  "email",
+  "phone",
+  "ssn",
+  "credit_card",
+  "ip_address",
+  "person_name",
+  "address",
+]);
 
 export default function FileDetailPage({ params }: { params: Promise<{ fileId: string }> }) {
   const router = useRouter();
@@ -33,6 +45,18 @@ export default function FileDetailPage({ params }: { params: Promise<{ fileId: s
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load file"))
       .finally(() => setPageLoading(false));
+    // Profile loads independently: a pending or failed profile must not
+    // block the page, it only feeds the PII banner.
+    getFileProfile(fileId)
+      .then((res) => {
+        const profile = res.profile ?? {};
+        setPiiColumns(
+          Object.entries(profile)
+            .filter(([, col]) => col && PII_SEMANTIC_TYPES.has(col.semantic_type ?? ""))
+            .map(([name]) => name),
+        );
+      })
+      .catch(() => setPiiColumns([]));
   }, [isLoading, resolvedParams.fileId, router, user]);
 
   if (isLoading || !user || pageLoading) {

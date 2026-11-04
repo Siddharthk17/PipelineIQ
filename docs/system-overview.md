@@ -1,197 +1,73 @@
-# 1. Overall System Architecture
+# System Overview
+
+Service map, ports, and data flow for PipelineIQ. For install and operations, see [README](../README.md), [RUNBOOK](../RUNBOOK.md), and [DEPLOYMENT_GUIDE](../DEPLOYMENT_GUIDE.md).
 
 ![Overall System Architecture](diagrams/PipelineIQ-architecture-diagram.png)
 
----
+## Services
 
-## Overview
+All ports below are loopback-bound in Compose (`127.0.0.1`), except Nginx on `:80`. Public paths are served through Nginx; see the location table in [API and proxy paths](#api-and-proxy-paths).
 
-PipelineIQ is a production-grade data pipeline orchestration platform built with a microservices-inspired architecture. The system is designed to handle data pipeline execution, real-time collaboration, autonomous AI healing, and comprehensive observability — all within a lightweight Kubernetes deployment costing approximately $12/month.
+| Service | Port | Image / runtime | Purpose |
+|---------|------|-----------------|---------|
+| `nginx` | 80 | `nginx:1.25.5-alpine` | Reverse proxy, gzip, rate limits, `/metrics` ACL |
+| `api` | 8000 (loopback) | `python:3.11.13-slim`, Gunicorn + 4 Uvicorn workers, `appuser` | FastAPI REST |
+| `sse-service` | 8001 (loopback) | same backend image, 2 workers | SSE streams only |
+| `frontend` | 3000 (internal) | `node:20.19.0-alpine`, Next.js standalone, `nextjs` user | Dashboard |
+| `postgres` / `postgres-replica` | internal 5432 | `postgres:15.12-alpine` | Primary + streaming replica (`max_connections=200`) |
+| `pgbouncer` / `pgbouncer-replica` | loopback 5432 / 5433 | transaction mode pools | Write / read pooling |
+| `worker-critical`, `-default`, `-bulk`, `-gemini`, `-streaming` | — | same backend image | Celery, concurrency 2/3/2/1/8 |
+| `celery-beat` | — | same backend image | Singleton scheduler (`schedules.check` every 60 s) |
+| `redis-broker` | loopback 6379 | `redis:7.4.2-alpine`, 512 MB | Celery broker + results |
+| `redis-pubsub` | loopback 6380 | 512 MB | SSE channels, terminal payloads |
+| `redis-cache` | loopback 6381 | 1 GB, persisted | Revocation, YAML/policy caches, rate limits |
+| `redis-yjs` | loopback 6382 | 128 MB | Yjs document persistence |
+| `y-websocket` | loopback 1234 | `node:20.19.0-alpine`, `node` user, 80 MB limit | Yjs relay (`ws` + `y-redis`) |
+| `minio` | loopback 9000/9001 | `pgsty/minio` | S3 storage (4 buckets) |
+| `flower` | loopback 5555 | same backend image, basic auth | Celery monitor (`--url_prefix=/flower`) |
+| `redpanda` | loopback 9092/8082/8081 | `redpandadata/redpanda:v24.2.1`, 3 GB limit | Kafka-compatible streaming |
+| `redpanda-console` | loopback 8090→8080 | console v2.8.10 | Topic UI |
+| `prometheus` | loopback 9090 | `prom/prometheus:v2.48.0`, 15-day retention | Metrics (`--route-prefix=/prometheus`) |
+| `jaeger` | loopback 16686/4317/4318 | `all-in-one:1.57`, in-memory spans | OTLP intake + trace UI (`--query.base-path=/jaeger`) |
+| `loki` / `promtail` / `grafana` | loopback 3100 / — / 3000 | 2.9.8 / 2.9.8 / 10.2.0 | Logs / shipping / dashboards (`/grafana/`) |
 
-The architecture follows a strict separation of concerns across seven distinct layers: Client, API, Task, Execution, Storage, Streaming, and Observability. Each layer communicates through well-defined interfaces, enabling independent scaling and deployment.
+30 services total, one `pipelineiq-network`, 10 named volumes.
 
----
+## Data flow
 
-## Layer-by-Layer Breakdown
+1. **Run submission** — browser `POST /api/v1/pipelines/run` → Nginx → `api`. The API validates YAML, inserts a `pipeline_runs` row (`PENDING`), and calls `execute_pipeline_task` on the `default` queue (or the streaming daemon path for `stream_consume` pipelines). The response is `202` with a `run_id`.
+2. **Execution** — a worker loads files from MinIO, runs steps through `SmartExecutor` (Pandas or DuckDB per step, WASM for `wasm_compute`), moves Arrow tables between steps on the Arrow bus (Redis → `/dev/shm` → MinIO spill), and writes `step_results`, `lineage_graphs`, contracts, catalog rows, and versions.
+3. **Progress** — the worker publishes to `redis-pubsub` (`pipeline_progress:{run_id}`); `sse-service` forwards it as SSE at `/api/v1/pipelines/{run_id}/stream` (legacy `/api/runs/{run_id}/stream`). Payloads are HMAC-signed; the last payload is cached for reconnects.
+4. **Schedules** — Beat fires `schedules.check` every 60 s; due schedules get a `schedule_runs` row and a `PipelineRun(trigger='scheduled')` on the `bulk` queue. No Beat restart is needed: the check reads the database every tick.
+5. **Streaming** — `tasks.run_streaming_pipeline` consumes Redpanda micro-batches, runs the non-streaming steps, publishes results, and writes `StreamingStats`; pause/resume/stop flip `PipelineRun.status`, which the daemon reads each iteration.
+6. **AI** — generation, repair, healing patches, and pipeline descriptions all funnel through `tasks.call_gemini` on the single-concurrency `gemini` queue (50 calls/min, 900K tokens/min, SHA256 response cache).
+7. **Collaboration** — browsers open `ws://HOST/yjs/<room>` to `y-websocket`; Yjs CRDT bytes are routed between room members and persisted to `redis-yjs`. JWT is required per connection.
 
-### 1. Client Layer
+## API and proxy paths
 
-The client layer consists of two components that handle all user-facing interactions.
+Nginx (`nginx/conf.d/pipelineiq.conf`) routes:
 
-**Next.js 14 Frontend (Vercel)**
-- Deployed on Vercel's global CDN for edge-level performance
-- Built with Next.js 14 App Router for server-side rendering and streaming
-- React Flow provides the visual pipeline canvas — a node-based editor where users drag, connect, and configure pipeline steps
-- CodeMirror powers the YAML editor with syntax highlighting, autocomplete, and linting
-- Yjs integrates real-time collaborative editing directly into both React Flow and CodeMirror
-- The frontend communicates with the backend via HTTPS REST API calls and Server-Sent Events for real-time updates
+| Location | Target |
+|----------|--------|
+| `/api/` | `api:8000` (500 MB bodies, 300 s) |
+| `/api/v1/pipelines/.../stream`, `/api/v1/runs/.../stream`, `/api/runs/.../stream` | `sse-service:8001` (buffering off, 3600 s) |
+| `/auth/`, `/webhooks/`, `/audit/` | `api:8000` |
+| `/health`, `/livez`, `/readyz`, `/docs`, `/redoc`, `/openapi.json` | `api:8000` (docs family rate-limited) |
+| `/metrics` | `api:8000` (private ranges only, deny all others) |
+| `/flower/` | `flower:5555` (`X-Forwarded-Prefix`) |
+| `/grafana/` | `grafana:3000` (websocket upgrade) |
+| `/prometheus/`, `/jaeger/` | upstream with route prefix / base path preserved |
+| `/yjs/` (rewritten to `/`) | `y-websocket:1234` (websocket, 3600 s) |
+| `/` | `frontend:3000` |
 
-**Y-WebSocket Server**
-- A lightweight Node.js process (~50MB memory footprint)
-- Routes binary Yjs protocol messages between connected browsers
-- Does NOT interpret or merge content — Yjs CRDT math handles conflict resolution
-- JWT authentication via `jsonwebtoken.verify()` on every connection
-- Redis persistence (`redis-yjs:6382`) ensures documents survive server restarts
-- Room model: one Yjs document per pipeline, identified by pipeline name
-- Handles awareness protocol: cursor positions, selected nodes, user colors (ephemeral, not persisted)
-
-### 2. API Layer
-
-**FastAPI Application**
-- Running under Gunicorn with 4 worker processes on port 8000
-- Pydantic BaseSettings for configuration management (`backend/config.py`)
-- Structured JSON logging for production, human-readable for development
-- Middleware stack: API version header, request ID injection, timing, structlog access logging
-- Exception handlers for `ClientDisconnected` (499), `PipelineIQError` (422), `RequestValidationError` (422), and unhandled exceptions (500)
-- Route mounting for 15+ endpoint groups: API, auth, webhooks, audit, AI, WASM, streaming, catalog, lineage export, column policies, contracts, runs, debug
-- Health check endpoints: `/livez` (liveness), `/readyz` (readiness), `/health` (comprehensive)
-- Prometheus metrics instrumentation for request duration, status codes, and custom business metrics
-- SHA256 YAML cache: identical pipeline configurations are parsed once and reused
-
-**SSE Service**
-- Separate FastAPI process on port 8001
-- Dedicated to Server-Sent Events streaming
-- Subscribes to Redis PubSub channels for pipeline progress events
-- Channels named `pipeline_progress:{run_id}`
-- Events are signed with HMAC-SHA256 to prevent tampering
-- Supports reconnection: cached latest progress payload in Redis (TTL: 1 hour)
-
-### 3. Task Layer (Celery)
-
-Four specialized Celery worker types, each with distinct resource profiles and queue assignments.
-
-**worker-default (x2, concurrency=4)**
-- Handles normal user-triggered pipeline runs
-- Pulls from `default` and `critical` queues (critical has priority)
-- `prefetch_multiplier=1`: worker gets 1 task at a time (prevents long tasks blocking short ones)
-- `acks_late=True`: task acknowledged only after completion (crash-safe)
-- Concurrency=4 balances throughput with memory usage
-
-**worker-bulk (x2, concurrency=2)**
-- Handles file profiling (`profile_file`) and scheduled pipeline runs (`execute_scheduled_pipeline`)
-- Pulls from `bulk` queue only — no competition with user-triggered runs
-- Lower concurrency=2 prevents OOM on large DataFrames during profiling
-- Separate workers ensure scheduled runs don't impact interactive performance
-
-**worker-gemini (x1, concurrency=1)**
-- Handles ALL Gemini AI calls (`call_gemini_task`)
-- Exactly 1 process with concurrency=1 — this is intentional and critical
-- `rate_limit='50/m'`: additional enforcement layer (50 API calls per minute)
-- `max_retries=5`: exponential backoff on 429 rate limit errors
-- SHA256 response cache: identical prompts reuse cached results
-- Token budget tracking: 900K tokens/minute rolling window in Redis
-- **NEVER increase replicas**: defeats the rate limit design
-
-**celery-beat (x1)**
-- Singleton cron dispatcher — fires scheduled tasks at configured intervals
-- **NEVER increase replicas**: multiple Beat instances = duplicate scheduled tasks
-- Dynamic schedule registration: user-created schedules are added at runtime
-- Reloads all active schedules from database on restart
-
-### 4. Execution Engine
-
-**SmartExecutor**
-- Central routing component that receives every pipeline step
-- Routes based on step type and row count:
-  - `wasm_compute` steps → WasmExecutor (any row count)
-  - Steps with >= 50,000 rows → DuckDB (vectorized SQL)
-  - Steps with < 50,000 rows → Pandas (Python operations)
-- Full OpenTelemetry tracing: step name, engine used, rows in/out, duration
-
-**DuckDB**
-- Vectorized analytical SQL engine
-- Per-worker connection initialized by `worker_init` signal (NOT created per-step)
-- Zero-copy Arrow-to-DuckDB registration via `conn.register(alias, arrow_table)`
-- SQL Builder generates step-specific SQL for 11 step types
-- Performance: ~12ms for GROUP BY + SUM on 1M rows (vs ~1.2s in Pandas)
-- Steps supported: filter, select, sort, aggregate, join, deduplicate, fill_nulls, sample, pivot, unpivot, sql
-
-**Pandas**
-- Used for small datasets (< 50K rows) and complex Python logic
-- Conversion: `pa.Table.to_pandas()` → DataFrame operations → `pa.Table.from_pandas()`
-- Acceptable performance for small data; simpler for operations with no SQL equivalent
-
-**WasmExecutor**
-- WebAssembly UDF execution via Wasmtime runtime
-- Empty Linker = no WASI = no filesystem/network/env access (sandboxed)
-- Fuel-based CPU budget: `FUEL_PER_STEP = 10,000,000`, `FUEL_PER_ROW = 1,000`
-- SHA256 module cache: compiled Module objects cached per-worker
-- Fresh Store per execution: no state leakage between calls
-- TrapError → None (continues to next row, not a crash)
-
-**ArrowDataBus**
-- Three-tier inter-step data transport
-- Hot tier (< 10MB): Redis-cache, ~0.2ms latency, TTL 1 hour
-- Warm tier (10-500MB): /dev/shm (Linux tmpfs), ~0.5ms latency, deleted on run completion
-- Cold tier (>= 500MB): MinIO Parquet+Snappy, ~50ms latency, 2-day lifecycle
-- Serialization: Arrow IPC (native binary, zero-copy) — NOT pickle
-- Automatic eviction: when Redis memory > 90%, largest hot entries move to warm tier
-- Idempotent cleanup: `cleanup_run()` deletes all tier data for a run
-
-### 5. Storage Layer
-
-**PostgreSQL 15**
-- Primary datastore for all relational data
-- PgBouncer connection pooling for efficient connection reuse
-- Read replica for query distribution
-- Tables: pipeline_runs, step_results, pipeline_schedules, data_assets, asset_relationships, pipeline_contracts, contract_breaches, column_policies, healing_attempts, wasm_modules, uploaded_files, file_profiles, users, audit_logs, webhook_deliveries, lineage_graphs, pipeline_versions
-- PostgreSQL RULEs for immutability: healing_attempts, contract_breaches, webhook_deliveries (DELETE/UPDATE → INSTEAD NOTHING)
-- GIN trigram index on data_assets.name for fast ILIKE search
-
-**Four Redis Instances**
-- `redis-broker:6379` — Celery task state and broker (PENDING/STARTED/SUCCESS/FAILURE)
-- `redis-pubsub:6380` — SSE event channels (`pipeline_progress:{run_id}`)
-- `redis-cache:6381` — 1GB LRU cache: YAML cache, policy cache, Arrow hot tier, response cache
-- `redis-yjs:6382` — Yjs CRDT document state persistence
-
-**MinIO**
-- S3-compatible object storage
-- Four buckets with lifecycle policies:
-  - `pipelineiq-uploads` — User-uploaded source files
-  - `pipelineiq-outputs` — Pipeline execution outputs
-  - `pipelineiq-spills` — Arrow cold tier Parquet files (2-day lifecycle)
-  - `pipelineiq-wasm` — WebAssembly module storage
-- Presigned URLs for secure file access (48h expiry for downloads)
-- Lifecycle policies for automatic cleanup
-
-### 6. Streaming Layer
-
-**Redpanda**
-- Kafka-compatible streaming platform (same wire protocol)
-- C++ reimplementation: 600MB RAM vs Kafka's 3GB
-- Single-node deployment suitable for 16GB laptop with 25+ containers
-- 8-partition topics for parallel consumption (Bottleneck #15 fix)
-- DLQ (Dead Letter Queue) per topic: never lose a message
-- Consumer group protocol distributes partitions automatically
-- Streaming daemon runs indefinitely until stopped, checking PipelineRun.status each iteration
-
-### 7. Observability Layer
-
-**OpenTelemetry SDK**
-- Auto-instrumented: FastAPI, SQLAlchemy, Redis, Celery (zero code change)
-- Manual spans: SmartExecutor steps with business context (engine, rows, timing)
-- BatchSpanProcessor: background thread, zero request latency impact
-- OTLP gRPC export to Jaeger
-
-**Jaeger**
-- All-in-one deployment
-- Port 4317: OTLP gRPC intake
-- Port 16686: Web UI for trace search, span attributes, error highlighting
-- Deep-link from frontend Gantt chart: `http://jaeger:16686/trace/{trace_id}`
-
----
-
-## Key Source Files
+## Key source files
 
 | File | Purpose |
 |------|---------|
-| `backend/main.py` | FastAPI application factory, middleware stack, route mounting |
-| `backend/config.py` | Pydantic BaseSettings with all environment configuration |
-| `backend/celery_app.py` | Celery application with worker init/shutdown hooks |
-| `backend/celery_config.py` | Queue routing and execution defaults |
-| `backend/telemetry.py` | OpenTelemetry SDK initialization and instrumentation |
-| `backend/execution/smart_executor.py` | Step routing between DuckDB and Pandas |
-| `backend/execution/arrow_bus.py` | Three-tier Arrow IPC data bus |
-| `backend/execution/wasm_executor.py` | WebAssembly UDF execution engine |
-| `backend/tasks/pipeline_tasks.py` | Main pipeline orchestration task |
-| `backend/sse_app.py` | SSE service (port 8001) |
+| `backend/main.py` | App factory, middleware, router mounting, health checks |
+| `backend/sse_app.py` | Standalone SSE app (port 8001) |
+| `backend/config.py` | All settings, fails fast on bad config |
+| `backend/celery_app.py`, `backend/celery_config.py` | Celery app, 5 queues, routes, beat schedule |
+| `backend/database.py` | Write/read engines and session factories |
+| `docker-compose.yml` | All 30 services |
+| `nginx/conf.d/pipelineiq.conf` | Public routes |

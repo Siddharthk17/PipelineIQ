@@ -1,136 +1,55 @@
-# 14. Celery Task Queue Architecture
+# Celery Task Queues
 
-> Four specialized queues with worker isolation, rate limiting, and crash-safe acknowledgment.
-
-## Architecture Diagram
+Five queues with isolated workers. Routing, concurrency, and the beat schedule all live in `backend/celery_config.py`; the Celery app (fork-safe worker init for DuckDB, OTel, Sentry) in `backend/celery_app.py`.
 
 ![Celery Task Queue Architecture](diagrams/celery-queue.png)
 
----
+## Queues
 
-## Overview
+| Queue | Concurrency (Compose and k8s) | k8s replicas | Tasks |
+|-------|--------------------|--------------|-------|
+| `critical` | 2 (`worker-critical`) + overflow from `worker-default` | 1 | `tasks.deliver_webhook`, `tasks.deliver_notifications` |
+| `default` | 3 (`worker-default`, also drains `critical`) | 2 | `pipeline.execute` (manual runs) |
+| `bulk` | 2 (`worker-bulk`) | 2 | `schedules.check`, `tasks.profile_file`, `tasks.maintain_storage`, `tasks.reconcile_stuck_runs` |
+| `gemini` | 1 (`worker-gemini`, 1 replica) | 1 | `tasks.call_gemini`, pipeline descriptions (50 calls/min, 900K tokens/min budget) |
+| `streaming` | 8 (`worker-streaming`) | 1 | `tasks.run_streaming_pipeline` (no time limit) |
 
-PipelineIQ uses a four-queue Celery architecture to isolate different workload types and prevent resource contention. Each queue has dedicated workers with tuned concurrency settings, ensuring that long-running bulk operations don't block critical webhook deliveries, and that AI API calls are rate-limited to exactly one concurrent request. The system uses `acks_late=True` for crash-safe task acknowledgment — if a worker crashes mid-run, the task stays in the queue and is automatically requeued for another worker.
+ Routes in `celery_config.py` (`task_routes`): webhooks/notifications → `critical`; `pipeline.execute` → `default`; schedules/profile/maintenance/reconcile → `bulk`; gemini tasks → `gemini`; streaming → `streaming`. Anything else falls through to `default`.
 
----
+## Worker behavior
 
-## Four Queues
+- `acks_late=True` + `prefetch_multiplier=1`: a task is acknowledged only after it finishes, and a worker holds one task at a time. A crashed worker's task returns to the queue; tasks guard with run-status checks (`PENDING`-only execution) so redelivery is a no-op.
+- Soft time limit 300 s, hard limit 360 s; streaming tasks are exempt (infinite daemon loop).
+- Result backend expiry: 3600 s.
+- Celery Beat (`celery-beat`, one replica): `check-pipeline-schedules` every 60 s, `maintain-storage` every 300 s, `reconcile-stuck-runs` every 600 s. Reconciliation marks orphaned `RUNNING`/`HEALING` runs `TIMEOUT`/`FAILED` via Celery inspect.
 
-| Queue | Workers | Tasks Routed | Purpose | Priority |
-|-------|---------|--------------|---------|----------|
-| **critical** | worker-critical (conc 2, fast lane) + worker-default (overflow) | `webhooks.deliver`, `notifications.deliver`, `tasks.deliver_webhook` | Webhook/notification delivery must happen fast, not behind slow pipeline runs | Highest |
-| **default** | worker-default (conc 3) | `pipeline.execute` | Normal user-triggered pipeline runs | Normal |
-| **bulk** | worker-bulk (conc 2) | `tasks.profile_file`, `schedules.check`, `tasks.execute_scheduled_pipeline`, `tasks.maintain_storage` | Long-running, CPU/memory intensive operations | Low |
-| **gemini** | worker-gemini (conc 1) | `tasks.call_gemini`, `tasks.generate_pipeline_description`, `tasks.generate_pipeline_ai`, `tasks.repair_pipeline_ai` | Rate limit enforcement — 1 worker × concurrency=1 = 1 active call max | Normal |
-| **streaming** | worker-streaming (conc 8) | `tasks.run_streaming_pipeline` | Long-lived Redpanda consume/publish loop (no task time limit) | Normal |
+## Redis roles
 
----
+| Instance | Port | Memory | Holds |
+|----------|------|--------|-------|
+| `redis-broker` | 6379 | 512 MB, allkeys-lru, no persistence | Task messages (db 0), results (db 1) |
+| `redis-pubsub` | 6380 | 512 MB, allkeys-lru | `pipeline_progress:{run_id}` events, terminal payload cache |
+| `redis-cache` | 6381 | 1 GB, allkeys-lru, persisted | Revocation, parsed YAML (TTL 3600), policies (TTL 60), rate limits |
+| `redis-yjs` | 6382 | 128 MB | Yjs documents |
 
-## Worker Configuration
+## Task modules (`backend/tasks/`)
 
-| Worker | Processes | Concurrency | Prefetch Multiplier | Ack Mode | Purpose |
-|--------|-----------|-------------|---------------------|----------|---------|
-| worker-critical | 1 | 2 | 1 | Late | Critical fast lane: webhooks + notifications |
-| worker-default | 1 | 3 | 1 | Late | Pipeline execution; also drains critical overflow so a dead critical worker degrades instead of stalling |
-| worker-bulk | 1 | 2 | 1 | Late | Profiling + scheduled runs |
-| worker-gemini | 1 | 1 | 1 | Late | AI calls only, rate_limit='50/m' |
-| worker-streaming | 1 | 8 | 1 | Late | Redpanda streaming pipelines |
-| celery-beat | 1 | — | — | — | Cron dispatcher (singleton) |
+| Module | Task | Queue | Purpose |
+|--------|------|-------|---------|
+| `pipeline_tasks.py` | `pipeline.execute` (name `execute_pipeline_task`) | default/bulk | Full run lifecycle, idempotent on `PENDING` |
+| `streaming_pipeline.py` | `tasks.run_streaming_pipeline` | streaming | Consume → execute → publish loop, DLQ, backpressure at 50K lag, 50-error stop |
+| `schedule_tasks.py` | `schedules.check` | bulk | Tick dispatch (Redis lock, batch 100) |
+| `gemini_tasks.py` | `tasks.call_gemini` + description task | gemini | Budget, retries, response cache |
+| `webhook_tasks.py` | `tasks.deliver_webhook` (+ plural fan-out) | critical | HMAC-signed POST with retries, delivery log |
+| `notification_tasks.py` | `deliver_notifications` | critical | Slack/email per `NotificationConfig` |
+| `profiling.py` | `tasks.profile_file` | bulk | Async `FileProfile` compute |
+| `reconciliation.py` | `tasks.reconcile_stuck_runs` | bulk | Orphan timeout via inspect |
+| `storage_maintenance.py` | `tasks.maintain_storage` | bulk | MinIO lifecycle, stale shm cleanup |
 
-### Concurrency Rationale
+## Key source files
 
-- **worker-default (concurrency=4)**: Standard throughput for pipeline execution. Each worker handles 4 concurrent tasks.
-- **worker-bulk (concurrency=2)**: Lower concurrency prevents OOM on memory-intensive profiling and scheduled pipeline runs. Each worker handles only 2 concurrent tasks.
-- **worker-gemini (concurrency=1)**: Strictly single-threaded to enforce rate limiting. Combined with `rate_limit='50/m'`, this ensures exactly 1 active Gemini API call at a time across the entire cluster.
-
-### Prefetch Multiplier
-
-All workers use `prefetch_multiplier=1` — each worker fetches exactly one task at a time from the broker. This prevents a single worker from hoarding tasks while other workers sit idle.
-
----
-
-## Task Acknowledgment (acks_late=True)
-
-```
-1. Worker picks up task (does NOT ack yet)
-2. Worker executes pipeline run
-3. Only after SUCCESS or explicit failure: worker acks
-4. If worker CRASHES mid-run: task stays in queue, another worker picks it up
-```
-
-This prevents data loss on crash — the task is never lost, just requeued. The trade-off is that crashed tasks may execute twice (idempotency is handled at the task level via run status checks).
-
----
-
-## Task Routing
-
-Defined in `backend/celery_config.py`:
-
-```python
-task_routes = {
-    'tasks.deliver_webhook':              {'queue': 'critical'},
-    'tasks.call_gemini':                  {'queue': 'gemini'},
-    'tasks.profile_file':                 {'queue': 'bulk'},
-    'tasks.execute_scheduled_pipeline':   {'queue': 'bulk'},
-    # All other tasks → default queue
-}
-```
-
-Tasks not explicitly routed fall through to the default queue.
-
----
-
-## Singleton Requirements
-
-| Component | Replicas | Why |
-|-----------|----------|-----|
-| celery-beat | Exactly 1 | Multiple Beat instances = duplicate scheduled tasks at every interval |
-| worker-gemini | Exactly 1 with concurrency=1 | Multiple replicas defeat the rate limit design |
-
-These are enforced in the Kubernetes manifests with `replicas: 1` and comments explaining the constraint.
-
----
-
-## Redis Infrastructure
-
-PipelineIQ uses four separate Redis instances to prevent contention:
-
-| Instance | Port | Purpose | Data |
-|----------|------|---------|------|
-| redis-broker | 6379 | Celery task broker | Task state (PENDING/STARTED/SUCCESS/FAILURE), result backend |
-| redis-pubsub | 6380 | SSE event channels | Real-time streaming events for frontend |
-| redis-cache | 6381 | LRU cache, policy cache | Column policies, profiling cache, Arrow hot tier |
-| redis-yjs | 6382 | CRDT document state | Yjs document snapshots for multiplayer editing |
-
----
-
-## Task Lifecycle
-
-1. **Producer submits** → `apply_async(queue='critical')` or Beat fires cron task
-2. **Broker queues** → Redis stores task message in the appropriate queue list
-3. **Worker fetches** → Prefetches one task (prefetch_multiplier=1)
-4. **Worker executes** → Runs task function, updates state to STARTED
-5. **Worker acks** → On success or explicit failure, task removed from queue
-6. **Worker crashes** → Task not acked, stays in queue, requeued for another worker
-
----
-
-## Deployment Topology
-
-| Worker | K8s Replicas | Total Processes | Total Concurrency |
-|--------|-------------|-----------------|-------------------|
-| worker-default | 2 | 4 | 16 |
-| worker-bulk | 2 | 4 | 8 |
-| worker-gemini | 1 | 1 | 1 |
-| celery-beat | 1 | 1 | — |
-| **Total** | **6 pods** | **10 processes** | **25 concurrent tasks** |
-
----
-
-## Key Source Files
-
-- `backend/celery_config.py:64` — Queue routing and execution defaults
-- `backend/celery_app.py:105` — Celery app, worker init/shutdown hooks
-- `backend/tasks/pipeline_tasks.py:1114` — Main pipeline execution task
-- `backend/tasks/webhook_tasks.py` — Webhook delivery task
-- `backend/tasks/scheduled_pipeline.py:112` — Scheduled pipeline trigger
+| File | Purpose |
+|------|---------|
+| `backend/celery_config.py` | Queues, routes, limits, beat schedule |
+| `backend/celery_app.py` | App, task autodiscovery (10 modules), worker-process init |
+| `backend/tests/unit/infrastructure/test_celery_task_registry.py` | Registry coverage — update it when adding tasks |

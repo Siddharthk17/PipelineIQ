@@ -1,195 +1,49 @@
-# 9. WebAssembly UDF Sandbox
+# WASM Sandbox
+
+Row-level user functions via Wasmtime. Upload and management endpoints are in `backend/routers/wasm.py` (`/api/v1/wasm`); execution in `backend/execution/wasm_executor.py`.
 
 ![WASM Sandbox](diagrams/wasm-sandbox.png)
 
----
+## Security model
 
-## Overview
+The sandbox boundary is an **empty linker**: modules are instantiated with no WASI imports, so there is no filesystem, network, environment, or process access to call into. On top of that:
 
-PipelineIQ's WebAssembly UDF (User-Defined Function) sandbox allows users to upload custom Rust/Wasm functions and execute them safely within pipeline steps. The security model is based on Wasmtime's fuel-based CPU budgeting and an empty Linker that provides zero access to host system resources — no filesystem, no network, no environment variables.
+| Control | Value | Effect |
+|---------|-------|--------|
+| Fuel per step | `FUEL_PER_STEP = 10,000,000` | Total CPU budget per step execution |
+| Fuel per row | `FUEL_PER_ROW = 1,000` | Refilled before each row call |
+| Validation fuel | `VALIDATION_FUEL = 100,000` | Upload-time check budget |
+| Wall clock | 30-second timeout (`SIGALRM`) | Kills hung executions |
+| Stack | 1 MB max Wasm stack | Stack-overflow containment |
+| State | Fresh `Store` per execution | No leakage between rows or runs |
+| Types | `f64` arguments and return only | Narrow, checkable interface |
 
----
+A trap (fuel exhaustion, divide-by-zero, disallowed import) records `NULL` for that row and continues — one bad row never fails the step. Compiled modules are cached per worker by SHA256, up to `MAX_CACHED_MODULES = 100` (LRU eviction); compilation (~100 ms) happens once per module per worker.
 
-## Security Model
+## Workflow
 
-### What the Sandbox Prevents
-
-| Access Type | Blocked? | Mechanism |
-|-------------|----------|-----------|
-| Filesystem read/write | Yes | No WASI `fd_write`/`fd_read` |
-| Network (HTTP, DNS) | Yes | No WASI `sock_accept` |
-| Environment variables | Yes | No WASI `environ_get` |
-| System calls (exec/fork) | Yes | No WASI at all |
-| CPU abuse | Yes | Fuel budget: 10M per step, 1K per row |
-| Stack overflow | Yes | 1MB stack limit |
-| Memory exhaustion | Yes | Fresh Store per execution |
-| Infinite loops | Yes | Fuel exhaustion → TrapError → null result |
-
-### Why Empty Linker Is the Security Mechanism
-
-**WASI (WebAssembly System Interface)** is what grants filesystem/network access to Wasm modules. It's a set of host functions that a Wasm module can import:
-
-```
-fd_write    → file write
-fd_read     → file read
-sock_accept → network socket
-environ_get → environment variables
-proc_exit   → process exit
-```
-
-An **empty Linker** has no host functions available for Wasm to import. When a Wasm module tries to call `fd_write`, the import fails at instantiation time — the module cannot even start.
-
-This is exactly how **Cloudflare Workers** isolate user code — they don't give Wasm modules any WASI imports.
-
----
-
-## Developer Workflow
-
-### 1. Write Rust Function
-
-```rust
-// Example: compute_risk score
-#[no_mangle]
-pub fn compute_risk(age: f64, income: f64, credit: f64) -> f64 {
-    let age_factor = if age < 25.0 { 1.2 } else { 1.0 };
-    let income_factor = income / 100_000.0;
-    let credit_factor = credit / 850.0;
-    (age_factor * income_factor * credit_factor * 100.0).min(100.0)
-}
-```
-
-### 2. Compile to WebAssembly
-
-```bash
-cargo build --target wasm32-unknown-unknown --release
-```
-
-Output: `.wasm` binary file (compiled machine code, not interpreted)
-
-### 3. Upload via API
-
-```
-POST /api/wasm/upload
-Content-Type: multipart/form-data
-Body: file=@compute_risk.wasm, name="compute_risk", description="..."
-```
-
-### 4. Validation
-
-At upload time, Wasmtime:
-1. Instantiates the module with an empty Linker
-2. Lists all exported functions
-3. Validates function signatures (only f64 arguments and return values)
-4. Stores module in MinIO `pipelineiq-wasm` bucket
-
-### 5. Reference in Pipeline YAML
+1. Write a function that takes floats and returns a float (Rust, C, Go, AssemblyScript — anything targeting `wasm32-unknown-unknown`).
+2. `POST /api/v1/wasm/upload` (multipart). Validation compiles the module with the validation fuel budget, instantiates it against the empty linker (any required host import fails here), and lists exports to confirm the requested `function` exists with an `f64 → f64` signature. The bytes go to the `pipelineiq-wasm` MinIO bucket and a `wasm_modules` row records sha256, exports, and fuel budget.
+3. Reference it from a pipeline step:
 
 ```yaml
-pipeline:
-  steps:
-    - name: compute_risk_score
-      type: wasm_compute
-      wasm_file_id: "abc-123"
-      function: "compute_risk"
-      input_columns: ["age", "income", "credit_score"]
-      output_column: "risk_score"
+- name: risk_score
+  type: wasm_compute
+  input: customers
+  wasm_file_id: "<module-uuid>"
+  function: "compute_risk"
+  input_columns: ["age", "income", "credit_score"]
+  output_column: "risk_score"
 ```
 
----
+4. At runtime the executor fetches the bytes, hits the module cache, creates a fresh store with step fuel, and calls the function per row, appending `output_column` (`f64`, null on trap).
 
-## Execution Flow
+`GET /api/v1/wasm/` lists modules, `GET /{id}` shows one, `DELETE /{id}` deactivates (204). The WASM security suite is `backend/tests/security/test_wasm_sandbox_security.py`; the upload contract is covered under `backend/tests/unit/wasm/` (fixtures compile WAT via `wasmtime.wat2wasm`, including infinite-loop and divide-by-zero cases).
 
-### At Runtime
+## Key source files
 
-1. **Fetch .wasm bytes** from MinIO `pipelineiq-wasm` bucket
-
-2. **SHA256 module cache check** — per-worker, compiled once
-   - `SHA256(wasm_bytes)` → compiled `Module` object
-   - Compilation: ~50-200ms (done once per module per worker)
-   - Cache lookup: ~microseconds
-   - Cache lifetime: worker process lifetime
-
-3. **Wasmtime Engine** — shared per worker process
-   - `consume_fuel = True` — enables fuel-based CPU budgeting
-   - `max_wasm_stack = 1MB` — prevents stack overflow
-
-4. **Fresh Store** — created per execution
-   - Fresh fuel budget: `store.add_fuel(FUEL_PER_STEP = 10,000,000)`
-   - Fresh memory: no state leakage between executions
-   - No shared state between different pipeline runs
-
-5. **Empty Linker** — no WASI added
-   - `linker = wasmtime.Linker(store.engine)`
-   - No `linker.define_wasi()` call — this is the security boundary
-
-6. **Instantiate module**
-   - `instance = linker.instantiate(store, module)`
-   - If the module imports any host function → instantiation fails (TrapError)
-
-7. **Row-by-row execution**
-   ```
-   For each row in the Arrow Table:
-     a. Convert columns to f64 arguments
-     b. store.add_fuel(FUEL_PER_ROW = 1,000)
-     c. wasm_func = instance.exports(store)["compute_risk"]
-     d. result = wasm_func(store, age, income, credit)
-     e. If TrapError (fuel exhausted, divide-by-zero):
-        result = None (not a crash — continue to next row)
-     f. Append result to output column
-   ```
-
-8. **Output** — Arrow Table with new `output_column` added
-
----
-
-## Module Cache
-
-| Property | Value |
-|----------|-------|
-| Key | `SHA256(wasm_bytes)` |
-| Value | Compiled Wasmtime `Module` object |
-| Lifetime | Worker process lifetime |
-| Compilation time | ~50-200ms (done once) |
-| Cache lookup | ~microseconds |
-| Amortized cost | Negligible for repeated executions |
-
----
-
-## Fuel Budget
-
-| Budget | Value | Purpose |
-|--------|-------|---------|
-| `FUEL_PER_STEP` | 10,000,000 | Total fuel for entire step execution |
-| `FUEL_PER_ROW` | 1,000 | Fuel added before each row call |
-| Total rows per step | ~10,000 max | Before fuel exhaustion |
-
-When fuel runs out:
-- Wasmtime raises a `TrapError`
-- The row result is set to `None` (not a crash)
-- Execution continues to the next row
-- This prevents infinite loops from hanging the pipeline
-
----
-
-## Validation
-
-At upload time, the Wasm module is validated:
-
-1. **Compile check** — Wasmtime compiles the module
-2. **Instantiation check** — Module instantiates with empty Linker
-3. **Export check** — Lists exported functions, validates signatures
-4. **Function signature check** — Only f64 arguments and return values allowed
-5. **No WASI check** — Module should not require WASI imports
-
-If any check fails, the upload is rejected with a descriptive error.
-
----
-
-## Key Source Files
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `backend/execution/wasm_executor.py` | 273 | WasmExecutor class |
-| `backend/routers/wasm.py` | 342 | Upload, validation, listing endpoints |
-| `backend/execution/wasm_validator.py` | — | Module validation |
-| `backend/models/__init__.py` | 792 | WasmModule model |
+| File | Purpose |
+|------|---------|
+| `backend/execution/wasm_executor.py` | Engine, cache, fuel, per-row calls |
+| `backend/routers/wasm.py` | Validate/upload/list/get/delete endpoints |
+| `backend/models/__init__.py` | `WasmModule` model |

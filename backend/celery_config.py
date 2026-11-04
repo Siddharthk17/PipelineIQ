@@ -23,7 +23,6 @@ task_routes = {
     "tasks.profile_file": {"queue": "bulk"},
     "tasks.call_gemini": {"queue": "gemini"},
     "tasks.generate_pipeline_description": {"queue": "gemini"},
-    "tasks.execute_scheduled_pipeline": {"queue": "bulk"},
     "tasks.run_streaming_pipeline": {"queue": "streaming"},
     "tasks.deliver_webhook": {"queue": "critical"},
     "tasks.maintain_storage": {"queue": "bulk"},

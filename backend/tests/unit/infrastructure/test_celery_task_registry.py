@@ -14,7 +14,6 @@ from backend.tasks import notification_tasks as notification_tasks
 from backend.tasks import pipeline_tasks as pipeline_tasks
 from backend.tasks import profiling as profiling
 from backend.tasks import schedule_tasks as schedule_tasks
-from backend.tasks import scheduled_pipeline as scheduled_pipeline
 from backend.tasks import storage_maintenance as storage_maintenance
 from backend.tasks import streaming_pipeline as streaming_pipeline
 from backend.tasks import webhook_tasks as webhook_tasks
@@ -25,7 +24,6 @@ _REGISTERED_TASK_MODULES = (
     pipeline_tasks,
     profiling,
     schedule_tasks,
-    scheduled_pipeline,
     storage_maintenance,
     streaming_pipeline,
     webhook_tasks,

@@ -2,17 +2,17 @@
 
 ## Environment
 
-**Platform:** Civo k3s (lightweight Kubernetes)  
-**Cluster:** pipelineiq-prod  
-**Namespace:** pipelineiq  
-**Registry:** ghcr.io/siddharthk17/pipelineiq-backend  
+**Platform:** Civo k3s (lightweight Kubernetes)
+**Cluster:** pipelineiq-prod
+**Namespace:** pipelineiq
+**Registry:** ghcr.io/siddharthk17/pipelineiq-backend
 
 ### Service URLs
 
 | Service | URL | Access |
 |---|---|---|
 | API | https://pipelineiq-api.onrender.com | Public (TLS) |
-| Frontend | https://pipelineiq.vercel.app | Vercel (external) |
+| Frontend | https://pipeline-iq0.vercel.app | Deployed client (host allow-listed in `CORS_ORIGINS`/`TRUSTED_HOSTS`) |
 | MinIO Console | Internal | kubectl port-forward |
 | Jaeger UI | Internal | kubectl port-forward |
 
@@ -35,7 +35,7 @@
 | pipelineiq-api | 2 (HPA: 2-5) | FastAPI via Gunicorn/Uvicorn |
 | sse-service | 1 | Dedicated SSE streaming endpoint |
 | worker-critical | 1 | Critical priority queue, concurrency=2 |
-| worker-default | 2 | Default queue, concurrency=4 |
+| worker-default | 2 | Default + critical overflow, concurrency=3 |
 | worker-bulk | 2 | Bulk processing queue, concurrency=2 |
 | worker-gemini | 1 | Gemini AI queue, concurrency=1 |
 | worker-streaming | 1 | Redpanda streaming queue, concurrency=8 |
@@ -236,9 +236,11 @@ kubectl config use-context pipelineiq-prod
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/configmap.yaml
 
-kubectl create secret generic pipelineiq-secrets \
-  --namespace=pipelineiq \
-  --from-env-file=.env.production
+# Secrets ship only as k8s/secrets.yaml.template. Copy it, fill in values,
+# apply once, and never commit the filled file:
+cp k8s/secrets.yaml.template /tmp/pipelineiq-secrets.yaml
+# edit /tmp/pipelineiq-secrets.yaml, then:
+kubectl apply -f /tmp/pipelineiq-secrets.yaml -n pipelineiq
 
 kubectl apply -f k8s/postgres/
 kubectl apply -f k8s/redis/

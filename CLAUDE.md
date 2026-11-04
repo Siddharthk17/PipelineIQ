@@ -25,10 +25,10 @@ Browser → Nginx `:80` → api `:8000`, sse-service `:8001`, frontend `:3000`, 
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, …), subject ≤72 chars, no force-push to shared branches.
-- `APP_VERSION` lives in 8 files (`backend/config.py`, `frontend/lib/constants.ts`, `.env.example`, `docker-compose.yml` ×2, `k8s/configmap.yaml`, `render.yaml`, CI ×2) — never bump it by hand; release-please owns it.
+- `APP_VERSION` lives in 7 files (`backend/config.py`, `frontend/lib/constants.ts`, `.env.example`, `docker-compose.yml`, `k8s/configmap.yaml`, `render.yaml`, `.github/workflows/ci.yml`) — never bump it by hand; release-please owns it.
 - Backend: typed dataclasses, dispatch dicts, dependency injection. `backend/pipeline/steps/__init__.py` re-exports the executor surface — export new symbols there.
 - Auth is JWT in the `pipelineiq_token` HttpOnly cookie plus Bearer support; revocation is Redis-backed and fail-closed. `lib/api.ts` holds no token client-side.
-- `transform` parses but has no batch executor (raises at runtime); `stream_consume` runs only in the streaming daemon. Do not present either as working batch steps.
+- `transform` parses but is rejected at validation with a 400 (no batch executor exists); `stream_consume` runs only in the streaming daemon and is rejected at schedule creation. Do not present either as working batch steps.
 - Secrets never touch git (`.env` is ignored and `chmod 600`). Public demo creds are `demo@pipelineiq.app` / `Demo1234!` by design.
 - Docs rulebook: every statement verifiable in code, exact commands only, no invented metrics, no `docs/adr/` (deleted by maintainer — record decisions in the PR).
 - After backend changes: run the touched pytest files; after frontend changes: `tsc --noEmit` + relevant Vitest specs. Always `git status` before staging, and stage explicitly.
