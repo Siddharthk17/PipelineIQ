@@ -1017,5 +1017,3 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, test gates, and conventions, 
 ## License
 
 [Apache 2.0](LICENSE) — Copyright 2026 Siddharth
-
-
