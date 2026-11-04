@@ -1,0 +1,146 @@
+name: Supply Chain Security
+
+# Dependency + container + license scanning. Runs weekly and on every PR
+# touching manifests or Dockerfiles. See CONTRIBUTING.md "Dependency Policy".
+#
+# Gate philosophy (documented, deliberate):
+# - pip-audit, license allowlist, hadolint: BLOCKING. Deterministic, no
+#   known exceptions — a failure here is a real problem, fix forward.
+# - npm audit: fails only on CRITICAL. Two HIGH advisories in the Next.js /
+#   PostCSS chain are knowingly tracked for the Next 16 major upgrade
+#   (see CHANGELOG 12.7.3 and SECURITY.md); they must not go red silently,
+#   so the full report is uploaded as an artifact on every run.
+# - Trivy filesystem scan: SARIF to the Security tab (report-only). It
+#   graduates to blocking once the baseline is clean for 4 consecutive weeks.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "backend/requirements.txt"
+      - "package-lock.json"
+      - "frontend/package*.json"
+      - "y-websocket/package*.json"
+      - "**/Dockerfile"
+      - "docker-compose.yml"
+      - ".hadolint.yaml"
+  schedule:
+    - cron: "30 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  pip-audit:
+    name: pip-audit (backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit pinned backend requirements
+        run: pip-audit --requirement backend/requirements.txt --disable-pip --desc
+
+  license-allowlist:
+    name: License allowlist (no copyleft)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pip-licenses
+        run: pip install pip-licenses
+      - name: Fail on GPL/AGPL/LGPL/EPL in the backend tree
+        run: |
+          pip install -r backend/requirements.txt -q
+          pip-licenses --format=plain --from=mixed \
+            --fail-on="GPL;GPLv2;GPLv3;AGPL;AGPLv3;LGPL;LGPLv2;LGPLv3;EPL;MPL" \
+            | tee licenses.txt
+      - name: Upload license inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-licenses
+          path: licenses.txt
+          retention-days: 30
+
+  npm-audit:
+    name: npm audit (critical gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install workspaces (lockfile-frozen)
+        run: npm ci
+      - name: Audit — fail only on CRITICAL
+        run: |
+          npm audit --audit-level=critical
+      - name: Full audit report (tracked HIGHs live here)
+        if: always()
+        run: |
+          npm audit --json > npm-audit.json || true
+          echo "## npm audit summary" >> "$GITHUB_STEP_SUMMARY"
+          node -e 'const r=require("./npm-audit.json"); const v=(r.metadata&&r.metadata.vulnerabilities)||{}; console.log(Object.keys(v).map(function(k){return "- "+k+": "+v[k];}).join("\n"))' >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload full audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: npm-audit.json
+          retention-days: 30
+
+  hadolint:
+    name: hadolint (Dockerfiles)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: backend/Dockerfile
+          config: .hadolint.yaml
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: frontend/Dockerfile
+          config: .hadolint.yaml
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: nginx/Dockerfile
+          config: .hadolint.yaml
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: y-websocket/Dockerfile
+          config: .hadolint.yaml
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: pgbouncer/Dockerfile
+          config: .hadolint.yaml
+
+  trivy-fs:
+    name: Trivy filesystem scan (report-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan repo for vulns + misconfigurations
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: "0"
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-fs

@@ -180,28 +180,31 @@ grep '^PUBLIC_HOST=' .env
 - To set it: edit `.env` (`PUBLIC_HOST=1.2.3.4`, no scheme, no trailing slash), then re-run `./scripts/bootstrap.sh` (it preserves your value and re-merges `TRUSTED_HOSTS`), then restart the proxy: `docker compose up -d --force-recreate nginx grafana`.
 - The current value is always honored — the script never overwrites a real `PUBLIC_HOST`.
 
-## 10. Step 8 — Enable AI features (optional, recommended)
+## 10. Step 8 — Enable AI features and error tracking (optional, recommended)
 
-AI generation/repair/autocomplete need a Gemini key; without it the API returns a clear `503` (by design, not a bug).
+AI generation/repair/autocomplete need a Gemini key; without it the API returns a clear `503` (by design, not a bug). Sentry is the same shape: empty DSN means disabled, set DSN means stack traces in Sentry for the API and all Celery workers.
 
-1. Create a key at [Google AI Studio](https://aistudio.google.com/apikey) (free tier is fine).
-2. Set it on the VM **without ever printing it** (input is hidden; nothing lands in shell history as a value):
+1. Create keys: [Google AI Studio](https://aistudio.google.com/apikey) (free tier is fine) and [Sentry](https://sentry.io) (free tier is fine; create a FastAPI project and copy its DSN).
+2. Set them on the VM **without ever printing them** (input is hidden; nothing lands in shell history as a value):
 
 ```bash
 cd ~/PipelineIQ
 read -rsp "Paste NEW Gemini key: " K; echo
-python3 - "$K" <<'PY'
+read -rsp "Paste Sentry DSN (empty to skip): " S; echo
+python3 - "$K" "$S" <<'PY'
 import sys
 from pathlib import Path
-k = sys.argv[1].strip()
+k, s = sys.argv[1].strip(), sys.argv[2].strip()
 p = Path(".env"); lines = p.read_text().splitlines()
-out = [l for l in lines if not l.startswith("GEMINI_API_KEY=")]
+out = [l for l in lines if not l.startswith(("GEMINI_API_KEY=", "SENTRY_DSN="))]
 out.append(f"GEMINI_API_KEY={k}")
+if s:
+    out.append(f"SENTRY_DSN={s}")
 p.write_text("\n".join(out) + "\n")
-print("written, key-length:", len(k))
+print("written, gemini key-length:", len(k), "| sentry:", "set" if s else "skipped")
 PY
-unset K
-docker compose up -d --force-recreate worker-gemini api
+unset K S
+docker compose up -d --force-recreate worker-gemini api worker-critical worker-default worker-bulk worker-streaming celery-beat sse-service
 sleep 20
 ```
 
@@ -213,9 +216,9 @@ curl -s -X POST http://localhost/api/ai/generate -H 'Content-Type: application/j
 unset TOKEN
 ```
 
-`200` with YAML = AI works. `503 AI features are unavailable` = the key isn't in the containers (repeat step 2 and confirm the recreates happened).
+`200` with YAML = AI works. `503 AI features are unavailable` = the key isn't in the containers (repeat step 2 and confirm the recreates happened). Sentry: trigger any 500 path (or check Sentry > Issues after the next real error) — with an empty DSN nothing is sent, by design.
 
-> If a key is ever pasted in chat, logs, or screenshots, **delete it in AI Studio immediately** and create a new one — treat it as compromised.
+> If a key is ever pasted in chat, logs, or screenshots, **revoke it at the source immediately** and create a new one — treat it as compromised.
 
 ## 11. Step 9 — Verify end to end
 
@@ -266,7 +269,49 @@ docker compose down --volumes           # ⚠️ DESTROYS all data (DB, MinIO, R
 Backups (do this before anything risky):
 
 ```bash
-docker compose exec postgres pg_dump -U "$POSTGRES_USER" pipelineiq | gzip > "/tmp/pg-$(date +%F).sql.gz"
+cd ~/PipelineIQ
+make backup                                   # pg_dump (-Fc) + gzip into ./backups/, 7-day retention
+ls -la backups/
+```
+
+Restore (destructive — replaces the live database; practice on a scratch box first):
+
+```bash
+cd ~/PipelineIQ
+make restore BACKUP=backups/pg-<date>.sql.gz  # stops writers, drops, loads, migrates, restarts, verifies
+```
+
+The dump covers PostgreSQL only. MinIO objects (uploads, pipeline outputs,
+WASM modules) are not in `pg_dump` — mirror buckets separately if they matter:
+
+```bash
+docker compose exec minio mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+docker compose exec minio mc mirror --overwrite local/pipelineiq-uploads /tmp/minio-mirror/uploads
+```
+
+Full drill procedure (backup → restore → verify) lives in `RUNBOOK.md` under Disaster Recovery.
+
+### Seed the public demo (supervised first run)
+
+The landing page and demo account only impress with data in them.
+`backend/scripts/seed_showcase.py` fills the demo account with 5 datasets,
+50 pipelines covering every step type, and mixed outcomes:
+
+```bash
+cd ~/PipelineIQ
+docker compose exec -T api python -m backend.scripts.seed_showcase
+```
+
+Expected output: `Showcase seeded: 50 runs (10 failed, 5 healed), 5 files, 4 schedules.`
+Verify before trusting the nightly cron to it: open Runs, Files, Schedules in
+the browser — all populated, failures visible.
+
+Re-running is idempotent (existing names are skipped). `--reset` wipes ONLY
+demo-owned runs/schedules/files and re-seeds — the nightly cron at 02:30 uses
+exactly this flag, so this supervised run is the same code path the cron takes:
+
+```bash
+docker compose exec -T api python -m backend.scripts.seed_showcase --reset
 ```
 
 ## 14. Updating without breaking things
@@ -376,6 +421,7 @@ Missing names (left side only) go in `.env`; extra names on the right are new ex
 - [ ] `.env` is `chmod 600` and git-ignored. Never paste secrets in chat, issues, logs, or screenshots (revoke + rotate immediately if one leaks).
 - [ ] `TRUSTED_HOSTS` lists only your hosts — do not set it to `*`.
 - [ ] Rotate the demo password before any private showing where visitors shouldn't mutate shared state — or better, reseed nightly.
+- [ ] For private showings, prefer a **viewer account over sharing the admin demo login**: register a second user (first account stays admin, later ones are viewers), hand out the viewer credentials, and keep `demo@pipelineiq.app` for yourself. Viewers can run and inspect but cannot manage users or schedules. The nightly reseed still restores anything guests create.
 
 ## 18. Costs (new-account free trial)
 
@@ -393,7 +439,8 @@ A 90-day $300 trial comfortably covers months of demo hosting on one VM. Biggest
 ## 19. Going further (when you're ready)
 
 - **Custom domain + HTTPS** — the single biggest flagship upgrade after this guide (also unlocks Secure cookies and HSTS).
-- **Nightly demo reseed** — a cron job running `seed_demo` on a schedule so visitors always land on a alive, pristine demo.
-- **Backups** — nightly `pg_dump` + MinIO bucket sync to Cloud Storage.
+- **Nightly demo reseed** — a cron job running the showcase seed on a schedule so visitors always land on an alive, pristine demo (already installed by bootstrap; verify with `crontab -l | grep pipelineiq`).
+- **Backups** — nightly `pg_dump` + MinIO bucket sync to Cloud Storage. Prove restores with `make restore BACKUP=...` on a scratch box before you need it (see RUNBOOK.md Disaster Recovery).
+- **External uptime monitor** — `.github/workflows/uptime.yml` probes the public URL every 5 minutes once you set the `PRODUCTION_URL` repository secret (Actions → repo Settings → Secrets → Actions). For paging (not just a red badge), point Better Stack or Uptime Kuma at the same `/health` endpoint.
 - **Status page** — a tiny public `/health`-based status check visitors can see.
-- **Release discipline** — tag versions (`git tag v12.8.0`), write CHANGELOG entries, keep CI green; the README badges already reflect it.
+- **Release discipline** — Release-please tags versions and publishes GitHub Releases from conventional commits; keep CI green and the badges reflect it.

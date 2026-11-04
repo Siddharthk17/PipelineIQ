@@ -3,6 +3,28 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [12.8.0]
+
+### Added
+- Public-by-default reverse proxy: `/docs`, `/redoc`, `/openapi.json`, `/flower/`, `/grafana/`, `/prometheus/`, `/jaeger/`, and `/yjs/` (collaboration WebSocket) are all reachable on port 80 with matching service flags (`--url_prefix`, `--web.route-prefix`, `--query.base-path`).
+- Same-origin public URLs: Jaeger trace links and the Yjs socket URL now derive from the page host (`frontend/lib/publicUrls.ts`), with `NEXT_PUBLIC_*` overrides and localhost dev fallback — no more hardcoded `localhost:16686`/`localhost:1234` on deployments.
+- Showcase seed (`backend/scripts/seed_showcase.py`): 5 CSV datasets and 50 parser-validated pipelines covering every step type, with mixed outcomes (completed/failed/healed/running/pending/cancelled), step results, schedules, and versions. `--reset` wipes demo-owned data only.
+- Public landing page for logged-out visitors with live-demo, register, and API-docs entry points.
+- One-command fresh-VM deploy: `scripts/bootstrap.sh` (`make setup && make up`) generates all secrets, detects the public host, wires `TRUSTED_HOSTS`, enables `vm.overcommit_memory`, and installs nightly backup + demo-reseed cron jobs. `DEPLOYMENT_GUIDE.md` covers the full GCP flow.
+- Nightly operations: `scripts/backup.sh` (pg_dump, 7-day retention) and `scripts/demo-reseed.sh`, plus `make reseed` / `make backup` targets.
+- Open-source community files: `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `SUPPORT.md`, issue/PR templates, `CODEOWNERS`, and Dependabot weekly grouped updates with an explicit `kombu` pin policy.
+- Live deployment screenshots in the README (login, dashboard, API docs, Jaeger).
+
+### Changed
+- AI error handling no longer masks failures with "body stream already read" — error bodies are read once, then interpreted.
+- Demo account protection is now time-based (nightly reseed) instead of a login wall.
+
+### Security
+- Nginx `limit_req` throttling on login-free public routes (docs family 20r/s, Jaeger/Prometheus/Flower 5r/s + bursts, HTTP 429 on excess); documented in `SECURITY.md`.
+
+### Fixed
+- CI reliability: redis-py 6.4 floor for kombu, `pgsty/minio` mirror, prefixed Prometheus ready probe, streaming-flush retries, IPv4 Kafka advertisement, Playwright runner pinned to `ubuntu-24.04`.
+
 ## [12.7.3]
 
 ### Fixed

@@ -152,6 +152,25 @@ kubectl get secret pipelineiq-secrets -n pipelineiq -o jsonpath='{.data}' | pyth
 
 ## Disaster Recovery
 
+### PostgreSQL backup → restore drill
+
+Backups are taken nightly by `scripts/backup.sh` (cron 02:00, 7-day retention,
+`./backups/pg-<date>.sql.gz`). A backup you have never restored is a rumor —
+run this drill on a scratch box quarterly:
+
+```bash
+cd ~/PipelineIQ
+make backup && ls -la backups/            # take a fresh backup
+make restore BACKUP=backups/<file>.sql.gz # stops writers, drops, loads, migrates, restarts, verifies
+make verify                                # full end-to-end smoke test
+```
+
+What `make restore` does: stops api/workers/beat/sse/flower, terminates backend
+connections, drops + recreates the database, loads the dump with
+`ON_ERROR_STOP=1`, runs `alembic upgrade head` (dump may predate the schema),
+restarts the stack, and checks `/health`. MinIO objects are NOT in `pg_dump` —
+mirror buckets separately if uploads/outputs matter (see DEPLOYMENT_GUIDE §13).
+
 ### PostgreSQL pod crashed
 
 1. Check the PVC still exists: `kubectl get pvc -n pipelineiq`

@@ -3,7 +3,7 @@ services:
   # On the Docker host, run: sysctl -w vm.overcommit_memory=1
   # (persist via /etc/sysctl.conf) to avoid Redis background-save failures.
   redis-overcommit-note:
-    image: alpine:3.19
+    image: alpine:3.20.3
     container_name: pipelineiq-redis-overcommit-note
     command: ["sh", "-c", "echo 'REMINDER: set vm.overcommit_memory=1 on the Docker host (sysctl -w vm.overcommit_memory=1)'"]
     restart: "no"
@@ -11,7 +11,7 @@ services:
       - pipelineiq-network
 
   postgres:
-    image: postgres:15-alpine
+    image: postgres:15.12-alpine
     container_name: pipelineiq-postgres
     command: >
       postgres
@@ -48,7 +48,7 @@ services:
           - db
 
   postgres-replica:
-    image: postgres:15-alpine
+    image: postgres:15.12-alpine
     container_name: pipelineiq-db-replica
     entrypoint: ["/bin/sh", "/etc/postgres-replica/replica-entrypoint.sh"]
     environment:
@@ -623,7 +623,7 @@ services:
       - pipelineiq-network
 
   redis-broker:
-    image: redis:7.4-alpine
+    image: redis:7.4.2-alpine
     container_name: pipelineiq-redis-broker
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
@@ -651,7 +651,7 @@ services:
       - pipelineiq-network
 
   redis-pubsub:
-    image: redis:7.4-alpine
+    image: redis:7.4.2-alpine
     container_name: pipelineiq-redis-pubsub
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
@@ -678,7 +678,7 @@ services:
       - pipelineiq-network
 
   redis-cache:
-    image: redis:7.4-alpine
+    image: redis:7.4.2-alpine
     container_name: pipelineiq-redis-cache
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
@@ -711,12 +711,17 @@ services:
       - pipelineiq-network
 
   y-websocket:
-    image: node:20-alpine
+    image: node:20.19.0-alpine
     container_name: pipelineiq-y-websocket
     working_dir: /app
+    # Named node_modules volume: runtime `npm install` writes here instead of
+    # the host bind-mount, so restarts are fast and never depend on host
+    # ownership. (Compose keeps the bind-mount dev pattern, which needs root;
+    # production builds from y-websocket/Dockerfile run as `node`.)
     command: sh -c "npm install --omit=dev && node server.js"
     volumes:
       - ./y-websocket:/app
+      - yjs_node_modules:/app/node_modules
     ports:
       - "127.0.0.1:1234:1234"
     environment:
@@ -738,7 +743,7 @@ services:
       - pipelineiq-network
 
   redis-yjs:
-    image: redis:7.4-alpine
+    image: redis:7.4.2-alpine
     container_name: pipelineiq-redis-yjs
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
@@ -791,12 +796,12 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: "/api/v1"
-        NEXT_PUBLIC_APP_VERSION: "${APP_VERSION:-12.7.3}"
+        NEXT_PUBLIC_APP_VERSION: "${APP_VERSION:-12.8.0}"
         NEXT_PUBLIC_YJS_URL: "${NEXT_PUBLIC_YJS_URL:-}"
     container_name: pipelineiq-frontend
     environment:
       - NEXT_PUBLIC_API_URL=/api/v1
-      - NEXT_PUBLIC_APP_VERSION=${APP_VERSION:-12.7.3}
+      - NEXT_PUBLIC_APP_VERSION=${APP_VERSION:-12.8.0}
       - NEXT_PUBLIC_YJS_URL=${NEXT_PUBLIC_YJS_URL:-}
       - AUTH_JWT_SECRET=${SECRET_KEY}
     depends_on:
@@ -904,6 +909,7 @@ services:
     container_name: pipelineiq-prometheus
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -950,6 +956,39 @@ services:
     networks:
       - pipelineiq-network
 
+  loki:
+    image: grafana/loki:2.9.8
+    container_name: pipelineiq-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - loki_data:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    container_name: pipelineiq-promtail
+    volumes:
+      - ./promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/promtail.yml
+    depends_on:
+      loki:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pipelineiq-network
+
   grafana:
     image: grafana/grafana:10.2.0
     container_name: pipelineiq-grafana
@@ -963,6 +1002,14 @@ services:
       - GF_SERVER_ROOT_URL=http://${PUBLIC_HOST:-localhost}/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GF_DATABASE_WAL=true
+      # Outgoing alert mail reuses the app's SMTP settings (empty = alerts
+      # evaluate and stay visible in Grafana > Alerting, but no mail sent).
+      - GF_SMTP_ENABLED=${SMTP_ENABLED:-false}
+      - GF_SMTP_HOST=${SMTP_HOST:-}
+      - GF_SMTP_USER=${SMTP_USER:-}
+      - GF_SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - GF_SMTP_FROM_ADDRESS=${SMTP_FROM:-}
+      - GF_SMTP_FROM_NAME=PipelineIQ Alerts
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
@@ -1113,8 +1160,10 @@ volumes:
   postgres_replica_data_v2:
   redis_cache_data:
   redis_yjs_data:
+  yjs_node_modules:
   minio_data:
   prometheus_data:
+  loki_data:
   grafana_data:
   redpanda_data: {}
 

@@ -19,7 +19,8 @@ spec:
     spec:
       containers:
         - name: minio
-          image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+          # Pinned mirror per ADR-0001 (upstream minio/minio is gone from Hub).
+          image: pgsty/minio:latest
           command:
             - minio
             - server

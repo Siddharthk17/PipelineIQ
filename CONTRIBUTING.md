@@ -15,6 +15,8 @@ By participating, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md
 - [End-to-End Tests](#end-to-end-tests)
 - [Commit Conventions](#commit-conventions)
 - [Branching and Pull Requests](#branching-and-pull-requests)
+- [Release Process](#release-process)
+- [Contributor Ladder](#contributor-ladder)
 - [Project Structure](#project-structure)
 - [Getting Help](#getting-help)
 
@@ -155,6 +157,46 @@ E2E specs assume a running stack (`E2E_BASE_URL`, `E2E_API_URL` for remote runs;
 3. Run the gates locally: backend pytest file(s) + `tsc --noEmit` + relevant Vitest specs. Full-suite runs are slow (bcrypt rounds); at minimum run the suites touching your change plus `backend/tests/unit/api/test_auth.py` for auth-adjacent work.
 4. Open a PR against `main` using the template. Fill in **Summary, Root cause, Change, Verification** — PRs without verification steps will be sent back.
 5. Keep the PR small and single-purpose. CI must be green; do not merge with failing jobs.
+
+### Branch Protection (`main`)
+
+`main` is protected: green CI is required, force-pushes are blocked, and at least one review is required before merge. If you push straight to `main` and it is rejected, that is the protection working — open a branch + PR instead. The maintainer applies the policy once per repository (it is a GitHub setting, not a file in this repo):
+
+```bash
+gh api repos/Siddharthk17/PipelineIQ/branches/main/protection -X PUT --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["Backend Tests", "Frontend TypeScript + Tests + Build", "Code Quality Check", "Docker Compose Smoke Test"]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+JSON
+```
+
+### Release Process
+
+Do not bump versions by hand. [Release-please](https://github.com/googleapis/release-please) owns `APP_VERSION`:
+
+1. Land conventional commits on `main` (`feat:`/`fix:` drive SemVer).
+2. Release-please opens a `chore: release X.Y.Z` PR (see `release-please-config.json` / `.release-please-manifest.json`).
+3. Merging it tags `vX.Y.Z` and publishes the GitHub Release with generated notes.
+4. `.github/workflows/release.yml` then verifies the tag is version-consistent across `backend/config.py`, `frontend/lib/constants.ts`, and `.env.example`.
+
+For the manual path (no automation available): update `APP_VERSION` in `backend/config.py`, `frontend/lib/constants.ts`, `.env.example`, `docker-compose.yml`, `k8s/configmap.yaml`, `render.yaml`, and both CI `APP_VERSION` entries; add a `CHANGELOG.md` entry; then `git tag vX.Y.Z && git push origin vX.Y.Z` and publish the GitHub Release from the tag.
+
+### Contributor Ladder
+
+- **Contributor**: lands a first merged PR (any size — docs count).
+- **Regular**: 3+ merged PRs with green CI and template-complete descriptions; may review others' PRs.
+- **Maintainer**: sustained quality + ownership of an area (backend engine, frontend, infra, QA); gets merge rights and helps cut releases. Ask in an issue when you feel ready — there is no election, just consistent work.
 
 ## Project Structure
 

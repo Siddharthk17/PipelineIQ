@@ -1,6 +1,7 @@
 {
   "name": "pipelineiq-y-websocket",
   "version": "1.0.0",
+  "license": "Apache-2.0",
   "description": "Y-WebSocket server for PipelineIQ multiplayer collaboration",
   "main": "server.js",
   "scripts": {

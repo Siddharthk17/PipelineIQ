@@ -1358,7 +1358,7 @@ Full list in `.env.example` (108 variables). Key variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `APP_NAME` | `PipelineIQ` | Application name |
-| `APP_VERSION` | `12.7.3` | Application version |
+| `APP_VERSION` | `12.8.0` | Application version |
 | `DEBUG` | `false` | Enable debug mode |
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG/INFO/WARNING/ERROR) |
 | `ENVIRONMENT` | `development` | Runtime environment |

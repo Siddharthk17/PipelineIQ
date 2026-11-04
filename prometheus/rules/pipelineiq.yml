@@ -1,0 +1,44 @@
+groups:
+  - name: pipelineiq-golden-signals
+    interval: 1m
+    rules:
+      - alert: PipelineFailedRunSpike
+        expr: |
+          (
+            sum(rate(pipelineiq_pipeline_runs_total{status="FAILED"}[5m]))
+            /
+            clamp_min(sum(rate(pipelineiq_pipeline_runs_total[5m])), 0.0001)
+          ) > 0.25
+        for: 10m
+        labels:
+          severity: critical
+          service: pipelineiq-api
+        annotations:
+          summary: "Failed pipeline runs above 25% for 10 minutes"
+          description: "Failed/total run ratio exceeded 0.25 over the last 5m window, sustained 10m. Check worker logs and the failures ledger."
+          runbook: "DEPLOYMENT_GUIDE.md §16 — check celery workers, Redis, then recent deploys."
+
+      - alert: CeleryQueueDepthHigh
+        expr: max(pipelineiq_celery_queue_depth) > 100
+        for: 10m
+        labels:
+          severity: warning
+          service: celery
+        annotations:
+          summary: "Celery queue depth above 100 for 10 minutes"
+          description: "Workers are not draining the queue. Check worker health, concurrency, and broker latency before scaling."
+
+      - alert: ApiHigh5xxRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total[5m])), 0.0001)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: pipelineiq-api
+        annotations:
+          summary: "API 5xx rate above 5% for 5 minutes"
+          description: "One in twenty API responses is a server error. Check api logs, DB/pgBouncer, and Redis health immediately."
