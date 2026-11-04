@@ -17,7 +17,6 @@ Time budget: ~10 min of your time + 15–30 min of machine time on first boot
 > `<ZONE>` its zone (e.g. `asia-south1-a`), `<PROJECT>` your GCP project.
 > Replace them verbatim in every command.
 
----
 
 ## Table of Contents
 
@@ -41,7 +40,6 @@ Time budget: ~10 min of your time + 15–30 min of machine time on first boot
 18. [Costs (new-account free trial)](#18-costs-new-account-free-trial)
 19. [Going further (when you're ready)](#19-going-further-when-youre-ready)
 
----
 
 ## 1. What you get
 
