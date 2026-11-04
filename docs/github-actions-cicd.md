@@ -1,158 +1,62 @@
-# 15. GitHub Actions CI/CD Pipeline
+# CI/CD Pipeline
 
-> Two-workflow CI/CD: parallel testing on every push, zero-downtime deployment on main.
-
-## Architecture Diagram
+Seven GitHub Actions workflows. CI (`ci.yml`) validates every push and PR; `deploy.yml` ships `main` to Civo k3s; `cd.yml` triggers Render; `release.yml`, `uptime.yml`, and `nightly.yml` handle releases, monitoring, and load tests; `security.yml` gates supply chain.
 
 ![GitHub Actions CI/CD Pipeline](diagrams/cicd-pipeline.png)
 
----
+## CI — `ci.yml` (every push and PR)
 
-## Overview
+| Job | Runner / services | Steps |
+|-----|-------------------|-------|
+| Backend Tests | `ubuntu-latest`, `pgvector/pg15` + `redis:7-alpine` | pip install, `alembic upgrade head`, full `pytest tests/` |
+| Frontend | `ubuntu-latest`, Node 20 | `tsc --noEmit`, Vitest, `npm run build` |
+| Code Quality (needs both above) | `ubuntu-latest` | Blocking `ruff check backend/ --select E9,F63,F82`; full Ruff; `tsc`; informational ESLint |
+| Docker Compose Smoke Test (needs the three above) | `ubuntu-latest` | Writes CI `.env`, `sysctl vm.overcommit_memory=1`, `compose up --build`, health → demo login → CSV upload → run → poll to SUCCESS/COMPLETED, then `down --volumes` |
+| Streaming E2E (needs smoke) | `ubuntu-latest` | Full Compose, Redpanda `rpk cluster health` + `worker-streaming` gate, then `tests/e2e/test_week9_streaming_e2e.py` |
+| Playwright E2E (needs backend+frontend) | pinned `ubuntu-24.04` | `playwright install --with-deps chromium` (fallback without `--with-deps`), 4 specs (`01-auth`, `02-file-upload`, `03-pipeline-builder`, `10-templates`) against `PRODUCTION_URL` / `PRODUCTION_API_URL`; `main` pushes and manual dispatch only |
 
-PipelineIQ uses two GitHub Actions workflows: `ci.yml` runs on every push and PR to validate code quality through parallel backend tests, frontend tests, and Dockerfile linting. `deploy.yml` runs only on main branch pushes, building a Docker image, pushing to GHCR, and deploying to the Civo k3s cluster with zero-downtime rolling updates and smoke testing. The deploy workflow uses concurrency groups to cancel in-progress deployments when a new push arrives.
+Note: `alembic upgrade head` in the Backend Tests job currently fails — the history has four heads (`0013`, `0014_otel_and_contracts`, `0016_catalog_indexes`, `k1a2b3c4d5e0`). Until a merge migration lands, the correct target is `alembic upgrade heads`. See [Database](../README.md#database).
 
----
+## Security — `security.yml`
 
-## Workflow 1 — ci.yml (All Pushes and PRs)
+Runs on PRs touching manifests/Dockerfiles, weekly Monday 06:30, and manually: blocking `pip-audit`; fail-closed license check (GPL/AGPL/LGPL/EPL/MPL rejected in the backend tree); npm audit failing only on CRITICAL (full JSON uploaded as an artifact; two HIGHs in the Next/PostCSS chain tracked for the Next 16 upgrade); `hadolint` on all 5 Dockerfiles (`.hadolint.yaml`); Trivy filesystem SARIF to the Security tab (report-only).
 
-### Trigger Conditions
+## Deploy — `deploy.yml` (`main` only, `ubuntu-22.04`)
 
-- Push to ANY branch
-- Pull request targeting main
+`build-and-push`: GHCR via docker/login + metadata actions (`linux/amd64`, GHA cache, tags `sha-*`, `main`, `latest`). `deploy`: dry-run without `KUBE_CONFIG`; otherwise kubectl 1.29 decodes the base64 kubeconfig, rotates `pipelineiq-secrets` (12 `--from-literal` entries), applies `k8s/{namespace,configmap,postgres,redis,minio,backend,workers,y-websocket,ingress}`, sets images on the 8 deployments (api, worker-critical/default/bulk/gemini/streaming/beat, sse), waits on rollouts, then curls `/healthz` (must 200) and `/readyz` (warn-only). Concurrency group `deploy-production` cancels superseded runs.
 
-### Parallel Jobs
+## CD, release, uptime, nightly
 
-| Job | Runner | Services | Steps |
-|-----|--------|----------|-------|
-| `backend-tests` | ubuntu-22.04 | PostgreSQL 15, Redis | pip install, alembic upgrade, pytest with coverage, Codecov upload |
-| `frontend-tests` | ubuntu-22.04 | Node 20 + pnpm | pnpm install --frozen-lockfile, pnpm test, pnpm build, tsc --noEmit |
-| `dockerfile-lint` | ubuntu-22.04 | — | hadolint Dockerfile (failure-threshold: error) |
-| `e2e-tests` | ubuntu-22.04 | — | playwright install chromium, playwright test against production URL |
+- **`cd.yml`**: on green `main` (or manual), `POST`s `RENDER_DEPLOY_HOOK_URL`; exits non-zero naming the secret when unset.
+- **`release.yml`**: `release-please-action@v4` with `release-please-config.json` / `.release-please-manifest.json`. When it creates a release, `verify-tag` checks out the tag and greps `backend/config.py`, `frontend/lib/constants.ts`, and `.env.example` for the tagged version.
+- **`uptime.yml`** (every 5 min): no-op notice without `PRODUCTION_URL`; otherwise probes `/health` (200), `/` (307/200), `/docs` (200), 20 s timeout.
+- **`nightly.yml`** (02:00 UTC): installs k6, runs the three profiles with `--summary-export` to `k6-results/`, uploads the artifact. Requires `PRODUCTION_API_URL` (`LOAD_TEST_TOKEN` for authenticated scenarios).
 
-### Job Dependencies
+## Secrets
 
-```
-backend-tests ─────┐
-                    ├──> e2e-tests (main branch only)
-frontend-tests ────┘
-dockerfile-lint (independent)
-```
+Complete list — every `secrets.*` reference across workflows:
 
-The `e2e-tests` job requires both `backend-tests` and `frontend-tests` to pass first. It only runs on the main branch (not on PRs) to avoid testing against production from feature branches.
-
-### Backend Test Steps
-
-1. **Setup**: ubuntu-22.04 + PostgreSQL 15 service + Redis service
-2. **Install**: `pip install -r requirements.txt`
-3. **Migrate**: `alembic upgrade head`
-4. **Test**: `pytest backend/tests/unit/ --cov=backend --junitxml=results.xml`
-5. **Report**: Upload test artifacts + coverage to Codecov
-
-### Frontend Test Steps
-
-1. **Setup**: ubuntu-22.04 + Node 20 + pnpm
-2. **Install**: `pnpm install --frozen-lockfile`
-3. **Test**: `pnpm test --watchAll=false`
-4. **Build**: `pnpm build`
-5. **Type Check**: `npx tsc --noEmit`
-
-### E2E Test Steps
-
-1. **Prerequisite**: backend-tests + frontend-tests pass
-2. **Browser**: `playwright install chromium`
-3. **Test**: `npx playwright test` against `PRODUCTION_URL`
-
----
-
-## Workflow 2 — deploy.yml (Main Branch Only)
-
-### Trigger Conditions
-
-- Push to main branch only
-- Requires CI to pass first (implicit via branch protection)
-
-### Concurrency Control
-
-```yaml
-concurrency:
-  group: deploy-production
-  cancel-in-progress: true
-```
-
-New pushes cancel any in-progress deployment. Only the latest commit deploys.
-
-### Job: build-and-push
-
-| Step | Action | Details |
-|------|--------|---------|
-| 1 | Login to GHCR | `docker/login-action` with `GITHUB_TOKEN` |
-| 2 | Metadata | `docker/metadata-action` — tags: `sha-abc123`, `main`, `latest` |
-| 3 | Build & Push | `docker/build-push-action` — GHA cache, `linux/amd64`, push to GHCR |
-
-### Job: deploy (needs: build-and-push)
-
-| Step | Action | Details |
-|------|--------|---------|
-| 1 | Setup kubectl | `azure/setup-kubectl v1.29.0` |
-| 2 | Decode kubeconfig | Base64 decode `KUBE_CONFIG` secret |
-| 3 | Rotate secrets | `kubectl delete + create secret pipelineiq-secrets` |
-| 4 | Apply manifests | `kubectl apply -f k8s/` (idempotent) |
-| 5 | Update images | `kubectl set image deployment` for each deployment |
-| 6 | Wait for rollout | `kubectl rollout status --timeout=5m` |
-| 7 | Smoke test | `curl /healthz` + `curl /readyz` → must return 200 |
-
-### Smoke Test
-
-After deployment, the workflow runs two health checks:
-- `GET /healthz` → Simple 200 check (no DB dependency)
-- `GET /readyz` → Checks DB + Redis connectivity, returns 200 only when all dependencies are healthy
-
-If either fails, the deployment is considered failed and GitHub Actions reports the error.
-
----
-
-## Required GitHub Secrets
-
-| Secret | Purpose | Used In |
+| Secret | Used in | Purpose |
 |--------|---------|---------|
-| `KUBE_CONFIG` | kubectl config (base64 encoded) | deploy.yml |
-| `DATABASE_URL` | PostgreSQL connection string | deploy.yml (secret rotation) |
-| `POSTGRES_PASSWORD` | PostgreSQL password | deploy.yml (secret rotation) |
-| `JWT_SECRET` | JWT signing secret | deploy.yml (secret rotation) |
-| `GEMINI_API_KEY` | Google Gemini API key | deploy.yml (secret rotation) |
-| `MINIO_ROOT_USER` | MinIO access key | deploy.yml (secret rotation) |
-| `MINIO_ROOT_PASSWORD` | MinIO secret key | deploy.yml (secret rotation) |
-| `PRODUCTION_URL` | Production frontend URL | ci.yml (e2e tests) |
-| `PRODUCTION_API_URL` | Production API URL | ci.yml (e2e tests) |
+| `PRODUCTION_URL` | ci (e2e), uptime | Public frontend URL |
+| `PRODUCTION_API_URL` | ci (e2e), nightly | Public API URL |
+| `RENDER_DEPLOY_HOOK_URL` | cd | Render backend deploy hook |
+| `KUBE_CONFIG` | deploy | Base64 kubeconfig (absent = dry-run) |
+| `DATABASE_URL`, `DATABASE_WRITE_URL`, `DATABASE_READ_URL` | deploy | Postgres connection strings |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | deploy | Database credentials |
+| `JWT_SECRET`, `SECRET_KEY` | deploy | Yjs key and app secret (`openssl rand -hex 32` / `token_urlsafe(48)`) |
+| `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_FALLBACK_MODELS` | deploy, gemini worker | AI endpoints |
+| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` | deploy | Object storage (S3 keys must match MinIO) |
+| `LOAD_TEST_TOKEN` | nightly | Bearer token for authenticated k6 scenarios |
 
----
+(Same table lives in [.github/SECRETS_REQUIRED.md](../.github/SECRETS_REQUIRED.md) with generation commands.)
 
-## Docker Image Tags
+## Image tags and Dependabot
 
-| Tag Format | Example | Purpose |
-|------------|---------|---------|
-| `sha-{hash}` | `sha-abc123def` | Exact commit traceability |
-| `main` | `main` | Latest main branch build |
-| `latest` | `latest` | Default tag for convenience |
+Images land in `ghcr.io/siddharthk17/pipelineiq-backend` as `sha-<commit>`, `main`, and `latest`. Dependabot proposes weekly grouped bumps (pip `/backend`, npm `/` + `/frontend` + `/y-websocket`, Docker, Actions; Mondays 06:00 Asia/Kolkata; reviewer `Siddharthk17`; max 5, 3 for y-websocket/gha). Merge only on green CI.
 
-Images are stored in GitHub Container Registry: `ghcr.io/USERNAME/pipelineiq-backend:{tag}`
+## Key files
 
----
-
-## Deployment Strategy
-
-1. **Zero-downtime**: Kubernetes rolling update with `maxSurge=1, maxUnavailable=0`
-2. **Secret rotation**: Secrets deleted and recreated on every deploy (ensures fresh credentials)
-3. **Idempotent apply**: `kubectl apply -f k8s/` is safe to run multiple times
-4. **Rollout wait**: `kubectl rollout status --timeout=5m` blocks until all pods are ready
-5. **Smoke test**: HTTP health checks confirm the deployment is serving traffic
-
----
-
-## Key Source Files
-
-- `.github/workflows/ci.yml` — CI workflow definition
-- `.github/workflows/deploy.yml` — CD workflow definition
-- `k8s/` — Kubernetes manifests (namespace, deployments, services, ingress)
-- `Dockerfile` — Container build definition
+- `.github/workflows/ci.yml`, `security.yml`, `deploy.yml`, `cd.yml`, `release.yml`, `uptime.yml`, `nightly.yml`
+- `.github/dependabot.yml`, `release-please-config.json`, `.release-please-manifest.json`
+- `k8s/` (deploy target), `render.yaml` (Render target)

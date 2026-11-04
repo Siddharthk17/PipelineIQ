@@ -1,217 +1,69 @@
-# 2. Data Pipeline Execution Flow
+# Pipeline Execution Flow
+
+Complete lifecycle of one pipeline run, from `POST /api/v1/pipelines/run` to the terminal SSE event. Engine routing is covered in [execution-engine.md](execution-engine.md); schedules in [pipeline-scheduling.md](pipeline-scheduling.md).
 
 ![Data Pipeline Execution Flow](diagrams/data-pipeline-flow.png)
 
----
+## Stage 1 — Submission (browser → API → Redis)
 
-## Overview
+1. Browser sends `POST /api/v1/pipelines/run` with `{yaml_config, name?}` (`RunPipelineRequest`: YAML string, minimum 10 chars; legacy `POST /api/runs` also accepts `yaml`). Auth is the login cookie or a Bearer token, plus a per-pipeline `owner`/`runner` grant (first run grants the caller `owner`).
+2. The API parses and validates the YAML (~17 checks: names, step types with closest-match suggestions, required fields, forward-only references, registered `file_id`s, filter operators, join configs, save-path traversal, validate rules, SQL safety, unsupported `transform` rejection). Validation failures return 422 with field-level errors.
+3. A `pipeline_runs` row is created with status `PENDING`. If any step is `stream_consume`, the run goes to `tasks.run_streaming_pipeline` on the `streaming` queue with status `STREAMING_ACTIVE`; otherwise `execute_pipeline_task` is applied to the `default` queue.
+4. The API returns `202 Accepted` with the `run_id`. The browser opens `GET /api/v1/pipelines/{run_id}/stream` (served by `sse-service`, HMAC-signed events, cached last payload for reconnects).
 
-This document describes the complete lifecycle of a single pipeline run in PipelineIQ — from the moment a user clicks "Run" to the final downloadable output. The flow involves seven distinct components communicating through HTTP, Redis, and PostgreSQL, with real-time progress streamed to the browser via Server-Sent Events.
+## Stage 2 — Worker pickup
 
----
+5. A worker pulls the task (`prefetch_multiplier = 1`, `acks_late`). Only `PENDING` runs execute — a redelivered task for an already-started run is a no-op (idempotency).
+6. Status flips to `RUNNING` with `started_at` and the Celery task id. Redis pub/sub emits `pipeline_started`.
 
-## Complete Execution Flow
+## Stage 3 — Step execution
 
-### Stage 1: Task Submission (Browser → FastAPI → Redis)
+7. **Load** — the file is read from `pipelineiq-uploads` (CSV, JSON, Parquet, XLSX), column policies enforced (`redacted` dropped, others masked unless the caller's role is in `allowed_roles`), profiled columns available for autocomplete, then converted to an Arrow table.
+8. **Processing** — `SmartExecutor` routes each step (Pandas / DuckDB / WASM). After each step: Arrow bus store, registry eviction for consumed tables, step-contract check, `step_results` row, `pipeline_progress:{run_id}` event with rows in/out and duration.
+9. **Column contracts** — inline `validate_step_contract` runs per step if the YAML declares expectations.
+10. **Save** — output serializes to CSV/JSON/Parquet under `pipelineiq-outputs/outputs/{run_id}/{filename}`; the presigned GET URL is valid 48 hours (`DOWNLOAD_URL_EXPIRY`).
+11. **Failure** — any exception becomes a terminal event unless the healing classifier accepts it. `HEALABLE` error types: `ColumnNotFoundError`, `JoinKeyMissingError`, `KeyError`, `MergeError`, `ValueError`, `TypeError`, `AggregationError` (with message-pattern overrides both ways). Anything else fails the run immediately.
 
-1. **Browser sends POST /api/runs** with YAML configuration and file references
-   - Request body: `{yaml: "...", files: [file_id_1, file_id_2, ...]}`
-   - Authentication: JWT token in Authorization header
+## Stage 4 — Healing (only for classified errors)
 
-2. **FastAPI validates the YAML**
-   - `get_parsed_pipeline(yaml)` checks SHA256 cache in Redis first
-   - Cache hit: reuse parsed config (microseconds)
-   - Cache miss: parse YAML, validate step types, check file references, cache result
-   - SHA256 key: `sha256(normalized_yaml)`
+12. Schema diff: old profile (from `schema_snapshots`) vs actual data; rename candidates ranked by Jaro-Winkler (≥ 0.85) times a same-type boost.
+13. Up to `AUTONOMOUS_HEALING_MAX_ATTEMPTS = 3` rounds: build prompt (broken YAML + error + diff) → `tasks.call_gemini` on the `gemini` queue (temperature 0.0) → JSON patch `{confidence, step_name, field, old_value, new_value}` → structure validation → sandbox test (fresh DuckDB `:memory:`, 100 sample rows, never the worker connection) → apply on pass. Events: `healing_started`, `healing_attempt_started`, `healing_attempt_applied`, `healing_complete` / `healing_failed`.
+14. Success resumes the run as `HEALED`; exhaustion marks it `FAILED`.
 
-3. **PostgreSQL: INSERT pipeline_runs**
-   - Record created with `status=pending`
-   - Stores: run_id (UUID), yaml_config, user_id, name
+## Stage 5 — Post-run hooks
 
-4. **Redis Broker: apply_async(execute_pipeline)**
-   - Task submitted to `default` queue
-   - `execute_pipeline_task.apply_async(args=[run_id], queue="default")`
-   - Returns immediately (microseconds)
+15. **Catalog** — `register_run_assets()` upserts files, columns, pipelines, and topics plus edges. It runs in a `try/except` that never fails the run.
+16. **Contracts** — the output table is validated against the active contract. Error-severity violations with `severity: block` set status `CONTRACT_VIOLATION` and push downstream schedules' `next_run_at` forward one hour; warnings only record. Rows land in `contract_violations` (append-only).
+17. **Versions/notifications/webhooks** — the YAML is saved as a `PipelineVersion`; `tasks.deliver_notifications` and `fire_webhooks_for_event()` run on the `critical` queue.
+18. **Cleanup** — the Arrow bus deletes all three tiers for the run inside the task `finally` block.
 
-5. **Browser receives 201 response** with `{run_id}`
-   - Browser opens SSE connection to `/api/sse/pipeline_progress:{run_id}`
+## Stage 6 — Terminal event
 
-### Stage 2: Worker Pickup (Redis → Celery Worker → PostgreSQL)
+19. One of `pipeline_completed`, `pipeline_failed`, or `pipeline_cancelled`, carrying the Gantt payload (per-step timing + trace IDs linking into Jaeger), the download URL when one exists, and step summaries.
 
-6. **Celery worker pulls task** from `redis-broker:6379`
-   - `prefetch_multiplier=1`: gets exactly 1 task
-   - Task NOT acknowledged yet (`acks_late=True`)
+## Run statuses
 
-7. **PostgreSQL: UPDATE status=running**
-   - `pipeline_run.status = PipelineStatus.RUNNING`
-   - `pipeline_run.started_at = utcnow()`
-   - `pipeline_run.celery_task_id = self.request.id`
+| Status | Meaning |
+|--------|---------|
+| `PENDING` | Created, queued |
+| `RUNNING` | Worker executing |
+| `HEALING` | AI patch cycle in progress |
+| `HEALED` | Patch applied, run finished after healing |
+| `COMPLETED` | All steps succeeded |
+| `CONTRACT_VIOLATION` | Blocking contract breach |
+| `FAILED` | Non-healable error or healing exhausted |
+| `CANCELLED` | User cancelled (Celery task revoked) |
+| `TIMEOUT` | Reconciliation found an orphaned running run |
+| `STREAMING_ACTIVE` / `STREAMING_PAUSED` / `STREAMING_STOPPED` | Daemon lifecycle |
 
-8. **Redis PubSub: publish progress event**
-   - Channel: `pipeline_progress:{run_id}`
-   - Payload: `{event_type: "pipeline_started", status: "running"}`
-   - SSE service forwards to browser
+## Key source files
 
-### Stage 3: Step Execution (topological order)
-
-For each step in the pipeline's topological order:
-
-#### Load Step
-9. **MinIO: get_object(file_id)**
-   - Download source file from `pipelineiq-uploads` bucket
-   - Read CSV, Parquet, JSON, or Excel into pandas DataFrame
-
-10. **Column Policy Enforcement**
-    - `apply_column_policies(df, user_role, policies)`
-    - Redacted columns: `df.drop(columns=[col_name])`
-    - Masked columns: apply pattern-based obscuring (email, phone, SSN, credit_card, custom)
-    - Role override: admin users see full unmasked data
-
-11. **Convert to Arrow Table**
-    - `pa.Table.from_pandas(df)` for inter-step transport
-
-#### Processing Steps (SmartExecutor)
-12. **SmartExecutor routes by row count**
-    - `wasm_compute` → WasmExecutor (any row count)
-    - >= 50,000 rows → DuckDB (vectorized SQL)
-    - < 50,000 rows → Pandas (Python operations)
-
-13. **DuckDB Path** (if applicable)
-    - `conn.register(table_alias, arrow_table)` — zero-copy
-    - SQL Builder generates step-specific SQL
-    - `conn.execute(sql).arrow()` — result as Arrow Table
-    - `conn.unregister(table_alias)` — cleanup
-
-14. **Pandas Path** (if applicable)
-    - `pa.Table.to_pandas()` → DataFrame operation → `pa.Table.from_pandas()`
-
-15. **WasmExecutor Path** (if wasm_compute)
-    - Load `.wasm` bytes from MinIO `pipelineiq-wasm`
-    - SHA256 module cache check
-    - Fresh Store with fuel budget
-    - Row-by-row f64 function calls
-
-#### Save Step
-16. **MinIO: put_object(output_bucket)**
-    - Serialize Arrow Table to output format (CSV, Parquet, JSON)
-    - Upload to `pipelineiq-outputs` bucket
-    - Generate presigned download URL (48h expiry)
-
-17. **PostgreSQL: UPDATE step_results**
-    - Record: download_url, size_bytes, output_filename, output_format
-
-#### Inter-Step Transport
-18. **ArrowDataBus.store(key, table)**
-    - Serialize to Arrow IPC bytes
-    - Route to tier: Hot (<10MB Redis), Warm (10-500MB /dev/shm), Cold (>=500MB MinIO Parquet)
-
-#### Progress Reporting
-19. **PostgreSQL: INSERT step_results**
-    - Record: span_id, trace_id, engine, start_at, end_at, duration_ms, row_in, row_out
-
-20. **Redis PubSub: publish step_complete**
-    - Payload: `{step_name, step_index, total_steps, status, rows_in, rows_out, duration_ms}`
-    - SSE service forwards to browser
-    - Browser updates Gantt chart in real-time
-
-### Stage 4: Error Handling and Autonomous Healing
-
-21. **Step raises exception**
-    - Error caught by pipeline runner
-    - `HealingClassifier.is_healable(error)` checks error type
-
-22. **Classification result**
-
-    **NOT healable** (MemoryError, AttributeError, etc.):
-    - `status = FAILED` immediately
-    - SSE event: `{event_type: "pipeline_failed", error_message: "..."}`
-
-    **HEALABLE** (ColumnNotFoundError, KeyError, MergeError):
-    - `status = HEALING` (NOT "failed")
-    - SSE event: `{event_type: "healing_started", failed_step: "...", error_type: "..."}`
-    - Browser shows healing banner
-
-23. **Schema Diff computation**
-    - `SchemaDiff.compute_schema_diff(old_profile, new_profile)`
-    - `find_removed_columns()`, `find_added_columns()`
-    - `find_rename_candidates()`: Jaro-Winkler similarity >= 0.85 = rename pair
-
-24. **Healing attempts (up to 3)**
-    - `build_healing_prompt()`: inject broken YAML + error + schema diff
-    - Call Gemini (temperature=0.0, deterministic) via `call_gemini_task` (gemini queue)
-    - Gemini returns JSON PATCH: `{confidence, step_name, field, old_value, new_value}`
-    - `validate_healing_patch()` — structure check before sandbox
-    - `apply_patch(yaml, patch)` → candidate YAML
-    - `test_patch_in_sandbox()`: fresh DuckDB `:memory:`, 100 sample rows, run patched steps
-
-25. **Sandbox result**
-    - **Passes**: apply patch, create new pipeline version, `status=HEALED`, resume execution
-    - **Fails**: record attempt, continue to next (up to 3 total)
-
-26. **All attempts failed**: `status=FAILED`
-
-### Stage 5: Post-Completion Hook
-
-27. **Register run assets in data catalog**
-    - `register_run_assets(run_id, pipeline_name, lineage_graph, owner_id)`
-    - Upsert pipeline, file, column, topic assets
-    - Insert relationship edges
-    - Non-fatal: DB failure doesn't fail the run
-
-28. **Contract validation**
-    - `ContractValidator.validate(output_table, contract)`
-    - Check 5 breach types: column_removed, type_changed, null_threshold, row_count, unexpected_column
-    - If `severity=block` and blocking breach found → `status=contract_violation`
-
-29. **Webhook delivery**
-    - `fire_webhooks_for_event(run.success, payload, owner_id)`
-    - For each matching webhook: `deliver_webhook.apply_async(queue='critical')`
-
-30. **Arrow bus cleanup**
-    - `ArrowDataBus.cleanup_run(run_id)` — delete all tier data for this run
-    - Called in `finally` block (always runs)
-
-31. **Presigned download URL**
-    - Generated with 48h expiry
-    - Stored in final step_result
-
-### Stage 6: Terminal SSE Event
-
-32. **Final status published**
-    - `success`, `healed`, `contract_violation`, or `failed`
-    - Includes: Gantt chart data, download URL, step results summary
-
-33. **Browser receives final event**
-    - Updates UI with final status badge
-    - Shows download button
-    - Gantt chart displays all step timings with Jaeger deep-links
-
----
-
-## Pipeline Statuses
-
-| Status | Meaning | Trigger |
-|--------|---------|---------|
-| `pending` | Created, waiting for worker | API creates run |
-| `running` | Worker executing steps | Worker picks up task |
-| `healing` | Autonomous AI repair in progress | Healable error detected |
-| `healed` | Auto-repaired and completed successfully | Healing + re-execution succeeded |
-| `completed` | All steps succeeded | All steps completed without error |
-| `failed` | Non-healable error or all healing attempts exhausted | Error not classified as healable |
-| `contract_violation` | Output violated data contract with `severity=block` | Contract breach detected |
-| `cancelled` | User cancelled before completion | User action |
-
----
-
-## Key Source Files
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `backend/tasks/pipeline_tasks.py` | 1114 | Main orchestration task (`execute_pipeline_task`) |
-| `backend/pipeline/runner.py` | — | `PipelineRunner.execute()` step loop |
-| `backend/execution/smart_executor.py` | 300 | Step routing logic |
-| `backend/execution/healing_agent.py` | 527 | Autonomous healing orchestration |
-| `backend/execution/arrow_bus.py` | 722 | Inter-step data transport |
-| `backend/api/sse.py` | 317 | Server-Sent Events endpoint |
-| `backend/api/pipelines.py` | 1332 | Pipeline CRUD and run submission |
-| `backend/contracts/` | — | Contract validation logic |
+| File | Purpose |
+|------|---------|
+| `backend/api/pipelines.py` | Submission, validation, run detail, cancel, export, timing |
+| `backend/api/sse.py`, `backend/sse_app.py` | Stream handlers and the standalone SSE app |
+| `backend/tasks/pipeline_tasks.py` | `execute_pipeline_task`: the whole lifecycle |
+| `backend/pipeline/runner.py` | Sequential step loop |
+| `backend/execution/healing_agent.py`, `healing_classifier.py`, `schema_diff.py`, `sandbox.py`, `patch_applier.py` | Healing pipeline |
+| `backend/contracts/validator.py` | Post-run contract enforcement |
+| `backend/execution/steps/save_step.py` | Output persistence + presigned URLs |

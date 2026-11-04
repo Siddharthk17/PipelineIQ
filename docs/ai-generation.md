@@ -1,197 +1,35 @@
-# 6. AI Pipeline Generation & Repair
+# AI Generation and Repair
+
+Natural-language pipeline authoring and failure repair, both served from `backend/routers/ai.py` (`/api/ai`) and executed through the single-concurrency `gemini` queue. Temperatures are fixed in `backend/ai/generation.py`: 0.1 for first-draft generation, 0.0 for every fix path.
 
 ![AI Generation](diagrams/ai-generation.png)
 
----
+## Generate (`POST /api/ai/generate`)
 
-## Overview
+Request: `{description (10–1000 chars), file_ids}`. The backend builds a file-schema section from stored `FileProfile` rows (real column names and types from the user's data), injects the step-type reference, and instructs the model to return only YAML starting with `pipeline:`. The task (`tasks.call_gemini`) checks the SHA256 prompt-response cache, reserves from the 900,000-token-per-minute rolling budget, and calls `gemini-2.5-flash` (fallbacks `gemini-2.0-flash,gemini-1.5-flash`). The response is fence-stripped (`_clean_yaml_response`) and validated with the same parser the run path uses; on failure a `SELF_FIX_PROMPT` (validation error + bad YAML) goes back at temperature 0.0 for one deterministic retry. The endpoint returns `{yaml, valid, attempts, error}` for the React Flow canvas.
 
-PipelineIQ provides three AI-powered features that leverage Google's Gemini 1.5 Flash model: natural language pipeline generation, automated error repair, and column autocomplete. All AI calls are routed through a dedicated Celery worker with strict rate limiting, response caching, and token budget tracking to prevent API abuse and ensure reliability.
+## Repair (`POST /api/ai/runs/{run_id}/repair`)
 
----
+Loads the failed run (step, error type/message, file schemas, original YAML), prompts for the minimum change that fixes the error, cleans and validates the corrected YAML, and returns it with a `difflib` line diff so the user reviews exactly what changed before accepting. Unlike healing (which applies sandbox-verified patches automatically), repair is always human-approved.
 
-## Flow A — AI Pipeline Generation
+## Autocomplete (`POST /api/ai/autocomplete/column` and `/columns`)
 
-### Request Flow
+No model call. Pure-Python Jaro-Winkler similarity (`jellyfish`) between the typed fragment and available columns, same 0.85 threshold family as healing rename detection. Used by the builder for typo'd column names in `filter`, `select`, `rename`, and `join` configs, and by the parser for unknown step types and missing step references.
 
-1. **User types natural language description** in the UI
-   - Example: "Show me total revenue by region for completed orders"
-   - User selects which uploaded files the pipeline should reference
+## Validate (`POST /api/ai/validate-yaml`)
 
-2. **POST /api/ai/generate** → FastAPI
-   - Request body: `{description: "...", file_ids: ["uuid1", "uuid2"]}`
+Parse-and-validate without creating anything. This is the endpoint the k6 profile hammers (200 rps constant arrival, p99 < 100 ms) because it exercises the parser with no database or Redis writes.
 
-3. **Build file schemas section** (`build_file_schemas_section()`)
-   - Query `file_profiles` table for each file_id
-   - Extract column names + semantic types from stored profiles
-   - Example output: `File: orders.csv — Columns: order_id (int64), revenue (float64), region (object), status (object)`
+## Rate limiting design
 
-4. **Assemble GENERATION_SYSTEM_PROMPT**
-   - Inject STEP_TYPE_REFERENCE (all 19 step types with descriptions and field schemas)
-   - Inject file schemas (real column names from the user's data)
-   - Inject user's natural language description
-   - Rule: "Output ONLY valid YAML, no markdown fences, no preamble"
+One worker, concurrency 1, `rate_limit='50/m'`, plus the token budget and prompt cache, means at most one live model call cluster-wide with identical prompts served from Redis. Retries use exponential backoff on 429s (max 5). Never raise `worker-gemini` replicas: the limit is architectural, not incidental.
 
-5. **Submit to Gemini** via `call_gemini_task.apply_async(queue='gemini', temperature=0.1)`
-   - Temperature 0.1: slight creativity for varied pipeline naming (not too deterministic)
+## Key source files
 
-6. **Gemini Worker processes the task**
-   - Check SHA256 response cache in Redis (same prompt → reuse result)
-   - Check token budget (900K/minute rolling window in Redis)
-   - Call Gemini 1.5 Flash API (3-8 second response)
-   - Cache response with SHA256(prompt) as key
-
-7. **Clean response** (`_clean_yaml_response()`)
-   - Strip ```yaml markdown fences
-   - Strip preamble text before `pipeline:`
-   - Find the `pipeline:` start marker
-
-8. **Validate YAML** (`get_parsed_pipeline()`)
-   - Parse YAML structure
-   - Validate step types against known types
-   - Check file references exist
-   - Check column names match file schemas
-
-9. **Self-fix attempt** (if validation fails)
-   - Build `SELF_FIX_PROMPT` with validation error + invalid YAML
-   - Submit to Gemini (temperature=0.0 — deterministic fix)
-   - Validate again
-
-10. **Return response**
-    - `{yaml, valid, attempts, error}`
-    - Frontend renders the generated pipeline on the React Flow canvas
-
-### Temperature Choices
-
-| Use Case | Temperature | Reason |
-|----------|-------------|--------|
-| Generation | 0.1 | Slight creativity → varied pipeline naming |
-| Repair | 0.0 | Same broken YAML must always produce same fix |
-| Healing | 0.0 | Deterministic, reproducible patch |
-
-### Rate Limiting Design
-
-| Property | Value | Purpose |
-|----------|-------|---------|
-| Worker processes | 1 | Single point of rate enforcement |
-| Concurrency | 1 | Only 1 API call at a time |
-| `rate_limit` | `'50/m'` | 50 API calls per minute maximum |
-| Token budget | 900K/minute | Rolling window in Redis |
-| Response cache | SHA256(prompt) → response | Identical prompts reuse result |
-| Max retries | 5 | Exponential backoff on 429 errors |
-
-**Why ONE dedicated worker:**
-- Multiple workers would each make independent API calls
-- Rate limiting across multiple workers requires distributed coordination
-- Single worker = single point of enforcement = simple and reliable
-
----
-
-## Flow B — AI Error Repair
-
-### Request Flow
-
-1. **POST /api/ai/runs/{run_id}/repair** with failed run context
-
-2. **Load failed run data**
-   - `failed_step`: which step failed
-   - `error_type`: exception class name
-   - `error_message`: human-readable error
-   - `file_ids`: files referenced by the pipeline
-   - `yaml_config`: the original pipeline YAML
-
-3. **Build REPAIR_SYSTEM_PROMPT**
-   - Original broken YAML
-   - Error details (step, type, message)
-   - Current file schemas (column names + types)
-   - Instruction: "Make the MINIMUM change to fix this error"
-
-4. **Call Gemini** (temperature=0.0 — deterministic repair)
-   - Same broken YAML must always produce same fix
-   - Randomness makes debugging impossible
-
-5. **Clean and validate** corrected YAML
-
-6. **Compute YAML diff** (`compute_yaml_diff()`)
-   - Line-by-line diff using `difflib.SequenceMatcher`
-   - Returns: `{corrected_yaml, diff_lines, valid, error}`
-   - Diff lines show exactly what changed (added/removed/unchanged)
-
-7. **Return to frontend**
-   - User sees the corrected YAML with highlighted diff
-   - User can accept or reject the repair
-
----
-
-## Flow C — Column Autocomplete
-
-### Request Flow
-
-1. **POST /api/ai/autocomplete/column**
-   - Request body: `{typed: "reveue", available_columns: ["revenue", "region", "order_id"]}`
-
-2. **Pure Python similarity scoring** (NO Gemini call needed)
-   - `jellyfish.jaro_winkler_similarity(typed.lower(), column.lower())`
-   - Weights prefix matches more (better for mid-word typos)
-   - Threshold 0.85: "reveue" → "revenue" (confidence: 0.95)
-   - Below threshold: "xyz" → null (no match)
-
-3. **Return response**
-   - `{suggestion: "revenue", confidence: 0.95}` or `{suggestion: null}`
-
-### Why No Gemini Call
-
-- Column autocomplete is a local, instant operation
-- Jaro-Winkler similarity is O(n) where n = number of columns
-- Gemini API call would add 3-8 seconds latency
-- No creative generation needed — just fuzzy string matching
-
----
-
-## Prompt Engineering Patterns
-
-### GENERATION_SYSTEM_PROMPT
-
-```
-You are a data pipeline generator. Given the user's description and available
-file schemas, generate a valid YAML pipeline configuration.
-
-RULES:
-1. Output ONLY valid YAML starting with "pipeline:"
-2. Use ONLY the column names from the provided file schemas
-3. Use ONLY step types from the STEP_TYPE_REFERENCE
-4. Do NOT include markdown fences or preamble text
-5. Each step must have a unique name
-6. Steps must be in logical execution order
-```
-
-### REPAIR_SYSTEM_PROMPT
-
-```
-You are a pipeline repair agent. A pipeline step failed with an error.
-Make the MINIMUM change to fix the error.
-
-ORIGINAL YAML:
-{yaml}
-
-ERROR:
-Step: {failed_step}
-Type: {error_type}
-Message: {error_message}
-
-FILE SCHEMAS:
-{file_schemas}
-
-Return the corrected YAML. Change only what's necessary.
-```
-
----
-
-## Key Source Files
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `backend/routers/ai.py` | 353 | AI endpoints (generate, repair, autocomplete) |
-| `backend/ai/` | — | Gemini task definitions, prompt templates |
-| `backend/tasks/gemini_tasks.py` | — | Celery task for Gemini API calls |
-| `backend/pipeline/cache.py` | — | SHA256 response caching |
+| File | Purpose |
+|------|---------|
+| `backend/routers/ai.py` | generate, repair, autocomplete ×2, validate-yaml |
+| `backend/ai/generation.py` | Prompts (generation, self-fix, repair), temps, cleaning |
+| `backend/ai/prompts.py`, `backend/ai/healing_prompts.py` | Prompt templates |
+| `backend/tasks/gemini_tasks.py` | Budget, cache, retries, model calls |
+| `backend/clients/gemini_client.py` | Low-level client |

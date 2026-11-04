@@ -88,7 +88,7 @@ Save the printed address — that is your `<EXTERNAL-IP>` everywhere below.
 Console path: *Compute Engine → VM instances → Create instance* with:
 name `pipeline-iq`, region/zone of your choice, machine `e2-standard-2`
 (2 vCPU, 8 GB), boot disk *Ubuntu 24.04 LTS*, *50 GB*, *Balanced persistent disk*;
-*Networking → External IPv4 address → `pipelineiq-ip`* (the one you just reserved);
+*Networking → External IPv4 address → `pipelineiq-ip`* (the one created above);
 *Firewall → tick **Allow HTTP traffic*** (or do Step 3 via gcloud instead).
 
 Equivalent one-liner (run from your laptop):
@@ -425,7 +425,7 @@ Missing names (left side only) go in `.env`; extra names on the right are new ex
 - [ ] `.env` is `chmod 600` and git-ignored. Never paste secrets in chat, issues, logs, or screenshots (revoke + rotate immediately if one leaks).
 - [ ] `TRUSTED_HOSTS` lists only your hosts — do not set it to `*`.
 - [ ] Rotate the demo password before any private showing where visitors shouldn't mutate shared state — or better, reseed nightly.
-- [ ] For private showings, prefer a **viewer account over sharing the admin demo login**: register a second user (first account stays admin, later ones are viewers), hand out the viewer credentials, and keep `demo@pipelineiq.app` for yourself. Viewers can run and inspect but cannot manage users or schedules. The nightly reseed still restores anything guests create.
+- [ ] For private showings, prefer a **viewer account over sharing the admin demo login**: register a second user (first account stays admin, later ones are viewers), hand out the viewer credentials, and keep `demo@pipelineiq.app` for yourself. Viewers are read-only by default — running a pipeline needs an explicit `owner`/`runner` grant on it, and user/schedule management needs admin. The nightly reseed still restores anything guests create.
 
 ## 18. Costs (new-account free trial)
 

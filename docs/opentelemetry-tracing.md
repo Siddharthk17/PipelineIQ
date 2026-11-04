@@ -1,162 +1,26 @@
-# 11. OpenTelemetry Distributed Tracing
+# Distributed Tracing
+
+OpenTelemetry auto-instrumentation plus one manual span per pipeline step, exported OTLP/gRPC to Jaeger. Init: `backend/telemetry.py` (`instrument_all`); per-step spans: `backend/execution/smart_executor.py`; frontend links: run Gantt chart → Jaeger.
 
 ![Distributed Tracing](diagrams/distributed-tracing.png)
 
----
+## What is traced
 
-## Overview
+- Auto: FastAPI requests, SQLAlchemy queries (with `enable_commenter` so trace context rides in SQL comments), Redis commands, Celery tasks, HTTPX calls — no code changes at the call sites. Initialization is deferred to avoid double-instrumentation across Gunicorn pre-fork.
+- Manual: each pipeline step runs in `tracer.start_as_current_span(f"step:{step.name}")` with `pipelineiq.step.name`, `pipelineiq.step.type`, `pipelineiq.step.engine`, and `pipelineiq.rows.in`; on completion `pipelineiq.rows.out` is set and the status flips to OK/ERROR (exceptions recorded). The `trace_id`/`span_id` are stored on the `step_results` row, which is what the Gantt chart uses for its Jaeger deep-links (`getJaegerUiUrl()` in `lib/publicUrls.ts`: `NEXT_PUBLIC_JAEGER_UI_URL`, else same-origin `/jaeger`).
 
-PipelineIQ implements full-stack distributed tracing using OpenTelemetry, providing visibility into every HTTP request, SQL query, Redis operation, Celery task, and pipeline step execution. The system combines auto-instrumentation (zero code change) with manual business-context spans, exporting to Jaeger for visualization and analysis.
+## Export
 
----
+`BatchProcessor`-based export to `OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://jaeger:4317`) — a background thread, so request latency is unaffected. Controlled by `OTEL_ENABLED` (default `true`) and `OTEL_SAMPLE_RATE` (default `0.1`). Jaeger all-in-one keeps spans in memory; UI at `/jaeger/` (`--query.base-path=/jaeger`).
 
-## Auto-Instrumentation (Zero Code Change)
+## Reading a run trace
 
-| Instrumentor | What It Traces | Span Attributes |
-|--------------|---------------|-----------------|
-| `FastAPIInstrumentor` | Every HTTP request | method, route, status code, duration |
-| `SQLAlchemyInstrumentor` | Every SQL query | operation, table, rows, duration |
-| `RedisInstrumentor` | Every Redis GET/SET/DEL/SCAN | key, hit/miss, duration |
-| `CeleryInstrumentor` | Every task execution | task name, queue, retry count, status |
+A run trace nests as: HTTP `POST /api/v1/pipelines/run` → `INSERT pipeline_runs` → Celery `execute_pipeline_task` → per-step `step:{name}` spans with engine and row counts → MinIO/S3 and Redis child spans. Red spans carry the recorded exception; the Gantt bar for the same step shows duration and rows from `step_results`.
 
-SQLAlchemy uses `enable_commenter=True` which adds OTel trace context to SQL comments, enabling cross-service correlation when multiple services share the same database.
+## Key source files
 
----
-
-## Manual Spans (Business Context)
-
-Auto-instrumentation captures infrastructure-level operations but cannot know about business-level semantics. Manual spans add this context:
-
-### SmartExecutor Step Spans
-
-```python
-tracer.start_as_current_span(f"step:{step_name}")
-span.set_attribute("pipelineiq.step.name", step_name)
-span.set_attribute("pipelineiq.step.type", step_type)
-span.set_attribute("pipelineiq.step.engine", engine)
-span.set_attribute("pipelineiq.rows.in", table.num_rows)
-# ... execute step ...
-span.set_attribute("pipelineiq.rows.out", result.num_rows)
-span.set_status(StatusCode.OK)  # or StatusCode.ERROR on failure
-```
-
-**On error:**
-```python
-span.record_exception(e)  # Attaches exception details
-span.set_status(StatusCode.ERROR)  # Red span in Jaeger
-```
-
-**On success:**
-```python
-span.set_attribute("pipelineiq.rows.out", result.num_rows)
-span.set_status(StatusCode.OK)  # Green span in Jaeger
-```
-
----
-
-## Span Hierarchy (One Pipeline Run)
-
-```
-HTTP POST /api/runs                          (FastAPI span, ~5ms)
-├── INSERT INTO pipeline_runs                (SQLAlchemy span, ~2ms)
-├── Redis SETEX task                         (Redis span, ~0.3ms)
-│
-└── tasks.execute_pipeline                   (Celery span, ~total run time)
-    ├── SELECT pipeline_run                  (SQLAlchemy span)
-    ├── Redis GET yaml_cache                 (Redis span, cache hit/miss)
-    ├── MinIO GET file                       (MinIO operation span)
-    │
-    ├── step:load_data                       (manual span, engine=io)
-    ├── step:filter_rows                     (manual span, engine=duckdb, rows.in=1M, rows.out=340K)
-    ├── step:aggregate                       (manual span, engine=duckdb, rows.in=340K, rows.out=8)
-    └── step:save_output                     (manual span, engine=io)
-```
-
-Each span shows:
-- **Duration**: how long the operation took
-- **Attributes**: custom key-value pairs (engine, rows, step type)
-- **Status**: OK (green) or ERROR (red)
-- **Events**: exception details on error
-- **Parent-child**: which operation called which
-
----
-
-## Export Pipeline
-
-### BatchSpanProcessor
-
-| Property | Value |
-|----------|-------|
-| Background thread | Yes (non-blocking) |
-| Max queue size | 2048 spans |
-| Batch size | 512 spans |
-| Export interval | Every 5 seconds |
-| Request latency impact | Zero |
-
-**Why BatchSpanProcessor, not SimpleSpanProcessor:**
-- Simple: exports one span at a time, synchronously, in the request handler → adds 5-20ms per span to every request
-- Batch: background thread collects spans in a queue, exports in batches → zero latency impact
-
-### OTLPSpanExporter
-
-| Property | Value |
-|----------|-------|
-| Protocol | gRPC over HTTP/2 |
-| Serialization | Protocol Buffers (binary, efficient) |
-| Endpoint | `http://jaeger:4317` |
-| Security | Insecure=True for development |
-
-### Jaeger all-in-one
-
-| Port | Purpose |
+| File | Purpose |
 |------|---------|
-| 4317 | OTLP gRPC intake endpoint |
-| 16686 | Jaeger Web UI |
-
-**Jaeger UI features:**
-- Search by service name (pipelineiq-api, celery-worker-default, etc.)
-- Full trace view with span hierarchy
-- Span attributes (custom business context)
-- Error highlighting (red spans)
-- Duration analysis (waterfall view)
-- Deep-link from frontend: `http://jaeger:16686/trace/{trace_id}`
-
----
-
-## Timing Storage
-
-`step_results` table stores timing data for the frontend Gantt chart:
-
-| Column | Type | Purpose |
-|--------|------|---------|
-| `span_id` | VARCHAR(32) | OTel span ID |
-| `trace_id` | VARCHAR(32) | OTel trace ID |
-| `start_at` | TIMESTAMPTZ | Step start time |
-| `end_at` | TIMESTAMPTZ | Step end time |
-| `duration_ms` | INTEGER | Step duration in milliseconds |
-| `engine` | VARCHAR(20) | Execution engine used |
-
-The frontend reads this data to render a Gantt chart, with each bar linking to Jaeger for deep-dive analysis.
-
----
-
-## Configuration
-
-| Setting | Value | Purpose |
-|---------|-------|---------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://jaeger:4317` | Jaeger endpoint |
-| `OTEL_SERVICE_NAME` | `pipelineiq-api` / `celery-worker` | Service identification |
-| `OTEL_TRACES_SAMPLER` | `always_on` | Sample all traces (dev) |
-| `OTEL_METRICS_EXPORTER` | `otlp` | Metrics export |
-| `OTEL_LOGS_EXPORTER` | `otlp` | Logs export |
-
----
-
-## Key Source Files
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `backend/telemetry.py` | 257 | OTel SDK initialization, middleware, Celery hooks |
-| `backend/execution/smart_executor.py` | 300 | Manual span per step |
-| `backend/tasks/pipeline_tasks.py` | 1114 | Trace context capture from OTel |
-| `backend/main.py` | 658 | FastAPIInstrumentor integration |
+| `backend/telemetry.py` | SDK init, instrumentor wiring, Celery hooks |
+| `backend/execution/smart_executor.py` | Per-step span + attributes |
+| `backend/tasks/pipeline_tasks.py` | Trace context across the worker boundary |

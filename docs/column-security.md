@@ -1,125 +1,46 @@
-# 13. Column-Level Security & PII Enforcement
+# Column Security
 
-> Policy-based column redaction and masking applied before data enters the execution engine.
+Per-file, per-column `redacted`/`masked` policies enforced at load time and at preview, cached for 60 seconds. Model: `ColumnPolicy` (`backend/models/column_policy.py`); enforcement and masking: `backend/security/column_security.py`; endpoints: `backend/routers/column_policies.py` (`/api/column-policies`).
 
-## Architecture Diagram
+![Column-Level Security](diagrams/column-security.png)
 
-![Column-Level Security & PII Enforcement](diagrams/column-security.png)
+## Policy types
 
----
+| Policy | Effect |
+|--------|--------|
+| `redacted` | Column dropped from the DataFrame — it never enters the engine |
+| `masked` | Value partially obscured by a pattern (email, phone, credit_card, ssn, name, `custom:N`) |
 
-## Overview
+Example outputs from `_apply_mask`: `alice@example.com` → `a***@example.com`; `555-867-5309` → `***-***-5309`; a 16-digit card → `****-****-****-1234`; `123-45-6789` → `***-***-6789`; `custom:3` keeps the first 3 characters then `***`. Short or unparseable input collapses to a fixed mask (`***`, `****`, `***-**-****`) rather than leaking length-dependent detail.
 
-PipelineIQ enforces column-level security at two critical enforcement points: during pipeline execution (load step) and during file preview via the REST API. Policies are stored in PostgreSQL, cached in Redis with a 60-second TTL, and applied before data enters the execution engine. The system supports two policy types — `redacted` (entire column dropped) and `masked` (partial obscuration via pattern matching) — with role-based overrides that allow admin users to bypass masking and see full unmasked values.
+`allowed_roles` on the policy bypasses masking: a caller whose role is listed sees full values. `UNIQUE(file_id, column_name)` keeps one rule per column; create/update/delete invalidates the cache key immediately (`col_policies:{file_id}`).
 
-A PII detection banner scans profiler metadata for sensitive column types (`email`, `phone`, `ssn`, `credit_card`, `ip_address`, `person_name`, `address`) and alerts users when unprotected PII columns exist.
+## Enforcement points
 
----
+Both go through `apply_column_policies(df, user_role, policies)`:
 
-## Policy Types
+1. **Load step** — after the MinIO read, before the Arrow conversion in `execute_load`. Admins and `allowed_roles` see full data; everyone else sees the masked frame.
+2. **File preview** — `GET /api/v1/files/{file_id}/preview` applies the same function, so preview never shows more than execution would.
 
-| Policy | Behavior | Data Safety | Implementation |
-|--------|----------|-------------|----------------|
-| `redacted` | Column DROPPED entirely from DataFrame | Data never enters execution engine | `df.drop(columns=[col_name])` |
-| `masked` | Column partially obscured via pattern-based masking | Data visible but sensitive parts hidden | Pattern-specific string manipulation |
+Policies live in Redis (`redis-cache`, `POLICY_CACHE_TTL = 60`, orjson-serialized records) so workers avoid a database read per load; the 60-second TTL bounds staleness after an out-of-band database edit, and the CRUD endpoints delete the key on write.
 
----
+## PII detection
 
-## Masking Patterns Reference
+`backend/profiling/analyzer.py` assigns a `semantic_type` per column (email/phone/ssn/credit_card by regex and Luhn, plus name/address/ip/person patterns) into the stored file profile. The frontend `PIIBanner` (`frontend/components/widgets/PIIBanner.tsx`) renders a yellow "Personal Information Detected" prompt only when handed a non-empty suggestion list, and `ColumnPolicyManager` highlights suggested columns lacking policies. Detection output is advisory; enforcement is the policy table above.
 
-| Pattern | Input Example | Output Example | Logic |
-|---------|--------------|----------------|-------|
-| `email` | `alice@example.com` | `a***@example.com` | First char + `***` + `@` + domain |
-| `phone` | `555-867-5309` | `***-***-5309` | Last 4 digits preserved, rest masked |
-| `credit_card` | `4111111111111234` | `****-****-****-1234` | Last 4 digits preserved, rest masked |
-| `ssn` | `123-45-6789` | `***-**-6789` | Last 4 digits preserved, rest masked |
-| `custom:N` | `ABCDEFGH` (N=3) | `ABC***` | First N characters preserved, rest masked |
-| `redacted` | (entire column) | Column removed from DataFrame | `df.drop(columns=[col_name])` |
+## Endpoints
 
----
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/column-policies/` | Create policy (201) |
+| GET | `/api/column-policies/files/{file_id}` | Policies for a file |
+| DELETE | `/api/column-policies/{id}` | Delete (204, cache invalidated) |
 
-## Role-Based Override
+## Key source files
 
-The `allowed_roles` field on each policy controls which user roles see full unmasked data:
-
-- **Admin role**: Sees the complete unmasked column value (bypasses masking)
-- **Viewer role**: Sees the masked/redacted version (default behavior)
-- Role is resolved from pipeline run context: `run.owner_role`
-
-The override is evaluated at enforcement time — `user_role in allowed_roles` determines whether the full column is returned or the masked version is applied.
-
----
-
-## Enforcement Points
-
-| Enforcement Point | When Triggered | What Happens | Code Path |
-|-------------------|----------------|--------------|-----------|
-| Load step execution | After MinIO read, BEFORE pipeline processing | `apply_column_policies(df, user_role, policies)` filters DataFrame | `backend/pipeline/runner.py` |
-| File preview | `GET /api/files/{id}/preview` | Same enforcement applied to preview response | `backend/routers/column_policies.py` |
-
-Both enforcement points use the same `apply_column_policies()` function, ensuring consistent policy application regardless of access method.
-
----
-
-## Caching Architecture
-
-Policies are cached in Redis-cache (port 6381) to avoid repeated database lookups:
-
-| Property | Value |
-|----------|-------|
-| Cache key format | `col_policies:{file_id}` |
-| Cache value | `pickle(list[ColumnPolicyRecord])` |
-| TTL | 60 seconds (short — policy changes propagate quickly) |
-| Invalidation | Immediate on CREATE/UPDATE/DELETE of any policy for the file |
-
-The short TTL ensures policy changes (e.g., adding a new column protection) take effect within 60 seconds across all running processes.
-
----
-
-## PII Detection System
-
-`detect_pii_columns(profile)` scans the data profiler's `semantic_type` field to identify unprotected PII:
-
-| PII Type | Detection Method |
-|----------|-----------------|
-| `email` | Regex pattern matching for email format |
-| `phone` | Regex pattern matching for phone number format |
-| `ssn` | Regex pattern matching for SSN format |
-| `credit_card` | Luhn algorithm validation + regex |
-| `ip_address` | IPv4/IPv6 pattern matching |
-| `person_name` | NLP-based name detection |
-| `address` | NLP-based address detection |
-
-When unprotected PII columns are detected, the UI displays a yellow warning banner: "3 PII columns have no policy — set one?" prompting the user to configure column policies before running the pipeline.
-
----
-
-## Data Flow
-
-1. **Admin creates policy** → `POST /api/column-policies` with `file_id`, `column_name`, `policy`, `mask_pattern`, `allowed_roles`
-2. **Policy stored** → PostgreSQL `column_policies` table with `UNIQUE(file_id, column_name)`
-3. **Cache invalidated** → Redis key `col_policies:{file_id}` deleted immediately
-4. **Pipeline runs** → Load step reads file from MinIO, calls `apply_column_policies(df, user_role, policies)`
-5. **Role check** → If `user_role in allowed_roles`, full column returned; otherwise masking applied
-6. **Filtered DataFrame** → Safe data enters execution engine (no PII exposed to unauthorized roles)
-
----
-
-## Security Properties
-
-| Property | Guarantee |
-|----------|-----------|
-| Data never leaves enforcement | Redacted columns dropped before execution engine |
-| Role isolation | Admin sees full data, viewers see masked |
-| Audit trail | Policy CRUD operations logged |
-| Cache freshness | 60-second max staleness |
-| Dual enforcement | Same function at load step AND preview |
-
----
-
-## Key Source Files
-
-- `backend/routers/column_policies.py:136` — Policy CRUD API endpoints
-- `backend/models/column_policy.py:62` — `ColumnPolicyRecord` model definition
-- `backend/pipeline/runner.py` — `apply_column_policies()` integration in load steps
-- `backend/services/column_policy_service.py` — Policy caching and PII detection logic
+| File | Purpose |
+|------|---------|
+| `backend/security/column_security.py` | `apply_column_policies`, `_apply_mask`, cache helpers |
+| `backend/routers/column_policies.py` | Policy CRUD endpoints |
+| `backend/models/column_policy.py` | `ColumnPolicyRecord`, unique constraint |
+| `backend/profiling/analyzer.py` | Semantic-type detection incl. PII |
