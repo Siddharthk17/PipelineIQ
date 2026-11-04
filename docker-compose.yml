@@ -1016,11 +1016,13 @@ services:
       prometheus:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      # Serve-from-sub-path moves the API under /grafana/; probe that first
+      # with a root fallback. start_period covers slow provisioning on CI.
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/grafana/api/health || wget --spider -q http://localhost:3000/api/health"]
       interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 20s
+      retries: 15
+      start_period: 60s
     restart: unless-stopped
     networks:
       - pipelineiq-network
