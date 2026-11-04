@@ -888,7 +888,7 @@ export async function cleanupStaleShm(): Promise<{ deleted: number }> {
 }
 
 export async function getCostEstimate(pipelineYaml: string, fileIds: string[]): Promise<CostEstimate> {
-  return fetchWithAuth<CostEstimate>(API_BASE_URL, "/runs/estimate", {
+  return fetchWithAuth<CostEstimate>(API_BASE_URL, "/api/runs/estimate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pipeline_yaml: pipelineYaml, file_ids: fileIds }),

@@ -27,6 +27,7 @@ from backend.database import SessionLocal
 from backend.models import (
     HealingAttempt,
     HealingAttemptStatus,
+    LineageGraph,
     PipelineRun,
     PipelineSchedule,
     PipelineStatus,
@@ -512,6 +513,112 @@ def _add_steps(db, run, spec_steps, status_ok, rows_in, rng, trace_base):
         ))
 
 
+def _seed_lineage(db, run, spec_steps, yaml_text):
+    """Persist a lineage graph for a seeded run using the real recorder.
+
+    The lineage API serves whatever LineageRecorder.serialize() produces,
+    so building the seed payload with the same class guarantees the demo
+    graph renders. The same graph is handed to the real catalog
+    registration, so search and blast radius work on seeded runs too.
+    Streaming pipelines are skipped: stream_consume has no batch input and
+    the streaming daemon records those graphs at runtime.
+    """
+    from backend.pipeline.lineage import LineageRecorder
+
+    if any(s.get("type") == "stream_consume" for s in spec_steps):
+        return
+    if db.query(LineageGraph).filter(
+            LineageGraph.pipeline_run_id == run.id).first():
+        return
+
+    files = {}
+    for s in spec_steps:
+        if s.get("type") == "load" and s.get("file_id"):
+            try:
+                rec = db.query(UploadedFile).filter(
+                    UploadedFile.id == uuid.UUID(s["file_id"])).first()
+            except (ValueError, AttributeError):
+                rec = None
+            if rec is not None:
+                files[s["file_id"]] = (
+                    rec.original_filename,
+                    list(rec.columns or []),
+                    dict(rec.dtypes or {}),
+                )
+
+    rec = LineageRecorder()
+    cols = {}
+    for s in spec_steps:
+        name, typ = s.get("name"), s.get("type")
+        if not name or not typ:
+            continue
+        if typ == "load":
+            info = files.get(s.get("file_id"))
+            if info is None:
+                continue
+            fname, fcols, dtypes = info
+            rec.record_load(s["file_id"], fname, name, fcols, dtypes)
+            cols[name] = list(fcols)
+        elif typ == "save":
+            in_cols = list(cols.get(s.get("input"), []))
+            rec.record_save(
+                name, s.get("input"), s.get("filename", f"{name}_output"),
+                in_cols)
+            cols[name] = in_cols
+        elif typ == "select":
+            kept = list(s.get("columns") or [])
+            src = list(cols.get(s.get("input"), []))
+            rec.record_projection(
+                name, s.get("input"),
+                [c for c in kept if c in src] or kept,
+                [c for c in src if c not in kept])
+            cols[name] = [c for c in kept if c in src] or kept
+        elif typ == "rename":
+            mapping = dict(s.get("mapping") or {})
+            src = list(cols.get(s.get("input"), []))
+            rec.record_rename(name, s.get("input"), mapping, src)
+            cols[name] = [mapping.get(c, c) for c in src]
+        elif typ == "join":
+            left, right = s.get("left"), s.get("right")
+            lcols, rcols = list(cols.get(left, [])), list(cols.get(right, []))
+            out = lcols + [c for c in rcols if c not in lcols]
+            rec.record_join(
+                name, left, right, lcols, rcols, out,
+                s.get("on", ""), s.get("how", "inner"))
+            cols[name] = out
+        elif typ == "aggregate":
+            group_by = list(s.get("group_by") or [])
+            aggs = list(s.get("aggregations") or [])
+            out = group_by + [
+                f"{a.get('column')}_{a.get('function')}" for a in aggs]
+            rec.record_aggregate(name, s.get("input"), group_by, aggs, out)
+            cols[name] = out
+        else:
+            # filter/sort/deduplicate/sample/fill_nulls/validate/sql/pivot/
+            # unpivot/stream_publish: column set unchanged (sql/pivot/unpivot
+            # outputs are approximated from their input in seed data).
+            # wasm_compute additionally emits its output_column.
+            in_cols = list(cols.get(s.get("input") or s.get("left"), []))
+            out = list(in_cols)
+            if typ == "wasm_compute" and s.get("output_column"):
+                out.append(s["output_column"])
+            if s.get("input"):
+                rec.record_passthrough(name, typ, s["input"], out)
+                cols[name] = out
+    payload = rec.serialize()
+    db.add(LineageGraph(
+        pipeline_run_id=run.id,
+        graph_data=payload["graph_data"],
+        react_flow_data=payload["react_flow_data"],
+    ))
+    try:
+        from backend.repositories.catalog import register_run_assets
+        register_run_assets(
+            db, str(run.id), run.name, yaml_text, rec.graph, run.user_id)
+    except Exception as exc:  # catalog must never fail seeding
+        print(f"WARNING: catalog registration failed for {run.name}: {exc}")
+
+
 def seed_showcase(reset=False):
     from backend.models import PipelineStatus as PS
     db = SessionLocal()
@@ -603,6 +710,8 @@ def seed_showcase(reset=False):
                        status_ok=status in (PS.COMPLETED, PS.HEALED),
                        rows_in=total_in, rng=RNG,
                        trace_base=run.trace_id)
+            if status in (PS.COMPLETED, PS.HEALED):
+                _seed_lineage(db, run, steps, yaml_text)
             if status == PS.HEALED:
                 db.add(HealingAttempt(
                     run_id=run.id, attempt_number=1,
@@ -627,6 +736,27 @@ def seed_showcase(reset=False):
             counts["failed" if status == PS.FAILED else "healed"] += (
                 1 if status in (PS.FAILED, PS.HEALED) else 0)
             db.commit()
+
+        # Backfill: runs seeded before lineage seeding existed (or skipped
+        # above as already-present) get their graphs now, so a plain
+        # re-run heals old deployments without --reset.
+        backfilled = 0
+        for run in db.query(PipelineRun).filter(
+                PipelineRun.user_id == user.id,
+                PipelineRun.status.in_([PS.COMPLETED, PS.HEALED])).all():
+            if db.query(LineageGraph).filter(
+                    LineageGraph.pipeline_run_id == run.id).first():
+                continue
+            try:
+                steps = yaml.safe_load(
+                    run.yaml_config or "")["pipeline"]["steps"]
+            except Exception:
+                continue
+            _seed_lineage(db, run, steps, run.yaml_config or "")
+            backfilled += 1
+        if backfilled:
+            db.commit()
+            print(f"Backfilled lineage for {backfilled} existing runs.")
 
         # Schedules (3 active, 1 paused).
         sched_specs = [
