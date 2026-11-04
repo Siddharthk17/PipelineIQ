@@ -1016,9 +1016,11 @@ services:
       prometheus:
         condition: service_healthy
     healthcheck:
-      # Serve-from-sub-path moves the API under /grafana/; probe that first
-      # with a root fallback. start_period covers slow provisioning on CI.
-      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/grafana/api/health || wget --spider -q http://localhost:3000/api/health"]
+      # curl is installed by the Grafana image itself (see upstream Dockerfile);
+      # wget availability is not guaranteed. Sub-path first (serve_from_sub_path
+      # moves the API under /grafana/), root with redirect-following fallback.
+      # start_period covers provisioning + slow CI boot.
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/grafana/api/health || curl -sfL http://localhost:3000/api/health"]
       interval: 10s
       timeout: 5s
       retries: 15

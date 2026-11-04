@@ -268,6 +268,17 @@ jobs:
           docker compose up -d
           sleep 30
 
+      - name: Dump service state on startup failure
+        if: failure()
+        run: |
+          docker compose ps
+          echo "--- grafana logs (tail) ---"
+          docker compose logs --tail=100 grafana || true
+          echo "--- grafana health ---"
+          docker inspect pipelineiq-grafana --format='{{json .State.Health}}' || true
+          echo "--- prometheus logs (tail) ---"
+          docker compose logs --tail=30 prometheus || true
+
       - name: Verify all services healthy
         run: |
           docker compose ps
@@ -485,6 +496,17 @@ jobs:
           docker compose up -d
           echo "Waiting for all services to be healthy..."
           sleep 60
+
+      - name: Dump service state on startup failure
+        if: failure()
+        run: |
+          docker compose ps
+          echo "--- grafana logs (tail) ---"
+          docker compose logs --tail=100 grafana || true
+          echo "--- grafana health ---"
+          docker inspect pipelineiq-grafana --format='{{json .State.Health}}' || true
+          echo "--- redpanda logs (tail) ---"
+          docker compose logs --tail=30 redpanda || true
 
       - name: Verify all services healthy
         run: |
