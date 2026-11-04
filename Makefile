@@ -2,11 +2,13 @@
 #
 # Fresh VM?  `make setup && make up` is the entire deploy.
 
-.PHONY: setup up down logs status verify reseed backup
+.PHONY: setup up down logs status verify reseed backup restore
 
 # Bootstrap .env/secrets/host config. Safe to re-run (fills gaps only).
+# Pass extra bootstrap flags with FLAGS=, e.g. make setup FLAGS="--host 1.2.3.4 --yes".
+FLAGS ?=
 setup:
-	./scripts/bootstrap.sh
+	./scripts/bootstrap.sh $(FLAGS)
 
 # If .env is missing, bootstrap first so `make up` works on a fresh clone.
 .env:
@@ -29,7 +31,7 @@ logs:
 # Container + public endpoint status (informational; never fails the run).
 status:
 	docker compose ps --format "table {{.Name}}\t{{.Status}}"
-	@echo "--- public endpoints ---"
+	@echo "public endpoints:"
 	@for p in "/" "/docs" "/openapi.json" "/redoc" "/flower/" "/grafana/login" "/jaeger/" "/prometheus/graph" "/health" "/readyz"; do \
 		printf "%-18s " "$$p"; curl -s -o /dev/null -w "%{http_code}\n" "http://localhost$$p"; \
 	done || true

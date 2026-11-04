@@ -49,12 +49,39 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --host) HOST_OVERRIDE="${2:?--host requires a value}"; shift 2 ;;
     --up) RUN_UP=1; shift ;;
-    --yes) ASSUME_YES=1; shift ;;
+    --yes) ASSUME_YES=1; shift ;; # accepted for script compat; runs are already non-interactive
     --no-cron) INSTALL_CRON=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+
+# A pasted URL is not a host: strip scheme and path so PUBLIC_HOST /
+# TRUSTED_HOSTS always get a bare hostname or IP. A single :port suffix is
+# stripped too; IPv6 literals (two or more colons) are left untouched.
+if [ -n "$HOST_OVERRIDE" ]; then
+  HOST_OVERRIDE="${HOST_OVERRIDE#http://}"
+  HOST_OVERRIDE="${HOST_OVERRIDE#https://}"
+  HOST_OVERRIDE="${HOST_OVERRIDE%%/*}"
+  case "$HOST_OVERRIDE" in
+    \[*\]:*) HOST_OVERRIDE="${HOST_OVERRIDE%%\]*}]" ;; # [v6]:port → [v6]
+  esac
+  _rest="${HOST_OVERRIDE#*:}"
+  case "$_rest" in
+    *:* ) ;; # two or more colons: IPv6 literal, keep as-is
+    *)
+      _tail="${HOST_OVERRIDE##*:}"
+      if [ "$_tail" != "$HOST_OVERRIDE" ]; then
+        case "$_tail" in
+          ''|*[!0-9]*) ;; # not a bare :port suffix, keep as-is
+          *) HOST_OVERRIDE="${HOST_OVERRIDE%:*}" ;;
+        esac
+      fi
+      ;;
+  esac
+  unset _rest _tail
+  [ -n "$HOST_OVERRIDE" ] || { echo "--host resolved to an empty hostname" >&2; exit 1; }
+fi
 
 log()  { printf '\033[1;34m[bootstrap]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[bootstrap:WARN]\033[0m %s\n' "$*" >&2; }
@@ -128,10 +155,13 @@ is_placeholder() {
 get_var() { grep -E "^$1=" "$ENV_FILE" | tail -n1 | cut -d= -f2-; }
 
 set_var() { # set_var NAME VALUE — replace existing line or append
-  local name="$1" value="$2" tmp
+  local name="$1" value="$2" tmp esc_value
   tmp="$(mktemp)"
+  # Escape sed-replacement metacharacters (&, backslash, and our | delimiter)
+  # so generated/host values can never corrupt the line being written.
+  esc_value="$(printf '%s' "$value" | sed -e 's/[|\\&]/\\&/g')"
   if grep -qE "^${name}=" "$ENV_FILE"; then
-    sed -E "s|^${name}=.*|${name}=${value}|" "$ENV_FILE" > "$tmp"
+    sed -E "s|^${name}=.*|${name}=${esc_value}|" "$ENV_FILE" > "$tmp"
   else
     cat "$ENV_FILE" > "$tmp"
     printf '%s=%s\n' "$name" "$value" >> "$tmp"
@@ -149,6 +179,15 @@ log "Filling required secrets (existing values are never touched)..."
 ensure_secret POSTGRES_PASSWORD 24
 ensure_secret REDIS_PASSWORD 16
 ensure_secret SECRET_KEY 32
+
+# A hand-set SECRET_KEY shorter than 32 chars breaks the stack at runtime
+# (production backend refuses to start, y-websocket exits). Never rotate
+# silently — warn loudly so the operator fixes it in .env.
+_sk="$(get_var SECRET_KEY || true)"
+if [ "${#_sk}" -lt 32 ]; then
+  warn "SECRET_KEY is shorter than 32 characters — production API refuses weak secrets and y-websocket exits(1). Set a strong value in .env."
+fi
+unset _sk
 
 if is_placeholder "$(get_var MINIO_ROOT_USER || true)"; then set_var MINIO_ROOT_USER "minioadmin"; log "set MINIO_ROOT_USER=minioadmin"; fi
 ensure_secret MINIO_ROOT_PASSWORD 20
@@ -268,6 +307,8 @@ cat <<EOF
    Grafana  : http://$HOST/grafana/login
    Jaeger   : http://$HOST/jaeger/
    Prometheus: http://$HOST/prometheus/graph (proxied UI)
+   MinIO     : http://localhost:9001  (loopback only, S3 console)
+   Redpanda  : http://localhost:8090  (loopback only, topic console)
 
  If this is a NEW cloud VM, open port 80 first (example for GCP):
    gcloud compute firewall-rules create pipelineiq-http \\
@@ -282,6 +323,7 @@ cat <<EOF
 EOF
 
 if [ "$RUN_UP" -eq 1 ]; then
+  $SUDO docker info >/dev/null 2>&1 || die "docker daemon not reachable (is dockerd running?). Start it, then re-run with --up."
   log "starting the full stack..."
   if command_exists make && [ -f "$ROOT/Makefile" ]; then
     ( cd "$ROOT" && make up )
