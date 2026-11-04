@@ -1,7 +1,7 @@
 # PipelineIQ — Fresh-VM Deployment Guide (GCP, end to end)
 
 Deploy the entire flagship stack on a **brand-new GCP VM** so that afterwards a
-single command brings up everything, all public, just like production:
+single command brings up everything, all public, matching production:
 
 ```bash
 git clone https://github.com/Siddharthk17/PipelineIQ.git
@@ -63,7 +63,7 @@ Demo login (seeded automatically): `demo@pipelineiq.app` / `Demo1234!`
 ## 2. Prerequisites
 
 - A GCP account + project with billing enabled (new accounts get a $300 free trial — see §18).
-- [`gcloud` CLI](https://cloud.google.com/sdk/docs/install) installed and logged in (`gcloud auth login`), **or** just use the Cloud Console for Steps 1–4 and the in-browser SSH button.
+- [`gcloud` CLI](https://cloud.google.com/sdk/docs/install) installed and logged in (`gcloud auth login`), **or** use the Cloud Console for Steps 1–4 and the in-browser SSH button.
 - Nothing else. Docker, secrets, host tuning, and trusted-host wiring are all handled by the repo's bootstrap script.
 
 Minimum VM shape (do not go smaller — the stack OOMs below this):
@@ -152,7 +152,7 @@ What it does (safe to re-run any time; existing values are never overwritten):
 2. Creates `.env` from `.env.example` and generates every secret the stack needs (Postgres, Redis, JWT, MinIO, S3-matched creds, Flower, Grafana, replica password matched to Postgres). It also fixes two silent-failure traps: S3 credentials must equal the MinIO credentials, and the replica password must equal the Postgres password.
 3. Detects the public IP (GCP metadata → host IPv4 → `localhost` fallback) and writes `PUBLIC_HOST` + merges the IP into `TRUSTED_HOSTS` (without this, every browser login fails with `400 Invalid host header`).
 4. Sets `vm.overcommit_memory=1` persistently (Redis requirement), or prints the one-liner if it lacks privilege.
-5. With `--up`: builds all images and starts all 21 services, then prints every URL.
+5. With `--up`: builds all images and starts all 30 services, then prints every URL.
 
 Takes 15–30 min on first run (image pulls + Next.js build). Do not `Ctrl-C` the build — re-running resumes safely.
 
@@ -263,7 +263,7 @@ make logs SVC=api                       # follow one service (api, worker-defaul
 docker compose logs --tail=50 nginx     # nginx access log (who hit what, backend replies)
 docker compose up -d --force-recreate <svc>   # restart one service with latest config
 docker compose down                     # stop everything (data kept in volumes)
-docker compose down --volumes           # ⚠️ DESTROYS all data (DB, MinIO, Redis). Never on a live demo.
+docker compose down --volumes           # WARNING: destroys all data (DB, MinIO, Redis). Never on a live demo.
 ```
 
 Backups (do this before anything risky):
@@ -282,11 +282,15 @@ make restore BACKUP=backups/pg-<date>.sql.gz  # stops writers, drops, loads, mig
 ```
 
 The dump covers PostgreSQL only. MinIO objects (uploads, pipeline outputs,
-WASM modules) are not in `pg_dump` — mirror buckets separately if they matter:
+WASM modules) are not in `pg_dump` — mirror buckets separately with a local
+`mc` install. (The MinIO server image does not ship the `mc` client, so this
+does not run inside the `minio` container.)
 
 ```bash
-docker compose exec minio mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-docker compose exec minio mc mirror --overwrite local/pipelineiq-uploads /tmp/minio-mirror/uploads
+curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /tmp/mc \
+  && chmod +x /tmp/mc
+/tmp/mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+/tmp/mc mirror --overwrite local/pipelineiq-uploads /tmp/minio-mirror/uploads
 ```
 
 Full drill procedure (backup → restore → verify) lives in `RUNBOOK.md` under Disaster Recovery.
@@ -441,6 +445,6 @@ A 90-day $300 trial comfortably covers months of demo hosting on one VM. Biggest
 - **Custom domain + HTTPS** — the single biggest flagship upgrade after this guide (also unlocks Secure cookies and HSTS).
 - **Nightly demo reseed** — a cron job running the showcase seed on a schedule so visitors always land on an alive, pristine demo (already installed by bootstrap; verify with `crontab -l | grep pipelineiq`).
 - **Backups** — nightly `pg_dump` + MinIO bucket sync to Cloud Storage. Prove restores with `make restore BACKUP=...` on a scratch box before you need it (see RUNBOOK.md Disaster Recovery).
-- **External uptime monitor** — `.github/workflows/uptime.yml` probes the public URL every 5 minutes once you set the `PRODUCTION_URL` repository secret (Actions → repo Settings → Secrets → Actions). For paging (not just a red badge), point Better Stack or Uptime Kuma at the same `/health` endpoint.
+- **External uptime monitor** — `.github/workflows/uptime.yml` probes the public URL every 5 minutes once you set the `PRODUCTION_URL` repository secret (Actions → repo Settings → Secrets → Actions). For paging (not only a red badge), point Better Stack or Uptime Kuma at the same `/health` endpoint.
 - **Status page** — a tiny public `/health`-based status check visitors can see.
 - **Release discipline** — Release-please tags versions and publishes GitHub Releases from conventional commits; keep CI green and the badges reflect it.

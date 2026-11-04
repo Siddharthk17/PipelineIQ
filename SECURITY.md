@@ -48,7 +48,7 @@ In-scope areas we especially care about: JWT issuance/validation and revocation 
 - Set `ENVIRONMENT=production` (enforces secure cookies and refuses weak secrets at startup) and serve behind TLS.
 - Keep `TRUSTED_HOSTS` restricted to the hostnames you actually serve.
 - Set `vm.overcommit_memory=1` on the Docker host (required for Redis persistence).
-- Containers run least-privilege by default: backend as `appuser`, frontend as `nextjs`, nginx workers as `nginx`, pgbouncer via `su-exec postgres`, y-websocket production builds as `node`. Do not add `privileged: true` or `user: root` overrides to compose/k8s without an ADR.
+- Containers run least-privilege by default: backend as `appuser`, frontend as `nextjs`, nginx workers as `nginx`, pgbouncer via `su-exec postgres`, y-websocket production builds as `node`. Do not add `privileged: true` or `user: root` overrides to compose/k8s manifests without documenting the reason in the PR.
 
 ## Supply-Chain Security
 

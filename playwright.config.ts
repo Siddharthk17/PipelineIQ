@@ -33,7 +33,7 @@ export default defineConfig({
   ],
 
   webServer: process.env.CI ? undefined : {
-    command: 'cd frontend && pnpm dev',
+    command: 'cd frontend && npm run dev',
     url: BASE_URL,
     reuseExistingServer: true,
     timeout: 60_000,

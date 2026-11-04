@@ -3,7 +3,7 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
-## [12.8.0]
+## [12.8.4]
 
 ### Added
 - Public-by-default reverse proxy: `/docs`, `/redoc`, `/openapi.json`, `/flower/`, `/grafana/`, `/prometheus/`, `/jaeger/`, and `/yjs/` (collaboration WebSocket) are all reachable on port 80 with matching service flags (`--url_prefix`, `--web.route-prefix`, `--query.base-path`).
