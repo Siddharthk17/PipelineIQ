@@ -253,7 +253,7 @@ jobs:
           FLOWER_PASSWORD=ci_flower_password
           GRAFANA_USER=admin
           GRAFANA_PASSWORD=ci_grafana_password
-          APP_VERSION=12.8.0
+          APP_VERSION=12.8.4
           CELERY_WORKERS_CRITICAL=1
           CELERY_WORKERS_DEFAULT=1
           CELERY_WORKERS_BULK=1
@@ -470,7 +470,7 @@ jobs:
           FLOWER_PASSWORD=ci_flower_password
           GRAFANA_USER=admin
           GRAFANA_PASSWORD=ci_grafana_password
-          APP_VERSION=12.8.0
+          APP_VERSION=12.8.4
           CELERY_WORKERS_CRITICAL=1
           CELERY_WORKERS_DEFAULT=1
           CELERY_WORKERS_BULK=1
