@@ -272,11 +272,11 @@ jobs:
         if: failure()
         run: |
           docker compose ps
-          echo "--- grafana logs (tail) ---"
+          echo "grafana logs (tail):"
           docker compose logs --tail=100 grafana || true
-          echo "--- grafana health ---"
+          echo "grafana health:"
           docker inspect pipelineiq-grafana --format='{{json .State.Health}}' || true
-          echo "--- prometheus logs (tail) ---"
+          echo "prometheus logs (tail):"
           docker compose logs --tail=30 prometheus || true
 
       - name: Verify all services healthy
@@ -501,31 +501,31 @@ jobs:
         if: failure()
         run: |
           docker compose ps
-          echo "--- grafana logs (tail) ---"
+          echo "grafana logs (tail):"
           docker compose logs --tail=100 grafana || true
-          echo "--- grafana health ---"
+          echo "grafana health:"
           docker inspect pipelineiq-grafana --format='{{json .State.Health}}' || true
-          echo "--- redpanda logs (tail) ---"
+          echo "redpanda logs (tail):"
           docker compose logs --tail=30 redpanda || true
 
       - name: Verify all services healthy
         run: |
           docker compose ps
-          echo "--- Checking API ---"
+          echo "Checking API:"
           curl --retry 5 --retry-delay 5 -f http://localhost/health || {
             echo "API not healthy, showing logs:"
             docker compose logs api --tail=30
             exit 1
           }
           echo "✓ API healthy through Nginx"
-          echo "--- Checking Redpanda ---"
+          echo "Checking Redpanda:"
           docker exec pipelineiq-redpanda rpk cluster health || {
             echo "Redpanda not healthy, showing logs:"
             docker compose logs redpanda --tail=30
             exit 1
           }
           echo "✓ Redpanda healthy"
-          echo "--- Checking worker-streaming ---"
+          echo "Checking worker-streaming:"
           docker compose ps worker-streaming | grep -q "Up" || {
             echo "worker-streaming not running, showing logs:"
             docker compose logs worker-streaming --tail=30
