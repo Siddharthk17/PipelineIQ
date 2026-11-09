@@ -8,8 +8,8 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "ws": "^8.17.0",
-    "y-websocket": "^1.5.4",
+    "ws": "^8.22.1",
+    "y-websocket": "^3.1.0",
     "y-redis": "^1.0.3",
     "jsonwebtoken": "^9.0.2"
   }
