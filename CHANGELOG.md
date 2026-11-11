@@ -3,6 +3,33 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## 12.8.5 (2026-11-11)
+
+## What's Changed
+* Fix CI: advertise IPv4 Kafka, pin confluent-kafka, harden flush asserts by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/23
+* Production hardening: release train, supply chain, observability, ops by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/24
+* E2E hardening: fix six runtime defects, unify version to 12.8.4 by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/25
+* Docs audit + five defect fixes (v12.8.4) by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/26
+* Fix CI Grafana healthcheck + Prometheus datasource (v12.8.4) by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/27
+* Fix Grafana CI probe with curl + failure diagnostics (v12.8.4) by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/28
+* Fix Grafana provisioning crash, CI diagnostics, slop cleanup (v12.8.4) by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/29
+* Harden bootstrap and Makefile (v12.8.4) by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/30
+* Seed lineage and catalog data, fix estimate endpoint path (v12.8.4) by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/31
+* ci(deps): bump actions/checkout from 4 to 7 by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/32
+* ci(deps): bump docker/build-push-action from 5 to 7 by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/33
+* ci(deps): bump googleapis/release-please-action from 4 to 5 by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/34
+* chore(deps): bump opentelemetry-exporter-otlp from 1.45.1 to 1.45.2 in /backend by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/35
+* chore(deps): bump uvicorn from 0.27.0 to 0.54.0 in /backend by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/36
+* chore(deps): bump duckdb from 1.5.2 to 2.0.0 in /backend by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/37
+* chore(deps): bump ws from 8.21.0 to 8.22.1 in /y-websocket by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/38
+* chore(deps): bump psycopg2-binary from 2.9.9 to 2.9.13 in /backend by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/39
+* chore(deps): bump the celery-stack group across 1 directory with 2 updates by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/40
+* chore(deps): bump the frontend-deps group in /frontend with 39 updates by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/42
+* chore(deps): bump the root-deps group with 38 updates by @dependabot[bot] in https://github.com/Siddharthk17/PipelineIQ/pull/41
+
+
+**Full Changelog**: https://github.com/Siddharthk17/PipelineIQ/compare/v12.8.4...v12.8.5
+
 ## [12.8.4]
 
 ### Added
