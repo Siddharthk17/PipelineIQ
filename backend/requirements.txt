@@ -42,12 +42,17 @@ jellyfish==1.2.1
 wasmtime>=18.0.0
 structlog==24.1.0
 confluent-kafka==2.16.1
-opentelemetry-api==1.45.1
-opentelemetry-sdk==1.45.1
+opentelemetry-api==1.45.2
+opentelemetry-sdk==1.45.2
 opentelemetry-exporter-otlp==1.45.2
-opentelemetry-instrumentation==0.66b1
-opentelemetry-instrumentation-fastapi==0.66b1
-opentelemetry-instrumentation-celery==0.66b1
-opentelemetry-instrumentation-sqlalchemy==0.66b1
-opentelemetry-instrumentation-redis==0.66b1
-opentelemetry-instrumentation-httpx==0.66b1
+# NOTE: the nine OTel pins (core 1.45.x + instrumentation 0.66bx) must move
+# as a lockstep family: exporter-otlp 1.45.2 requires sdk~=1.45.2, and
+# sdk 1.45.2 requires semantic-conventions==0.66b2 (which comes with the
+# 0.66b2 instrumentation line). Bumping any one of them alone (as
+# Dependabot did with the exporter) breaks pip resolution for the file.
+opentelemetry-instrumentation==0.66b2
+opentelemetry-instrumentation-fastapi==0.66b2
+opentelemetry-instrumentation-celery==0.66b2
+opentelemetry-instrumentation-sqlalchemy==0.66b2
+opentelemetry-instrumentation-redis==0.66b2
+opentelemetry-instrumentation-httpx==0.66b2

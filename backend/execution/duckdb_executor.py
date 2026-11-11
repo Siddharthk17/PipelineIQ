@@ -264,7 +264,9 @@ class DuckDBExecutor:
             with contextlib.suppress(Exception):
                 conn.execute(f"SET max_rows_to_scan={_settings.WORKER_MAX_ROWS_TO_SCAN}")
 
-            arrow_result = conn.execute(sql).arrow()
+            # NB: DuckDB >= 2.0 removed Connection.arrow()/fetch_arrow_table();
+            # use conn.sql() which returns a relation without the copy warning.
+            arrow_result = conn.sql(sql).to_arrow_table()
             if isinstance(arrow_result, pa.Table):
                 return arrow_result
             return arrow_result.read_all()

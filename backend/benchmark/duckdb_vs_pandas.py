@@ -145,7 +145,7 @@ def _run_duckdb(
         else:
             raise ValueError(f"Unknown op '{op}'")
 
-        result = conn.execute(query).arrow()
+        result = conn.sql(query).to_arrow_table()
         if isinstance(result, pa.Table):
             return result
         return result.read_all()

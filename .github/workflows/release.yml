@@ -16,7 +16,11 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v5
+      # Pinned to v4: v5 hard-fails parsing legacy non-conventional commits
+      # in this repo's history ("commit could not be parsed"), killing every
+      # release run. Revisit only after history is conventional or v5+
+      # tolerates unparsable messages again.
+      - uses: googleapis/release-please-action@v4
         id: release
         with:
           config-file: release-please-config.json
