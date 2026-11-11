@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 import orjson
 import pandas as pd
 import pyarrow as pa
+from celery import Task
 from celery.utils.log import get_task_logger
 from confluent_kafka import KafkaError
 
@@ -44,9 +45,25 @@ MAX_STREAMING_BATCH_SIZE = 50_000
 MAX_CONSECUTIVE_ERRORS = 50          # Shut down after 50 consecutive batch errors
 
 
+class _UnlimitedTask(Task):
+    """Base for daemon tasks that must never be time-limited.
+
+    Celery >= 5.7 copies task_time_limit/task_soft_time_limit onto every
+    task at bind time, and app finalization re-binds every task, so neither
+    omitting the options nor task_annotations can keep them None.
+    on_bound runs after the merge on every bind, so clearing here sticks.
+    """
+
+    abstract = True
+
+    @classmethod
+    def on_bound(cls, app) -> None:
+        cls.time_limit = None
+        cls.soft_time_limit = None
 
 
 @celery_app.task(
+    base=_UnlimitedTask,
     name="tasks.run_streaming_pipeline",
     queue="streaming",
     bind=True,
