@@ -82,7 +82,7 @@ jobs:
 
       - name: Install kubectl
         if: steps.check-kube.outputs.dry-run == 'false'
-        uses: azure/setup-kubectl@v3
+        uses: azure/setup-kubectl@v5
         with:
           version: v1.29.0
 
