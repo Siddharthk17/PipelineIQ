@@ -163,18 +163,14 @@ def client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
         assert login_response.status_code == 200, (
             f"Fixture admin login failed: {login_response.text}"
         )
-        test_client.headers["Authorization"] = (
-            f"Bearer {login_response.json()['access_token']}"
-        )
+        test_client.headers["Authorization"] = f"Bearer {login_response.json()['access_token']}"
         yield test_client
 
     app.dependency_overrides.clear()
 
 
 @pytest.fixture()
-def mock_admin_client(
-    test_db: Session, tmp_path
-) -> Generator[TestClient, None, None]:
+def mock_admin_client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
     """TestClient with auth dependencies overridden by a mock admin.
 
     BYPASSES REAL AUTHENTICATION — use only for tests that genuinely
