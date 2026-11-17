@@ -128,6 +128,9 @@ class StepExecutor:
     lineage, and return StepExecutionResult.
     """
 
+    _current_run_id: str | None = None
+    """Run id forwarded by the runner so save steps write run-scoped artifacts."""
+
     def __init__(self) -> None:
         self._dispatch: dict[StepType, Callable] = {
             StepType.LOAD: self.execute_load,
@@ -772,7 +775,7 @@ class StepExecutor:
         save_result = None
         try:
             from backend.execution.steps.save_step import execute_save_step
-            run_id = getattr(self, "_current_run_id", None) or ""
+            run_id = self._current_run_id or ""
             save_result = execute_save_step(
                 table=input_table,
                 step=config,
