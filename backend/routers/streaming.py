@@ -8,11 +8,9 @@ import uuid as uuid_module
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_admin, get_current_user
-from backend.celery_app import celery_app
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import PipelineRun, StreamingStats, User
 from backend.streaming.access import base_topic, check_topic_access, get_accessible_topics
@@ -180,19 +178,54 @@ def _replay_dlq_sync(
             logger.exception("DLQ replay consumer close failed for %s", dlq_topic)
 
 
+def _call_transition(name: str, run_id: str, user: User):
+    """Invoke a daemon-side transition function (M-078).
+
+    The transition functions (``request_pause``/``request_resume``/
+    ``request_stop``/``request_restart``) live in
+    ``backend/tasks/streaming_pipeline.py`` (sibling-owned) and return
+    ``(ok, error)``. Routes only do authz + map the result to HTTP codes —
+    they never write run state themselves.
+    """
+    try:
+        from backend.tasks import streaming_pipeline as daemon
+    except ImportError as exc:
+        raise HTTPException(503, "Streaming daemon unavailable") from exc
+    fn = getattr(daemon, name, None)
+    if fn is None:
+        raise HTTPException(503, f"Streaming transition '{name}' unavailable")
+    try:
+        result = fn(run_id, user)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Streaming transition %s failed for run %s", name, run_id)
+        raise HTTPException(500, f"{name} failed: {exc}") from exc
+    if isinstance(result, tuple) and len(result) == 2:
+        return result
+    return bool(result), None
+
+
+def _map_transition_error(error: object, action: str) -> HTTPException:
+    detail = str(error) if error else f"{action} failed"
+    lowered = detail.lower()
+    if "not found" in lowered:
+        return HTTPException(404, detail)
+    if "conflict" in lowered or "concurrent" in lowered or "modified" in lowered:
+        return HTTPException(409, detail)
+    return HTTPException(400, detail)
+
+
 @router.post("/runs/{run_id}/pause")
 async def pause_streaming(
     run_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db_dependency),
 ):
-    run = await _get_run_or_404(run_id, current_user.id, db)
-    if run.status.value != "STREAMING_ACTIVE":
-        raise HTTPException(400, f"Run not streaming_active (status: {run.status.value})")
-    db.execute(
-        update(PipelineRun).where(PipelineRun.id == run_id).values(status="STREAMING_PAUSED")
-    )
-    db.commit()
+    await _get_run_or_404(run_id, current_user.id, db)
+    ok, error = _call_transition("request_pause", run_id, current_user)
+    if not ok:
+        raise _map_transition_error(error, "pause")
     return {"status": "STREAMING_PAUSED", "run_id": run_id}
 
 
@@ -202,13 +235,10 @@ async def resume_streaming(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db_dependency),
 ):
-    run = await _get_run_or_404(run_id, current_user.id, db)
-    if run.status.value != "STREAMING_PAUSED":
-        raise HTTPException(400, f"Run not streaming_paused (status: {run.status.value})")
-    db.execute(
-        update(PipelineRun).where(PipelineRun.id == run_id).values(status="STREAMING_ACTIVE")
-    )
-    db.commit()
+    await _get_run_or_404(run_id, current_user.id, db)
+    ok, error = _call_transition("request_resume", run_id, current_user)
+    if not ok:
+        raise _map_transition_error(error, "resume")
     return {"status": "STREAMING_ACTIVE", "run_id": run_id}
 
 
@@ -218,15 +248,10 @@ async def stop_streaming(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db_dependency),
 ):
-    run = await _get_run_or_404(run_id, current_user.id, db)
-    if run.status.value not in ("STREAMING_ACTIVE", "STREAMING_PAUSED"):
-        raise HTTPException(400, f"Run not streaming (status: {run.status.value})")
-    if run.celery_task_id:
-        celery_app.control.revoke(run.celery_task_id, terminate=True, signal="SIGTERM")
-    db.execute(
-        update(PipelineRun).where(PipelineRun.id == run_id).values(status="STREAMING_STOPPED")
-    )
-    db.commit()
+    await _get_run_or_404(run_id, current_user.id, db)
+    ok, error = _call_transition("request_stop", run_id, current_user)
+    if not ok:
+        raise _map_transition_error(error, "stop")
     return {"status": "STREAMING_STOPPED", "run_id": run_id}
 
 
@@ -236,19 +261,11 @@ async def restart_streaming(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db_dependency),
 ):
-    run = await _get_run_or_404(run_id, current_user.id, db)
-    if run.status.value != "STREAMING_STOPPED":
-        raise HTTPException(400, f"Run not stopped (status: {run.status.value})")
-    from backend.tasks.streaming_pipeline import run_streaming_pipeline
-
-    result = run_streaming_pipeline.delay(run_id)
-    db.execute(
-        update(PipelineRun)
-        .where(PipelineRun.id == run_id)
-        .values(status="STREAMING_ACTIVE", celery_task_id=result.id)
-    )
-    db.commit()
-    return {"status": "STREAMING_ACTIVE", "run_id": run_id, "celery_task_id": result.id}
+    await _get_run_or_404(run_id, current_user.id, db)
+    ok, error = _call_transition("request_restart", run_id, current_user)
+    if not ok:
+        raise _map_transition_error(error, "restart")
+    return {"status": "STREAMING_ACTIVE", "run_id": run_id}
 
 
 @router.get("/runs/{run_id}/stats")
