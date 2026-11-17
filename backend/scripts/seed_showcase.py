@@ -13,12 +13,13 @@ pipeline versions) and re-seeds from scratch. Never touches other users.
 Idempotent without --reset: existing names are skipped.
 """
 
+import contextlib
 import csv
 import io
 import random
 import sys
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import yaml
 
@@ -30,11 +31,9 @@ from backend.models import (
     LineageGraph,
     PipelineRun,
     PipelineSchedule,
-    PipelineStatus,
     PipelineVersion,
     ScheduleRun,
     StepResult,
-    StepStatus,
     UploadedFile,
     User,
 )
@@ -636,10 +635,8 @@ def seed_showcase(reset=False):
                 db.delete(sched)
             for f in db.query(UploadedFile).filter(
                     UploadedFile.user_id == user.id).all():
-                try:
+                with contextlib.suppress(Exception):
                     storage_service.delete(f.stored_path)
-                except Exception:
-                    pass
                 db.delete(f)
             db.query(PipelineVersion).delete()
             db.commit()
@@ -651,7 +648,7 @@ def seed_showcase(reset=False):
 
         fids, file_info = _seed_files(db, user)
         wasm_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         counts = {"runs": 0, "failed": 0, "healed": 0}
 
         for idx, (base, kind, domain) in enumerate(PIPELINE_SPECS):
@@ -776,7 +773,7 @@ def seed_showcase(reset=False):
             sched = PipelineSchedule(
                 user_id=user.id, pipeline_name=sname,
                 yaml_config=_yaml(sname, "Showcase schedule", _steps_sales_delivered(
-                    list(fids.values())[0])),
+                    next(iter(fids.values())))),
                 cron_expression=cron,
                 cron_human=f"cron {cron}", is_active=active,
                 last_run_at=now - timedelta(hours=5),

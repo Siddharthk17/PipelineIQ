@@ -29,7 +29,6 @@ from backend.pipeline.exceptions import (
     UnsupportedFileFormatError,
 )
 from backend.pipeline.lineage import LineageRecorder
-from backend.utils.string_utils import format_bytes
 from backend.pipeline.parser import (
     AggregateStepConfig,
     DeduplicateStepConfig,
@@ -54,6 +53,7 @@ from backend.pipeline.parser import (
     WasmComputeStepConfig,
 )
 from backend.services.storage_service import storage_service
+from backend.utils.string_utils import format_bytes
 from backend.utils.time_utils import measure_ms
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,9 @@ class StepExecutor:
     the same pattern: validate inputs, execute transformation, record
     lineage, and return StepExecutionResult.
     """
+
+    _current_run_id: str | None = None
+    """Run id forwarded by the runner so save steps write run-scoped artifacts."""
 
     def __init__(self) -> None:
         self._dispatch: dict[StepType, Callable] = {
@@ -772,7 +775,7 @@ class StepExecutor:
         save_result = None
         try:
             from backend.execution.steps.save_step import execute_save_step
-            run_id = getattr(self, "_current_run_id", None) or ""
+            run_id = self._current_run_id or ""
             save_result = execute_save_step(
                 table=input_table,
                 step=config,
