@@ -127,9 +127,14 @@ def perf_client(test_db: Session, tmp_path):
 
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()
+    saved_upload_dir = file_settings.UPLOAD_DIR
     file_settings.UPLOAD_DIR = upload_dir
 
-    return TestClient(app)
+    try:
+        yield TestClient(app)
+    finally:
+        file_settings.UPLOAD_DIR = saved_upload_dir
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture()
