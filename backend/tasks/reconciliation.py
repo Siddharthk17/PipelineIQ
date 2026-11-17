@@ -211,10 +211,19 @@ def reconcile_stuck_runs(
                     age = _run_age(run, utcnow())
                     if age is None or age < 2 * timeout:
                         continue
-            error_message = (
-                "Run timed out: worker stopped reporting progress "
-                f"(last celery task state: {task_state or 'unknown'})"
-            )
+            if not run.celery_task_id:
+                # M-020 orphan: run row committed but dispatch never
+                # reached the broker. Converge to TIMEOUT here instead
+                # of sitting in PENDING forever.
+                error_message = (
+                    "Run timed out: dispatch never reached the broker "
+                    "(no celery task id; orphaned PENDING run)"
+                )
+            else:
+                error_message = (
+                    "Run timed out: worker stopped reporting progress "
+                    f"(last celery task state: {task_state or 'unknown'})"
+                )
             run.status = PipelineStatus.TIMEOUT
             run.completed_at = utcnow()
             run.error_message = error_message
