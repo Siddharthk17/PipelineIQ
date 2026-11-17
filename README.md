@@ -598,6 +598,28 @@ cd backend
 python -m pytest tests/ -v --tb=short
 ```
 
+### Required live services (fail-fast, no skips)
+
+Backend tests require live throwaway Postgres + Redis even though each
+test gets a hermetic SQLite DB and tmp dirs: JWT revocation checks are
+fail-closed without Redis, the audit side-session opens its own DB
+connection, and rate limiting/task state need Redis. If any endpoint is
+unreachable, collection aborts immediately with the exact host:port
+instead of skipping or failing obscurely.
+
+```bash
+# Expected by default: postgres on localhost:5432 (db pipelineiq,
+# user postgres), redis on localhost:6379 (broker), :6380 (pubsub),
+# :6381 (cache). Via Compose:
+docker compose up -d postgres redis-broker redis-pubsub redis-cache
+# ... or as bare throwaway processes:
+pg_ctl -D $WORK/pgdata -l $WORK/logs/pg.log start
+# (run: initdb -D $WORK/pgdata first, if pgdata is missing)
+for p in 6379 6380 6381; do
+  redis-server --port $p --daemonize yes --save '' --appendonly no
+done
+```
+
 | Area | Files | What is covered |
 |------|-------|-----------------|
 | `unit/api/` | 10 | Auth flows, RBAC, run ownership, rate limits, public endpoints, upload encodings, plan checks |
