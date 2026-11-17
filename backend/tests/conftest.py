@@ -62,6 +62,96 @@ FIXTURE_ADMIN_USERNAME = "fixture_admin"
 FIXTURE_ADMIN_PASSWORD = "FixtureAdmin123!"
 
 
+def _tcp_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
+    """True when a TCP connection to host:port succeeds within timeout."""
+    import socket
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _required_service_targets() -> list[tuple[str, str, int]]:
+    """Live services the suite needs, as (setting name, host, port).
+
+    Derived from the configured settings so CI (single Redis on :6379)
+    and local throwaway stacks (PG :5432, Redis :6379-:6382) are both
+    probed correctly. SQLite database URLs have nothing to probe and are
+    skipped. ``PIPELINEIQ_TEST_PG_URL`` / ``PIPELINEIQ_TEST_REDIS_URLS``
+    (comma-separated) override the probed URLs — used to exercise the
+    fail-fast path itself without stopping shared services.
+    """
+    import os
+    from urllib.parse import urlparse
+
+    from backend.config import settings
+
+    pg_url = os.getenv("PIPELINEIQ_TEST_PG_URL") or settings.DATABASE_URL
+    redis_urls = os.getenv("PIPELINEIQ_TEST_REDIS_URLS")
+    redis_candidates = (
+        [u.strip() for u in redis_urls.split(",") if u.strip()]
+        if redis_urls
+        else [
+            settings.REDIS_BROKER_URL,
+            settings.REDIS_PUBSUB_URL,
+            settings.REDIS_CACHE_URL,
+        ]
+    )
+
+    targets: list[tuple[str, str, int]] = []
+    labeled: list[tuple[str, str, int]] = [("DATABASE_URL", pg_url, 5432)]
+    redis_names = ("REDIS_BROKER_URL", "REDIS_PUBSUB_URL", "REDIS_CACHE_URL")
+    for i, url in enumerate(redis_candidates):
+        label = redis_names[i] if i < len(redis_names) else f"REDIS_URL_{i}"
+        labeled.append((label, url, 6379))
+    for label, url, default_port in labeled:
+        parts = urlparse(url)
+        if parts.scheme == "sqlite" or not parts.hostname:
+            continue
+        targets.append((label, parts.hostname, parts.port or default_port))
+    return targets
+
+
+def pytest_sessionstart(session) -> None:
+    """Fail fast when required live services are unreachable (M-053/B-001).
+
+    Backend tests depend on throwaway Postgres + Redis (JWT revocation
+    checks are fail-closed, the audit side-session opens its own DB
+    connection, rate limiting and task state need Redis). Running without
+    them produces dozens of misleading failures, so abort collection with
+    one actionable message instead of letting tests skip or fail obscurely.
+    """
+    unreachable = [
+        (label, host, port)
+        for label, host, port in _required_service_targets()
+        if not _tcp_reachable(host, port)
+    ]
+    if not unreachable:
+        return
+    details = "\n".join(
+        f"  - {label}: TCP {host}:{port} refused" for label, host, port in unreachable
+    )
+    raise pytest.UsageError(
+        "PipelineIQ backend tests require live throwaway services, "
+        f"but {len(unreachable)} endpoint(s) are unreachable:\n"
+        f"{details}\n"
+        "Start them, then re-run (no data is preserved; tests are hermetic "
+        "per-test via SQLite + tmp dirs):\n"
+        "  docker compose up -d postgres redis-broker redis-pubsub redis-cache\n"
+        "or as bare throwaway processes:\n"
+        "  pg_ctl -D $WORK/pgdata -l $WORK/logs/pg.log start"
+        "  # (run: initdb -D $WORK/pgdata first, if pgdata is missing)\n"
+        "  for p in 6379 6380 6381; do $WORK/bin/redis-server --port $p"
+        " --daemonize yes --save '' --appendonly no; done\n"
+        "Expected by default: postgres on localhost:5432 (db pipelineiq, "
+        "user postgres), redis on localhost:6379/6380/6381. "
+        "Aborting collection — tests are never skipped for missing services. "
+        "See README 'Testing'."
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
     """Reset rate limiter storage between ALL tests."""
