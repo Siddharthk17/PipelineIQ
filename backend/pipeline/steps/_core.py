@@ -29,7 +29,6 @@ from backend.pipeline.exceptions import (
     UnsupportedFileFormatError,
 )
 from backend.pipeline.lineage import LineageRecorder
-from backend.utils.string_utils import format_bytes
 from backend.pipeline.parser import (
     AggregateStepConfig,
     DeduplicateStepConfig,
@@ -54,6 +53,7 @@ from backend.pipeline.parser import (
     WasmComputeStepConfig,
 )
 from backend.services.storage_service import storage_service
+from backend.utils.string_utils import format_bytes
 from backend.utils.time_utils import measure_ms
 
 logger = logging.getLogger(__name__)
