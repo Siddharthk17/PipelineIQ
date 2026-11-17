@@ -12,6 +12,7 @@ checks the current status and only proceeds if PENDING.
 import contextlib
 import logging
 import re
+import uuid as uuid_lib
 
 import orjson
 from redis.exceptions import RedisError
@@ -271,22 +272,31 @@ def check_and_enforce_contract(
 def execute_pipeline_task(self, run_id: str) -> dict[str, str]:
     """Execute a pipeline run asynchronously.
 
-    This task is idempotent: if the run_id already has a non-PENDING
-    status, the task logs a warning and returns early.
+    Task-level idempotency (M-033): the PENDING -> RUNNING transition is
+    claimed with a single conditional UPDATE, so concurrent duplicate
+    deliveries race on the database row instead of check-then-act in
+    Python. Only the claim winner executes; losers return the current
+    status without touching Arrow state or result tables.
     """
     db = SessionLocal()
+    claimed = False
     try:
-        pipeline_run = db.query(PipelineRun).filter(
-            PipelineRun.id == run_id).first()
-
+        pipeline_run = _try_claim_run(
+            db, run_id, getattr(self.request, "id", None))
         if pipeline_run is None:
-            logger.error("Pipeline run %s not found in database", run_id)
-            return {"run_id": run_id, "status": "NOT_FOUND"}
-
-        if not _should_execute(pipeline_run):
-            return {"run_id": run_id, "status": pipeline_run.status.value}
-
-        pipeline_run.celery_task_id = self.request.id
+            existing = db.query(PipelineRun).filter(
+                PipelineRun.id == _coerce_run_uuid(run_id)).first()
+            if existing is None:
+                logger.error(
+                    "Pipeline run %s not found in database", run_id)
+                return {"run_id": run_id, "status": "NOT_FOUND"}
+            logger.warning(
+                "Duplicate delivery for run %s (status %s); skipping",
+                run_id,
+                existing.status.value,
+            )
+            return {"run_id": run_id, "status": existing.status.value}
+        claimed = True
 
         # Capture OpenTelemetry trace context for distributed tracing
         try:
@@ -294,12 +304,11 @@ def execute_pipeline_task(self, run_id: str) -> dict[str, str]:
             span_ctx = current_span_context()
             if span_ctx.get("trace_id"):
                 pipeline_run.trace_id = span_ctx["trace_id"]
+                db.commit()
         except Exception:
             logger.debug("Failed to capture OTel trace context", exc_info=True)
+            db.rollback()
 
-        db.commit()
-
-        _mark_running(db, pipeline_run)
         summary = _execute_with_autonomous_healing(db, pipeline_run)
         _persist_results(db, pipeline_run, summary)
     except Exception as exc:
@@ -321,20 +330,85 @@ def execute_pipeline_task(self, run_id: str) -> dict[str, str]:
     else:
         return {"run_id": run_id, "status": pipeline_run.status.value}
     finally:
-        try:
-            from backend.execution.arrow_bus import get_arrow_bus
+        if claimed:
+            # Only the claim winner owns Arrow bus state; a duplicate
+            # delivery that lost the claim must not wipe the winner's
+            # in-flight tables (M-033).
+            try:
+                from backend.execution.arrow_bus import get_arrow_bus
 
-            cleanup_result = get_arrow_bus().cleanup_run(run_id)
-            logger.info(
-                "Arrow bus cleanup: run_id=%s, hot=%d, warm=%d, cold=%d",
-                run_id[:16],
-                cleanup_result.get("hot", 0),
-                cleanup_result.get("warm", 0),
-                cleanup_result.get("cold", 0),
-            )
-        except Exception:
-            logger.debug("Arrow bus cleanup skipped for run_id=%s", run_id)
+                cleanup_result = get_arrow_bus().cleanup_run(run_id)
+                logger.info(
+                    "Arrow bus cleanup: run_id=%s, hot=%d, warm=%d, cold=%d",
+                    run_id[:16],
+                    cleanup_result.get("hot", 0),
+                    cleanup_result.get("warm", 0),
+                    cleanup_result.get("cold", 0),
+                )
+            except Exception:
+                logger.debug("Arrow bus cleanup skipped for run_id=%s", run_id)
         db.close()
+
+
+def _coerce_run_uuid(run_id: object) -> uuid_lib.UUID | None:
+    """Coerce a run id to UUID (Uuid columns need real UUIDs on SQLite)."""
+    if isinstance(run_id, uuid_lib.UUID):
+        return run_id
+    try:
+        return uuid_lib.UUID(str(run_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _try_claim_run(db, run_id: str, celery_task_id: str | None):
+    """Atomically claim a PENDING run for execution (M-033).
+
+    A single conditional UPDATE moves PENDING -> RUNNING. Concurrent
+    duplicate deliveries serialize on the row: exactly one sees
+    rowcount 1 (winner); the rest see 0 and return None (losers).
+    Returns the claimed run, or None when the run is missing or
+    already claimed.
+    """
+    from sqlalchemy import update
+
+    run_uuid = _coerce_run_uuid(run_id)
+    if run_uuid is None:
+        return None
+    try:
+        result = db.execute(
+            update(PipelineRun)
+            .where(
+                PipelineRun.id == run_uuid,
+                PipelineRun.status == PipelineStatus.PENDING,
+            )
+            .values(
+                status=PipelineStatus.RUNNING,
+                started_at=utcnow(),
+                celery_task_id=celery_task_id,
+            )
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            return None
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "Failed to claim pipeline run %s", run_id, exc_info=True)
+        return None
+    claimed_run = db.query(PipelineRun).filter(
+        PipelineRun.id == run_uuid).first()
+    if claimed_run is None or claimed_run.status != PipelineStatus.RUNNING:
+        return None
+    _cache_progress_payload(
+        str(claimed_run.id),
+        {
+            "run_id": str(claimed_run.id),
+            "event_type": "pipeline_started",
+            "status": PipelineStatus.RUNNING.value,
+        },
+    )
+    return claimed_run
 
 
 def _should_execute(pipeline_run: PipelineRun) -> bool:
