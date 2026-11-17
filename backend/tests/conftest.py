@@ -53,6 +53,14 @@ pytestmark = pytest.mark.asyncio(mode="auto")
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
+# Credentials for the dedicated admin user that the `client` fixture
+# registers through the real /auth/register + /auth/login flow. Deliberately
+# distinct from any email/username used by individual tests so fixture setup
+# can never collide with test-created users (UNIQUE constraint).
+FIXTURE_ADMIN_EMAIL = "fixture.admin@t.local"
+FIXTURE_ADMIN_USERNAME = "fixture_admin"
+FIXTURE_ADMIN_PASSWORD = "FixtureAdmin123!"
+
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
@@ -95,10 +103,84 @@ def test_db(test_engine) -> Generator[Session, None, None]:
 
 @pytest.fixture()
 def client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
-    """FastAPI TestClient with the test database injected.
+    """FastAPI TestClient authenticated as a REAL admin via real JWT.
 
-    Auth dependencies are overridden with a mock admin user so existing
-    tests that hit protected endpoints continue to work without tokens.
+    No auth dependencies are overridden: every request goes through the
+    production ``get_current_user`` / ``get_current_admin`` /
+    ``get_optional_user`` path (password hashing, JWT issue/verify,
+    Redis revocation check, DB user lookup). The fixture registers a
+    dedicated admin user through ``POST /auth/register`` and logs in
+    through ``POST /auth/login``, then attaches the resulting Bearer
+    token as the client's default ``Authorization`` header. Per-request
+    ``headers=`` still override it (e.g. to test 401/403 paths).
+
+    For the rare test that must bypass authentication entirely, use the
+    explicitly-marked :func:`mock_admin_client` fixture instead.
+    """
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_read_db] = override_get_db
+    app.dependency_overrides[get_write_db] = override_get_db
+
+    # Patch upload dir to use tmp_path
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    with (
+        patch("backend.api.files.settings") as mock_settings,
+        patch("backend.api.pipelines.execute_pipeline_task") as mock_task,
+        patch("backend.tasks.profiling.profile_file.apply_async") as mock_profile_task,
+    ):
+        mock_settings.UPLOAD_DIR = upload_dir
+        mock_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
+        mock_settings.MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+        mock_settings.MAX_ROWS_PER_FILE = 1000000
+        mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
+        mock_profile_task.return_value = MagicMock(id="mock-profile-task-id")
+        test_client = TestClient(app)
+        # Real registration + login so the client presents a genuine JWT.
+        # First registered user automatically becomes admin.
+        register_response = test_client.post(
+            "/auth/register",
+            json={
+                "email": FIXTURE_ADMIN_EMAIL,
+                "username": FIXTURE_ADMIN_USERNAME,
+                "password": FIXTURE_ADMIN_PASSWORD,
+            },
+        )
+        assert register_response.status_code == 201, (
+            f"Fixture admin registration failed: {register_response.text}"
+        )
+        login_response = test_client.post(
+            "/auth/login",
+            json={
+                "email": FIXTURE_ADMIN_EMAIL,
+                "password": FIXTURE_ADMIN_PASSWORD,
+            },
+        )
+        assert login_response.status_code == 200, (
+            f"Fixture admin login failed: {login_response.text}"
+        )
+        test_client.headers["Authorization"] = (
+            f"Bearer {login_response.json()['access_token']}"
+        )
+        yield test_client
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def mock_admin_client(
+    test_db: Session, tmp_path
+) -> Generator[TestClient, None, None]:
+    """TestClient with auth dependencies overridden by a mock admin.
+
+    BYPASSES REAL AUTHENTICATION — use only for tests that genuinely
+    need to skip the auth layer (e.g. exercising code paths with a user
+    that must not exist in the database). Prefer :func:`client`, which
+    presents a real JWT, for all API behavior tests.
     """
 
     def override_get_db() -> Generator[Session, None, None]:
