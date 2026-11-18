@@ -983,7 +983,10 @@ services:
     volumes:
       - ./promtail/promtail.yml:/etc/promtail/promtail.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # NOTE: the Docker socket (/var/run/docker.sock) is intentionally NOT
+    # mounted (M-050) — it grants root-equivalent container escape. Log
+    # collection uses static json-file log paths below instead of the
+    # Docker daemon service-discovery API.
     command: -config.file=/etc/promtail/promtail.yml
     depends_on:
       loki:
