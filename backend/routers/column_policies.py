@@ -8,7 +8,11 @@ from backend.auth import get_current_user
 from backend.database import get_read_db, get_write_db
 from backend.models import FileProfile, UploadedFile, User
 from backend.models.column_policy import ColumnPolicy
-from backend.security.column_security import detect_pii_columns, invalidate_policy_cache
+from backend.security.column_security import (
+    detect_pii_columns,
+    invalidate_policy_cache,
+    validate_mask_pattern,
+)
 from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 router = APIRouter(prefix="/api/column-policies", tags=["Column Security"])
@@ -29,6 +33,10 @@ def create_column_policy(
     db: Session = Depends(get_write_db),
 ):
     validate_uuid_format(request.file_id)
+    try:
+        normalized_pattern = validate_mask_pattern(request.mask_pattern)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     file_record = (
         db.query(UploadedFile)
         .filter(UploadedFile.id == as_uuid(request.file_id))
@@ -50,14 +58,14 @@ def create_column_policy(
 
     if existing:
         existing.policy = request.policy
-        existing.mask_pattern = request.mask_pattern
+        existing.mask_pattern = normalized_pattern
         existing.allowed_roles = request.allowed_roles
     else:
         existing = ColumnPolicy(
             file_id=request.file_id,
             column_name=request.column_name,
             policy=request.policy,
-            mask_pattern=request.mask_pattern,
+            mask_pattern=normalized_pattern,
             allowed_roles=request.allowed_roles,
             created_by=current_user.id,
         )
