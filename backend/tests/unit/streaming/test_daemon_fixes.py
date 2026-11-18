@@ -283,3 +283,79 @@ class TestM011StatsUpsert:
         assert row.messages_processed == 0
         assert row.messages_failed == 0
         assert row.messages_dlq == 0
+
+
+class TestM042SingleFlight:
+    """Daemon entry needs a status guard + single-flight claim (M-042)."""
+
+    def _run(self, db, status, task_id=None):
+        import uuid as uuid_module
+
+        from backend.models import PipelineRun
+        run = PipelineRun(
+            id=uuid_module.uuid4(),
+            name="stream-run",
+            status=status,
+            yaml_config="pipeline:\n  name: s\n  steps: []\n",
+            celery_task_id=task_id,
+        )
+        db.add(run)
+        db.commit()
+        return run
+
+    def test_pending_claimed_active(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks.streaming_pipeline import _claim_run
+        run = self._run(test_db, PipelineStatus.PENDING)
+        assert _claim_run(test_db, run.id, "task-1") is None
+        test_db.expire_all()
+        assert run.status == PipelineStatus.STREAMING_ACTIVE
+        assert run.celery_task_id == "task-1"
+
+    def test_duplicate_task_id_rejected(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks.streaming_pipeline import _claim_run
+        run = self._run(
+            test_db, PipelineStatus.STREAMING_ACTIVE, task_id="task-1")
+        reason = _claim_run(test_db, run.id, "task-2")
+        assert reason is not None and "duplicate" in reason.lower()
+        test_db.expire_all()
+        assert run.celery_task_id == "task-1"
+
+    def test_restart_path_matching_task_id_ok(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks.streaming_pipeline import _claim_run
+        run = self._run(
+            test_db, PipelineStatus.STREAMING_ACTIVE, task_id="task-9")
+        assert _claim_run(test_db, run.id, "task-9") is None
+
+    def test_stopped_claimed_for_restart(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks.streaming_pipeline import _claim_run
+        run = self._run(test_db, PipelineStatus.STREAMING_STOPPED)
+        assert _claim_run(test_db, run.id, "task-7") is None
+        test_db.expire_all()
+        assert run.status == PipelineStatus.STREAMING_ACTIVE
+
+    def test_terminal_state_rejected_without_mutation(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks.streaming_pipeline import _claim_run
+        run = self._run(test_db, PipelineStatus.COMPLETED)
+        reason = _claim_run(test_db, run.id, "task-1")
+        assert reason is not None
+        test_db.expire_all()
+        assert run.status == PipelineStatus.COMPLETED
+        assert run.celery_task_id is None
+
+    def test_missing_run_rejected(self, test_db):
+        from backend.tasks.streaming_pipeline import _claim_run
+        reason = _claim_run(test_db, "00000000-0000-4000-8000-000000000000", "t")
+        assert reason is not None and "not found" in reason.lower()
+
+    def test_task_options_bounded_visibility(self):
+        from backend.tasks.streaming_pipeline import run_streaming_pipeline
+        assert getattr(run_streaming_pipeline, "acks_late", False) is True
+        timeout = getattr(run_streaming_pipeline, "visibility_timeout", None)
+        assert timeout is not None and timeout <= 3600, (
+            "acks_late daemon must bound its visibility timeout")
+        assert getattr(run_streaming_pipeline, "time_limit", None) is None

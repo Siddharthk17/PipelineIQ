@@ -9,6 +9,7 @@ Architectural differences from batch pipeline task:
 """
 
 import time
+import uuid
 from datetime import UTC, datetime
 
 import orjson
@@ -44,6 +45,14 @@ BACKPRESSURE_COOLDOWN_SEC = 10       # Wait 10s before resuming after backpressu
 IDEMPOTENT_CACHE_TTL = 10_000        # Keep last 10K processed offsets in memory
 MAX_STREAMING_BATCH_SIZE = 50_000
 MAX_CONSECUTIVE_ERRORS = 50          # Shut down after 50 consecutive batch errors
+# Explicit bound on how long the broker may wait before redelivering the
+# daemon's still-unacked (acks_late) task message (M-042). The daemon runs
+# indefinitely, so *some* redelivery bound always applies; making it
+# explicit documents the design and keeps redeliveries frequent enough to
+# recover a dead worker but rare enough to avoid duplicate-start churn.
+# Every redelivery is safe: _claim_run single-flights them (only the first
+# claimant runs; losers exit immediately without mutating the run).
+STREAMING_VISIBILITY_TIMEOUT_S = 1800
 
 
 class StreamingPublishError(RuntimeError):
@@ -77,6 +86,7 @@ class _UnlimitedTask(Task):
     queue="streaming",
     bind=True,
     acks_late=True,
+    visibility_timeout=STREAMING_VISIBILITY_TIMEOUT_S,
 )
 def run_streaming_pipeline(self, run_id: str) -> dict:
     """Long-running streaming pipeline daemon.
@@ -91,6 +101,12 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
     dlq_producer = None
 
     try:
+        task_id = getattr(getattr(self, "request", None), "id", None)
+        denial = _claim_run(db, run_id, task_id)
+        if denial is not None:
+            logger.warning("Streaming daemon refused to start: %s", denial)
+            return {"error": denial}
+
         pipeline_run = db.query(PipelineRun).filter(
             PipelineRun.id == run_id).first()
         if not pipeline_run:
@@ -124,7 +140,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         admin = get_admin_client()
         admin.ensure_topic(topic)
 
-        _set_status(db, run_id, PipelineStatus.STREAMING_ACTIVE)
+        # Status was already claimed as STREAMING_ACTIVE by _claim_run.
         _init_stats(db, run_id, topic, consumer_group)
         db.commit()
 
@@ -267,6 +283,87 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         db.close()
         logger.info("Consumer closed for run_id=%s", run_id)
     return stats
+
+
+def _claim_run(db, run_id: str, task_id: str | None) -> str | None:
+    """Atomically claim a run for this daemon (M-042 single-flight).
+
+    Returns None when this task owns the run, else a human-readable
+    reason so the caller can exit without touching run state. The claim
+    is a conditional UPDATE (check-and-set): concurrent duplicate
+    dispatches serialize on the row and all but one lose.
+    """
+    try:
+        run_uuid = run_id if isinstance(run_id, uuid.UUID) else uuid.UUID(str(run_id))
+    except (ValueError, AttributeError, TypeError):
+        return f"Run not found: {run_id}"
+    run = db.query(PipelineRun).filter(PipelineRun.id == run_uuid).first()
+    if run is None:
+        return f"Run not found: {run_id}"
+
+    if run.status in (
+        PipelineStatus.PENDING, PipelineStatus.STREAMING_STOPPED,
+    ):
+        expected = run.status
+        updated = (
+            db.query(PipelineRun)
+            .filter(
+                PipelineRun.id == run_uuid,
+                PipelineRun.status == expected,
+            )
+            .update(
+                {
+                    "status": PipelineStatus.STREAMING_ACTIVE,
+                    "celery_task_id": task_id,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        if updated == 1:
+            return None
+        db.expire_all()
+        run = db.query(PipelineRun).filter(
+            PipelineRun.id == run_uuid).first()
+        if run is None:
+            return f"Run not found: {run_id}"
+
+    if run.status == PipelineStatus.STREAMING_ACTIVE:
+        if run.celery_task_id in (None, task_id):
+            # Restart path (endpoint sets ACTIVE + task id before the
+            # delay lands) or adopting an unclaimed ACTIVE row.
+            updated = (
+                db.query(PipelineRun)
+                .filter(
+                    PipelineRun.id == run_uuid,
+                    PipelineRun.status == PipelineStatus.STREAMING_ACTIVE,
+                    (
+                        PipelineRun.celery_task_id.is_(None)
+                        if task_id is None
+                        else (
+                            (PipelineRun.celery_task_id.is_(None))
+                            | (PipelineRun.celery_task_id == task_id)
+                        )
+                    ),
+                )
+                .update(
+                    {"celery_task_id": task_id},
+                    synchronize_session=False,
+                )
+            )
+            db.commit()
+            if updated == 1:
+                return None
+            return (
+                f"concurrent duplicate dispatch for run {run_id}; exiting"
+            )
+        return (
+            f"duplicate daemon for run {run_id} (owned by task "
+            f"{run.celery_task_id}); exiting"
+        )
+    return (
+        f"run {run_id} is {run.status.value}, not dispatchable; exiting"
+    )
 
 
 def _step_type(step) -> str:
