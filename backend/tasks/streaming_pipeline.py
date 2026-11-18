@@ -215,10 +215,10 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
 
             try:
                 table = pa.Table.from_pandas(df, preserve_index=False)
-                table_registry: dict[str, pa.Table] = {"_stream_input": table}
-                output_name = "_stream_input"
+                table_registry, output_name = _seed_registry(table, consume_step)
 
                 for step in middle_steps:
+                    _ensure_step_input(table_registry, step, output_name)
                     result = executor.execute(
                         step,
                         table_registry,
@@ -295,6 +295,46 @@ def _step_type(step) -> str:
 
 def _step_field(step, field: str):
     return getattr(step, field, None)
+
+
+def _seed_registry(
+    table: "pa.Table", consume_step,
+) -> tuple[dict[str, "pa.Table"], str]:
+    """Seed the per-batch table registry (M-009).
+
+    Transforms name the consume step as their ``input`` (e.g.
+    ``input: ingest``), but the daemon used to seed only the
+    ``_stream_input`` alias, so the first transform raised KeyError and
+    every batch went to the DLQ. Seed the consume step's output under
+    the consume step's own name and keep ``_stream_input`` as a legacy
+    alias for pipelines that reference it.
+    """
+    consume_name = getattr(consume_step, "name", None) or "_stream_input"
+    registry: dict[str, pa.Table] = {consume_name: table}
+    registry.setdefault("_stream_input", table)
+    return registry, consume_name
+
+
+def _ensure_step_input(registry: dict, step, fallback_name: str) -> None:
+    """Chain single-input steps whose ``input`` is unresolvable (M-009).
+
+    When a step names an input absent from the registry, alias it to the
+    previous step's output (with a warning) instead of letting the
+    executor raise KeyError and DLQing the batch. Join steps carry
+    ``left``/``right`` refs rather than a single ``input`` and are left
+    alone: a missing join side is a real config error that must surface.
+    """
+    input_name = getattr(step, "input", None)
+    if (
+        input_name
+        and input_name not in registry
+        and fallback_name in registry
+    ):
+        logger.warning(
+            "Step '%s' names unknown input '%s'; chaining from '%s'",
+            getattr(step, "name", "?"), input_name, fallback_name,
+        )
+        registry[input_name] = registry[fallback_name]
 
 
 def _deserialize(messages, fmt: str) -> tuple[pd.DataFrame, list[tuple[object, str]]]:
