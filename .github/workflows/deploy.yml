@@ -1,12 +1,21 @@
 name: Deploy to Civo k3s
 
+# Gated on CI: runs only after the CI workflow completes successfully on
+# main (tests/lint/smoke green). Direct pushes never deploy. Manual runs are
+# allowed from main only and still require the production environment's
+# approval rules. (M-025, M-139)
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
 
 concurrency:
   group: deploy-production
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 env:
   REGISTRY: ghcr.io
@@ -16,7 +25,19 @@ env:
 jobs:
   build-and-push:
     name: Build and Push to GHCR
+    # Only run for CI success on main, or a manual dispatch from main.
+    if: >
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      ) ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref_name == 'main'
+      )
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}
 
@@ -62,6 +83,7 @@ jobs:
     name: Deploy to Production
     needs: build-and-push
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
 
     environment:
       name: production
