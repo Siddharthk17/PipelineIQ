@@ -501,3 +501,209 @@ class TestM044TransientDB:
 
         with patch.object(sp.time, "sleep", lambda s: None):
             assert sp._handle_pause(ScriptDb(), "run-id") is True
+
+
+class TestM078Transitions:
+    """Daemon-owned pause/resume/stop/restart state machine (M-078).
+
+    Sibling routes call request_pause/resume/stop/restart(run_id, user)
+    and map (ok, error) to HTTP codes. All transitions are atomic
+    check-and-set; races surface as conflicts, never silent toggles.
+    """
+
+    def _user(self, role="viewer"):
+        import uuid as uuid_module
+        from types import SimpleNamespace
+        return SimpleNamespace(id=uuid_module.uuid4(), role=role)
+
+    def _run(self, db, status, user_id=None):
+        import uuid as uuid_module
+
+        from backend.models import PipelineRun
+        run = PipelineRun(
+            id=uuid_module.uuid4(),
+            name="stream-run",
+            status=status,
+            yaml_config="pipeline:\n  name: s\n  steps: []\n",
+            user_id=user_id,
+        )
+        db.add(run)
+        db.commit()
+        return run
+
+    def test_pause_active_to_paused(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_ACTIVE, user.id)
+        ok, error = sp.request_pause(str(run.id), user, test_db)
+        assert (ok, error) == (True, None)
+        assert run.status == PipelineStatus.STREAMING_PAUSED
+
+    def test_pause_wrong_state_conflicts(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_STOPPED, user.id)
+        ok, error = sp.request_pause(str(run.id), user, test_db)
+        assert ok is False
+        assert "conflict" in error
+        assert run.status == PipelineStatus.STREAMING_STOPPED
+
+    def test_resume_paused_to_active(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_PAUSED, user.id)
+        ok, error = sp.request_resume(str(run.id), user, test_db)
+        assert (ok, error) == (True, None)
+        assert run.status == PipelineStatus.STREAMING_ACTIVE
+
+    def test_resume_active_conflicts(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_ACTIVE, user.id)
+        ok, error = sp.request_resume(str(run.id), user, test_db)
+        assert ok is False
+        assert "conflict" in error
+
+    def test_double_pause_second_conflicts(self, test_db):
+        """Concurrent pause/pause must not toggle: loser gets conflict."""
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_ACTIVE, user.id)
+        assert sp.request_pause(str(run.id), user, test_db) == (True, None)
+        ok, error = sp.request_pause(str(run.id), user, test_db)
+        assert ok is False
+        assert "conflict" in error
+        assert run.status == PipelineStatus.STREAMING_PAUSED
+
+    def test_stop_from_active_and_paused(self, test_db):
+        from unittest.mock import patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        for start in (
+            PipelineStatus.STREAMING_ACTIVE, PipelineStatus.STREAMING_PAUSED,
+        ):
+            run = self._run(test_db, start, user.id)
+            with patch.object(sp, "celery_app") as mock_app:
+                ok, error = sp.request_stop(str(run.id), user, test_db)
+            assert (ok, error) == (True, None), error
+            assert run.status == PipelineStatus.STREAMING_STOPPED
+            mock_app.control.revoke.assert_called_once()
+
+    def test_stop_wrong_state_no_revoke(self, test_db):
+        from unittest.mock import patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_STOPPED, user.id)
+        with patch.object(sp, "celery_app") as mock_app:
+            ok, error = sp.request_stop(str(run.id), user, test_db)
+        assert ok is False
+        assert "conflict" in error
+        mock_app.control.revoke.assert_not_called()
+
+    def test_restart_stopped_dispatches_new_task(self, test_db):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_STOPPED, user.id)
+        with (
+            patch.object(sp, "celery_app"),
+            patch.object(
+                sp.run_streaming_pipeline, "delay",
+                return_value=SimpleNamespace(id="task-new"),
+            ) as mock_delay,
+        ):
+            ok, error = sp.request_restart(str(run.id), user, test_db)
+        assert (ok, error) == (True, None), error
+        mock_delay.assert_called_once_with(str(run.id))
+        assert run.status == PipelineStatus.STREAMING_ACTIVE
+        assert run.celery_task_id == "task-new"
+
+    def test_restart_active_conflicts_without_dispatch(self, test_db):
+        from unittest.mock import patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_ACTIVE, user.id)
+        with (
+            patch.object(sp, "celery_app"),
+            patch.object(
+                sp.run_streaming_pipeline, "delay") as mock_delay,
+        ):
+            ok, error = sp.request_restart(str(run.id), user, test_db)
+        assert ok is False
+        assert "conflict" in error
+        mock_delay.assert_not_called()
+        assert run.status == PipelineStatus.STREAMING_ACTIVE
+
+    def test_non_owner_denied_as_not_found(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        owner = self._user()
+        stranger = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_ACTIVE, owner.id)
+        ok, error = sp.request_pause(str(run.id), stranger, test_db)
+        assert ok is False
+        assert "not found" in error
+
+    def test_admin_may_transition_foreign_run(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        owner = self._user()
+        admin = self._user(role="admin")
+        run = self._run(test_db, PipelineStatus.STREAMING_ACTIVE, owner.id)
+        ok, error = sp.request_pause(str(run.id), admin, test_db)
+        assert (ok, error) == (True, None), error
+
+    def test_unknown_and_malformed_ids_are_not_found(self, test_db):
+        import uuid as uuid_module
+
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        ok, error = sp.request_pause(str(uuid_module.uuid4()), user, test_db)
+        assert ok is False
+        assert "not found" in error
+        ok, error = sp.request_stop("not-a-uuid", user, test_db)
+        assert ok is False
+        assert "not found" in error
+
+    def test_final_settle_preserves_terminal_status(self, test_db):
+        """Loop exit must not clobber FAILED/CANCELLED with STOPPED."""
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        failed = self._run(test_db, PipelineStatus.FAILED, user.id)
+        assert sp._settle_final_status(test_db, failed.id) == PipelineStatus.FAILED
+        assert failed.status == PipelineStatus.FAILED
+        cancelled = self._run(test_db, PipelineStatus.CANCELLED, user.id)
+        assert sp._settle_final_status(
+            test_db, cancelled.id) == PipelineStatus.CANCELLED
+        active = self._run(test_db, PipelineStatus.STREAMING_ACTIVE, user.id)
+        assert sp._settle_final_status(
+            test_db, active.id) == PipelineStatus.STREAMING_STOPPED
+        assert active.status == PipelineStatus.STREAMING_STOPPED

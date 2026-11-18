@@ -263,7 +263,10 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             ):
                 break
 
-        _set_status(db, run_id, PipelineStatus.STREAMING_STOPPED)
+        # Settle without clobbering terminal states: a max-errors shutdown
+        # already marked FAILED with a reason; a stop/revoke already marked
+        # STOPPED/CANCELLED. Only daemon-owned states become STOPPED (M-078).
+        _settle_final_status(db, run_id)
         logger.info(
             "Streaming stopped: batches=%d, messages=%d",
             stats["batches"], stats["messages"],
@@ -286,6 +289,261 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         db.close()
         logger.info("Consumer closed for run_id=%s", run_id)
     return stats
+
+
+# ---------------------------------------------------------------------------
+# Operator transitions (M-078).
+#
+# The streaming control routes (pause/resume/stop/restart) delegate to the
+# request_* functions below so the state machine lives with the daemon that
+# enforces it. Every transition is an atomic conditional UPDATE
+# (check-and-set): concurrent requests serialize on the row and all but one
+# lose with a conflict instead of silently toggling state.
+#
+#   ACTIVE  --request_pause-->  PAUSED
+#   PAUSED  --request_resume--> ACTIVE
+#   ACTIVE | PAUSED --request_stop--> STREAMING_STOPPED (+ revoke)
+#   STREAMING_STOPPED --request_restart--> ACTIVE (+ fresh daemon dispatch)
+#
+# Each function returns (ok, error): (True, None) on success, otherwise
+# (False, human-readable reason). Foreign runs are reported as "not found"
+# (never 403) so run IDs cannot be probed, mirroring the run-ownership rule.
+# ---------------------------------------------------------------------------
+
+_PAUSE_FROM = frozenset({PipelineStatus.STREAMING_ACTIVE})
+_RESUME_FROM = frozenset({PipelineStatus.STREAMING_PAUSED})
+_STOP_FROM = frozenset({
+    PipelineStatus.STREAMING_ACTIVE, PipelineStatus.STREAMING_PAUSED,
+})
+_RESTART_FROM = frozenset({PipelineStatus.STREAMING_STOPPED})
+
+
+def _coerce_run_uuid(run_id):
+    """Parse a run id, returning None when it cannot name a run."""
+    try:
+        return run_id if isinstance(run_id, uuid.UUID) else uuid.UUID(str(run_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _transition_session(db):
+    """Use the caller's session, or open (and own) a fresh one."""
+    if db is not None:
+        return db, False
+    return SessionLocal(), True
+
+
+def _check_streaming_access(run, user) -> str | None:
+    """None when `user` may transition `run`, else a denial reason.
+
+    The run owner or an admin may act; anyone else gets "not found" so
+    the existence of foreign runs is not disclosed.
+    """
+    if getattr(user, "role", None) == "admin":
+        return None
+    actor_id = getattr(user, "id", None)
+    if (
+        actor_id is not None
+        and run.user_id is not None
+        and str(run.user_id) == str(actor_id)
+    ):
+        return None
+    return f"Run not found: {run.id}"
+
+
+def _atomic_transition(db, run_uuid, expected, to_status, extra=None) -> bool:
+    """Conditional UPDATE to `to_status`; True iff this caller won the race."""
+    values = {"status": to_status}
+    if extra:
+        values.update(extra)
+    updated = (
+        db.query(PipelineRun)
+        .filter(
+            PipelineRun.id == run_uuid,
+            PipelineRun.status.in_(expected),
+        )
+        .update(values)
+    )
+    if updated != 1:
+        db.rollback()
+        return False
+    db.commit()
+    return True
+
+
+def _load_transition_run(session, run_id):
+    """Fetch the run for a transition, or an error when it cannot be named."""
+    run_uuid = _coerce_run_uuid(run_id)
+    if run_uuid is None:
+        return None, None, f"Run not found: {run_id}"
+    run = session.query(PipelineRun).filter(
+        PipelineRun.id == run_uuid).first()
+    if run is None:
+        return None, None, f"Run not found: {run_id}"
+    return run, run_uuid, None
+
+
+def _transition_conflict(session, run_uuid, run_id, action: str, expected: str) -> str:
+    """Fresh conflict message naming the run's actual current status."""
+    session.expire_all()
+    run = session.query(PipelineRun).filter(
+        PipelineRun.id == run_uuid).first()
+    actual = run.status.value if run is not None else "missing"
+    return (
+        f"state conflict: cannot {action} run {run_id} "
+        f"(status {actual}, expected {expected})"
+    )
+
+
+def request_pause(run_id, user, db=None) -> tuple:
+    """Transition STREAMING_ACTIVE -> STREAMING_PAUSED (M-078)."""
+    session, owned = _transition_session(db)
+    try:
+        run, run_uuid, error = _load_transition_run(session, run_id)
+        if error is not None:
+            return False, error
+        denial = _check_streaming_access(run, user)
+        if denial is not None:
+            return False, denial
+        if not _atomic_transition(
+            session, run_uuid, _PAUSE_FROM, PipelineStatus.STREAMING_PAUSED,
+        ):
+            return False, _transition_conflict(
+                session, run_uuid, run_id, "pause", "STREAMING_ACTIVE")
+        logger.info("Streaming run %s paused by operator", run_id)
+        return True, None
+    finally:
+        if owned:
+            session.close()
+
+
+def request_resume(run_id, user, db=None) -> tuple:
+    """Transition STREAMING_PAUSED -> STREAMING_ACTIVE (M-078)."""
+    session, owned = _transition_session(db)
+    try:
+        run, run_uuid, error = _load_transition_run(session, run_id)
+        if error is not None:
+            return False, error
+        denial = _check_streaming_access(run, user)
+        if denial is not None:
+            return False, denial
+        if not _atomic_transition(
+            session, run_uuid, _RESUME_FROM, PipelineStatus.STREAMING_ACTIVE,
+        ):
+            return False, _transition_conflict(
+                session, run_uuid, run_id, "resume", "STREAMING_PAUSED")
+        logger.info("Streaming run %s resumed by operator", run_id)
+        return True, None
+    finally:
+        if owned:
+            session.close()
+
+
+def request_stop(run_id, user, db=None) -> tuple:
+    """Transition STREAMING_ACTIVE/PAUSED -> STREAMING_STOPPED (M-078).
+
+    The status flip lands first (the daemon exits cooperatively on its
+    next poll even if the revoke below fails); the Celery revoke then
+    expedites the shutdown best-effort.
+    """
+    session, owned = _transition_session(db)
+    try:
+        run, run_uuid, error = _load_transition_run(session, run_id)
+        if error is not None:
+            return False, error
+        denial = _check_streaming_access(run, user)
+        if denial is not None:
+            return False, denial
+        task_id = run.celery_task_id
+        if not _atomic_transition(
+            session, run_uuid, _STOP_FROM, PipelineStatus.STREAMING_STOPPED,
+        ):
+            return False, _transition_conflict(
+                session, run_uuid, run_id, "stop",
+                "STREAMING_ACTIVE or STREAMING_PAUSED")
+        try:
+            celery_app.control.revoke(
+                task_id or str(run_uuid), terminate=True, signal="SIGTERM")
+        except Exception:
+            logger.warning(
+                "Revoke failed during stop of run %s; daemon exits via "
+                "status poll", run_id, exc_info=True,
+            )
+        logger.info("Streaming run %s stopped by operator", run_id)
+        return True, None
+    finally:
+        if owned:
+            session.close()
+
+
+def request_restart(run_id, user, db=None) -> tuple:
+    """Transition STREAMING_STOPPED -> STREAMING_ACTIVE (M-078).
+
+    Dispatches a fresh daemon, then atomically claims ACTIVE with the new
+    task id. The state gate is checked *before* dispatching so a refused
+    restart never launches an orphan daemon; if the claim loses a race
+    after dispatch, the orphan is revoked immediately (the daemon's own
+    single-flight claim would also refuse it).
+    """
+    session, owned = _transition_session(db)
+    try:
+        run, run_uuid, error = _load_transition_run(session, run_id)
+        if error is not None:
+            return False, error
+        denial = _check_streaming_access(run, user)
+        if denial is not None:
+            return False, denial
+        if run.status not in _RESTART_FROM:
+            return False, _transition_conflict(
+                session, run_uuid, run_id, "restart", "STREAMING_STOPPED")
+        try:
+            dispatched = run_streaming_pipeline.delay(str(run_uuid))
+        except Exception as exc:
+            return False, f"failed to dispatch daemon for run {run_id}: {exc}"
+        new_task_id = getattr(dispatched, "id", None)
+        if not _atomic_transition(
+            session, run_uuid, _RESTART_FROM,
+            PipelineStatus.STREAMING_ACTIVE,
+            {"celery_task_id": new_task_id},
+        ):
+            try:
+                celery_app.control.revoke(
+                    new_task_id, terminate=True, signal="SIGTERM")
+            except Exception:
+                logger.warning(
+                    "Revoke of orphan daemon %s failed", new_task_id,
+                    exc_info=True,
+                )
+            return False, _transition_conflict(
+                session, run_uuid, run_id, "restart", "STREAMING_STOPPED")
+        logger.info(
+            "Streaming run %s restarted by operator (task %s)",
+            run_id, new_task_id,
+        )
+        return True, None
+    finally:
+        if owned:
+            session.close()
+
+
+def _settle_final_status(db, run_id):
+    """Persist the daemon's final status on loop exit (M-078).
+
+    Daemon-owned states (ACTIVE/PAUSED) settle to STREAMING_STOPPED;
+    anything else (FAILED with a reason, CANCELLED, ...) is preserved so
+    loop exit never clobbers a terminal status. Returns the final status,
+    or None when the run no longer exists.
+    """
+    run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    if run is None:
+        return None
+    if run.status in (
+        PipelineStatus.STREAMING_ACTIVE, PipelineStatus.STREAMING_PAUSED,
+    ):
+        run.status = PipelineStatus.STREAMING_STOPPED
+        db.commit()
+        return PipelineStatus.STREAMING_STOPPED
+    return run.status
 
 
 def _claim_run(db, run_id: str, task_id: str | None) -> str | None:
