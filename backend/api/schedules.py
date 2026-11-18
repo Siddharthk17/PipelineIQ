@@ -17,6 +17,9 @@ from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import PipelineSchedule, ScheduleRun, User
 from backend.scheduling.cron_utils import (
+    PREVIEW_DEFAULT_N,
+    PREVIEW_MAX_N,
+    RUN_HISTORY_MAX_LIMIT,
     cron_to_human,
     get_next_n_runs,
     get_next_run_at,
@@ -353,11 +356,19 @@ def list_schedule_runs(
 ) -> dict:
     schedule = _get_schedule_or_404(schedule_id, current_user, db)
 
+    # Clamp the page size (M-028): unbounded history reads fan out per
+    # run and are an authenticated DoS vector.
+    try:
+        page_size = int(limit)
+    except (TypeError, ValueError):
+        page_size = 20
+    page_size = max(1, min(page_size, RUN_HISTORY_MAX_LIMIT))
+
     runs = (
         db.query(ScheduleRun)
         .filter(ScheduleRun.schedule_id == schedule.id)
         .order_by(ScheduleRun.triggered_at.desc())
-        .limit(limit)
+        .limit(page_size)
         .all()
     )
 
@@ -380,12 +391,19 @@ def list_schedule_runs(
 @router.get("/{schedule_id}/preview", summary="Preview next scheduled runs")
 def preview_schedule(
     schedule_id: str,
-    n: int = 5,
+    n: int = PREVIEW_DEFAULT_N,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     schedule = _get_schedule_or_404(schedule_id, current_user, db)
-    next_runs = get_next_n_runs(schedule.cron_expression, n=n)
+    # get_next_n_runs clamps server-side (M-028); clamp here too so the
+    # echoed count matches what was computed.
+    try:
+        count = int(n)
+    except (TypeError, ValueError):
+        count = PREVIEW_DEFAULT_N
+    count = max(1, min(count, PREVIEW_MAX_N))
+    next_runs = get_next_n_runs(schedule.cron_expression, n=count)
     return {
         "schedule_id": schedule_id,
         "cron_expression": schedule.cron_expression,
