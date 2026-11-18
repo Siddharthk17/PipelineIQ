@@ -46,6 +46,39 @@ def _compute_duckdb_thread_count(cpu_cores: int, celery_concurrency: int) -> int
     return max(1, cpu_cores // celery_concurrency)
 
 
+def _statement_timeout_ms() -> int:
+    """Per-query DuckDB statement timeout in milliseconds.
+
+    Bounds runaway user SQL (e.g. cartesian products, huge aggregations)
+    that passes validation. Overridable via ``DUCKDB_STATEMENT_TIMEOUT_MS``.
+    """
+    try:
+        return max(1, int(os.environ.get("DUCKDB_STATEMENT_TIMEOUT_MS", "60000")))
+    except ValueError:
+        return 60000
+
+
+def harden_connection(conn: duckdb.DuckDBPyConnection) -> None:
+    """Apply class-level sandbox controls to a DuckDB connection (M-001).
+
+    - ``enable_external_access=false``: blocks all file-system access
+      (``read_csv``/``read_parquet``/``read_text``/..., ``glob``,
+      replacement scans such as ``FROM '/etc/passwd'``, ``COPY ... TO``).
+    - ``allow_community_extensions=false``,
+      ``autoinstall_known_extensions=false``,
+      ``autoload_known_extensions=false``: no silent extension downloads
+      (e.g. ``sqlite_scan`` auto-install) that would reopen file access.
+    - ``max_execution_time``: statement timeout so unbounded queries
+      (``WITH RECURSIVE`` if validation is ever bypassed, runaway joins)
+      cannot wedge a worker permanently.
+    """
+    conn.sql("SET enable_external_access=false")
+    conn.sql("SET allow_community_extensions=false")
+    conn.sql("SET autoinstall_known_extensions=false")
+    conn.sql("SET autoload_known_extensions=false")
+    conn.sql(f"SET max_execution_time={_statement_timeout_ms()}")
+
+
 def _configure_connection(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -59,10 +92,18 @@ def _configure_connection(
 
     conn.sql("PRAGMA enable_object_cache=true")
 
+    # Class-level sandbox: deny file-system access and bound query time on
+    # every worker/local connection, including the httpfs opt-in path.
+    harden_connection(conn)
+
     if os.environ.get("DUCKDB_ENABLE_HTTPFS", "").lower() != "true":
         logger.info("DuckDB httpfs extension disabled by default")
         return
 
+    logger.warning(
+        "DUCKDB_ENABLE_HTTPFS is set but external access stays disabled "
+        "(M-001): S3-direct reads will fail closed and fall back to download"
+    )
     _configure_httpfs(conn)
 
 

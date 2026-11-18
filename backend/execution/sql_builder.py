@@ -17,7 +17,22 @@ _FORBIDDEN_SQL_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 _FORBIDDEN_SQL_FUNCTIONS = re.compile(
-    r"\b(read_csv|read_csv_auto|read_json|read_json_auto|read_parquet|read_blob|read_text|sqlite_scan|postgres_scan|httpfs)\s*\(",
+    r"""(?ix)
+    \b(
+        read_[a-z_]*                     # read_csv, read_parquet, read_text, ...
+        | csv_scan | parquet_scan | delta_scan | iceberg_scan
+        | sqlite_scan | sqlite_query
+        | postgres_scan | postgres_query
+        | glob(_table_function)?
+        | query(_table)?                 # generic query() inner-SQL escape hatch
+        | pragma_[a-z_]*                # pragma_* table functions
+        | sniff_csv | read_xlsx | read_excel
+        | [a-z_][a-z0-9_]*_(scan|query)  # any other *_scan() / *_query() reader
+    )\s*\(
+    """,
+)
+_FORBIDDEN_WITH_RECURSIVE = re.compile(
+    r"\bwith\s+recursive\b",
     re.IGNORECASE,
 )
 _FORBIDDEN_EXTERNAL_URI = re.compile(
@@ -29,13 +44,47 @@ _LEADING_COMMENT = re.compile(
 )
 _DOLLAR_QUOTE_START = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$")
 
+#: Relations a SQL step may read. Deny-by-default: user SQL can only touch
+#: the registered input relation(s), CTEs it defines itself, brace
+#: placeholders substituted by the executor, or a few provably safe table
+#: functions. Anything else after FROM/JOIN (file paths, reader functions,
+#: foreign tables) is rejected. (M-001)
+_ALLOWED_TABLE_REFS = frozenset({"__input__", "__left__", "__right__"})
+_SAFE_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
+_CLAUSE_TERMINATORS = frozenset({
+    "where", "group", "order", "limit", "offset", "having", "window",
+    "union", "except", "intersect", "fetch", "for",
+})
+_CTE_DEFINITION = re.compile(
+    r"(?:\bwith\b|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*\(",
+    re.IGNORECASE,
+)
+_QUOTED_CTE_DEFINITION = re.compile(
+    r'(?:\bwith\b|,)\s*"((?:[^"]|"")*)"\s+as\s*\(',
+    re.IGNORECASE,
+)
+_FROM_OR_JOIN = re.compile(r"\b(from|join)\b", re.IGNORECASE)
+_WORD_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
 
 def _strip_literals_and_comments(sql: str) -> str:
-    """Mask SQL string/comment bodies so keyword scans only inspect executable SQL."""
+    """Mask SQL string/comment bodies so keyword scans only inspect executable SQL.
+
+    Double-quoted identifiers are masked as well, *except* when the quoted
+    name is immediately followed by ``(``: DuckDB accepts quoted function
+    names (``"read_text"('/etc/hostname')``), so those must stay visible to
+    the forbidden-function scan (M-001). Quoted non-call identifiers such
+    as ``SELECT "delete" FROM ...`` remain masked to avoid false positives.
+
+    Masking is strictly length-preserving, so offsets in the returned scan
+    string match offsets in the input (used by table-reference checks).
+    """
     result: list[str] = []
     i = 0
     state = "code"
     dollar_delimiter = ""
+    quoted_buffer: list[str] = []
+    quote_start = 0
     length = len(sql)
 
     while i < length:
@@ -57,7 +106,8 @@ def _strip_literals_and_comments(sql: str) -> str:
                 result.append(" ")
             elif ch == '"' and state == "code":
                 state = "double_quote"
-                result.append(" ")
+                quoted_buffer = []
+                quote_start = i
             elif ch == "-" and nxt == "-":
                 state = "line_comment"
                 result.extend((" ", " "))
@@ -79,13 +129,21 @@ def _strip_literals_and_comments(sql: str) -> str:
                 result.append(" ")
         elif state == "double_quote":
             if ch == '"' and nxt == '"':
-                result.extend((" ", " "))
+                quoted_buffer.append('"')
                 i += 1
             elif ch == '"':
+                # A quoted name followed by '(' is a (possibly malicious)
+                # quoted function call — keep it visible, padded so scan
+                # and raw positions stay aligned. Otherwise mask it.
+                content = "".join(quoted_buffer)
+                consumed = i - quote_start + 1
+                if sql[i + 1:].lstrip().startswith("("):
+                    result.append(content + " " * (consumed - len(content)))
+                else:
+                    result.append(" " * consumed)
                 state = "code"
-                result.append(" ")
             else:
-                result.append(" ")
+                quoted_buffer.append(ch)
         elif state == "line_comment":
             if ch == "\n":
                 state = "code"
@@ -114,6 +172,166 @@ def _strip_literals_and_comments(sql: str) -> str:
         raise ValueError("SQL query contains an unterminated literal or comment")
 
     return "".join(result)
+
+
+def _collect_cte_names(scan_sql: str, raw_sql: str) -> set[str]:
+    """Collect CTE names defined by WITH ... AS (...) / , ... AS (...).
+
+    Bare names come from the masked scan; double-quoted names (``WITH
+    "my cte" AS (...)``) come from the raw text, which shares positions
+    with the scan. Over-collection is safe: an allowed name that resolves
+    to nothing fails closed at execution with a catalog error. (M-001)
+    """
+    names = {match.group(1).lower() for match in _CTE_DEFINITION.finditer(scan_sql)}
+    names.update(
+        match.group(1).replace('""', '"').lower()
+        for match in _QUOTED_CTE_DEFINITION.finditer(raw_sql)
+    )
+    return names
+
+
+def _parse_quoted_name(raw_sql: str, pos: int) -> tuple[str, int] | None:
+    """Parse a double-quoted or backtick-quoted name at ``pos``.
+
+    Returns ``(name, end_pos)`` where ``end_pos`` is just past the closing
+    quote, or ``None`` if the quotes are unbalanced.
+    """
+    quote = raw_sql[pos]
+    i = pos + 1
+    chars: list[str] = []
+    while i < len(raw_sql):
+        ch = raw_sql[i]
+        if ch == quote:
+            if quote == '"' and i + 1 < len(raw_sql) and raw_sql[i + 1] == '"':
+                chars.append('"')
+                i += 2
+                continue
+            return "".join(chars), i + 1
+        chars.append(ch)
+        i += 1
+    return None
+
+
+def _check_table_references(scan_sql: str, raw_sql: str) -> None:
+    """Enforce deny-by-default table references after FROM/JOIN.
+
+    Each table factor must be a parenthesised subquery, the registered
+    input relation (``{{input}}``/``__input__``/``__left__``/``__right__``),
+    a brace placeholder substituted by the executor, a CTE defined in the
+    query itself, or a provably safe table function. Bare path literals
+    (replacement scans), quoted paths, unknown tables and unlisted reader
+    functions are rejected. (M-001)
+
+    ``scan_sql`` (masked) and ``raw_sql`` share positions: masking is
+    length-preserving, so quote characters are read from ``raw_sql`` at the
+    same offset (masked spans appear as spaces in the scan).
+    """
+    cte_names = _collect_cte_names(scan_sql, raw_sql)
+    for match in _FROM_OR_JOIN.finditer(scan_sql):
+        pos = match.end()
+        factor_checked = False
+        while True:
+            # Skip real whitespace AND masked comments, but never skip a
+            # masked string/quoted literal: those are masked to spaces in
+            # the scan, so a naive isspace() skip would jump over a
+            # replacement scan (FROM '/etc/passwd') without noticing.
+            # Stop when the raw character opens a literal. (M-001)
+            while pos < len(scan_sql) and scan_sql[pos].isspace():
+                if raw_sql[pos] in ("'", '"', "`"):
+                    break
+                pos += 1
+            if pos >= len(scan_sql):
+                break
+            raw_ch = raw_sql[pos]
+            if raw_ch in ("'", '"', "`"):
+                if raw_ch == "'":
+                    # A string literal is never a valid table factor.
+                    raise ValueError(
+                        "SQL query must read from {{input}}; "
+                        "file-path table references are not allowed")
+                parsed = _parse_quoted_name(raw_sql, pos)
+                if parsed is None:
+                    raise ValueError(
+                        "SQL query contains an unterminated quoted identifier")
+                name, end = parsed
+                if name.lower() not in _ALLOWED_TABLE_REFS | cte_names:
+                    raise ValueError(
+                        f"SQL query table reference '{name}' is not allowed; "
+                        "read from {{input}}")
+                pos = end
+                factor_checked = True
+                continue
+            ch = scan_sql[pos]
+            if ch == "(":
+                # Parenthesised subquery / VALUES / function args: the inner
+                # FROM/JOIN occurrences are checked independently.
+                break
+            if ch == ",":
+                # Previous factor done; a new factor follows.
+                pos += 1
+                factor_checked = False
+                continue
+            if ch == "{":
+                # {{input}} or {extra} placeholder substituted by executor.
+                if scan_sql.startswith("{{", pos):
+                    end = scan_sql.find("}}", pos)
+                    if end == -1:
+                        raise ValueError(
+                            "SQL query contains an unterminated placeholder")
+                    pos = end + 2
+                else:
+                    end = scan_sql.find("}", pos)
+                    if end == -1:
+                        raise ValueError(
+                            "SQL query contains an unterminated placeholder")
+                    pos = end + 1
+                factor_checked = True
+                continue
+            word_match = _WORD_TOKEN.match(scan_sql, pos)
+            if word_match is None:
+                # Punctuation (e.g. '*', operator) — nothing table-like.
+                break
+            word = word_match.group(0)
+            lowered = word.lower()
+            if not factor_checked:
+                if lowered in _ALLOWED_TABLE_REFS or lowered in cte_names:
+                    pass
+                elif lowered == "lateral":
+                    pos = word_match.end()
+                    continue
+                elif lowered in _SAFE_TABLE_FUNCTIONS:
+                    after = scan_sql[word_match.end():].lstrip()
+                    if not after.startswith("("):
+                        raise ValueError(
+                            f"SQL query table reference '{word}' is not allowed; "
+                            "read from {{input}}")
+                else:
+                    raise ValueError(
+                        f"SQL query table reference '{word}' is not allowed; "
+                        "read from {{input}}")
+                factor_checked = True
+                pos = word_match.end()
+                continue
+            # We already have a table factor: expect an alias, comma, or a
+            # clause terminator — anything else ends this scan.
+            if lowered in _CLAUSE_TERMINATORS or lowered in {
+                    "as", "on", "using", "left", "right", "inner", "outer",
+                    "full", "cross", "join", "natural", "lateral"}:
+                break
+            # A second bare word is an alias (possibly followed by more
+            # factors after a comma); keep scanning for commas/terminators.
+            pos = word_match.end()
+            # Skip a single alias then require comma or terminator next
+            # (same masked-literal care as above).
+            while pos < len(scan_sql) and scan_sql[pos].isspace():
+                if raw_sql[pos] in ("'", '"', "`"):
+                    break
+                pos += 1
+            if pos < len(scan_sql) and scan_sql[pos] == ",":
+                pos += 1
+                factor_checked = False
+                continue
+            break
 
 
 def _step_value(step: Any, key: str, default: Any = None) -> Any:
@@ -171,11 +389,20 @@ def validate_sql_step_query(
 ) -> str:
     """Validate and normalize SQL-step query text.
 
-    Rules:
-    1. Must be a single statement.
-    2. Must start with SELECT or WITH (after comments/whitespace).
-    3. Must not contain write/admin keywords.
-    4. Must include {{input}} placeholder when required.
+    Deny-by-default (M-001): the query must read only from the registered
+    input relation. Enforcement is layered:
+
+    1. Single statement starting with SELECT/WITH.
+    2. No write/admin keywords (scanned outside literals/comments, with
+       quoted function names exposed so ``"read_text"(...)`` cannot hide).
+    3. No external file-reader functions (``read_*``, ``*_scan``,
+       ``*_query``, ``glob``, ``query_table``, ``pragma_*``, ...).
+    4. No ``WITH RECURSIVE`` (unbounded CTEs wedge workers; a statement
+       timeout is additionally enforced on every DuckDB connection).
+    5. Every FROM/JOIN table factor must be ``{{input}}``, a CTE defined in
+       the query, an executor brace placeholder, or a safe table function —
+       bare path literals (replacement scans) and foreign tables rejected.
+    6. ``{{input}}`` must appear outside strings/comments.
     """
     if not isinstance(query, str) or not query.strip():
         raise ValueError("SQL query must be a non-empty string")
@@ -188,9 +415,6 @@ def validate_sql_step_query(
     if _FORBIDDEN_EXTERNAL_URI.search(normalized):
         raise ValueError("SQL query cannot reference external URLs or object storage paths")
 
-    if require_input_placeholder and "{{input}}" not in normalized:
-        raise ValueError("SQL query must reference the input via {{input}}")
-
     sql_for_scan = _LEADING_COMMENT.sub("", normalized)
     if not sql_for_scan:
         raise ValueError("SQL query cannot be empty")
@@ -202,8 +426,15 @@ def validate_sql_step_query(
     keyword_scan_sql = _strip_literals_and_comments(sql_for_scan)
     if _FORBIDDEN_SQL_KEYWORDS.search(keyword_scan_sql):
         raise ValueError("SQL query contains disallowed write/admin keywords")
+    if _FORBIDDEN_WITH_RECURSIVE.search(keyword_scan_sql):
+        raise ValueError(
+            "SQL query must not use WITH RECURSIVE (unbounded recursion)")
     if _FORBIDDEN_SQL_FUNCTIONS.search(keyword_scan_sql):
         raise ValueError("SQL query contains disallowed external file access functions")
+    _check_table_references(keyword_scan_sql, sql_for_scan)
+
+    if require_input_placeholder and "{{input}}" not in keyword_scan_sql:
+        raise ValueError("SQL query must reference the input via {{input}}")
 
     return normalized.replace("{{input}}", "__input__")
 
