@@ -8,6 +8,7 @@ Architectural differences from batch pipeline task:
   - Failed batches route to DLQ, pipeline continues (does NOT stop)
 """
 
+import contextlib
 import time
 import uuid
 from datetime import UTC, datetime
@@ -18,7 +19,8 @@ import pyarrow as pa
 from celery import Task
 from celery.utils.log import get_task_logger
 from confluent_kafka import KafkaError, TopicPartition
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
@@ -53,6 +55,9 @@ MAX_CONSECUTIVE_ERRORS = 50          # Shut down after 50 consecutive batch erro
 # Every redelivery is safe: _claim_run single-flights them (only the first
 # claimant runs; losers exit immediately without mutating the run).
 STREAMING_VISIBILITY_TIMEOUT_S = 1800
+# Pause-wait poll quantum: stop/revoke wakes a paused daemon within ~1s,
+# status is re-read every quantum (M-152: a paused daemon stays cancellable).
+_PAUSE_POLL_SEC = 2
 
 
 class StreamingPublishError(RuntimeError):
@@ -172,11 +177,9 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         )
 
         while not _is_aborted(db, run_id):
-            if (
-                stats["batches"] % 10 == 0
-                and stats["batches"] > 0
-                and _handle_pause(db, run_id)
-            ):
+            # Pause is checked every iteration (not every N batches) so
+            # pause/stop take effect within one batch (M-152).
+            if _handle_pause(db, run_id):
                 break
 
             # Backpressure detection: pause if consumer lag is too high
@@ -648,6 +651,23 @@ def _persist_stats_best_effort(
         )
 
 
+def _is_transient_db_error(exc: BaseException) -> bool:
+    """True for DB failures that may clear on retry (M-044).
+
+    Connection resets, deadlocks, pool timeouts and other DBAPI-level
+    failures must not kill the daemon: the run is still alive, only the
+    status read failed. Anything else (programming errors, bad SQL)
+    fails safe by stopping.
+    """
+    return isinstance(exc, (DBAPIError, SQLAlchemyTimeoutError))
+
+
+def _rollback_quietly(db) -> None:
+    """Best-effort rollback after a failed read; never raises."""
+    with contextlib.suppress(Exception):
+        db.rollback()
+
+
 def _fail_run(db, run_id: str, reason: str) -> None:
     """Mark a run FAILED with a reason instead of stranding it (M-044)."""
     logger.critical("Streaming run %s failed: %s", run_id, reason)
@@ -678,38 +698,87 @@ def _sleep_interruptible(seconds: float, db, run_id: str) -> bool:
 
 
 def _is_aborted(db, run_id: str) -> bool:
-    """Check if the streaming pipeline should stop (replaces deprecated self.is_aborted())."""
+    """Check if the streaming pipeline should stop (replaces deprecated self.is_aborted()).
+
+    A transient DB failure (connection reset, pool timeout, deadlock)
+    keeps the daemon alive: only the status read failed, the run itself
+    is unaffected (M-044). The session is rolled back so the next
+    iteration reads cleanly. Any other error fails safe by stopping.
+    """
     try:
         db.expire_all()
         run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
-        if not run:
-            return True
-        aborted = run.status not in (
-            PipelineStatus.STREAMING_ACTIVE,
-            PipelineStatus.STREAMING_PAUSED,
-        )
-    except Exception:
+    except Exception as exc:
+        if _is_transient_db_error(exc):
+            _rollback_quietly(db)
+            logger.warning(
+                "Transient DB error reading run %s status; "
+                "daemon keeps running",
+                run_id, exc_info=True,
+            )
+            return False
+        logger.exception(
+            "Status read failed for run %s; stopping daemon", run_id)
         return True
-    else:
-        return aborted
+    if not run:
+        return True
+    return run.status not in (
+        PipelineStatus.STREAMING_ACTIVE,
+        PipelineStatus.STREAMING_PAUSED,
+    )
 
 
 def _handle_pause(db, run_id: str) -> bool:
-    db.expire_all()
-    run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    """Block while the run is paused; True means the daemon should stop.
+
+    The wait is abort-interruptible (stop/revoke wakes it within ~1s) so
+    a paused daemon stays cancellable (M-152). Transient DB errors during
+    the wait are swallowed with a rollback: the daemon keeps waiting
+    instead of exiting (M-044).
+    """
+    try:
+        db.expire_all()
+        run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+    except Exception as exc:
+        if _is_transient_db_error(exc):
+            _rollback_quietly(db)
+            logger.warning(
+                "Transient DB error reading run %s status; continuing",
+                run_id, exc_info=True,
+            )
+            return False
+        logger.exception(
+            "Status read failed for run %s; stopping daemon", run_id)
+        return True
     if not run:
         return True
-    if run.status == PipelineStatus.STREAMING_PAUSED:
-        logger.info("Paused — waiting for resume signal")
-        while not _is_aborted(db, run_id):
-            time.sleep(2)
-            db.expire_all()
-            run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
-            if not run or run.status != PipelineStatus.STREAMING_PAUSED:
-                break
-        if _is_aborted(db, run_id):
+    if run.status != PipelineStatus.STREAMING_PAUSED:
+        return False
+    logger.info("Paused — waiting for resume signal")
+    while True:
+        if _sleep_interruptible(_PAUSE_POLL_SEC, db, run_id):
             return True
-        logger.info("Resumed")
+        try:
+            db.expire_all()
+            run = db.query(PipelineRun).filter(
+                PipelineRun.id == run_id).first()
+        except Exception as exc:
+            if _is_transient_db_error(exc):
+                _rollback_quietly(db)
+                logger.warning(
+                    "Transient DB error while paused (run %s); "
+                    "keep waiting",
+                    run_id, exc_info=True,
+                )
+                continue
+            logger.exception(
+                "Status read failed for run %s; stopping daemon", run_id)
+            return True
+        if not run or run.status != PipelineStatus.STREAMING_PAUSED:
+            break
+    if _is_aborted(db, run_id):
+        return True
+    logger.info("Resumed")
     return False
 
 

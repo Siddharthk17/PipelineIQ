@@ -359,3 +359,145 @@ class TestM042SingleFlight:
         assert timeout is not None and timeout <= 3600, (
             "acks_late daemon must bound its visibility timeout")
         assert getattr(run_streaming_pipeline, "time_limit", None) is None
+
+
+class TestM044TransientDB:
+    """Transient PG errors must not kill the daemon or strand runs (M-044)."""
+
+    def _run(self, db, status):
+        import uuid as uuid_module
+
+        from backend.models import PipelineRun
+        run = PipelineRun(
+            id=uuid_module.uuid4(),
+            name="stream-run",
+            status=status,
+            yaml_config="pipeline:\n  name: s\n  steps: []\n",
+        )
+        db.add(run)
+        db.commit()
+        return run
+
+    def _transient(self):
+        from sqlalchemy.exc import OperationalError
+        return OperationalError(
+            "SELECT 1", {}, Exception("connection reset by peer"))
+
+    def _flaky_db(self, real_db, failures=1, exc=None):
+        """Wrap a session so the first `failures` queries raise transiently."""
+        from unittest.mock import patch
+
+        real_query = real_db.query
+        state = {"n": 0}
+        boom = exc or self._transient()
+
+        def flaky(*args, **kwargs):
+            state["n"] += 1
+            if state["n"] <= failures:
+                raise boom
+            return real_query(*args, **kwargs)
+
+        return patch.object(real_db, "query", side_effect=flaky)
+
+    def test_is_aborted_transient_error_keeps_running(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks.streaming_pipeline import _is_aborted
+        run = self._run(test_db, PipelineStatus.STREAMING_ACTIVE)
+        with self._flaky_db(test_db):
+            assert _is_aborted(test_db, run.id) is False
+        # Session must be usable afterwards (rolled back, not poisoned).
+        assert _is_aborted(test_db, run.id) is False
+
+    def test_is_aborted_terminal_and_missing_stop(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks.streaming_pipeline import _is_aborted
+        run = self._run(test_db, PipelineStatus.FAILED)
+        assert _is_aborted(test_db, run.id) is True
+        assert _is_aborted(test_db, run.id) is True  # missing run
+
+    def test_handle_pause_survives_transient_error(self, test_db):
+        from backend.models import PipelineStatus
+        from backend.tasks.streaming_pipeline import _handle_pause
+        run = self._run(test_db, PipelineStatus.STREAMING_ACTIVE)
+        # Status read itself flaps transiently: pause check must return
+        # False (keep running) rather than stopping the daemon.
+        with self._flaky_db(test_db):
+            assert _handle_pause(test_db, run.id) is False
+
+    def test_pause_resume_returns_without_stopping(self, test_db):
+        """PAUSED -> ACTIVE while waiting returns False (M-152: cancellable)."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        statuses = [
+            PipelineStatus.STREAMING_PAUSED,   # entry read
+            PipelineStatus.STREAMING_PAUSED,   # abort poll
+            PipelineStatus.STREAMING_ACTIVE,   # re-read -> resume
+            PipelineStatus.STREAMING_ACTIVE,   # final abort check
+        ]
+
+        class ScriptDb:
+            def __init__(self):
+                self.calls = 0
+
+            def expire_all(self):
+                pass
+
+            def rollback(self):
+                pass
+
+            def query(self, *args):
+                return self
+
+            def filter(self, *args):
+                return self
+
+            def first(self):
+                idx = min(self.calls, len(statuses) - 1)
+                self.calls += 1
+                return SimpleNamespace(status=statuses[idx])
+
+        with patch.object(sp.time, "sleep", lambda s: None):
+            assert sp._handle_pause(ScriptDb(), "run-id") is False
+
+    def test_pause_stop_returns_true(self):
+        """PAUSED -> STOPPED while waiting returns True (stop wins)."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        statuses = [
+            PipelineStatus.STREAMING_PAUSED,
+            PipelineStatus.STREAMING_PAUSED,
+            PipelineStatus.STREAMING_STOPPED,
+            PipelineStatus.STREAMING_STOPPED,
+        ]
+
+        class ScriptDb:
+            def __init__(self):
+                self.calls = 0
+
+            def expire_all(self):
+                pass
+
+            def rollback(self):
+                pass
+
+            def query(self, *args):
+                return self
+
+            def filter(self, *args):
+                return self
+
+            def first(self):
+                idx = min(self.calls, len(statuses) - 1)
+                self.calls += 1
+                return SimpleNamespace(status=statuses[idx])
+
+        with patch.object(sp.time, "sleep", lambda s: None):
+            assert sp._handle_pause(ScriptDb(), "run-id") is True
