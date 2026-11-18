@@ -142,12 +142,16 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             return {"error": "No stream_consume step found"}
 
         topic = _step_field(consume_step, "topic")
-        consumer_group = _step_field(
-            consume_step, "consumer_group") or f"piq-{run_id[:8]}"
+        consumer_group = _daemon_group_id(
+            run_id, _step_field(consume_step, "consumer_group"))
         batch_size = max(1, min(int(_step_field(consume_step, "batch_size") or 1000), MAX_STREAMING_BATCH_SIZE))
         timeout_ms = int(_step_field(consume_step, "batch_timeout_ms") or 5000)
         timeout_s = timeout_ms / 1000.0
         deserialize_fmt = _step_field(consume_step, "deserialize") or "json"
+        # Offset choice is explicit and logged (M-131): "earliest" replays
+        # backlog waiting on the topic, "latest" processes only new
+        # messages. Anything else falls back to earliest (never skip).
+        offset_reset = _step_field(consume_step, "auto_offset_reset")
 
         # Batch-only steps are rejected explicitly instead of being
         # silently filtered out of the batch (M-160).
@@ -172,6 +176,18 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             _fail_run(db, run_id, access_error)
             return {"error": access_error}
 
+        # First-use provisioning (M-006): record ownership of the topics
+        # this run just claimed so the next run's check can deny foreign
+        # claimants. Registration failure only warns (the next startup
+        # retries); it never blocks the run.
+        _register_topic_assets(
+            db, pipeline_run.user_id,
+            [topic] + (
+                [_step_field(publish_step, "topic")]
+                if publish_step is not None else []
+            ),
+        )
+
         admin = get_admin_client()
         admin.ensure_topic(topic)
 
@@ -179,7 +195,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         _init_stats(db, run_id, topic, consumer_group)
         db.commit()
 
-        consumer = _daemon_consumer(consumer_group)
+        consumer = _daemon_consumer(consumer_group, offset_reset)
         consumer.subscribe([topic])
 
         producer = make_producer() if publish_step else None
@@ -752,16 +768,75 @@ def _require_topic_access(db, pipeline_run, topics) -> str | None:
     return None
 
 
-def _daemon_consumer(consumer_group: str):
+def _daemon_group_id(run_id, explicit: str | None) -> str:
+    """Consumer group for a daemon run (M-131).
+
+    Defaults to the full run id: the old 8-char prefix could collide
+    across runs, silently sharing offsets between unrelated daemons.
+    """
+    if explicit:
+        return explicit
+    return f"piq-{run_id}"
+
+
+def _daemon_consumer(consumer_group: str, auto_offset_reset: str | None = "earliest"):
     """Build the daemon's Kafka consumer (M-131).
 
     The daemon mints a fresh group id per run, and the broker default
     (``auto_offset_reset="latest"``) would silently skip whatever backlog
     is already waiting on the topic. ``"earliest"`` replays it instead;
     committed offsets still resume where the group left off, so earliest
-    only affects first contact with uncommitted partitions.
+    only affects first contact with uncommitted partitions. The choice is
+    explicit per pipeline (``auto_offset_reset`` on the consume step) and
+    anything unrecognised falls back to earliest — never silently skip.
     """
-    return make_consumer(consumer_group, auto_offset_reset="earliest")
+    reset = (auto_offset_reset or "earliest").strip().lower()
+    if reset not in ("earliest", "latest"):
+        logger.warning(
+            "Unknown auto_offset_reset '%s' for group '%s'; "
+            "falling back to 'earliest'",
+            auto_offset_reset, consumer_group,
+        )
+        reset = "earliest"
+    logger.info(
+        "Consumer group '%s' starting with auto_offset_reset='%s' (%s)",
+        consumer_group, reset,
+        "replaying backlog" if reset == "earliest"
+        else "processing only new messages",
+    )
+    return make_consumer(consumer_group, auto_offset_reset=reset)
+
+
+def _register_topic_assets(db, owner_id, topics) -> None:
+    """Record first-use topic ownership in the catalog (M-006).
+
+    The ownership gate (:func:`check_topic_access`) reads ``topic``
+    DataAssets; without registration the gate would stay fail-open
+    forever. Best-effort: a catalog failure rolls back and warns (the
+    next daemon startup retries) instead of blocking the run.
+    """
+    names = {t.strip() for t in (topics or []) if t and t.strip()}
+    if not names or owner_id is None:
+        return
+    try:
+        from backend.repositories.catalog import NS_REDPANDA, upsert_data_asset
+        for name in sorted(names):
+            upsert_data_asset(
+                db=db,
+                asset_type="topic",
+                name=name,
+                namespace=NS_REDPANDA,
+                owner_id=owner_id,
+                metadata={"provisioned_by": "streaming-daemon"},
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "Topic ownership registration failed; "
+            "the next startup will retry",
+            exc_info=True,
+        )
 
 
 def _apply_backpressure(consumer, db, run_id) -> bool:
