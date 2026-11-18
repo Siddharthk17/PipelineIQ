@@ -179,7 +179,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         _init_stats(db, run_id, topic, consumer_group)
         db.commit()
 
-        consumer = make_consumer(consumer_group)
+        consumer = _daemon_consumer(consumer_group)
         consumer.subscribe([topic])
 
         producer = make_producer() if publish_step else None
@@ -750,6 +750,18 @@ def _require_topic_access(db, pipeline_run, topics) -> str | None:
                 f"run owner lacks {role} access to topic '{name}': {reason}"
             )
     return None
+
+
+def _daemon_consumer(consumer_group: str):
+    """Build the daemon's Kafka consumer (M-131).
+
+    The daemon mints a fresh group id per run, and the broker default
+    (``auto_offset_reset="latest"``) would silently skip whatever backlog
+    is already waiting on the topic. ``"earliest"`` replays it instead;
+    committed offsets still resume where the group left off, so earliest
+    only affects first contact with uncommitted partitions.
+    """
+    return make_consumer(consumer_group, auto_offset_reset="earliest")
 
 
 def _apply_backpressure(consumer, db, run_id) -> bool:

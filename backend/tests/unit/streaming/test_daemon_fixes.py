@@ -885,3 +885,27 @@ class TestM131Backpressure:
                 self._consumer(high=False), test_db, run.id) is False
         mock_sleep.assert_not_called()
         mock_sse.assert_not_called()
+
+
+class TestM131BacklogReplay:
+    """A fresh daemon group must replay backlog, not skip it (M-131)."""
+
+    def test_daemon_consumer_uses_earliest(self):
+        from unittest.mock import patch
+
+        from backend.tasks import streaming_pipeline as sp
+
+        seen = {}
+
+        def fake_make_consumer(group, **kwargs):
+            seen.update(kwargs)
+            return object()
+
+        with patch.object(
+            sp, "make_consumer", side_effect=fake_make_consumer,
+        ):
+            sp._daemon_consumer("piq-fresh-group")
+        assert seen.get("auto_offset_reset") == "earliest", (
+            "fresh daemon groups must replay backlog (earliest), "
+            "not skip it (latest)"
+        )
