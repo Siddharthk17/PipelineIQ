@@ -26,7 +26,13 @@ from backend.celery_app import celery_app
 from backend.database import SessionLocal
 from backend.db.redis_pools import get_pubsub_redis
 from backend.execution.smart_executor import SmartExecutor
-from backend.models import PipelineRun, PipelineStatus, StreamingStats
+from backend.models import (
+    DataAsset,
+    PipelineRun,
+    PipelineStatus,
+    StreamingStats,
+    User,
+)
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.lineage import LineageRecorder
 from backend.streaming.redpanda_client import (
@@ -35,6 +41,7 @@ from backend.streaming.redpanda_client import (
     make_dlq_producer,
     make_producer,
     try_drain_fallback,
+    validate_topic_name,
 )
 from backend.utils.sse_security import sign_sse_payload
 from backend.utils.time_utils import utcnow
@@ -142,6 +149,29 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         timeout_s = timeout_ms / 1000.0
         deserialize_fmt = _step_field(consume_step, "deserialize") or "json"
 
+        # Batch-only steps are rejected explicitly instead of being
+        # silently filtered out of the batch (M-160).
+        step_error = _validate_streaming_steps(steps)
+        if step_error is not None:
+            _fail_run(db, run_id, step_error)
+            return {"error": step_error}
+
+        # The publish path enforces topic ownership (M-006): fail fast
+        # before creating topics or consuming a single message.
+        access_error = _require_topic_access(
+            db, pipeline_run,
+            {
+                "consume": topic,
+                "publish": (
+                    _step_field(publish_step, "topic")
+                    if publish_step is not None else None
+                ),
+            },
+        )
+        if access_error is not None:
+            _fail_run(db, run_id, access_error)
+            return {"error": access_error}
+
         admin = get_admin_client()
         admin.ensure_topic(topic)
 
@@ -182,15 +212,9 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             if _handle_pause(db, run_id):
                 break
 
-            # Backpressure detection: pause if consumer lag is too high
-            lag = _compute_consumer_lag(consumer)
-            if lag > BACKPRESSURE_LAG_THRESHOLD:
-                logger.warning(
-                    "BACKPRESSURE: consumer_lag=%d (threshold=%d), "
-                    "cooling down %ds",
-                    lag, BACKPRESSURE_LAG_THRESHOLD, BACKPRESSURE_COOLDOWN_SEC,
-                )
-                time.sleep(BACKPRESSURE_COOLDOWN_SEC)
+            # Backpressure: pause fetching (never skip backlog silently),
+            # with an interruptible cooldown and an SSE event (M-131).
+            if _apply_backpressure(consumer, db, run_id):
                 continue
 
             # Drain fallback queue if broker recovered
@@ -625,6 +649,145 @@ def _claim_run(db, run_id: str, task_id: str | None) -> str | None:
     return (
         f"run {run_id} is {run.status.value}, not dispatchable; exiting"
     )
+
+
+# Batch-only step types the streaming daemon cannot execute (M-160).
+_BATCH_ONLY_STEP_TYPES = frozenset({"load", "save"})
+
+
+def _validate_streaming_steps(steps) -> str | None:
+    """Reject batch-only steps explicitly instead of silently dropping them.
+
+    The daemon used to filter ``load``/``save`` steps out of the batch
+    without a word, so pipelines ran with missing sinks/sources. Fail
+    fast with a clear reason instead. Returns the error, or None when
+    every step is streamable.
+    """
+    offenders = []
+    for step in (steps or []):
+        step_kind = _step_type(step)
+        if step_kind in _BATCH_ONLY_STEP_TYPES:
+            step_name = getattr(step, "name", None) or step_kind or "<unnamed>"
+            offenders.append(f"{step_name} ({step_kind})")
+    if not offenders:
+        return None
+    return (
+        "pipeline contains batch-only steps that streaming cannot execute "
+        f"({', '.join(offenders)}); remove them or "
+        "run the pipeline as a batch"
+    )
+
+
+def check_topic_access(db, topic, user, *, action="publish") -> tuple:
+    """Ownership check for streaming topics (M-006).
+
+    Returns ``(allowed, reason)``: ``(True, None)`` when ``user`` may use
+    ``topic`` for ``action`` (``"publish"`` or ``"consume"``), otherwise
+    ``(False, why)``. This is the daemon-side implementation of the
+    streaming control-plane ``check_topic_access`` contract:
+
+    * malformed topic names are denied (no wildcard/probe games);
+    * admins bypass ownership;
+    * a topic with no catalog owner is open (first-use provisioning —
+      the catalog registers ownership from lineage on first run);
+    * otherwise only the recorded owner (or an admin) may use it.
+
+    ``user`` may be a User row (``.id``/``.role``) or a bare id; the role
+    is resolved from the DB when only an id is given.
+    """
+    name = topic.strip() if isinstance(topic, str) else topic
+    if not name:
+        return False, f"no {action} topic configured"
+    try:
+        validate_topic_name(name)
+    except ValueError as exc:
+        return False, f"invalid {action} topic '{topic}': {exc}"
+    actor_id = getattr(user, "id", user)
+    role = getattr(user, "role", None)
+    if role is None and actor_id is not None:
+        actor_uuid = _coerce_run_uuid(actor_id)
+        account = (
+            db.query(User).filter(User.id == actor_uuid).first()
+            if actor_uuid is not None else None
+        )
+        role = getattr(account, "role", None)
+    if role == "admin":
+        return True, None
+    assets = (
+        db.query(DataAsset)
+        .filter(DataAsset.asset_type == "topic", DataAsset.name == name)
+        .all()
+    )
+    owners = {str(a.owner_id) for a in assets if a.owner_id is not None}
+    if not owners:
+        return True, None
+    actor_uuid = (
+        _coerce_run_uuid(actor_id) if actor_id is not None else None
+    )
+    if actor_uuid is not None and str(actor_uuid) in owners:
+        return True, None
+    return False, (
+        f"{action} topic '{name}' is owned by another user; "
+        "request access from the topic owner"
+    )
+
+
+def _require_topic_access(db, pipeline_run, topics) -> str | None:
+    """Enforce topic ownership for the daemon's topics (M-006).
+
+    ``topics`` maps a role (``"consume"``/``"publish"``) to a topic name
+    or None (a pipeline may have no publish step). Returns an error
+    message, or None when every required check passes. The actor is the
+    run owner: daemons act with exactly the owner's authority, never more.
+    """
+    for role, name in topics.items():
+        if not name:
+            continue
+        allowed, reason = check_topic_access(
+            db, name, pipeline_run.user_id, action=role)
+        if not allowed:
+            return (
+                f"run owner lacks {role} access to topic '{name}': {reason}"
+            )
+    return None
+
+
+def _apply_backpressure(consumer, db, run_id) -> bool:
+    """Pause fetching while consumer lag is over threshold (M-131).
+
+    Returns True when the caller must skip fetching this iteration (the
+    backlog is left on the broker for the next poll — never skipped).
+    The cooldown sleep is interruptible so stop/revoke wakes promptly,
+    and a backpressure SSE event is emitted so the stall is visible
+    instead of silent.
+    """
+    lag = _compute_consumer_lag(consumer)
+    if lag <= BACKPRESSURE_LAG_THRESHOLD:
+        return False
+    logger.warning(
+        "BACKPRESSURE: consumer_lag=%d (threshold=%d), pausing fetch, "
+        "cooling down %ds",
+        lag, BACKPRESSURE_LAG_THRESHOLD, BACKPRESSURE_COOLDOWN_SEC,
+    )
+    _sse_backpressure(run_id, lag)
+    _sleep_interruptible(BACKPRESSURE_COOLDOWN_SEC, db, run_id)
+    return True
+
+
+def _sse_backpressure(run_id: str, lag: int) -> None:
+    """Emit a visible backpressure event on the run's progress channel."""
+    try:
+        redis = get_pubsub_redis()
+        channel = f"pipeline_progress:{run_id}"
+        payload = {
+            "event": "streaming_backpressure",
+            "run_id": str(run_id),
+            "consumer_lag": lag,
+            "threshold": BACKPRESSURE_LAG_THRESHOLD,
+        }
+        redis.publish(channel, orjson.dumps(sign_sse_payload(payload)))
+    except Exception:
+        pass
 
 
 def _step_type(step) -> str:

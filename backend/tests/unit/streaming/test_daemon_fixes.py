@@ -707,3 +707,181 @@ class TestM078Transitions:
         assert sp._settle_final_status(
             test_db, active.id) == PipelineStatus.STREAMING_STOPPED
         assert active.status == PipelineStatus.STREAMING_STOPPED
+
+
+class TestM006TopicAccess:
+    """Publish path must enforce topic ownership (M-006, daemon side)."""
+
+    def _user(self, role="viewer"):
+        import uuid as uuid_module
+        from types import SimpleNamespace
+        return SimpleNamespace(id=uuid_module.uuid4(), role=role)
+
+    def _register_topic(self, db, name, owner_id):
+        from backend.models import DataAsset
+        asset = DataAsset(
+            asset_type="topic",
+            name=name,
+            namespace="redpanda://localhost:9092",
+            owner_id=owner_id,
+        )
+        db.add(asset)
+        db.commit()
+        return asset
+
+    def test_unregistered_topic_is_open(self, test_db):
+        from backend.tasks.streaming_pipeline import check_topic_access
+        allowed, reason = check_topic_access(
+            test_db, "fresh-topic", self._user())
+        assert (allowed, reason) == (True, None)
+
+    def test_owner_allowed_stranger_denied_admin_allowed(self, test_db):
+        from backend.tasks.streaming_pipeline import check_topic_access
+        owner = self._user()
+        stranger = self._user()
+        admin = self._user(role="admin")
+        self._register_topic(test_db, "orders", owner.id)
+        assert check_topic_access(
+            test_db, "orders", owner) == (True, None)
+        allowed, reason = check_topic_access(
+            test_db, "orders", stranger)
+        assert allowed is False
+        assert "owner" in reason.lower()
+        assert check_topic_access(
+            test_db, "orders", admin) == (True, None)
+
+    def test_unowned_registered_topic_is_open(self, test_db):
+        from backend.tasks.streaming_pipeline import check_topic_access
+        self._register_topic(test_db, "shared", None)
+        allowed, _ = check_topic_access(
+            test_db, "shared", self._user())
+        assert allowed is True
+
+    def test_malformed_topic_denied(self, test_db):
+        from backend.tasks.streaming_pipeline import check_topic_access
+        for bad in ("", "  ", "has spaces!", "../escape"):
+            allowed, reason = check_topic_access(
+                test_db, bad, self._user())
+            assert allowed is False, bad
+            assert reason is not None
+
+    def test_require_topic_access_uses_run_owner(self, test_db):
+        import uuid as uuid_module
+
+        from backend.models import PipelineRun, PipelineStatus
+        from backend.tasks.streaming_pipeline import _require_topic_access
+        owner = self._user()
+        stranger = self._user()
+        self._register_topic(test_db, "orders", owner.id)
+        run = PipelineRun(
+            id=uuid_module.uuid4(),
+            name="stream-run",
+            status=PipelineStatus.PENDING,
+            yaml_config="pipeline:\n  name: s\n  steps: []\n",
+            user_id=stranger.id,
+        )
+        test_db.add(run)
+        test_db.commit()
+        error = _require_topic_access(
+            test_db, run, {"consume": "orders", "publish": None})
+        assert error is not None and "orders" in error
+        run.user_id = owner.id
+        test_db.commit()
+        assert _require_topic_access(
+            test_db, run, {"consume": "orders", "publish": None}) is None
+
+
+class TestM160BatchOnlySteps:
+    """load/save steps must fail fast, never be silently dropped (M-160)."""
+
+    def _step(self, step_type, name):
+        from unittest.mock import MagicMock
+        step = MagicMock()
+        step.type = step_type
+        step.step_type = step_type
+        step.name = name
+        return step
+
+    def test_transform_only_passes(self):
+        from backend.tasks.streaming_pipeline import _validate_streaming_steps
+        assert _validate_streaming_steps(
+            [self._step("filter", "big")]) is None
+        assert _validate_streaming_steps([]) is None
+
+    def test_save_and_load_rejected_by_name(self):
+        from backend.tasks.streaming_pipeline import _validate_streaming_steps
+        error = _validate_streaming_steps([
+            self._step("filter", "big"),
+            self._step("save", "persist"),
+        ])
+        assert error is not None
+        assert "persist" in error and "save" in error.lower()
+        error = _validate_streaming_steps([self._step("load", "seed")])
+        assert error is not None and "seed" in error
+
+
+class TestM131Backpressure:
+    """Backpressure must pause fetching explicitly, never skip silently (M-131)."""
+
+    def _consumer(self, high):
+        from types import SimpleNamespace
+
+        class FakeTP:
+            topic = "orders"
+            partition = 0
+
+        class FakeConsumer:
+            def assignment(self):
+                return [FakeTP()]
+
+            def get_watermark_offsets(self, tp, timeout=None):
+                return (0, 60_000 if high else 100)
+
+            def committed(self, tps, timeout=None):
+                return [SimpleNamespace(offset=0)]
+
+        return FakeConsumer()
+
+    def _run(self, db):
+        import uuid as uuid_module
+
+        from backend.models import PipelineRun, PipelineStatus
+        run = PipelineRun(
+            id=uuid_module.uuid4(),
+            name="stream-run",
+            status=PipelineStatus.STREAMING_ACTIVE,
+            yaml_config="pipeline:\n  name: s\n  steps: []\n",
+        )
+        db.add(run)
+        db.commit()
+        return run
+
+    def test_over_threshold_skips_fetch_with_cooldown_and_event(self, test_db):
+        from unittest.mock import patch
+
+        from backend.tasks import streaming_pipeline as sp
+        run = self._run(test_db)
+        with (
+            patch.object(sp, "_sleep_interruptible",
+                         return_value=False) as mock_sleep,
+            patch.object(sp, "_sse_backpressure") as mock_sse,
+        ):
+            assert sp._apply_backpressure(
+                self._consumer(high=True), test_db, run.id) is True
+        mock_sleep.assert_called_once_with(
+            sp.BACKPRESSURE_COOLDOWN_SEC, test_db, run.id)
+        mock_sse.assert_called_once()
+
+    def test_under_threshold_fetches(self, test_db):
+        from unittest.mock import patch
+
+        from backend.tasks import streaming_pipeline as sp
+        run = self._run(test_db)
+        with (
+            patch.object(sp, "_sleep_interruptible") as mock_sleep,
+            patch.object(sp, "_sse_backpressure") as mock_sse,
+        ):
+            assert sp._apply_backpressure(
+                self._consumer(high=False), test_db, run.id) is False
+        mock_sleep.assert_not_called()
+        mock_sse.assert_not_called()
