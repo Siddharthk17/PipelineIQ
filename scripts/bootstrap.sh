@@ -271,15 +271,25 @@ else
 fi
 
 # 5. Nightly backup + demo-reseed cron jobs (idempotent, marker-tagged)
+# The demo reseed is OPT-IN ONLY (M-002/M-003): it can wipe the demo
+# account's showcase data, so the cron line is installed only when
+# PIPELINEIQ_SEED_DEMO=1 is set in the caller's environment. Re-running
+# bootstrap without the flag removes a previously installed reseed line.
 if [ "$INSTALL_CRON" -eq 1 ] && command_exists crontab && command_exists docker; then
   {
     crontab -l 2>/dev/null | grep -v "pipelineiq-backup\|pipelineiq-reseed" || true
     # NOTE: cron runs with a minimal PATH and no shell interpolation surprises:
     # the backup line keeps its own retention, the reseed script logs itself.
     printf '%s\n' "0 2 * * * cd $ROOT && ./scripts/backup.sh >> $ROOT/var-backup.log 2>&1 # pipelineiq-backup"
-    printf '%s\n' "30 2 * * * cd $ROOT && ./scripts/demo-reseed.sh >> $ROOT/var-reseed.log 2>&1 # pipelineiq-reseed"
+    if [ "${PIPELINEIQ_SEED_DEMO:-0}" = "1" ]; then
+      printf '%s\n' "30 2 * * * cd $ROOT && PIPELINEIQ_SEED_DEMO=1 ./scripts/demo-reseed.sh >> $ROOT/var-reseed.log 2>&1 # pipelineiq-reseed"
+    fi
   } | crontab -
-  log "cron jobs installed (02:00 backup, 02:30 demo reseed; re-run to update, --no-cron to skip)."
+  if [ "${PIPELINEIQ_SEED_DEMO:-0}" = "1" ]; then
+    log "cron jobs installed (02:00 backup, 02:30 demo reseed; re-run to update, --no-cron to skip)."
+  else
+    log "cron backup installed (02:00); demo reseed NOT installed (set PIPELINEIQ_SEED_DEMO=1 to opt in; re-run to update, --no-cron to skip)."
+  fi
 elif [ "$INSTALL_CRON" -eq 1 ]; then
   warn "crontab or docker not found — skipping cron install. Add manually:"
   warn "  0 2 * * * cd $ROOT && ./scripts/backup.sh # pipelineiq-backup"
