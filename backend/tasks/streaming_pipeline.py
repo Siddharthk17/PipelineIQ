@@ -16,7 +16,7 @@ import pandas as pd
 import pyarrow as pa
 from celery import Task
 from celery.utils.log import get_task_logger
-from confluent_kafka import KafkaError
+from confluent_kafka import KafkaError, TopicPartition
 
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
@@ -43,6 +43,14 @@ BACKPRESSURE_COOLDOWN_SEC = 10       # Wait 10s before resuming after backpressu
 IDEMPOTENT_CACHE_TTL = 10_000        # Keep last 10K processed offsets in memory
 MAX_STREAMING_BATCH_SIZE = 50_000
 MAX_CONSECUTIVE_ERRORS = 50          # Shut down after 50 consecutive batch errors
+
+
+class StreamingPublishError(RuntimeError):
+    """Raised when a batch cannot be durably published to the output topic."""
+
+
+class StreamingDLQError(RuntimeError):
+    """Raised when a failed batch cannot be durably preserved in the DLQ."""
 
 
 class _UnlimitedTask(Task):
@@ -202,64 +210,38 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             if not deduped:
                 continue
 
-            t0 = time.monotonic()
+            def _on_success(stats, throughput, batch_ms):
+                if stats["batches"] % STATS_UPDATE_INTERVAL == 0:
+                    _persist_stats_best_effort(
+                        db, run_id, stats, throughput, batch_ms, consumer)
+                    _sse_progress(run_id, stats, throughput)
 
-            df, malformed = _deserialize(deduped, deserialize_fmt)
-            if malformed:
-                _send_dlq(dlq_producer, [m for m, _ in malformed], topic, "deserialization failed")
-                stats["dlq"] += len(malformed)
-
-            if df.empty:
-                consumer.commit(message=deduped[-1], asynchronous=False)
-                continue
-
-            try:
-                table = pa.Table.from_pandas(df, preserve_index=False)
-                table_registry, output_name = _seed_registry(table, consume_step)
-
-                for step in middle_steps:
-                    _ensure_step_input(table_registry, step, output_name)
-                    result = executor.execute(
-                        step,
-                        table_registry,
-                        recorder,
-                    )
-                    output_name = step.name if hasattr(step, "name") else output_name
-                    table_registry[output_name] = result.output_table
-
-                df = table_registry[output_name].to_pandas()
-            except Exception as exc:
-                logger.exception("Batch processing error")
-                _send_dlq(dlq_producer, deduped, topic, str(exc))
-                stats["failed"] += len(deduped)
-                stats["dlq"] += len(deduped)
-                consecutive_errors += 1
-                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                    logger.critical(
-                        "Streaming pipeline exceeded max consecutive errors (%d), shutting down",
-                        MAX_CONSECUTIVE_ERRORS,
-                    )
-                    break
-                consumer.commit(message=deduped[-1], asynchronous=False)
-                continue
-
-            if publish_step and producer and not df.empty:
-                try:
-                    _publish(producer, df, publish_step)
-                except Exception:
-                    logger.exception("Publish error (non-fatal)")
-
-            batch_ms = (time.monotonic() - t0) * 1000
-            stats["batches"] += 1
-            stats["messages"] += len(deduped)
-            consecutive_errors = 0
-            elapsed = time.monotonic() - stats["start"]
-            throughput = stats["messages"] / elapsed if elapsed > 0 else 0
-
-            if stats["batches"] % STATS_UPDATE_INTERVAL == 0:
-                _update_stats(db, run_id, stats, throughput, batch_ms, consumer)
-                _sse_progress(run_id, stats, throughput)
-            consumer.commit(message=deduped[-1], asynchronous=False)
+            consecutive_errors = _process_batch(
+                deduped,
+                consumer=consumer,
+                producer=producer,
+                dlq_producer=dlq_producer,
+                consume_step=consume_step,
+                deserialize_fmt=deserialize_fmt,
+                publish_step=publish_step,
+                middle_steps=middle_steps,
+                executor=executor,
+                recorder=recorder,
+                stats=stats,
+                consecutive_errors=consecutive_errors,
+                on_success=_on_success,
+            )
+            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                _fail_run(
+                    db, run_id,
+                    "Streaming pipeline exceeded max consecutive batch "
+                    f"errors ({MAX_CONSECUTIVE_ERRORS}); shutting down",
+                )
+                break
+            if consecutive_errors and _sleep_interruptible(
+                min(consecutive_errors, 10), db, run_id,
+            ):
+                break
 
         _set_status(db, run_id, PipelineStatus.STREAMING_STOPPED)
         logger.info(
@@ -355,35 +337,246 @@ def _deserialize(messages, fmt: str) -> tuple[pd.DataFrame, list[tuple[object, s
 
 
 def _publish(producer, df: pd.DataFrame, publish_step) -> None:
+    """Publish a batch and wait until it is durably accepted (M-010).
+
+    Uses delivery callbacks plus a blocking flush: any delivery failure
+    or undelivered message raises :class:`StreamingPublishError` so the
+    caller withholds the offset commit instead of silently losing data.
+    """
     topic = _step_field(publish_step, "topic")
+    if not topic:
+        raise StreamingPublishError("publish step has no topic configured")
     key_col = _step_field(publish_step, "key_column")
-    for record in df.to_dict(orient="records"):
-        key = (
-            str(record[key_col]).encode()
-            if key_col and key_col in record
-            else None
-        )
-        value = orjson.dumps({k: str(v) if not isinstance(v, (str, int, float, bool, type(None), list, dict)) else v for k, v in record.items()})
-        producer.produce(topic=topic, key=key, value=value)
+    delivery_errors: list = []
+
+    def _on_delivery(err, _msg) -> None:
+        if err is not None:
+            delivery_errors.append(err)
+
+    try:
+        for record in df.to_dict(orient="records"):
+            key = (
+                str(record[key_col]).encode()
+                if key_col and key_col in record
+                else None
+            )
+            value = orjson.dumps({k: str(v) if not isinstance(v, (str, int, float, bool, type(None), list, dict)) else v for k, v in record.items()})
+            producer.produce(
+                topic=topic, key=key, value=value,
+                on_delivery=_on_delivery,
+            )
+    except Exception as exc:
+        raise StreamingPublishError(
+            f"Failed to queue batch for topic '{topic}': {exc}") from exc
     producer.poll(0)
+    remaining = producer.flush(timeout=30)
+    if delivery_errors:
+        raise StreamingPublishError(
+            f"{len(delivery_errors)} deliveries to '{topic}' failed: "
+            f"{delivery_errors[0]}")
+    if remaining:
+        raise StreamingPublishError(
+            f"{remaining} messages to '{topic}' undelivered after flush")
 
 
 def _send_dlq(dlq_producer, messages, original_topic: str, error: str) -> None:
+    """Preserve failed messages in the DLQ, raising if not durable (M-010).
+
+    Raises :class:`StreamingDLQError` when the DLQ write cannot be
+    confirmed, so the caller withholds the offset commit (the batch will
+    redeliver) instead of dropping it.
+    """
+    if not messages:
+        return
     dlq_topic = f"{original_topic}.dlq"
     failed_at = datetime.now(UTC).isoformat()
+    delivery_errors: list = []
+
+    def _on_delivery(err, _msg) -> None:
+        if err is not None:
+            delivery_errors.append(err)
+
+    try:
+        for msg in messages:
+            dlq_producer.produce(
+                topic=dlq_topic,
+                value=msg.value(),
+                key=msg.key(),
+                headers=[
+                    ("x-error", error[:500].encode()),
+                    ("x-original-topic", original_topic.encode()),
+                    ("x-failed-at", failed_at.encode()),
+                    ("x-original-offset", str(msg.offset()).encode()),
+                ],
+                on_delivery=_on_delivery,
+            )
+    except Exception as exc:
+        raise StreamingDLQError(
+            f"Failed to queue {len(messages)} messages for DLQ "
+            f"'{dlq_topic}': {exc}") from exc
+    dlq_producer.poll(0)
+    remaining = dlq_producer.flush(timeout=10)
+    if delivery_errors:
+        raise StreamingDLQError(
+            f"{len(delivery_errors)} DLQ deliveries to '{dlq_topic}' "
+            f"failed: {delivery_errors[0]}")
+    if remaining:
+        raise StreamingDLQError(
+            f"{remaining} messages to DLQ '{dlq_topic}' undelivered "
+            "after flush")
+
+
+def _commit_offsets(consumer, messages) -> None:
+    """Commit the per-partition high-water mark for a batch (M-010).
+
+    The old code committed a single message's offset, silently leaving
+    sibling partitions uncommitted; commit offset+1 for every partition
+    present in the batch instead.
+    """
+    high: dict = {}
     for msg in messages:
-        dlq_producer.produce(
-            topic=dlq_topic,
-            value=msg.value(),
-            key=msg.key(),
-            headers=[
-                ("x-error", error[:500].encode()),
-                ("x-original-topic", original_topic.encode()),
-                ("x-failed-at", failed_at.encode()),
-                ("x-original-offset", str(msg.offset()).encode()),
-            ],
+        key = (msg.topic(), msg.partition())
+        if msg.offset() > high.get(key, -1):
+            high[key] = msg.offset()
+    if not high:
+        return
+    consumer.commit(
+        offsets=[
+            TopicPartition(topic, partition, offset + 1)
+            for (topic, partition), offset in high.items()
+        ],
+        asynchronous=False,
+    )
+
+
+def _process_batch(
+    messages,
+    *,
+    consumer,
+    producer,
+    dlq_producer,
+    consume_step,
+    deserialize_fmt: str,
+    publish_step,
+    middle_steps,
+    executor,
+    recorder,
+    stats: dict,
+    consecutive_errors: int,
+    on_success=None,
+) -> int:
+    """Process one batch; commit offsets only on durable success (M-010).
+
+    Returns the updated consecutive-error count. Offsets are committed
+    exactly on paths where the batch was fully published *and* persisted
+    (DLQ for malformed/failed records). On publish/DLQ persistence
+    failure the commit is withheld so the batch redelivers instead of
+    being silently lost.
+    """
+    topic = _step_field(consume_step, "topic")
+    t0 = time.monotonic()
+    try:
+        df, malformed = _deserialize(messages, deserialize_fmt)
+        if malformed:
+            _send_dlq(
+                dlq_producer, [m for m, _ in malformed],
+                topic, "deserialization failed",
+            )
+            stats["dlq"] += len(malformed)
+
+        if not df.empty:
+            table = pa.Table.from_pandas(df, preserve_index=False)
+            table_registry, output_name = _seed_registry(table, consume_step)
+            for step in middle_steps:
+                _ensure_step_input(table_registry, step, output_name)
+                result = executor.execute(step, table_registry, recorder)
+                output_name = (
+                    step.name if hasattr(step, "name") else output_name)
+                table_registry[output_name] = result.output_table
+            df = table_registry[output_name].to_pandas()
+            if publish_step is not None and producer is not None and not df.empty:
+                _publish(producer, df, publish_step)
+
+        batch_ms = (time.monotonic() - t0) * 1000
+        stats["batches"] += 1
+        stats["messages"] += len(messages)
+        elapsed = time.monotonic() - stats["start"]
+        throughput = stats["messages"] / elapsed if elapsed > 0 else 0
+        if on_success is not None:
+            on_success(stats=stats, throughput=throughput, batch_ms=batch_ms)
+        _commit_offsets(consumer, messages)
+    except (StreamingPublishError, StreamingDLQError):
+        logger.exception(
+            "Batch persist failed; withholding offset commit for redelivery")
+        stats["failed"] += len(messages)
+        return consecutive_errors + 1
+    except Exception as exc:
+        # Transform (or unexpected) error: preserve the batch in the DLQ
+        # and commit only if that preservation succeeded.
+        try:
+            _send_dlq(dlq_producer, messages, topic, str(exc))
+        except StreamingDLQError:
+            logger.exception(
+                "Batch failed and DLQ persist failed; "
+                "withholding offset commit for redelivery")
+            stats["failed"] += len(messages)
+            return consecutive_errors + 1
+        logger.exception("Batch processing error; batch preserved in DLQ")
+        stats["failed"] += len(messages)
+        stats["dlq"] += len(messages)
+        _commit_offsets(consumer, messages)
+        return consecutive_errors + 1
+    else:
+        return 0
+
+
+def _persist_stats_best_effort(
+    db, run_id: str, stats: dict, throughput: float, batch_ms: float,
+    consumer=None,
+) -> None:
+    """Persist stats without endangering the batch (M-010/M-044).
+
+    Stats are observability, not data: a transient DB failure rolls back
+    and logs instead of failing the batch (whose offsets are already
+    committed) or poisoning the session for subsequent iterations.
+    """
+    try:
+        _update_stats(db, run_id, stats, throughput, batch_ms, consumer)
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "Streaming stats persist failed (best-effort); continuing",
+            exc_info=True,
         )
-    dlq_producer.flush(timeout=5)
+
+
+def _fail_run(db, run_id: str, reason: str) -> None:
+    """Mark a run FAILED with a reason instead of stranding it (M-044)."""
+    logger.critical("Streaming run %s failed: %s", run_id, reason)
+    try:
+        db.rollback()
+        run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
+        if run is not None:
+            run.status = PipelineStatus.FAILED
+            run.error_message = reason[:2000]
+            run.completed_at = utcnow()
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to mark run %s FAILED", run_id)
+
+
+def _sleep_interruptible(seconds: float, db, run_id: str) -> bool:
+    """Sleep up to ``seconds``, waking early if the run aborts.
+
+    Returns True when the daemon should stop.
+    """
+    deadline = time.monotonic() + max(0.0, seconds)
+    while time.monotonic() < deadline:
+        if _is_aborted(db, run_id):
+            return True
+        time.sleep(min(1.0, deadline - time.monotonic()))
+    return _is_aborted(db, run_id)
 
 
 def _is_aborted(db, run_id: str) -> bool:
