@@ -33,7 +33,7 @@ from celery.signals import worker_process_init as worker_init
 from celery.signals import worker_process_shutdown as worker_shutdown
 
 from backend.config import settings
-from backend.execution.sql_builder import build_sql_for_step
+from backend.execution.sql_builder import build_join_sql, build_sql_for_step
 
 logger = logging.getLogger(__name__)
 
@@ -268,9 +268,34 @@ class DuckDBExecutor:
 
         This is the primary entry point for smart routing. It leverages
         the sql_builder to convert a StepConfig into a DuckDB SQL query.
+        Join steps are built with the registered table schemas so DuckDB
+        output columns/values match pandas (M-013).
         """
-        sql = build_sql_for_step(step)
+        sql = self._build_step_sql(step, input_table, extra_tables)
         return self.execute_sql(sql, input_table, extra_tables=extra_tables)
+
+    @staticmethod
+    def _build_step_sql(
+        step: object,
+        input_table: pa.Table,
+        extra_tables: dict[str, pa.Table] | None,
+    ) -> str:
+        """Build step SQL, schema-aware for joins (M-013)."""
+        step_type = getattr(step, "step_type", "")
+        if hasattr(step_type, "value"):
+            step_type = step_type.value
+        if str(step_type).lower() != "join":
+            return build_sql_for_step(step)
+        tables = extra_tables or {}
+        right_table = tables.get("__right__")
+        left_table = tables.get("__left__", input_table)
+        if right_table is None or left_table is None:
+            return build_sql_for_step(step)
+        return build_join_sql(
+            step,
+            list(left_table.column_names),
+            list(right_table.column_names),
+        )
 
     def execute_sql(
         self,

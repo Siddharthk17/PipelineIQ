@@ -439,6 +439,26 @@ def validate_sql_step_query(
     return normalized.replace("{{input}}", "__input__")
 
 
+def _escape_like_literal(value: str) -> str:
+    """Escape LIKE wildcards so ``contains`` matches literally (M-014/M-161).
+
+    ``%``, ``_`` and the escape character itself are backslash-escaped;
+    callers must append ``ESCAPE '\\'`` to the predicate.
+    """
+    return (
+        str(value).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+
+
+def _like_predicate(column: str, pattern: str, *, negated: bool) -> str:
+    """Build a LIKE predicate with an explicit ESCAPE clause."""
+    keyword = "NOT LIKE" if negated else "LIKE"
+    return (
+        f"CAST({column} AS VARCHAR) {keyword} "
+        f"{sql_literal(pattern)} ESCAPE '\\'"
+    )
+
+
 def build_filter_sql(step: Any) -> str:
     column = quote_identifier(str(_step_value(step, "column", "")))
     operator = _step_value(step, "operator", "equals")
@@ -464,13 +484,13 @@ def build_filter_sql(step: Any) -> str:
     if operator in compare_ops:
         predicate = f"{column} {compare_ops[operator]} {sql_literal(value)}"
     elif operator == "contains":
-        predicate = f"CAST({column} AS VARCHAR) LIKE {sql_literal(f'%{value}%')}"
+        predicate = _like_predicate(column, f"%{_escape_like_literal(value)}%", negated=False)
     elif operator == "not_contains":
-        predicate = f"CAST({column} AS VARCHAR) NOT LIKE {sql_literal(f'%{value}%')}"
+        predicate = _like_predicate(column, f"%{_escape_like_literal(value)}%", negated=True)
     elif operator == "starts_with":
-        predicate = f"CAST({column} AS VARCHAR) LIKE {sql_literal(f'{value}%')}"
+        predicate = _like_predicate(column, f"{_escape_like_literal(value)}%", negated=False)
     elif operator == "ends_with":
-        predicate = f"CAST({column} AS VARCHAR) LIKE {sql_literal(f'%{value}')}"
+        predicate = _like_predicate(column, f"%{_escape_like_literal(value)}", negated=False)
     elif operator == "is_null":
         predicate = f"{column} IS NULL"
     elif operator == "is_not_null":
@@ -578,7 +598,22 @@ def build_aggregate_sql(step: Any) -> str:
     return sql
 
 
-def build_join_sql(step: Any) -> str:
+def build_join_sql(
+    step: Any,
+    left_columns: list[str] | None = None,
+    right_columns: list[str] | None = None,
+) -> str:
+    """Build join SQL with pandas-compatible output columns.
+
+    pandas ``merge(..., suffixes=("_left", "_right"))`` keeps a single join
+    key, then left columns, then right non-key columns, renaming overlaps to
+    ``<col>_left``/``<col>_right``. ``SELECT * ... USING`` instead yields
+    duplicate/renamed columns (``val``, ``val_1``), silently changing results
+    above the DuckDB routing threshold (M-013). When both schemas are known
+    an explicit aliased projection reproducing pandas names, order and key
+    semantics (null-safe ``ON`` + per-``how`` key coalescing) is emitted;
+    otherwise the legacy ``USING`` form is returned for backward compatibility.
+    """
     join_key = str(_step_value(step, "on", ""))
     if not join_key:
         raise ValueError("Join step requires 'on' key")
@@ -589,9 +624,58 @@ def build_join_sql(step: Any) -> str:
     valid = {"inner", "left", "right", "outer"}
     if how not in valid:
         raise ValueError(f"Unsupported join type '{how}'")
+    if left_columns is None or right_columns is None:
+        return (
+            f"SELECT * FROM __left__ {how.upper()} JOIN __right__ "
+            f"USING ({quote_identifier(join_key)})"
+        )
+
+    join_map = {
+        "inner": "INNER",
+        "left": "LEFT",
+        "right": "RIGHT",
+        "outer": "FULL OUTER",
+    }
+    overlap = (set(left_columns) & set(right_columns)) - {join_key}
+    projections: list[str] = []
+    if how in ("inner", "left"):
+        key_expr = f'__left__.{quote_identifier(join_key)}'
+    elif how == "right":
+        key_expr = f'__right__.{quote_identifier(join_key)}'
+    else:
+        key_expr = (
+            f'COALESCE(__left__.{quote_identifier(join_key)}, '
+            f'__right__.{quote_identifier(join_key)})'
+        )
+    projections.append(f"{key_expr} AS {quote_identifier(join_key)}")
+    for col in left_columns:
+        if col == join_key:
+            continue
+        if col in overlap:
+            projections.append(
+                f"__left__.{quote_identifier(col)} AS {quote_identifier(col + '_left')}")
+        else:
+            projections.append(
+                f"__left__.{quote_identifier(col)} AS {quote_identifier(col)}")
+    for col in right_columns:
+        if col == join_key:
+            continue
+        if col in overlap:
+            projections.append(
+                f"__right__.{quote_identifier(col)} AS {quote_identifier(col + '_right')}")
+        else:
+            projections.append(
+                f"__right__.{quote_identifier(col)} AS {quote_identifier(col)}")
+    # NULL-safe equality: pandas matches NaN/None keys with each other,
+    # while SQL `=` never matches NULL. IS NOT DISTINCT FROM reproduces
+    # pandas key-matching exactly for all dtypes.
+    on_clause = (
+        f"__left__.{quote_identifier(join_key)} IS NOT DISTINCT FROM "
+        f"__right__.{quote_identifier(join_key)}"
+    )
     return (
-        f"SELECT * FROM __left__ {how.upper()} JOIN __right__ "
-        f"USING ({quote_identifier(join_key)})"
+        f"SELECT {', '.join(projections)} FROM __left__ "
+        f"{join_map[how]} JOIN __right__ ON ({on_clause})"
     )
 
 
