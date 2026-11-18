@@ -416,7 +416,13 @@ class TestPipelineExecution:
     def test_export_pipeline_output_finds_uuid_suffixed_save_file(
         self, client, test_db, sales_csv_bytes, tmp_path, monkeypatch
     ):
-        """Export endpoint resolves files saved as {filename}_{uuid}.csv."""
+        """Export serves run-scoped artifacts, never stem-matched foreign files.
+
+        M-004: resolution is scoped to the run's own outputs (recorded
+        artifact names + run-id-prefixed files, no globs). A foreign file
+        sharing the save stem is not served; the run's own run-id-prefixed
+        artifact is.
+        """
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
         yaml_config = build_simple_pipeline_yaml(file_id)
         run_id = client.post(
@@ -436,7 +442,16 @@ class TestPipelineExecution:
             "backend.api.pipelines.settings.UPLOAD_DIR",
             export_dir)
 
-        output_file = export_dir / "output.csv_deadbeef.csv"
+        # Foreign file sharing the save stem: must NOT be served.
+        (export_dir / "output.csv_deadbeef.csv").write_text(
+            "order_id,status\\n1,delivered\\n",
+            encoding="utf-8")
+
+        response = client.get(f"/api/v1/pipelines/{run_id}/export")
+        assert response.status_code == 404
+
+        # The run's own run-scoped artifact is served.
+        output_file = export_dir / f"{run_id}_output.csv"
         output_file.write_text(
             "order_id,status\\n1,delivered\\n",
             encoding="utf-8")
