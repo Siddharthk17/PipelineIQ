@@ -916,8 +916,10 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
-      - "--web.enable-lifecycle"
       - "--web.route-prefix=/prometheus"
+    # NOTE: --web.enable-lifecycle intentionally absent (M-049). The
+    # lifecycle API (/-/quit, /-/reload) allows remote shutdown/reload and
+    # must never be exposed; nginx also denies those paths explicitly.
     ports:
       - "127.0.0.1:9090:9090"
     healthcheck:
