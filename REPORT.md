@@ -45,6 +45,14 @@ a host restart wiped `/tmp`.
   healing worker). Verified regression-first: test fails 409 pre-fix.
 - `693806b` M-131 — daemon consumer uses `auto_offset_reset="earliest"`
   via `_daemon_consumer` so fresh groups replay backlog.
+- `7337265` M-152 — regression lock that HEALING cancels (200 +
+  CANCELLED) and HEALED still 409s; cancel endpoint docs fixed.
+- `ee3d97e` M-006/M-131 — daemon registers claimed topics as catalog
+  `topic` DataAssets on first use (closes the gate's fail-open: nothing
+  wrote those rows before); offset reset is now per-pipeline
+  (`auto_offset_reset` on the consume step, invalid falls back to
+  earliest, choice logged at startup); consumer group uses the full
+  run id (the 8-char prefix could collide across runs).
 
 ## Verification
 
@@ -54,6 +62,8 @@ a host restart wiped `/tmp`.
   (59 combined with daemon fixes).
 - `backend/tests/unit/pipeline/test_cancel_healing.py` (parallel
   session): 2 passed.
+- `backend/tests/unit/streaming/test_daemon_provisioning.py`: 8 passed
+  (M-006 first-claim/deny/re-entry/idempotency, M-131 reset choice).
 - ruff clean and mypy clean on every touched source file.
 
 ## Notes / residual risks
