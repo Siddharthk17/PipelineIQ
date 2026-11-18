@@ -987,7 +987,7 @@ def _status_cache_key(run_id: str) -> str:
 @router.post(
     "/{run_id}/cancel",
     summary="Cancel a running pipeline",
-    description="Cancel a PENDING or RUNNING pipeline run and revoke its Celery task.",
+    description="Cancel a PENDING, RUNNING, HEALING or streaming pipeline run and revoke its Celery task.",
 )
 def cancel_pipeline_run(
     run_id: str,
@@ -1007,9 +1007,14 @@ def cancel_pipeline_run(
 
     _check_run_permission(db, current_user, pipeline_run, ["owner", "runner"])
 
+    # HEALING runs hold a live worker task (autonomous healing executes
+    # synchronously inside execute_pipeline_task), so they are cancellable
+    # like any other in-flight state (M-152). Revoke SIGTERMs the worker;
+    # the CANCELLED flip below sticks because the worker is gone.
     if pipeline_run.status not in (
             PipelineStatus.PENDING,
             PipelineStatus.RUNNING,
+            PipelineStatus.HEALING,
             PipelineStatus.STREAMING_ACTIVE,
             PipelineStatus.STREAMING_PAUSED):
         raise HTTPException(

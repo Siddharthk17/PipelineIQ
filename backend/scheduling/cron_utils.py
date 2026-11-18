@@ -10,6 +10,13 @@ try:
 except ImportError as exc:
     raise ImportError("Run: pip install croniter>=1.4.0") from exc
 
+# Preview bounds (M-028): the preview loop is CPU-bound in the API
+# process, so the count is clamped server-side no matter what callers ask.
+PREVIEW_DEFAULT_N = 5
+PREVIEW_MAX_N = 100
+# Upper bound for schedule run-history pages.
+RUN_HISTORY_MAX_LIMIT = 500
+
 
 # Validation
 
@@ -48,13 +55,24 @@ def get_next_run_at(expression: str, from_time: datetime | None = None) -> datet
     return next_naive.replace(tzinfo=UTC)
 
 
-def get_next_n_runs(expression: str, n: int = 5) -> list[datetime]:
-    """Get the next N scheduled run times (for the schedule preview UI)."""
+def get_next_n_runs(expression: str, n: int = PREVIEW_DEFAULT_N) -> list[datetime]:
+    """Get the next N scheduled run times (for the schedule preview UI).
+
+    ``n`` is clamped to [1, PREVIEW_MAX_N] (M-028): the loop is
+    CPU-bound in the caller, so an unbounded ``n`` is an authenticated
+    CPU-DoS vector.
+    """
     results = []
     from_time = datetime.now(UTC)
 
+    try:
+        count = int(n)
+    except (TypeError, ValueError):
+        count = PREVIEW_DEFAULT_N
+    count = max(1, min(count, PREVIEW_MAX_N))
+
     cron = croniter(expression.strip(), from_time.replace(tzinfo=None))
-    for _ in range(n):
+    for _ in range(count):
         next_run = cron.get_next(datetime).replace(tzinfo=UTC)
         results.append(next_run)
 
