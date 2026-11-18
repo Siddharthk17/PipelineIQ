@@ -395,17 +395,36 @@ def _check_run_permission(
     _check_pipeline_permission(db, user, pipeline_run.name, required_levels)
 
 
-def _safe_output_pattern(output_dir, pattern: str):
-    from pathlib import Path
+def _resolve_owned_filename(root, name: str | None):
+    """Literal, traversal-safe join of a recorded artifact name under root.
 
-    safe_name = os.path.basename(str(pattern).strip())
-    if not safe_name or safe_name in {".", ".."}:
+    Returns the resolved path when ``name`` is a plain filename recorded on
+    this run's own save steps and the file exists under ``root``; otherwise
+    returns None. Recorded names are used literally -- never as glob
+    patterns -- so attacker-controlled names cannot match other tenants'
+    files in the shared directory.
+    """
+    if not isinstance(name, str):
         return None
-    root = Path(output_dir).resolve()
-    candidate = (root / safe_name).resolve()
-    if candidate != root and root not in candidate.parents:
+    candidate = name.strip()
+    if not candidate or candidate in {".", ".."}:
         return None
-    return candidate
+    if (".." in candidate or "/" in candidate or "\\" in candidate
+            or "\x00" in candidate):
+        return None
+    if any(ch in candidate for ch in "*?[]"):
+        # Literal filenames only: never interpret recorded names as patterns.
+        return None
+    full = root / candidate
+    try:
+        resolved = full.resolve()
+    except OSError:
+        return None
+    if resolved != root and root not in resolved.parents:
+        return None
+    if not resolved.is_file():
+        return None
+    return resolved
 
 
 @router.post("/run",
@@ -1215,65 +1234,55 @@ def export_pipeline_output(
     save_results = [
         sr for sr in pipeline_run.step_results if sr.step_type == "save"]
 
-    # Prefer concrete local artifacts when present, even if S3 storage is enabled.
+    # Resolve local artifacts belonging to THIS run only. No globbing: every
+    # candidate is either an exact artifact name recorded on this run's own
+    # save steps, or prefixed with this run's validated UUID -- both joined
+    # literally under UPLOAD_DIR with symlink-aware confinement. Attacker
+    # controlled save filenames / step names can therefore never match
+    # another tenant's files in the shared directory.
     output_dir = settings.UPLOAD_DIR
-    import glob as glob_module
+    root = Path(output_dir).resolve()
 
     output_files: list[str] = []
     seen: set[str] = set()
 
-    def _add_matches(pattern: Path) -> None:
-        root = Path(output_dir).resolve()
-        resolved_pattern = Path(pattern).resolve()
-        if resolved_pattern != root and root not in resolved_pattern.parents:
+    def _add_owned(name: str | None) -> None:
+        resolved = _resolve_owned_filename(root, name)
+        if resolved is None:
             return
-        for match in glob_module.glob(str(pattern)):
-            resolved_match = Path(match).resolve()
-            if root not in resolved_match.parents:
-                continue
-            if str(resolved_match) not in seen:
-                seen.add(str(resolved_match))
-                output_files.append(str(resolved_match))
+        key = str(resolved)
+        if key not in seen:
+            seen.add(key)
+            output_files.append(key)
 
-    # Older conventions may include run_id in output filenames.
-    for pattern in [
-            output_dir /
-            f"{run_id}*.csv",
-            output_dir /
-            f"{run_id}*.json"]:
-        _add_matches(pattern)
-
-    # Current save step writes: "{filename}_{uuid}.csv"
+    # Exact artifact names recorded on this run's own save steps.
     for sr in save_results:
-        for ext in [".csv", ".json"]:
-            _add_matches(output_dir / f"{sr.step_name}_*{ext}")
-            _add_matches(output_dir / f"{sr.step_name}{ext}")
+        _add_owned(sr.output_filename)
 
-    # Parse YAML and look for save.filename values.
+    # Legacy convention: artifacts prefixed with this run's id. run_id was
+    # validated as a UUID above, so the prefix is run-scoped; matching uses
+    # literal string comparison, never the glob module.
     try:
-        parsed_pipeline = get_parsed_pipeline(pipeline_run.yaml_config)
-        for step in parsed_pipeline.steps:
-            if getattr(step, "step_type", None) != "save":
-                continue
-            filename = str(getattr(step, "filename", "")).strip()
-            if not filename:
-                continue
-            filename = os.path.basename(filename)
-            for ext in [".csv", ".json"]:
-                safe_pattern = _safe_output_pattern(output_dir, filename)
-                if safe_pattern is not None:
-                    _add_matches(safe_pattern)
-                safe_pattern = _safe_output_pattern(output_dir, f"{filename}_*{ext}")
-                if safe_pattern is not None:
-                    _add_matches(safe_pattern)
-                if not filename.endswith(ext):
-                    safe_pattern = _safe_output_pattern(output_dir, f"{filename}{ext}")
-                    if safe_pattern is not None:
-                        _add_matches(safe_pattern)
-    except Exception:
-        logger.warning(
-            "Could not parse YAML while locating export file for run_id=%s",
-            run_id)
+        entries = sorted(root.iterdir(), key=lambda p: p.name)
+    except OSError:
+        entries = []
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        if not entry.name.startswith(run_id):
+            continue
+        if not entry.name.endswith((".csv", ".json")):
+            continue
+        try:
+            resolved_entry = entry.resolve()
+        except OSError:
+            continue
+        if resolved_entry != root and root not in resolved_entry.parents:
+            continue
+        key = str(resolved_entry)
+        if key not in seen:
+            seen.add(key)
+            output_files.append(key)
 
     if output_files:
         output_path = Path(output_files[0])

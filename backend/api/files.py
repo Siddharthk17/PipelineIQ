@@ -794,13 +794,21 @@ def _build_schema_drift_response(
     original_filename: str,
     columns: list[str],
     dtypes: dict,
+    user_id,
 ) -> SchemaDriftResponse | None:
+    """Compare against the uploader's own previous snapshot with the same name.
+
+    The baseline lookup is scoped to (owner, filename): snapshots uploaded
+    by other tenants with the same ``original_filename`` must never leak
+    their column names/dtypes into this response.
+    """
     drift_report = None
     previous_snapshot = (
         db.query(SchemaSnapshot)
         .join(UploadedFile, SchemaSnapshot.file_id == UploadedFile.id)
         .filter(
             UploadedFile.original_filename == original_filename,
+            UploadedFile.user_id == user_id,
             SchemaSnapshot.file_id != _as_uuid(file_id),
         )
         .order_by(SchemaSnapshot.captured_at.desc())
@@ -921,6 +929,7 @@ def _finalize_uploaded_file(
         original_filename=original_filename,
         columns=columns,
         dtypes=dtypes,
+        user_id=current_user.id,
     )
 
     logger.info(
