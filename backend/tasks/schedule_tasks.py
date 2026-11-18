@@ -5,6 +5,7 @@ next_run_at <= now, and dispatches execute_pipeline_task for each.
 Also creates ScheduleRun records and updates schedule statistics.
 """
 
+import contextlib
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -62,6 +63,8 @@ def check_schedules() -> dict:
 
     db = SessionLocal()
     triggered = 0
+    synced = 0
+    backlog = 0
     try:
         now = datetime.now(UTC)
         # Row-level lock so overlapping beats serialize (M-071): even when
@@ -171,6 +174,39 @@ def check_schedules() -> dict:
                     schedule.id)
                 db.rollback()
 
+        # Mirror terminal pipeline outcomes into open schedule_runs so
+        # dispatched-but-never-completed rows cannot strand as RUNNING
+        # forever and counters converge (M-044). A sync failure must not
+        # fail the tick: the next beat retries.
+        try:
+            synced = _sync_open_schedule_runs(db)
+        except Exception:
+            db.rollback()
+            logger.exception("Error syncing schedule runs")
+            synced = 0
+
+        # Backlog (M-131): the batch limit bounds one tick's work, but due
+        # schedules beyond it must be reported, never silently skipped.
+        try:
+            backlog = (
+                db.query(PipelineSchedule)
+                .filter(
+                    PipelineSchedule.is_active,
+                    PipelineSchedule.next_run_at <= now,
+                )
+                .count()
+            )
+        except Exception:
+            db.rollback()
+            logger.exception("Error counting schedule backlog")
+            backlog = 0
+        if backlog:
+            logger.warning(
+                "Scheduler backlog: %d due schedule(s) left unprocessed "
+                "(batch limit %d)",
+                backlog, SCHEDULE_CHECK_BATCH_LIMIT,
+            )
+
     except Exception:
         logger.exception("Error checking schedules")
     finally:
@@ -185,4 +221,81 @@ def check_schedules() -> dict:
             logger.debug("Schedule lock release skipped", exc_info=True)
         db.close()
 
-    return {"triggered": triggered, "locked": False}
+    return {
+        "triggered": triggered,
+        "locked": False,
+        "backlog": backlog,
+        "synced": synced,
+    }
+
+
+def _sync_open_schedule_runs(db, limit: int = SCHEDULE_CHECK_BATCH_LIMIT) -> int:
+    """Mirror terminal pipeline outcomes into open schedule_runs (M-044).
+
+    Each open schedule_run whose linked pipeline_run reached a terminal
+    state records the outcome (status, error, duration) and bumps its
+    schedule's counters exactly once — the row leaves the open set, so
+    re-syncs are no-ops. Rows whose pipeline run vanished are marked
+    FAILED with a reason instead of stranding. Per-run isolation: one bad
+    row rolls back alone and the sync continues.
+    """
+    synced = 0
+    open_runs = (
+        db.query(ScheduleRun)
+        .filter(
+            ScheduleRun.run_id.is_not(None),
+            or_(
+                ScheduleRun.status.is_(None),
+                ScheduleRun.status.in_(SCHEDULE_RUN_OPEN_STATUSES),
+            ),
+        )
+        .order_by(ScheduleRun.triggered_at.asc())
+        .limit(limit)
+        .all()
+    )
+    for schedule_run in open_runs:
+        try:
+            pipeline_run = (
+                db.query(PipelineRun)
+                .filter(PipelineRun.id == schedule_run.run_id)
+                .first()
+            )
+            if pipeline_run is None:
+                schedule_run.status = "FAILED"
+                schedule_run.error_message = (
+                    "linked pipeline run is missing; cannot determine outcome"
+                )
+            else:
+                terminal = _TERMINAL_RUN_TO_SCHEDULE_STATUS.get(
+                    pipeline_run.status)
+                if terminal is None:
+                    continue  # still in flight; leave open
+                schedule_run.status = terminal
+                if pipeline_run.error_message:
+                    schedule_run.error_message = pipeline_run.error_message[:2000]
+                started = pipeline_run.started_at
+                completed = pipeline_run.completed_at
+                if started is not None and completed is not None:
+                    with contextlib.suppress(Exception):
+                        schedule_run.duration_seconds = int(
+                            (completed - started).total_seconds())
+            schedule = (
+                db.query(PipelineSchedule)
+                .filter(PipelineSchedule.id == schedule_run.schedule_id)
+                .first()
+            )
+            if schedule is not None:
+                schedule.last_run_status = schedule_run.status
+                if schedule_run.status == "COMPLETED":
+                    schedule.successful_runs += 1
+                elif schedule_run.status == "FAILED":
+                    schedule.failed_runs += 1
+                elif schedule_run.status == "HEALED":
+                    schedule.healed_runs += 1
+            db.commit()
+            synced += 1
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "Failed to sync schedule run %s", schedule_run.id)
+    return synced
