@@ -33,7 +33,7 @@ from celery.signals import worker_process_init as worker_init
 from celery.signals import worker_process_shutdown as worker_shutdown
 
 from backend.config import settings
-from backend.execution.sql_builder import build_sql_for_step
+from backend.execution.sql_builder import build_join_sql, build_sql_for_step
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,39 @@ _worker_connection = _worker_conn
 
 def _compute_duckdb_thread_count(cpu_cores: int, celery_concurrency: int) -> int:
     return max(1, cpu_cores // celery_concurrency)
+
+
+def _statement_timeout_ms() -> int:
+    """Per-query DuckDB statement timeout in milliseconds.
+
+    Bounds runaway user SQL (e.g. cartesian products, huge aggregations)
+    that passes validation. Overridable via ``DUCKDB_STATEMENT_TIMEOUT_MS``.
+    """
+    try:
+        return max(1, int(os.environ.get("DUCKDB_STATEMENT_TIMEOUT_MS", "60000")))
+    except ValueError:
+        return 60000
+
+
+def harden_connection(conn: duckdb.DuckDBPyConnection) -> None:
+    """Apply class-level sandbox controls to a DuckDB connection (M-001).
+
+    - ``enable_external_access=false``: blocks all file-system access
+      (``read_csv``/``read_parquet``/``read_text``/..., ``glob``,
+      replacement scans such as ``FROM '/etc/passwd'``, ``COPY ... TO``).
+    - ``allow_community_extensions=false``,
+      ``autoinstall_known_extensions=false``,
+      ``autoload_known_extensions=false``: no silent extension downloads
+      (e.g. ``sqlite_scan`` auto-install) that would reopen file access.
+    - ``max_execution_time``: statement timeout so unbounded queries
+      (``WITH RECURSIVE`` if validation is ever bypassed, runaway joins)
+      cannot wedge a worker permanently.
+    """
+    conn.sql("SET enable_external_access=false")
+    conn.sql("SET allow_community_extensions=false")
+    conn.sql("SET autoinstall_known_extensions=false")
+    conn.sql("SET autoload_known_extensions=false")
+    conn.sql(f"SET max_execution_time={_statement_timeout_ms()}")
 
 
 def _configure_connection(
@@ -59,10 +92,18 @@ def _configure_connection(
 
     conn.sql("PRAGMA enable_object_cache=true")
 
+    # Class-level sandbox: deny file-system access and bound query time on
+    # every worker/local connection, including the httpfs opt-in path.
+    harden_connection(conn)
+
     if os.environ.get("DUCKDB_ENABLE_HTTPFS", "").lower() != "true":
         logger.info("DuckDB httpfs extension disabled by default")
         return
 
+    logger.warning(
+        "DUCKDB_ENABLE_HTTPFS is set but external access stays disabled "
+        "(M-001): S3-direct reads will fail closed and fall back to download"
+    )
     _configure_httpfs(conn)
 
 
@@ -227,9 +268,34 @@ class DuckDBExecutor:
 
         This is the primary entry point for smart routing. It leverages
         the sql_builder to convert a StepConfig into a DuckDB SQL query.
+        Join steps are built with the registered table schemas so DuckDB
+        output columns/values match pandas (M-013).
         """
-        sql = build_sql_for_step(step)
+        sql = self._build_step_sql(step, input_table, extra_tables)
         return self.execute_sql(sql, input_table, extra_tables=extra_tables)
+
+    @staticmethod
+    def _build_step_sql(
+        step: object,
+        input_table: pa.Table,
+        extra_tables: dict[str, pa.Table] | None,
+    ) -> str:
+        """Build step SQL, schema-aware for joins (M-013)."""
+        step_type = getattr(step, "step_type", "")
+        if hasattr(step_type, "value"):
+            step_type = step_type.value
+        if str(step_type).lower() != "join":
+            return build_sql_for_step(step)
+        tables = extra_tables or {}
+        right_table = tables.get("__right__")
+        left_table = tables.get("__left__", input_table)
+        if right_table is None or left_table is None:
+            return build_sql_for_step(step)
+        return build_join_sql(
+            step,
+            list(left_table.column_names),
+            list(right_table.column_names),
+        )
 
     def execute_sql(
         self,

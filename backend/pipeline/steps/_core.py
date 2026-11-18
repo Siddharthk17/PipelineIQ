@@ -91,7 +91,13 @@ class StepExecutionResult:
 
 
 # Maps FilterOperator → a callable that takes (pd.Series, value) →
-# pd.Series[bool]
+# pd.Series[bool].
+#
+# contains/not_contains use LITERAL substring semantics (regex=False).
+# This aligns pandas with the DuckDB LIKE path, which escapes %, _ and \
+# (M-014/M-161), and eliminates user-controlled regex catastrophic
+# backtracking in workers (M-032). NOTE: validators.py `matches_pattern`
+# keeps regex semantics (other cluster's file).
 FILTER_OPERATIONS: dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] = {
     FilterOperator.EQUALS: lambda s, v: s == v,
     FilterOperator.NOT_EQUALS: lambda s, v: s != v,
@@ -99,9 +105,9 @@ FILTER_OPERATIONS: dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] =
     FilterOperator.LESS_THAN: lambda s, v: s < v,
     FilterOperator.GREATER_THAN_OR_EQUAL: lambda s, v: s >= v,
     FilterOperator.LESS_THAN_OR_EQUAL: lambda s, v: s <= v,
-    FilterOperator.CONTAINS: lambda s, v: s.astype(str).str.contains(str(v), na=False),
+    FilterOperator.CONTAINS: lambda s, v: s.astype(str).str.contains(str(v), na=False, regex=False),
     FilterOperator.NOT_CONTAINS: lambda s, v: (
-        ~s.astype(str).str.contains(str(v), na=False)
+        ~s.astype(str).str.contains(str(v), na=False, regex=False)
     ),
     FilterOperator.STARTS_WITH: lambda s, v: s.astype(str).str.startswith(
         str(v), na=False
