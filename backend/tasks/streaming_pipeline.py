@@ -17,6 +17,7 @@ import pyarrow as pa
 from celery import Task
 from celery.utils.log import get_task_logger
 from confluent_kafka import KafkaError, TopicPartition
+from sqlalchemy.exc import IntegrityError
 
 from backend.celery_app import celery_app
 from backend.database import SessionLocal
@@ -623,11 +624,44 @@ def _set_status(db, run_id: str, status: PipelineStatus) -> None:
 
 
 def _init_stats(db, run_id: str, topic: str, consumer_group: str) -> None:
-    db.add(StreamingStats(
-        run_id=run_id,
-        topic=topic,
-        consumer_group=consumer_group,
-    ))
+    """Create the stats row, or reset it when restarting (M-011).
+
+    Restart reuses the same run_id whose PK row already exists; the old
+    unconditional insert raised IntegrityError and failed the run after
+    the restart endpoint had already replied success. Reset counters so
+    a restarted run reports fresh cumulative stats.
+    """
+    row = db.query(StreamingStats).filter(
+        StreamingStats.run_id == run_id).first()
+    if row is None:
+        row = StreamingStats(
+            run_id=run_id,
+            topic=topic,
+            consumer_group=consumer_group,
+        )
+        db.add(row)
+        try:
+            db.flush()
+        except IntegrityError:
+            # Lost a race with a duplicate daemon (see M-042
+            # single-flight): adopt the winner's row instead of dying.
+            db.rollback()
+            row = db.query(StreamingStats).filter(
+                StreamingStats.run_id == run_id).first()
+            if row is None:
+                raise
+        else:
+            return
+    row.topic = topic
+    row.consumer_group = consumer_group
+    row.batches_processed = 0
+    row.messages_processed = 0
+    row.messages_failed = 0
+    row.messages_dlq = 0
+    row.throughput_per_sec = None
+    row.consumer_lag = None
+    row.avg_batch_latency_ms = None
+    row.last_batch_at = None
 
 
 def _update_stats(

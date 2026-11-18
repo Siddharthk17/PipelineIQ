@@ -233,3 +233,53 @@ class TestM010CommitGating:
             pass
         else:
             raise AssertionError("_publish must raise when delivery fails (was swallowed)")
+
+
+class TestM011StatsUpsert:
+    """Restart must not hit a duplicate StreamingStats PK (M-011)."""
+
+    def _make_run(self, db):
+        import uuid as uuid_module
+
+        from backend.models import PipelineRun, PipelineStatus
+
+        run = PipelineRun(
+            id=uuid_module.uuid4(),
+            name="stream-run",
+            status=PipelineStatus.STREAMING_STOPPED,
+            yaml_config="pipeline:\n  name: s\n  steps: []\n",
+        )
+        db.add(run)
+        db.commit()
+        return run
+
+    def test_double_init_does_not_raise(self, test_db):
+        from backend.models import StreamingStats
+        from backend.tasks.streaming_pipeline import _init_stats
+
+        run = self._make_run(test_db)
+        _init_stats(test_db, run.id, "orders", "g1")
+        test_db.commit()
+        _init_stats(test_db, run.id, "orders", "g1")
+        test_db.commit()
+        rows = test_db.query(StreamingStats).filter(StreamingStats.run_id == run.id).all()
+        assert len(rows) == 1
+
+    def test_restart_resets_counters_and_updates_group(self, test_db):
+        from backend.models import StreamingStats
+        from backend.tasks.streaming_pipeline import _init_stats, _update_stats
+
+        run = self._make_run(test_db)
+        _init_stats(test_db, run.id, "orders", "g1")
+        test_db.commit()
+        stats = {"batches": 10, "messages": 500, "failed": 3, "dlq": 2, "start": 0.0}
+        _update_stats(test_db, run.id, stats, 50.0, 12.5)
+        # Restart: same run_id must reset, not raise.
+        _init_stats(test_db, run.id, "orders", "g2")
+        test_db.commit()
+        row = test_db.query(StreamingStats).filter(StreamingStats.run_id == run.id).one()
+        assert row.consumer_group == "g2"
+        assert row.batches_processed == 0
+        assert row.messages_processed == 0
+        assert row.messages_failed == 0
+        assert row.messages_dlq == 0
