@@ -155,11 +155,12 @@ services:
     command:
       - sh
       - -c
-      - 'mkdir -p /tmp/gunicorn && python -m backend.scripts.wait_for_db && (python -m backend.scripts.seed_demo || true) && exec gunicorn backend.main:app --config backend/gunicorn.conf.py'
+      - 'mkdir -p /tmp/gunicorn && python -m backend.scripts.wait_for_db && (if [ "${PIPELINEIQ_SEED_DEMO:-0}" = "1" ]; then python -m backend.scripts.seed_demo || true; fi) && exec gunicorn backend.main:app --config backend/gunicorn.conf.py'
     env_file:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - PIPELINEIQ_SEED_DEMO=${PIPELINEIQ_SEED_DEMO:-0}
       - GUNICORN_WORKERS=4
       - GUNICORN_TIMEOUT=60
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@pgbouncer:5432/pipelineiq
