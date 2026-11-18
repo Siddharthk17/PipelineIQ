@@ -85,20 +85,30 @@ def _token_for(user: User) -> str:
     return create_access_token({"sub": str(user.id), "role": user.role})
 
 
-def test_sse_stream_requires_query_token(sse_client):
+def test_sse_stream_requires_auth(sse_client):
+    # No credentials at all (no header, no cookie, no query) → 401.
     run_id = str(uuid.uuid4())
     response = sse_client.get(f"/api/v1/pipelines/{run_id}/stream")
     assert response.status_code == 401
 
 
-def test_sse_stream_forbidden_for_non_owner(sse_client, test_db):
+def test_sse_stream_query_token_rejected_and_non_owner_forbidden(
+    sse_client, test_db
+):
+    # M-068: ?token= query auth removed (URLs leak via history/proxies/
+    # logs) — a valid token in the query string is ignored, so 401.
+    # The owner gate itself still holds via header auth (403).
     owner = _create_user(test_db, "owner@test.com", "owner")
     other = _create_user(test_db, "other@test.com", "other")
     run = _create_run(test_db, owner.id)
-    token = _token_for(other)
 
     response = sse_client.get(
-        f"/api/v1/pipelines/{run.id}/stream?token={token}")
+        f"/api/v1/pipelines/{run.id}/stream?token={_token_for(other)}")
+    assert response.status_code == 401
+
+    response = sse_client.get(
+        f"/api/v1/pipelines/{run.id}/stream",
+        headers={"Authorization": f"Bearer {_token_for(other)}"})
     assert response.status_code == 403
 
 
@@ -117,8 +127,11 @@ def test_sse_stream_owner_receives_events(sse_client, test_db, monkeypatch):
         sse_module,
         "_live_event_generator",
         fake_live_event_generator)
+    # M-068: auth via Authorization header (cookies also work); ?token=
+    # query auth was removed.
     response = sse_client.get(
-        f"/api/v1/pipelines/{run.id}/stream?token={token}")
+        f"/api/v1/pipelines/{run.id}/stream",
+        headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -130,8 +143,10 @@ def test_terminal_run_emits_stream_end_event(sse_client, test_db):
     run = _create_run(test_db, owner.id, status=PipelineStatus.COMPLETED)
     token = _token_for(owner)
 
+    # M-068: auth via Authorization header; ?token= query auth removed.
     response = sse_client.get(
-        f"/api/v1/pipelines/{run.id}/stream?token={token}")
+        f"/api/v1/pipelines/{run.id}/stream",
+        headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert "event: pipeline_completed" in response.text
     assert "event: stream_end" in response.text
