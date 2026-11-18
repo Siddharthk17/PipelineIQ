@@ -11,6 +11,7 @@ from datetime import datetime
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
@@ -167,10 +168,6 @@ def create_schedule(
 
     from backend.api.pipelines import _check_pipeline_permission
 
-    _check_pipeline_permission(
-        db, current_user, body.pipeline_name, ["owner", "runner"],
-        grant_owner=True,
-    )
     owned_ids = {str(row[0]) for row in db.query(UploadedFile.id).all()} \
         if current_user.role == "admin" else {
             str(row[0]) for row in db.query(UploadedFile.id).filter(
@@ -226,6 +223,14 @@ def create_schedule(
                 f"{e.step_name}.{e.field}: {e.message}" for e in non_file_errors or all_errors
             ),
         )
+
+    # All validation passed: only now may the pipeline name be claimed.
+    # Granting ownership before validation orphaned an owner row on every
+    # 400/404/422 (M-071).
+    _check_pipeline_permission(
+        db, current_user, body.pipeline_name, ["owner", "runner"],
+        grant_owner=True,
+    )
 
     schedule = PipelineSchedule(
         user_id=current_user.id,
@@ -291,11 +296,22 @@ def pause_schedule(
     current_user: User = Depends(get_current_user),
 ) -> ScheduleResponse:
     schedule = _get_schedule_or_404(schedule_id, current_user, db)
-    if not schedule.is_active:
-        raise HTTPException(status_code=400, detail="Schedule is already paused")
-
-    schedule.is_active = False
-    schedule.next_run_at = None
+    # Conditional check-and-set (M-071): only a still-active row flips.
+    # A lost race (already paused concurrently) reports 409, never a
+    # silent no-op or a lost update.
+    updated = db.execute(
+        update(PipelineSchedule)
+        .where(
+            PipelineSchedule.id == schedule.id,
+            PipelineSchedule.is_active.is_(True),
+        )
+        .values(is_active=False, next_run_at=None)
+    ).rowcount
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Schedule is already paused",
+        )
     db.commit()
     db.refresh(schedule)
 
@@ -314,11 +330,23 @@ def resume_schedule(
     current_user: User = Depends(get_current_user),
 ) -> ScheduleResponse:
     schedule = _get_schedule_or_404(schedule_id, current_user, db)
-    if schedule.is_active:
-        raise HTTPException(status_code=400, detail="Schedule is already active")
-
-    schedule.is_active = True
-    schedule.next_run_at = _compute_next_run(schedule.cron_expression)
+    # Conditional check-and-set (M-071): only a still-paused row resumes.
+    updated = db.execute(
+        update(PipelineSchedule)
+        .where(
+            PipelineSchedule.id == schedule.id,
+            PipelineSchedule.is_active.is_(False),
+        )
+        .values(
+            is_active=True,
+            next_run_at=_compute_next_run(schedule.cron_expression),
+        )
+    ).rowcount
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Schedule is already active",
+        )
     db.commit()
     db.refresh(schedule)
 
@@ -424,16 +452,29 @@ def toggle_schedule(
     current_user: User = Depends(get_current_user),
 ) -> ScheduleResponse:
     schedule = _get_schedule_or_404(schedule_id, current_user, db)
-    schedule.is_active = not schedule.is_active
-    if schedule.is_active:
-        schedule.next_run_at = _compute_next_run(schedule.cron_expression)
+    # Re-read under a row lock so concurrent toggles serialize instead of
+    # blindly flipping on stale state (M-071). SQLite ignores FOR UPDATE
+    # (single writer); Postgres locks the row.
+    locked = (
+        db.query(PipelineSchedule)
+        .filter(PipelineSchedule.id == schedule.id)
+        .with_for_update()
+        .first()
+    )
+    if locked is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Schedule not found")
+    locked.is_active = not locked.is_active
+    if locked.is_active:
+        locked.next_run_at = _compute_next_run(locked.cron_expression)
     else:
-        schedule.next_run_at = None
+        locked.next_run_at = None
     db.commit()
-    db.refresh(schedule)
+    db.refresh(locked)
 
     log_action(db, "schedule_toggled", user_id=current_user.id,
-               resource_type="schedule", resource_id=schedule.id,
-               details={"is_active": schedule.is_active}, request=request)
+               resource_type="schedule", resource_id=locked.id,
+               details={"is_active": locked.is_active}, request=request)
 
-    return _schedule_to_response(schedule)
+    return _schedule_to_response(locked)
