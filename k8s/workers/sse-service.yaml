@@ -21,7 +21,7 @@ spec:
           imagePullPolicy: Always
           command:
             - gunicorn
-            - backend.sse_app:app
+            - backend.sse_app:sse_app
             - -k
             - uvicorn.workers.UvicornWorker
             - -w
