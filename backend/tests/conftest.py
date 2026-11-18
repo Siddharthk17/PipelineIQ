@@ -34,6 +34,7 @@ from sqlalchemy.pool import StaticPool
 
 import backend.models  # noqa: F401 (model registration side effect)
 from backend.database import Base, get_db, get_read_db, get_write_db
+from backend.models import User
 from backend.main import app
 from backend.pipeline.lineage import LineageRecorder
 from backend.utils.rate_limiter import limiter
@@ -231,7 +232,9 @@ def client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
         mock_profile_task.return_value = MagicMock(id="mock-profile-task-id")
         test_client = TestClient(app)
         # Real registration + login so the client presents a genuine JWT.
-        # First registered user automatically becomes admin.
+        # Registration always yields viewer (M-048); the fixture then
+        # promotes this dedicated test user to admin through the test DB
+        # session (test-only explicit grant, mirroring create_admin.py).
         register_response = test_client.post(
             "/auth/register",
             json={
@@ -243,6 +246,15 @@ def client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
         assert register_response.status_code == 201, (
             f"Fixture admin registration failed: {register_response.text}"
         )
+        assert register_response.json()["role"] == "viewer", (
+            "registration must yield viewer (M-048)"
+        )
+        promoted = test_db.query(User).filter(
+            User.email == FIXTURE_ADMIN_EMAIL
+        ).first()
+        assert promoted is not None
+        promoted.role = "admin"
+        test_db.commit()
         login_response = test_client.post(
             "/auth/login",
             json={

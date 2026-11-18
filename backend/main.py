@@ -347,33 +347,122 @@ async def pipelineiq_error_handler(
     )
 
 
+# Maximum logged value sizes for the 422 handler (M-055): values are
+# truncated, keys are kept so field-level debugging still works.
+_MAX_LOG_VALUE_CHARS = 200
+_MAX_LOG_LIST_ITEMS = 20
+_MAX_LOG_DEPTH = 6
+_REDACTED = "[REDACTED]"
+
+_SENSITIVE_KEY_PARTS = frozenset({
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_token",
+    "refresh_token",
+    "client_secret",
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "credential",
+    "private_key",
+    "privatekey",
+    "session",
+    "pin",
+    "otp",
+    "passcode",
+})
+
+
+def _looks_sensitive(key: object) -> bool:
+    """Return True when a field/header name looks secret-bearing."""
+    name = str(key).lower().replace("-", "_")
+    return any(part in name for part in _SENSITIVE_KEY_PARTS)
+
+
+def _truncate_log_value(value: object) -> object:
+    if isinstance(value, str):
+        return value[:_MAX_LOG_VALUE_CHARS]
+    return value
+
+
+def _redact_log_value(key: object, value: object, _depth: int = 0) -> object:
+    """Redact secret-bearing values from structures before logging.
+
+    Field names are preserved; only values are replaced or truncated.
+    Deny-logs values, never keys.
+    """
+    if _depth > _MAX_LOG_DEPTH:
+        return _REDACTED
+    if key is not None and _looks_sensitive(key):
+        return _REDACTED
+    if isinstance(value, dict):
+        return {
+            k: _redact_log_value(k, v, _depth + 1)
+            for k, v in list(value.items())[: _MAX_LOG_LIST_ITEMS * 5]
+        }
+    if isinstance(value, (list, tuple)):
+        items = list(value)[:_MAX_LOG_LIST_ITEMS]
+        redacted = [_redact_log_value(None, v, _depth + 1) for v in items]
+        if len(value) > len(items):
+            redacted.append(f"...(+{len(value) - len(items)} more)")
+        return redacted
+    if isinstance(value, str):
+        return value[:_MAX_LOG_VALUE_CHARS]
+    if isinstance(value, (bytes, bytearray)):
+        return f"<{len(value)} bytes>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    # Pydantic ctx carries arbitrary objects (e.g. ValueError); stringify
+    # so the response/logging stays JSON-serializable.
+    return str(value)[:_MAX_LOG_VALUE_CHARS]
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """Handle Pydantic validation errors with field-level details.
 
-    Logs the offending request body, query params, path params, and the
-    field-level error so 422s are no longer a black box in production.
+    Logs error locations with secrets redacted: values for
+    password/secret/token-like keys are never logged (field names are
+    kept), string values are truncated, and the body capture stays
+    bounded. Use the ``request_id`` to correlate with the client.
     """
     request_id = getattr(request.state, "request_id", "unknown")
-    # Sanitize errors: Pydantic V2 may include non-serializable ctx values
+    # Sanitize errors: Pydantic V2 may include non-serializable ctx values.
+    # ``input`` echoes the submitted value, so redact it whenever the
+    # field name looks secret-bearing.
     safe_errors = []
     for err in exc.errors():
         safe_err = {k: v for k, v in err.items() if k != "ctx"}
         if "ctx" in err:
-            safe_err["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
+            safe_err["ctx"] = {
+                k: _redact_log_value(k, v) for k, v in err["ctx"].items()
+            }
+        loc = err.get("loc", ())
+        if isinstance(loc, (list, tuple)) and any(
+            _looks_sensitive(str(part)) for part in loc
+        ):
+            safe_err["input"] = "[REDACTED]"
+        elif "input" in safe_err and isinstance(safe_err["input"], str):
+            safe_err["input"] = _truncate_log_value(safe_err["input"])
         safe_errors.append(safe_err)
 
     # Capture the request body (best-effort; re-emit a fresh stream so
     # the rest of the stack can still read it). Skip binary bodies and
-    # bodies larger than 16 KB to keep logs bounded.
+    # bodies larger than 16 KB to keep logs bounded. Secret-bearing
+    # values are redacted before logging (M-055).
     body_summary: dict = {}
     try:
         raw = await request.body()
         if raw and len(raw) <= 16 * 1024:
             try:
-                body_summary["json"] = orjson.loads(raw)
+                parsed_body = orjson.loads(raw)
+                body_summary["json"] = _redact_log_value(None, parsed_body)
             except Exception:
                 body_summary["text_preview"] = raw[:512].decode(
                     "utf-8", errors="replace"
@@ -381,25 +470,26 @@ async def validation_error_handler(
         elif raw:
             body_summary["truncated_bytes"] = len(raw)
     except Exception as body_err:
-        body_summary["unavailable_reason"] = str(body_err)
+        body_summary["unavailable_reason"] = str(body_err)[:200]
 
-    # Path, query, headers (sanitized for Authorization)
+    # Path, query, headers (Authorization/cookie/token-like values redacted;
+    # the raw URL is never logged because it may carry ?token= credentials).
     location = {
-        "path_params": dict(request.path_params),
-        "query_params": dict(request.query_params),
+        "path_params": _redact_log_value(None, dict(request.path_params)),
+        "query_params": _redact_log_value(None, dict(request.query_params)),
         "body": body_summary,
     }
     headers_sanitized = {
-        k: v
+        k: ("[REDACTED]" if _looks_sensitive(k) else _truncate_log_value(v))
         for k, v in request.headers.items()
-        if k.lower() not in {"authorization", "cookie"}
     }
+    sanitized_url = request.url.path
 
     logger = structlog.get_logger()
     logger.error(
         "validation_error",
         method=request.method,
-        url=str(request.url),
+        url=sanitized_url,
         headers=headers_sanitized,
         location=location,
         errors=safe_errors,
@@ -407,10 +497,10 @@ async def validation_error_handler(
     # Also log to standard logger for Docker log visibility
     import json as _json
     logging.getLogger("pipelineiq").warning(
-        "422 Unprocessable Entity on %s %s", request.method, request.url
+        "422 Unprocessable Entity on %s %s", request.method, sanitized_url
     )
     logging.getLogger("pipelineiq").error(
-        "Missing/invalid fields: %s", _json.dumps(safe_errors, indent=2)
+        "Missing/invalid fields: %s", _json.dumps(safe_errors, indent=2)[:4000]
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

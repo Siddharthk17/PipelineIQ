@@ -42,10 +42,16 @@ def auth_header(token):
 # Registration
 
 
-def test_register_first_user_becomes_admin(auth_client):
+def test_register_first_user_is_viewer_not_admin(auth_client):
+    # M-048: first-signup auto-admin removed — fresh deployments must
+    # bootstrap the initial admin via the env-flagged create_admin CLI.
     r = register_user(auth_client, "admin1@test.com", "admin1")
     assert r.status_code == 201
-    assert r.json()["role"] == "admin"
+    assert r.json()["role"] == "viewer"
+    # And the first user has no admin powers.
+    token = login_user(auth_client, "admin1@test.com").json()["access_token"]
+    r = auth_client.get("/auth/users", headers=auth_header(token))
+    assert r.status_code == 403
 
 
 def test_register_second_user_becomes_viewer(auth_client):
@@ -179,8 +185,17 @@ def test_admin_route_with_viewer_token_returns_403(auth_client):
     assert r.status_code == 403
 
 
-def test_admin_route_with_admin_token_succeeds(auth_client):
+def test_admin_route_with_admin_token_succeeds(auth_client, test_db):
+    # M-048: admin powers come from the bootstrap path (or promotion by
+    # an existing admin), never from signup order. Simulate a
+    # bootstrapped admin by promoting the registered user, then verify
+    # the fresh login token carries admin access.
     register_user(auth_client, "boss@test.com", "bossuser")
+    from backend.models import User
+
+    user = test_db.query(User).filter(User.email == "boss@test.com").one()
+    user.role = "admin"
+    test_db.commit()
     admin_token = login_user(auth_client,
                              "boss@test.com").json()["access_token"]
     r = auth_client.get("/auth/users", headers=auth_header(admin_token))

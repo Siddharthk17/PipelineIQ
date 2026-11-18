@@ -5,12 +5,14 @@ files, schedules, versions, lineage entry points) shows realistic data
 instead of an empty product.
 
 Usage (inside the api container):
-    python -m backend.scripts.seed_showcase [--reset]
+    python -m backend.scripts.seed_showcase [--reset --target demo@pipelineiq.app]
 
---reset wipes ONLY the demo account's runs/schedules/files (plus showcase
-pipeline versions) and re-seeds from scratch. Never touches other users.
-
-Idempotent without --reset: existing names are skipped.
+--reset requires the explicit --target demo@pipelineiq.app and wipes ONLY
+the demo account's runs/schedules/files plus demo-owned pipeline versions
+(scoped by demo run ids + demo pipeline names). Never touches other
+users' data. Without --reset the run is idempotent: existing names are
+skipped. Seeding the demo account itself is additionally gated on
+PIPELINEIQ_SEED_DEMO=1 and never runs in production (see seed_demo).
 """
 
 import contextlib
@@ -618,7 +620,7 @@ def _seed_lineage(db, run, spec_steps, yaml_text):
         print(f"WARNING: catalog registration failed for {run.name}: {exc}")
 
 
-def seed_showcase(reset=False):
+def seed_showcase(reset=False, target=None):
     from backend.models import PipelineStatus as PS
     db = SessionLocal()
     try:
@@ -626,7 +628,29 @@ def seed_showcase(reset=False):
         user = db.query(User).filter(User.email == DEMO_EMAIL).one()
 
         if reset:
+            # --reset is destructive: require the explicit demo target so a
+            # bare `--reset` (e.g. from cron) can never wipe data. Only the
+            # demo account's own rows are ever deleted (M-003).
+            if target not in (DEMO_EMAIL, DEMO_USERNAME, "demo"):
+                print(
+                    "Refusing --reset without explicit demo target: "
+                    f"pass --reset --target {DEMO_EMAIL}.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
             print("Reset: wiping demo-owned showcase data...")
+            # Capture the demo-owned version keys BEFORE deleting runs, so
+            # the version cleanup below can be scoped to them. Versions
+            # carry no user_id; scoping by the demo run ids + demo pipeline
+            # names keeps every other user's version history intact.
+            demo_run_ids = [
+                r[0] for r in db.query(PipelineRun.id).filter(
+                    PipelineRun.user_id == user.id).all()
+            ]
+            demo_pipeline_names = [
+                r[0] for r in db.query(PipelineRun.name).filter(
+                    PipelineRun.user_id == user.id).all()
+            ]
             for run in db.query(PipelineRun).filter(
                     PipelineRun.user_id == user.id).all():
                 db.delete(run)
@@ -638,7 +662,22 @@ def seed_showcase(reset=False):
                 with contextlib.suppress(Exception):
                     storage_service.delete(f.stored_path)
                 db.delete(f)
-            db.query(PipelineVersion).delete()
+            version_q = db.query(PipelineVersion)
+            if demo_run_ids or demo_pipeline_names:
+                from sqlalchemy import or_ as _or
+
+                conditions = []
+                if demo_run_ids:
+                    conditions.append(
+                        PipelineVersion.run_id.in_(demo_run_ids))
+                if demo_pipeline_names:
+                    conditions.append(PipelineVersion.pipeline_name.in_(
+                        demo_pipeline_names))
+                deleted = version_q.filter(_or(*conditions)).delete(
+                    synchronize_session=False)
+                print(f"Reset: deleted {deleted} demo-owned pipeline version(s).")
+            else:
+                print("Reset: no demo runs found; pipeline versions untouched.")
             db.commit()
 
         existing_names = {
@@ -801,4 +840,10 @@ def seed_showcase(reset=False):
 
 
 if __name__ == "__main__":
-    seed_showcase(reset="--reset" in sys.argv)
+    _reset = "--reset" in sys.argv
+    _target = None
+    if "--target" in sys.argv:
+        _idx = sys.argv.index("--target")
+        if _idx + 1 < len(sys.argv):
+            _target = sys.argv[_idx + 1]
+    seed_showcase(reset=_reset, target=_target)

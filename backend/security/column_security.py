@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 
 POLICY_CACHE_TTL = 60
 
+# Server-side bounds for `custom:N` mask patterns (M-072). A negative N
+# (`value[:-N]`) or an unbounded N exposes nearly the entire value, so N
+# is clamped to [0, MAX_CUSTOM_VISIBLE_CHARS] at enforcement time and
+# rejected at creation time (see column_policies router).
+MAX_CUSTOM_VISIBLE_CHARS = 4
+
+ALLOWED_MASK_PATTERNS = frozenset(
+    {"default", "email", "phone", "credit_card", "ssn", "name"}
+)
+
 PII_SEMANTIC_TYPES = frozenset(
     {
         "email",
@@ -65,6 +75,53 @@ def _deserialize_policy_records(payload: bytes) -> list[ColumnPolicyRecord]:
     ]
 
 
+def validate_mask_pattern(mask_pattern: str | None) -> str | None:
+    """Validate a mask pattern, raising ValueError when it is not allowed.
+
+    Returns the normalized pattern (``custom:N`` with N clamped into
+    range). ``None`` (redacted policies / default masking) passes through.
+    """
+    if mask_pattern is None:
+        return None
+    if mask_pattern in ALLOWED_MASK_PATTERNS:
+        return mask_pattern
+    if mask_pattern.startswith("custom:"):
+        try:
+            n = int(mask_pattern.split(":", 1)[1])
+        except (IndexError, ValueError):
+            raise ValueError(
+                "mask_pattern 'custom:N' requires an integer N") from None
+        if not 0 <= n <= MAX_CUSTOM_VISIBLE_CHARS:
+            raise ValueError(
+                f"mask_pattern 'custom:N' requires 0 <= N <= "
+                f"{MAX_CUSTOM_VISIBLE_CHARS}")
+        return f"custom:{n}"
+    raise ValueError(
+        f"Unknown mask_pattern '{mask_pattern}'. Allowed: "
+        f"{sorted(ALLOWED_MASK_PATTERNS)} or 'custom:N' "
+        f"(0 <= N <= {MAX_CUSTOM_VISIBLE_CHARS}).")
+
+
+def normalize_mask_pattern(mask_pattern: str | None) -> str:
+    """Clamp a stored mask pattern into the safe range (defense in depth).
+
+    Legacy rows written before validation (e.g. ``custom:-1`` or
+    ``custom:999``) are clamped here so enforcement never leaks values,
+    even if the creation-time validator was bypassed.
+    """
+    if not mask_pattern:
+        return "default"
+    if mask_pattern in ALLOWED_MASK_PATTERNS:
+        return mask_pattern
+    if mask_pattern.startswith("custom:"):
+        try:
+            n = int(mask_pattern.split(":", 1)[1])
+        except (IndexError, ValueError):
+            return "default"
+        return f"custom:{max(0, min(n, MAX_CUSTOM_VISIBLE_CHARS))}"
+    return "default"
+
+
 def apply_column_policies(
     df: pd.DataFrame,
     user_role: str,
@@ -94,7 +151,7 @@ def apply_column_policies(
             logger.debug("Column '%s' redacted for role '%s'", col, user_role)
 
         elif pol.policy == "masked":
-            pattern = pol.mask_pattern or "default"
+            pattern = normalize_mask_pattern(pol.mask_pattern)
             result[col] = result[col].apply(
                 lambda v, _pattern=pattern: _apply_mask(str(v), _pattern)
                 if pd.notna(v) else v
@@ -104,6 +161,91 @@ def apply_column_policies(
             )
 
     return result
+
+
+def apply_policies_to_records(
+    records: list[dict],
+    user_role: str,
+    policies: list[ColumnPolicyRecord],
+) -> list[dict]:
+    """Apply column policies to exported row dicts (export/download paths).
+
+    Mirrors :func:`apply_column_policies` for ``DataFrame.to_dict``-style
+    records so CSV/JSON exports cannot leak unmasked values (M-072).
+    Redacted columns are dropped; masked columns are masked in place.
+    """
+    if not policies or not records:
+        return records
+
+    redacted = {
+        pol.column_name for pol in policies
+        if pol.policy == "redacted"
+        and user_role not in (pol.allowed_roles or [])
+    }
+    masked = {
+        pol.column_name: normalize_mask_pattern(pol.mask_pattern)
+        for pol in policies
+        if pol.policy == "masked"
+        and user_role not in (pol.allowed_roles or [])
+    }
+    if not redacted and not masked:
+        return records
+
+    scrubbed: list[dict] = []
+    for row in records:
+        new_row = {
+            k: v for k, v in row.items() if k not in redacted
+        }
+        for col, pattern in masked.items():
+            if col in new_row and new_row[col] is not None:
+                new_row[col] = _apply_mask(str(new_row[col]), pattern)
+        scrubbed.append(new_row)
+    return scrubbed
+
+
+def apply_policies_to_profile(
+    profile: dict,
+    user_role: str,
+    policies: list[ColumnPolicyRecord],
+) -> dict:
+    """Apply column policies to a data profile payload (profile paths).
+
+    Redacted columns are replaced with a ``{"redacted": True}`` marker;
+    masked columns keep aggregate stats but have raw ``top_values``
+    entries masked, so profile responses never leak unmasked samples
+    (M-072).
+    """
+    if not policies or not profile:
+        return profile
+
+    scrubbed = dict(profile)
+    for pol in policies:
+        col = pol.column_name
+        if col not in scrubbed:
+            continue
+        if user_role in (pol.allowed_roles or []):
+            continue
+        if pol.policy == "redacted":
+            scrubbed[col] = {"name": col, "redacted": True}
+        elif pol.policy == "masked":
+            pattern = normalize_mask_pattern(pol.mask_pattern)
+            entry = dict(scrubbed[col]) if isinstance(
+                scrubbed[col], dict) else {}
+            top_values = entry.get("top_values")
+            if isinstance(top_values, list):
+                masked_top = []
+                for item in top_values:
+                    if isinstance(item, dict) and "value" in item:
+                        masked_item = dict(item)
+                        masked_item["value"] = _apply_mask(
+                            str(item["value"]), pattern)
+                        masked_top.append(masked_item)
+                    else:
+                        masked_top.append(item)
+                entry["top_values"] = masked_top
+            entry["masked"] = True
+            scrubbed[col] = entry
+    return scrubbed
 
 
 def _apply_mask(value: str, pattern: str) -> str:
@@ -141,12 +283,13 @@ def _apply_mask(value: str, pattern: str) -> str:
     elif pattern.startswith("custom:"):
         try:
             n = int(pattern.split(":")[1])
-            visible = value[:n]
         except (IndexError, ValueError):
             pass
-
         else:
-            return f"{visible}***"
+            # Clamp N server-side: negative N (`value[:-N]`) or huge N
+            # would expose nearly the entire value (M-072).
+            n = max(0, min(n, MAX_CUSTOM_VISIBLE_CHARS))
+            return f"{value[:n]}***"
     if len(value) <= 3:
         return "***"
     return f"{value[:2]}***{value[-1]}"

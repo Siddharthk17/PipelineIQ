@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_user_sse
+from backend.auth import get_current_user
 from backend.db.redis_pools import get_cache_redis_async, get_pubsub_redis_async
 from backend.dependencies import get_read_db_dependency
 from backend.models import PipelineRun, PipelineStatus, User
@@ -50,7 +50,10 @@ async def stream_pipeline_progress(
     run_id: str,
     request: Request,
     db: Session = get_read_db_dependency(),
-    current_user: User = Depends(get_current_user_sse),
+    # Header (Bearer) or HttpOnly cookie only. ?token= query auth was
+    # removed (M-068): URLs persist in browser history, proxies, and
+    # logs, while EventSource clients send cookies automatically.
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream real-time pipeline execution progress via Server-Sent Events."""
     _validate_uuid_format(run_id)
@@ -87,7 +90,7 @@ async def stream_pipeline_progress_legacy(
     run_id: str,
     request: Request,
     db: Session = get_read_db_dependency(),
-    current_user: User = Depends(get_current_user_sse),
+    current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     """Legacy compatibility alias for stream endpoint."""
     return await stream_pipeline_progress(
