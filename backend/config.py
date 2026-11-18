@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     CELERY_WORKERS_DEFAULT: int = 3
     CELERY_WORKERS_BULK: int = 2
 
+    # Task execution limits (M-094). Defaults match backend/celery_config.py
+    # (300s soft / 360s hard). Override via environment in low-memory or
+    # long-pipeline deployments. NOTE: backend/celery_config.py still holds
+    # the wired values — the Celery worker owner must read these settings
+    # there (static-only follow-up, see REPORT.md).
+    CELERY_TASK_SOFT_TIME_LIMIT: int = 300
+    CELERY_TASK_HARD_TIME_LIMIT: int = 360
+
     UPLOAD_DIR: Path = Path("./uploads")
     MAX_UPLOAD_SIZE: int = 500 * 1024 * 1024  # 500 MB
     ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json", ".parquet", ".xlsx"})
@@ -228,9 +236,20 @@ class Settings(BaseSettings):
             env_explicitly_prod = _os.environ.get("ENVIRONMENT") == "production"
             if env_explicitly_prod:
                 raise ValueError(
-                    "SECRET_KEY must be a non-default random value with at least 32 characters."
+                    "SECRET_KEY must be a non-default random value with at least 32 characters. "
+                    "Generate one with: openssl rand -hex 32 (MANUAL owner action — rotate on compromise)."
                 )
+            # M-135: per-process ephemeral key. Multi-process servers WITHOUT
+            # a shared SECRET_KEY (no preload / multiple replicas) will mint
+            # different keys per process and invalidate each other's JWTs.
+            # Production must set SECRET_KEY explicitly (fail-closed above);
+            # this path is dev/CI-only and logs loudly so it is never silent.
             self.SECRET_KEY = _secrets.token_urlsafe(48)
+            logging.getLogger(__name__).warning(
+                "SECRET_KEY auto-generated ephemeral value for %s; "
+                "set SECRET_KEY explicitly for any shared deployment.",
+                self.ENVIRONMENT,
+            )
         return self
 
     @model_validator(mode="after")
