@@ -32,6 +32,41 @@ logger = logging.getLogger(__name__)
 MAX_WASM_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
+def get_owned_wasm_module(db: Session, module_id: str, owner_id: object) -> WasmModule:
+    """Return the Wasm module iff it belongs to ``owner_id``.
+
+    Raises 404 both when the module does not exist and when it belongs
+    to a different user, so callers cannot probe other users' module ids
+    (no ownership oracle). Pipeline-save validation and run-start loading
+    (outside this router) must resolve every referenced ``wasm_file_id``
+    through this helper — or :func:`assert_wasm_ids_owned` — so a
+    pipeline can never load or execute another user's module (M-077).
+    """
+    module = db.query(WasmModule).filter(
+        WasmModule.id == as_uuid(module_id),
+        WasmModule.user_id == as_uuid(str(owner_id)),
+    ).first()
+
+    if not module:
+        raise HTTPException(status_code=404, detail="Wasm module not found")
+    return module
+
+
+def assert_wasm_ids_owned(
+    db: Session, wasm_ids: set[str] | list[str], owner_id: object
+) -> dict[str, WasmModule]:
+    """Validate that every referenced module belongs to ``owner_id``.
+
+    Returns a mapping of wasm id string to module. Raises 404 naming the
+    first missing/foreign id. Use at pipeline save time (reject
+    cross-owner references) and at run start (load only owned modules).
+    """
+    resolved: dict[str, WasmModule] = {}
+    for wid in dict.fromkeys(str(w) for w in wasm_ids):
+        resolved[wid] = get_owned_wasm_module(db, wid, owner_id)
+    return resolved
+
+
 def _ensure_wasm_bucket(minio_client: Minio) -> None:
     """Create the Wasm bucket if it doesn't exist."""
     if not minio_client.bucket_exists(settings.WASM_BUCKET):
@@ -283,13 +318,7 @@ async def get_wasm_module(
     current_user: User = Depends(get_current_user),
 ):
     """Get details of a specific Wasm module."""
-    module = db.query(WasmModule).filter(
-        WasmModule.id == as_uuid(module_id),
-        WasmModule.user_id == current_user.id,
-    ).first()
-
-    if not module:
-        raise HTTPException(status_code=404, detail="Wasm module not found")
+    module = get_owned_wasm_module(db, module_id, current_user.id)
 
     return WasmModuleUploadResponse(
         id=str(module.id),
@@ -312,13 +341,7 @@ async def delete_wasm_module(
     current_user: User = Depends(get_current_user),
 ):
     """Delete a Wasm module and remove it from storage."""
-    module = db.query(WasmModule).filter(
-        WasmModule.id == as_uuid(module_id),
-        WasmModule.user_id == current_user.id,
-    ).first()
-
-    if not module:
-        raise HTTPException(status_code=404, detail="Wasm module not found")
+    module = get_owned_wasm_module(db, module_id, current_user.id)
 
     if module.pipeline_usage_count > 0:
         raise HTTPException(
