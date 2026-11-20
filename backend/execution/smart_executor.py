@@ -284,6 +284,15 @@ class SmartExecutor:
                     step_type in self.DUCKDB_CAPABLE_STEPS
                     and input_table.num_rows >= self.DUCKDB_THRESHOLD
                 )
+                if step_type == "sample" and getattr(step, "stratify_by", None):
+                    # C2-009: DuckDB USING SAMPLE cannot stratify; routing a
+                    # stratified sample there silently converts it into a
+                    # uniform reservoir sample. Stay on pandas (correctness
+                    # over speed) regardless of table size.
+                    should_route_to_duckdb = False
+                    engine = "pandas"
+                    _step_span.set_attribute(
+                        "pipelineiq.step.engine", "pandas")
                 if not should_route_to_duckdb:
                     result = self.pandas_executor.execute(table_registry, step, recorder)
                     _step_span.set_attribute("pipelineiq.rows.out", result.rows_out)
@@ -298,6 +307,17 @@ class SmartExecutor:
                 output_table = self.duckdb_executor.execute_step(
                     step, input_table, extra_tables=extra_tables
                 )
+                if step_type == "pivot":
+                    # C2-008: pandas pivot_table fills missing cells with
+                    # fill_value (default 0) but DuckDB PIVOT emits NULL.
+                    # The pivot columns are data-dependent so they cannot
+                    # be enumerated in SQL; fill post-hoc like pandas does.
+                    fill_value = getattr(step, "fill_value", None)
+                    if fill_value is not None:
+                        filled = output_table.to_pandas().fillna(
+                            value=fill_value)
+                        output_table = pa.Table.from_pandas(
+                            filled, preserve_index=False)
                 duration_ms = int((time.perf_counter() - start) * 1000)
                 result = self._as_result(
                     step, output_table,

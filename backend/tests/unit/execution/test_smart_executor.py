@@ -150,3 +150,98 @@ def test_large_join_routes_to_duckdb_with_join_aliases() -> None:
     assert call.kwargs["extra_tables"]["__left__"] is left
     assert call.kwargs["extra_tables"]["__right__"] is right
     pandas_exec.execute.assert_not_called()
+
+
+class TestC2006AggregateAliasParity:
+    """C2-006: pandas and DuckDB must agree on output column names."""
+
+    def test_func_named_like_column_suffixes(self):
+        import pandas as pd
+
+        from backend.pipeline.parser import AggregateStepConfig, StepType
+        from backend.pipeline.steps._core import StepExecutor
+
+        df = pd.DataFrame({"g": ["a", "a", "b"], "sum": [1, 2, 3]})
+        cfg = AggregateStepConfig(
+            name="agg", step_type=StepType.AGGREGATE, input="in",
+            group_by=["g"], aggregations=[{"column": "sum", "function": "sum"}])
+        import pyarrow as pa
+
+        from backend.pipeline.lineage import LineageRecorder
+        reg = {"in": pa.Table.from_pandas(df, preserve_index=False)}
+        out = StepExecutor().execute_aggregate(reg, cfg, LineageRecorder())
+        assert "sum_sum" in out.output_table.column_names
+        assert "sum" not in [
+            c for c in out.output_table.column_names if c != "g"]
+
+    def test_explicit_alias_honored(self):
+        import pandas as pd
+
+        from backend.pipeline.parser import AggregateStepConfig, StepType
+        from backend.pipeline.steps._core import StepExecutor
+
+        df = pd.DataFrame({"g": ["a", "b"], "amount": [1, 2]})
+        cfg = AggregateStepConfig(
+            name="agg", step_type=StepType.AGGREGATE, input="in",
+            group_by=["g"],
+            aggregations=[{"column": "amount", "function": "sum",
+                           "alias": "total"}])
+        import pyarrow as pa
+
+        from backend.pipeline.lineage import LineageRecorder
+        reg = {"in": pa.Table.from_pandas(df, preserve_index=False)}
+        out = StepExecutor().execute_aggregate(reg, cfg, LineageRecorder())
+        assert "total" in out.output_table.column_names
+
+
+class TestC2008PivotFillValue:
+    """C2-008: DuckDB pivot must honor fill_value like pandas."""
+
+    def _pivot_step(self):
+        from backend.pipeline.parser import PivotStepConfig, StepType
+        return PivotStepConfig(
+            name="pv", step_type=StepType.PIVOT, input="in",
+            index=["g"], columns="c", values="v", aggfunc="sum",
+            fill_value=0)
+
+    def test_duckdb_pivot_fills_missing_with_zero(self):
+        import pandas as pd
+        import pyarrow as pa
+
+        from backend.execution.smart_executor import SmartExecutor
+        from backend.pipeline.lineage import LineageRecorder
+
+        df = pd.DataFrame({
+            "g": ["a", "a", "b"], "c": ["x", "y", "x"], "v": [1, 2, 3]})
+        reg = {"in": pa.Table.from_pandas(df, preserve_index=False)}
+        ex = SmartExecutor()
+        ex.DUCKDB_THRESHOLD = 0  # force DuckDB path
+        out = ex.execute(
+            self._pivot_step(), reg, LineageRecorder()).output_table
+        assert out.to_pandas().isnull().sum().sum() == 0
+
+
+class TestC2009StratifiedSampleStaysPandas:
+    """C2-009: stratify_by must never route to DuckDB's uniform sampler."""
+
+    def test_stratified_sample_uses_pandas_engine(self):
+        import pandas as pd
+        import pyarrow as pa
+
+        from backend.execution.smart_executor import SmartExecutor
+        from backend.pipeline.lineage import LineageRecorder
+        from backend.pipeline.parser import SampleStepConfig, StepType
+
+        df = pd.DataFrame({
+            "g": ["a"] * 20 + ["b"] * 20,
+            "v": list(range(40))})
+        reg = {"in": pa.Table.from_pandas(df, preserve_index=False)}
+        step = SampleStepConfig(
+            name="s", step_type=StepType.SAMPLE, input="in",
+            n=10, random_state=1, stratify_by="g")
+        ex = SmartExecutor()
+        ex.DUCKDB_THRESHOLD = 0  # would route to DuckDB without the guard
+        result = ex.execute(step, reg, LineageRecorder())
+        assert result.engine == "pandas"
+        counts = result.output_table.to_pandas()["g"].value_counts()
+        assert counts["a"] == 5 and counts["b"] == 5

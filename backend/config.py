@@ -84,7 +84,31 @@ class Settings(BaseSettings):
 
     UPLOAD_DIR: Path = Path("./uploads")
     MAX_UPLOAD_SIZE: int = 500 * 1024 * 1024  # 500 MB
-    ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json", ".parquet", ".xlsx"})
+    ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
+        {".csv", ".json", ".parquet", ".xlsx"})
+
+    @field_validator("ALLOWED_EXTENSIONS", mode="before")
+    @classmethod
+    def parse_allowed_extensions(cls, value: object) -> object:
+        """Accept comma-separated (`.csv,.json`) or JSON (`[".csv"]`).
+
+        O2-005: the bare `frozenset` annotation crashed boot with
+        `SettingsError` whenever the env var was set, so the key was
+        missing from `.env.example`. Programmatic/comma forms are
+        normalized here; env vars additionally accept JSON (same
+        convention as CORS_ORIGINS).
+        """
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("["):
+                import json
+
+                return frozenset(json.loads(text))
+            return frozenset(
+                part.strip() for part in text.split(",") if part.strip())
+        if isinstance(value, (list, set, tuple)):
+            return frozenset(value)
+        return value
 
     MAX_PIPELINE_STEPS: int = 50
     MAX_ROWS_PER_FILE: int = 1_000_000

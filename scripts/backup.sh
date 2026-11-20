@@ -10,7 +10,11 @@
 # (those require pg_restore). See restore.sh, which validates the dump
 # BEFORE dropping anything and accepts either format.
 #
-# Usage: ./scripts/backup.sh [--objects-only]
+# Usage: ./scripts/backup.sh [--objects-only] [--dry-run]
+#
+# C2-013: --dry-run prints the exact pg_dump + object commands without
+# running them, so the backup path can be drilled on a box without
+# credentials or disk pressure.
 #
 # Object backup (M-137): pg_dump covers the database only — uploads,
 # pipeline outputs and WASM modules live in MinIO/S3 buckets (or the
@@ -36,7 +40,20 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 OBJECTS_ONLY=0
-[ "${1:-}" = "--objects-only" ] && OBJECTS_ONLY=1
+DRY_RUN=0
+for arg in "$@"; do
+  case "$arg" in
+    --objects-only) OBJECTS_ONLY=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    *) echo "backup: unknown argument: $arg" >&2; exit 1 ;;
+  esac
+done
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "[backup] DRY RUN: would dump PG database '${POSTGRES_DB:-pipelineiq}' to backups/pg-<stamp>.sql.gz"
+  echo "[backup] DRY RUN: object backup enabled=${OBJECT_BACKUP_ENABLED:-auto} source_dir=${OBJECT_SOURCE_DIR:-none} bucket=${S3_BUCKET:-pipelineiq-uploads}"
+  echo "[backup] DRY RUN ok: nothing was dumped or archived."
+  exit 0
+fi
 
 [ -f .env ] || { echo "backup: .env not found" >&2; exit 1; }
 # shellcheck disable=SC1091

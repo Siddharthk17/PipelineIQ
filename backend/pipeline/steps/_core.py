@@ -699,10 +699,25 @@ class StepExecutor:
                 reason=str(exc),
             ) from exc
 
-        # Flatten multi-level column names: (column, func) → column_func
-        grouped.columns = [
-            f"{col}_{func}" if func != col else col for col,
-            func in grouped.columns]
+        # Flatten multi-level column names.
+        # C2-006: names must match the DuckDB engine, which always emits
+        # f"{column}_{function}" unless an explicit alias is given
+        # (sql_builder.build_aggregate_sql). The old `if func != col else
+        # col` special-case produced bare `sum` for a column literally
+        # named `sum`, while DuckDB produced `sum_sum` — same YAML,
+        # different downstream columns across the 50k-row threshold.
+        ordered_aliases: list[str | None] = []
+        for agg in config.aggregations:
+            ordered_aliases.append(agg.get("alias"))
+        if len(ordered_aliases) == len(grouped.columns):
+            grouped.columns = [
+                alias or f"{col}_{func}"
+                for (col, func), alias in zip(
+                    grouped.columns, ordered_aliases, strict=True)
+            ]
+        else:
+            grouped.columns = [
+                f"{col}_{func}" for col, func in grouped.columns]
         return grouped.reset_index()
 
     def execute_sort(

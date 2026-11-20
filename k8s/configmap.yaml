@@ -17,9 +17,10 @@ data:
   CELERY_WORKERS_CRITICAL: "2"
   CELERY_WORKERS_DEFAULT: "4"
   CELERY_WORKERS_BULK: "2"
-  CELERY_WORKERS_STREAMING: "4"
-  CELERY_CONCURRENCY_BULK: "2"
-  CELERY_CONCURRENCY_GEMINI: "1"
+  # O2-005: CELERY_WORKERS_STREAMING / CELERY_CONCURRENCY_BULK /
+  # CELERY_CONCURRENCY_GEMINI were removed — no code reads them (the
+  # streaming worker hardcodes --concurrency=8, bulk/gemini use the
+  # CELERY_WORKERS_* keys above), so they only misled operators.
 
   GUNICORN_WORKERS: "4"
 

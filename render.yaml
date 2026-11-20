@@ -29,6 +29,10 @@ services:
         sync: false
       - key: GRAFANA_PASSWORD
         sync: false
+      # O2-006: the single-service Render deploy runs neither Flower nor
+      # Grafana, but validate_production_operational_secrets still requires
+      # both set to strong values in production (fail-closed by design —
+      # prevents shipping a Compose/VM deploy with default creds).
       - key: SECRET_KEY
         generateValue: true
       - key: ENVIRONMENT

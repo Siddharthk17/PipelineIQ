@@ -37,13 +37,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-BACKUP="${1:?Usage: ./scripts/restore.sh <backups/pg-*.sql.gz> [--yes] [--with-objects DIR]}"
+BACKUP="${1:?Usage: ./scripts/restore.sh <backups/pg-*.sql.gz> [--yes] [--with-objects DIR] [--dry-run]}"
 ASSUME_YES=0
 OBJECTS_DIR=""
+DRY_RUN=0
 shift
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes) ASSUME_YES=1 ;;
+    --dry-run) DRY_RUN=1 ;;
     --with-objects) OBJECTS_DIR="${2:?--with-objects needs a directory}"; shift ;;
     --with-objects=*) OBJECTS_DIR="${1#--with-objects=}" ;;
     *) echo "restore: unknown argument: $1" >&2; exit 1 ;;
@@ -132,6 +134,21 @@ if [ -n "$OBJECTS_DIR" ]; then
     exit 1
   }
   echo "[restore] object backup validated: ${RESTORE_BUCKETS:-no buckets} ${RESTORE_LOCAL_TARBALL:-no local tarball}"
+fi
+
+# C2-013: --dry-run drills validation without touching anything. The only
+# safe restore rehearsal used to be the destructive restore itself; a
+# dry run proves the dump + objects load while writers keep running.
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "[restore] DRY RUN: dump ($DUMP_FORMAT) + objects validate. Plan:"
+  echo "  - stop writers: api sse-service worker-* celery-beat flower"
+  echo "  - drop + recreate database '$POSTGRES_DB'"
+  echo "  - load '$BACKUP' ($DUMP_FORMAT)"
+  echo "  - alembic upgrade head"
+  echo "  - objects: ${RESTORE_BUCKETS:-none} ${RESTORE_LOCAL_TARBALL:-none}"
+  echo "  - restart stack, verify /health"
+  echo "[restore] DRY RUN ok: nothing was stopped, dropped, or loaded."
+  exit 0
 fi
 
 echo "[restore] stopping writers..."
