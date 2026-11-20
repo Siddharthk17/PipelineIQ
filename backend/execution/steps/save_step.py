@@ -51,6 +51,9 @@ def execute_save_step(
 
     Formula cells are neutralised before serializing so outputs cannot
     inject spreadsheet code when opened in Excel/Sheets (M-075).
+    With no S3 configured (default local deployment) the output is
+    persisted via the configured storage provider and a ``storage://``
+    object reference is returned instead of a presigned URL (M-095).
 
     Args:
         table:   The Arrow Table containing the pipeline output data.
@@ -78,32 +81,40 @@ def execute_save_step(
     object_name = f"outputs/{run_id}/{filename}"
     minio = _get_minio_client()
 
-    bucket = settings.S3_BUCKET
-    minio.put_object(
-        Bucket=bucket,
-        Key=object_name,
-        Body=io.BytesIO(content),
-        ContentLength=len(content),
-        ContentType=content_type,
-        Metadata={
-            "run-id": run_id,
-            "row-count": str(table.num_rows),
-            "format": ext,
-        },
-    )
+    if minio is None:
+        # M-095: no S3 configured (default local deployment). Persist via
+        # the configured storage provider instead of an AWS-bound client.
+        from backend.services.storage_service import storage_service
+
+        storage_service.upload(io.BytesIO(content), object_name)
+        download_url = f"storage://{object_name}"
+    else:
+        bucket = settings.S3_BUCKET
+        minio.put_object(
+            Bucket=bucket,
+            Key=object_name,
+            Body=io.BytesIO(content),
+            ContentLength=len(content),
+            ContentType=content_type,
+            Metadata={
+                "run-id": run_id,
+                "row-count": str(table.num_rows),
+                "format": ext,
+            },
+        )
+
+        download_url = _get_presign_client(minio).generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": bucket,
+                "Key": object_name,
+            },
+            ExpiresIn=int(DOWNLOAD_URL_EXPIRY.total_seconds()),
+        )
 
     logger.info(
         "Saved pipeline output: run_id=%s, filename=%s, size=%s, rows=%d",
         run_id, filename, format_bytes(len(content)), table.num_rows)
-
-    download_url = _get_presign_client(minio).generate_presigned_url(
-        "get_object",
-        Params={
-            "Bucket": bucket,
-            "Key": object_name,
-        },
-        ExpiresIn=int(DOWNLOAD_URL_EXPIRY.total_seconds()),
-    )
 
     return SaveResult(
         filename=filename,
@@ -145,6 +156,10 @@ def _get_presign_client(server_client):
 def refresh_download_url(object_name: str) -> str:
     """Generate a fresh presigned URL for an existing output file."""
     minio = _get_minio_client()
+    if minio is None:
+        # M-095: local deployments have no presigned URLs; callers fall
+        # back to the stored download reference on this error.
+        raise RuntimeError("S3 storage is not configured for this deployment")
     return _get_presign_client(minio).generate_presigned_url(
         "get_object",
         Params={
@@ -227,11 +242,13 @@ _bucket_ensured = False
 
 def _get_minio_client():
     from backend.services.storage_service import S3_CLIENT_CONFIG, storage_service
-    if hasattr(storage_service, "provider") and hasattr(
-            storage_service.provider, "s3"):
-        client = storage_service.provider.s3
-    else:
+    provider = getattr(storage_service, "provider", None)
+    if provider is not None and hasattr(provider, "s3"):
+        client = provider.s3
+    elif settings.STORAGE_TYPE == "s3" or settings.S3_ENDPOINT_URL:
+        # Explicit S3 deployment without a provider-backed client.
         import boto3
+
         client = boto3.client(
             "s3",
             aws_access_key_id=settings.S3_ACCESS_KEY,
@@ -239,6 +256,11 @@ def _get_minio_client():
             endpoint_url=settings.S3_ENDPOINT_URL,
             config=S3_CLIENT_CONFIG,
         )
+    else:
+        # M-095: default local deployment with no S3 endpoint configured.
+        # Return None so callers persist via the configured (local)
+        # storage provider instead of an AWS-bound client.
+        return None
 
     global _bucket_ensured
     if not _bucket_ensured:
