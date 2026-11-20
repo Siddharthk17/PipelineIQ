@@ -3,33 +3,93 @@ AI feature endpoints for PipelineIQ.
 All AI calls are non-blocking — they queue a Celery task and return immediately.
 The client polls for completion using the task_id.
 """
+
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
+from backend.config import settings
 from backend.dependencies import get_read_db_dependency
 from backend.models import PipelineRun, UploadedFile, User
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.exceptions import ClientDisconnected
+from backend.utils.rate_limiter import limiter
 from backend.utils.uuid_utils import as_uuid
 
 router = APIRouter(prefix="/api/ai", tags=["AI"])
 logger = logging.getLogger(__name__)
 
+# M-108: overall bound on a single generate/repair request. The Gemini
+# worker call itself times out at 120s; the router allows headroom for
+# validation + self-fix, then fails fast with 504 instead of holding the
+# request (and the client) forever.
+AI_REQUEST_TIMEOUT_SECONDS = 150.0
 
-async def _raise_if_disconnected(request: Request) -> None:
-    """Short-circuit a long-running call when the client has gone away.
+# M-039: poll interval for the client-disconnect watcher.
+_DISCONNECT_POLL_SECONDS = 0.1
 
-    Polls `Request.is_disconnected()` (a non-blocking check on the
-    underlying ASGI receive channel). This avoids burning CPU/DB/AI
-    quota on requests the client has already abandoned (499).
+
+async def _wait_for_disconnect(request: Request) -> None:
+    """Complete (by raising) only when the client actually goes away.
+
+    The previous one-shot `is_disconnected()` check is non-blocking: it
+    completes instantly when the client is still connected, so racing it
+    with FIRST_COMPLETED always cancelled the real AI task (M-039).
+    Polling until a real disconnect keeps generation alive while still
+    abandoning Gemini quota promptly when the client leaves.
     """
-    if await request.is_disconnected():
-        raise ClientDisconnected()
+    while True:
+        if await request.is_disconnected():
+            raise ClientDisconnected()
+        await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
+
+
+async def _run_with_disconnect_guard(request: Request, coro):
+    """Await an AI coroutine, abandoning it if the client disconnects.
+
+    Returns the coroutine result. Raises ClientDisconnected (mapped to
+    499 by middleware) when the client goes away first, HTTPException(504)
+    when AI_REQUEST_TIMEOUT_SECONDS elapses. Only the pending task is
+    ever cancelled — a finished generation result is never discarded.
+    """
+    ai_task = asyncio.create_task(coro)
+    disconnect_task = asyncio.create_task(_wait_for_disconnect(request))
+    try:
+        done, _pending = await asyncio.wait_for(
+            asyncio.wait(
+                {ai_task, disconnect_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            ),
+            timeout=AI_REQUEST_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        for task in (ai_task, disconnect_task):
+            if not task.done():
+                task.cancel()
+        raise HTTPException(
+            status_code=504,
+            detail="AI request timed out. Please try again later.",
+        ) from exc
+    try:
+        if disconnect_task in done:
+            # Client is gone: stop burning Gemini quota.
+            if not ai_task.done():
+                ai_task.cancel()
+            # Raises ClientDisconnected -> 499 via middleware.
+            await disconnect_task
+            raise AssertionError("unreachable: disconnect completed silently")
+        # Generation finished: stop the watcher and return its result.
+        if not disconnect_task.done():
+            disconnect_task.cancel()
+        return await ai_task
+    finally:
+        for task in (ai_task, disconnect_task):
+            if not task.done():
+                task.cancel()
 
 
 async def generate_pipeline_from_description(**kwargs):
@@ -66,17 +126,16 @@ def suggest_columns_batch(
 
 # Request/Response Models
 
+
 class GeneratePipelineRequest(BaseModel):
     description: str = Field(
         ...,
         min_length=10,
         max_length=1000,
-        description="Natural language description of what the pipeline should do"
+        description="Natural language description of what the pipeline should do",
     )
     file_ids: list[str] = Field(
-        ...,
-        min_length=1,
-        description="UUIDs of uploaded files the pipeline can reference"
+        ..., min_length=1, description="UUIDs of uploaded files the pipeline can reference"
     )
 
 
@@ -149,10 +208,13 @@ def _raise_if_ai_unavailable() -> None:
 
 # Endpoints
 
+
 @router.post("/generate", response_model=GeneratePipelineResponse)
+@limiter.limit(settings.RATE_LIMIT_PIPELINE_RUN)
 async def generate_pipeline(
-    request_context: Request,
-    request: GeneratePipelineRequest,
+    request: Request,
+    body: GeneratePipelineRequest,
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = get_read_db_dependency(),
 ):
@@ -167,38 +229,22 @@ async def generate_pipeline(
     """
     _raise_if_ai_unavailable()
     # Verify all file_ids belong to the current user
-    for file_id in request.file_ids:
+    for file_id in body.file_ids:
         file_record = _get_file_or_404(file_id, current_user.id, db)
         if not file_record:
             raise HTTPException(404, f"File not found: {file_id}")
 
-    # Race the AI call against client disconnect so we don't burn
-    # Gemini quota on requests the user has already abandoned.
-    gen_task = asyncio.create_task(
+    # Guard the AI call against client disconnect (abandon quota promptly)
+    # and bound the total wait (M-039, M-108).
+    result = await _run_with_disconnect_guard(
+        request,
         generate_pipeline_from_description(
-            description=request.description,
-            file_ids=request.file_ids,
+            description=body.description,
+            file_ids=body.file_ids,
             db=db,
-            request_id=getattr(request_context.state, "request_id", None),
-        )
+            request_id=getattr(request.state, "request_id", None),
+        ),
     )
-    disconnect_task = asyncio.create_task(_raise_if_disconnected(request_context))
-    try:
-        done, pending = await asyncio.wait(
-            {gen_task, disconnect_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for p in pending:
-            p.cancel()
-        if disconnect_task in done:
-            # The ClientDisconnected exception will propagate; the
-            # global middleware converts it to a 499 response.
-            await disconnect_task
-        result = await gen_task
-    finally:
-        for t in (gen_task, disconnect_task):
-            if not t.done():
-                t.cancel()
 
     return GeneratePipelineResponse(
         yaml=result.yaml,
@@ -209,8 +255,10 @@ async def generate_pipeline(
 
 
 @router.post("/runs/{run_id}/repair", response_model=RepairPipelineResponse)
+@limiter.limit(settings.RATE_LIMIT_PIPELINE_RUN)
 async def repair_failed_run(
     request: Request,
+    response: Response,
     run_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = get_read_db_dependency(),
@@ -228,16 +276,20 @@ async def repair_failed_run(
         raise HTTPException(400, "Invalid run_id format") from exc
 
     # Get the failed run
-    run = db.query(PipelineRun).filter(
-        PipelineRun.id == run_uuid,
-        PipelineRun.user_id == current_user.id).first()
+    run = (
+        db.query(PipelineRun)
+        .filter(PipelineRun.id == run_uuid, PipelineRun.user_id == current_user.id)
+        .first()
+    )
     if not run:
         raise HTTPException(404, "Run not found")
 
     # Actually the string in DB is "FAILED" for enum PipelineStatus
     if run.status.value != "FAILED":
         raise HTTPException(
-            400, f"Cannot repair a run with status '{run.status.value}'. Only 'failed' runs can be repaired.")
+            400,
+            f"Cannot repair a run with status '{run.status.value}'. Only 'failed' runs can be repaired.",
+        )
 
     # Extract error information from the run
     # PipelineRun error details are usually in `error_message` or
@@ -265,9 +317,10 @@ async def repair_failed_run(
     except Exception:
         pass
 
-    # Race the AI call against client disconnect so we don't burn
-    # Gemini quota on requests the user has already abandoned.
-    repair_task = asyncio.create_task(
+    # Guard the AI call against client disconnect (abandon quota promptly)
+    # and bound the total wait (M-039, M-108).
+    result = await _run_with_disconnect_guard(
+        request,
         repair_pipeline_from_error(
             original_yaml=run.yaml_config,
             failed_step=failed_step,
@@ -276,23 +329,8 @@ async def repair_failed_run(
             file_ids=file_ids,
             db=db,
             request_id=getattr(request.state, "request_id", None),
-        )
+        ),
     )
-    disconnect_task = asyncio.create_task(_raise_if_disconnected(request))
-    try:
-        done, pending = await asyncio.wait(
-            {repair_task, disconnect_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for p in pending:
-            p.cancel()
-        if disconnect_task in done:
-            await disconnect_task
-        result = await repair_task
-    finally:
-        for t in (repair_task, disconnect_task):
-            if not t.done():
-                t.cancel()
 
     return RepairPipelineResponse(
         corrected_yaml=result.corrected_yaml,
@@ -310,16 +348,18 @@ async def autocomplete_column(
     """
     Suggest the closest column name for a probable typo.
     Returns the suggestion and a confidence score, or null if no close match.
+
+    The Jaro-Winkler scan is CPU-bound: inputs are capped in
+    backend.ai.autocomplete (M-016) and the work runs in a worker thread so
+    the event loop is never blocked.
     """
     import jellyfish
 
-    suggestion = suggest_column(request.typed, request.available_columns)
+    suggestion = await asyncio.to_thread(suggest_column, request.typed, request.available_columns)
     confidence = None
 
     if suggestion:
-        confidence = jellyfish.jaro_winkler_similarity(
-            request.typed.lower(), suggestion.lower()
-        )
+        confidence = jellyfish.jaro_winkler_similarity(request.typed.lower(), suggestion.lower())
 
     return AutocompleteResponse(
         suggestion=suggestion,
@@ -334,13 +374,16 @@ async def autocomplete_columns(
 ):
     """
     Batch autocomplete for multiple possibly-typed column names.
+
+    Offloaded to a worker thread (M-016): batch cost is O(queries *
+    columns) and must not stall the loop.
     """
-    return AutocompleteBatchResponse(
-        suggestions=suggest_columns_batch(
-            request.typed_columns,
-            request.available_columns,
-        )
+    suggestions = await asyncio.to_thread(
+        suggest_columns_batch,
+        request.typed_columns,
+        request.available_columns,
     )
+    return AutocompleteBatchResponse(suggestions=suggestions)
 
 
 @router.post("/validate-yaml", response_model=ValidateYamlResponse)
