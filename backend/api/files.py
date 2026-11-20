@@ -355,12 +355,29 @@ async def confirm_direct_upload(
             detail="File not found in storage. Upload may have failed.",
         )
 
+    # M-067: presigned direct-to-S3 uploads bypass the server-side stream
+    # cap, so the confirm step is the enforcement point for oversized or
+    # empty objects. Reject over-cap (413) and delete the orphaned object.
+    actual_size = storage_service.get_size(str(stored_path))
+    if actual_size > settings.MAX_UPLOAD_SIZE:
+        _delete_stored_quietly(str(stored_path))
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
+        )
+    if actual_size == 0:
+        _delete_stored_quietly(str(stored_path))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+
     finalized = _finalize_uploaded_file(
         db=db,
         file_id=_as_uuid(file_id),
         original_filename=pending["filename"],
         stored_path=str(stored_path),
-        file_size_bytes=storage_service.get_size(str(stored_path)),
+        file_size_bytes=actual_size,
         request=request,
         current_user=current_user,
     )
