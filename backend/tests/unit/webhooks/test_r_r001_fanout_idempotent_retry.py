@@ -58,15 +58,14 @@ def test_fanout_retry_carries_completed_ids(test_db, monkeypatch):
     with patch(
         "backend.tasks.webhook_tasks.deliver_webhook.apply_async",
         side_effect=flaky_enqueue,
-    ):
-        with pytest.raises(_RetrySentinel) as exc_info:
-            deliver_webhooks_task.apply(
-                kwargs={
-                    "run_id": str(uuid.uuid4()),
-                    "status": "completed",
-                    "user_id": str(user.id),
-                }
-            ).get()
+    ), pytest.raises(_RetrySentinel) as exc_info:
+        deliver_webhooks_task.apply(
+            kwargs={
+                "run_id": str(uuid.uuid4()),
+                "status": "completed",
+                "user_id": str(user.id),
+            }
+        ).get()
     # First webhook went out, second failed.
     assert calls == ids, calls
     # The retry carries the completed id so it is skipped on redelivery.
