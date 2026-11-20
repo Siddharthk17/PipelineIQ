@@ -618,7 +618,7 @@ def get_contract(
     contract = (
         _contract_query(db, current_user)
         .filter(
-            PipelineContract.id == contract_id,
+            PipelineContract.id == as_uuid(contract_id),
             PipelineContract.pipeline_name == pipeline_name,
         )
         .first()
@@ -649,6 +649,7 @@ def update_contract(
     pipeline_name: str,
     contract_id: str,
     body: ContractUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -660,7 +661,7 @@ def update_contract(
     existing = (
         _contract_query(db, current_user)
         .filter(
-            PipelineContract.id == contract_id,
+            PipelineContract.id == as_uuid(contract_id),
             PipelineContract.pipeline_name == pipeline_name,
         )
         .first()
@@ -670,6 +671,29 @@ def update_contract(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Contract {contract_id} not found for pipeline {pipeline_name}",
         )
+
+    # R2-004: retried PUTs version-spammed (N+1, N+2). Honor
+    # Idempotency-Key like create (M-062); claimed after validation so
+    # 4xx never holds a placeholder.
+    idem_key = _get_idempotency_key(request)
+    idem_row: IdempotencyKey | None = None
+    if idem_key is not None:
+        action, idem_row = _idempotency_claim(
+            db, scope="contract_update", key=idem_key,
+            user_id=current_user.id,
+        )
+        if action == "replay":
+            assert idem_row is not None and idem_row.response_body is not None
+            return ContractDefResponse(**idem_row.response_body)
+        if action == "inflight":
+            assert idem_row is not None
+            done = _idempotency_wait(db, idem_row)
+            if done is not None and done.response_body is not None:
+                return ContractDefResponse(**done.response_body)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotent request still in progress",
+            )
 
     # New version via the same atomic deactivate-then-insert path as
     # create (M-008): never two actives, never duplicate versions.
@@ -682,7 +706,16 @@ def update_contract(
         user_id=current_user.id,
     )
 
-    return _to_def_response(new_contract)
+    response = _to_def_response(new_contract)
+    if idem_row is not None:
+        _idempotency_complete(
+            db,
+            idem_row,
+            status_code=status.HTTP_200_OK,
+            body=response.model_dump(mode="json"),
+            resource_id=str(new_contract.id),
+        )
+    return response
 
 
 @router.delete(
@@ -701,7 +734,7 @@ def delete_contract(
     contract = (
         _contract_query(db, current_user)
         .filter(
-            PipelineContract.id == contract_id,
+            PipelineContract.id == as_uuid(contract_id),
             PipelineContract.pipeline_name == pipeline_name,
         )
         .first()

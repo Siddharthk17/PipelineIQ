@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import httpx
 import orjson
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.orm import Session
 
@@ -87,6 +87,7 @@ def _parse_webhook_id(webhook_id: str):
              status_code=status.HTTP_201_CREATED)
 def create_webhook(
     body: WebhookCreate,
+    request: Request,
     db: Session = get_write_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
@@ -106,6 +107,36 @@ def create_webhook(
         raise HTTPException(
             status_code=400,
             detail="Maximum 10 webhooks per user")
+
+    # R2-004: honor Idempotency-Key so a retried create does not
+    # double-register (double fan-out deliveries). Claimed after the cap
+    # check so validation failures never hold a placeholder. Mirrors M-062.
+    from backend.api.contracts import (
+        _get_idempotency_key,
+        _idempotency_claim,
+        _idempotency_complete,
+        _idempotency_wait,
+    )
+
+    idem_key = _get_idempotency_key(request)
+    idem_row = None
+    if idem_key is not None:
+        action, idem_row = _idempotency_claim(
+            db, scope="webhook_create", key=idem_key,
+            user_id=current_user.id,
+        )
+        if action == "replay":
+            assert idem_row is not None and idem_row.response_body is not None
+            return WebhookResponse(**idem_row.response_body)
+        if action == "inflight":
+            assert idem_row is not None
+            done = _idempotency_wait(db, idem_row)
+            if done is not None and done.response_body is not None:
+                return WebhookResponse(**done.response_body)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotent request still in progress",
+            )
 
     webhook = Webhook(
         user_id=current_user.id,
@@ -132,7 +163,7 @@ def create_webhook(
         details={
             "url": body.url})
 
-    return WebhookResponse(
+    response = WebhookResponse(
         id=str(webhook.id),
         url=webhook.url,
         events=webhook.events,
@@ -140,6 +171,15 @@ def create_webhook(
         created_at=webhook.created_at,
         has_secret=webhook.secret is not None,
     )
+    if idem_row is not None:
+        _idempotency_complete(
+            db,
+            idem_row,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+            resource_id=str(webhook.id),
+        )
+    return response
 
 
 @router.get("/", response_model=list[WebhookResponse])

@@ -232,6 +232,36 @@ def create_schedule(
         grant_owner=True,
     )
 
+    # R2-004: retried schedule creates (client timeout, double-click)
+    # duplicated schedules and therefore duplicate firings. Honor
+    # Idempotency-Key like contract/run creates (M-062).
+    from backend.api.contracts import (
+        _get_idempotency_key,
+        _idempotency_claim,
+        _idempotency_complete,
+        _idempotency_wait,
+    )
+
+    idem_key = _get_idempotency_key(request)
+    idem_row = None
+    if idem_key is not None:
+        action, idem_row = _idempotency_claim(
+            db, scope="schedule_create", key=idem_key,
+            user_id=current_user.id,
+        )
+        if action == "replay":
+            assert idem_row is not None and idem_row.response_body is not None
+            return ScheduleResponse(**idem_row.response_body)
+        if action == "inflight":
+            assert idem_row is not None
+            done = _idempotency_wait(db, idem_row)
+            if done is not None and done.response_body is not None:
+                return ScheduleResponse(**done.response_body)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotent request still in progress",
+            )
+
     schedule = PipelineSchedule(
         user_id=current_user.id,
         pipeline_name=body.pipeline_name,
@@ -253,7 +283,16 @@ def create_schedule(
 
     logger.info("Schedule created: id=%s, pipeline=%s, cron=%s",
                 schedule.id, body.pipeline_name, body.cron_expression)
-    return _schedule_to_response(schedule)
+    response = _schedule_to_response(schedule)
+    if idem_row is not None:
+        _idempotency_complete(
+            db,
+            idem_row,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+            resource_id=str(schedule.id),
+        )
+    return response
 
 
 @router.get("/", summary="List user's pipeline schedules")
