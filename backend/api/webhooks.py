@@ -96,8 +96,11 @@ def create_webhook(
     # observe count == 9 and both insert, overshooting the limit (M-155).
     # The lock is held until commit; on SQLite it is a no-op.
     db.query(User).filter(User.id == current_user.id).with_for_update().first()
+    # Archived webhooks (soft-deleted, M-026) no longer fire, so only
+    # active ones consume cap budget.
     count = db.query(Webhook).filter(
-        Webhook.user_id == current_user.id).count()
+        Webhook.user_id == current_user.id,
+        Webhook.is_active.is_(True)).count()
     if count >= 10:
         db.rollback()
         raise HTTPException(
@@ -111,7 +114,13 @@ def create_webhook(
         events=body.events or ["pipeline_completed", "pipeline_failed"],
     )
     db.add(webhook)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        # Leave the session usable for the caller (M-173); the dependency
+        # closes it, but a poisoned session would break retries/audit.
+        db.rollback()
+        raise
     db.refresh(webhook)
 
     log_action(
@@ -171,8 +180,30 @@ def delete_webhook(
     # logging before the delete commits would record deletions that later
     # roll back. Capture the id first — the instance is expired post-commit.
     resource_id = webhook.id
-    db.delete(webhook)
-    db.commit()
+    has_history = (
+        db.query(WebhookDelivery)
+        .filter(WebhookDelivery.webhook_id == parsed_webhook_id)
+        .limit(1)
+        .first()
+        is not None
+    )
+    try:
+        if has_history:
+            # Append-only delivery history (M-026, M-081): a Postgres RULE
+            # replaces DELETEs on webhook_deliveries with NOTHING, so a
+            # cascaded parent delete would die on the FK (500 on PG);
+            # deleting the rows first would silently destroy the audit
+            # trail. Archive the webhook instead: deliveries stay
+            # queryable and the webhook stops firing (fan-out filters on
+            # is_active).
+            webhook.is_active = False
+        else:
+            db.delete(webhook)
+        db.commit()
+    except Exception:
+        # Session cleanup for commit failures (M-173).
+        db.rollback()
+        raise
 
     log_action(
         db,
