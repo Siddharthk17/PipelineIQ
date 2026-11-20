@@ -112,3 +112,46 @@ constraints. Note: the single-owner partial index exists only in the migration
 - `d20c799` validator fail-closed (M-073, M-059)
 - DB hardening (M-007, M-008, M-062) / contracts.py (M-030, M-008, M-088, M-062)
   / pipelines.py (M-007, M-089, M-062) / this report
+
+## Follow-up round
+
+### M-076 — consumers block other tenants' schedules (Med)
+
+Verified: a contract with `consumers: [victim_pipeline]` returned 201; on a
+block-severity breach `_block_downstream_schedules` (pipeline_tasks, not in
+scope) pauses every active schedule with that name — including the victim's.
+Fix (`contracts.py::_validate_consumers`, enforced on create+update):
+entries matching an existing pipeline require owner-level access (own
+contract, OWNER grant, or admin), else 422. Non-matching entries (e-mails /
+Slack targets, future names) stay allowed.
+Residuals: (a) the worker-side matcher itself is untouched — recommend the
+exec cluster scope it to (owner, pipeline); (b) a predicted future name
+cannot be distinguished from a notification target.
+
+### M-154 — WASM module name globally unique (Low)
+
+Verified: same name registered by two users hit `UNIQUE (wasm_modules.name)`
+-> IntegrityError/500, and the 409-vs-500 difference oracles name ownership.
+Fix: `WasmModule.name` lost `unique=True`, gained
+`UniqueConstraint("user_id","name")` (`uq_wasm_modules_user_name`) in the
+model plus new revision `0019_wasm_user_scoped_names` (down_revision `0018`;
+id kept <=32 chars for `alembic_version.version_num`). 0010 created the
+enforcement as unique *index* `ix_wasm_modules_name` (unique+index on one
+column), so the migration drops that index, not a table constraint. No data
+migration needed — the old global uniqueness precludes duplicates.
+Verified on throwaway PG: full-chain `upgrade head`, cross-user same name
+allowed, same-user duplicate blocked, `downgrade -1` (refuses while dupes
+exist, succeeds once clean), re-`upgrade head`, single head.
+
+### M-077 remainder — wire aiwasm ownership helpers into run start (Med)
+
+Verified: a run referencing another user's `wasm_file_id` returned 202 and
+queued execution (the worker `_load_wasm_modules` loads any id by design).
+Fix (`pipelines.py`): `_validate_wasm_ownership` collects `wasm_file_id`s
+from the parsed config and calls aiwasm's `assert_wasm_ids_owned` inside
+both run-start validators, before the ownership claim — missing and foreign
+ids both 404 as "Wasm module not found" (no oracle), no run row created.
+No SAVE-time YAML hookup exists in owned code (`increment_pipeline_usage`
+has no callers); the queue-time check is the single choke point, and the
+worker-side loader remains unscoped — recommend the exec cluster re-check
+there (defence in depth).
