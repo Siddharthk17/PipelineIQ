@@ -65,11 +65,64 @@ def execute_validate(
     )
 
 
-def _execute_single_rule(df: pd.DataFrame, rule: dict) -> ValidationRuleResult:
-    """Evaluate a single validation rule against a DataFrame."""
-    check = rule["check"]
+def _execute_single_rule(df: pd.DataFrame, rule: Any) -> ValidationRuleResult:
+    """Evaluate a single validation rule against a DataFrame.
+
+    M-113: never raises. Malformed rules (non-mapping, missing keys,
+    wrong-typed params) used to propagate KeyError/TypeError out of the
+    run path as HTTP 500s. They are reported as failed error-severity
+    results instead, so the run completes with actionable findings.
+    """
+    if not isinstance(rule, dict):
+        return ValidationRuleResult(
+            rule_name=f"rule.{type(rule).__name__}", column=None,
+            check="invalid", passed=False, severity="error",
+            failing_count=len(df), total_count=len(df), failing_examples=[],
+            message=f"Validation rule must be a mapping; got {type(rule).__name__}",
+        )
+    check = rule.get("check")
     column = rule.get("column")
     severity = rule.get("severity", "error")
+    if not isinstance(severity, str) or severity not in ("error", "warning"):
+        severity = "error"
+    if not isinstance(check, str) or not check:
+        return ValidationRuleResult(
+            rule_name=f"{column or 'dataset'}.invalid", column=column,
+            check=str(check), passed=False, severity=severity,
+            failing_count=len(df), total_count=len(df), failing_examples=[],
+            message="Validation rule is missing required parameter 'check'",
+        )
+
+    try:
+        return _evaluate_rule(df, rule, check, column, severity)
+    except Exception as exc:
+        return ValidationRuleResult(
+            rule_name=f"{column or 'dataset'}.{check}", column=column,
+            check=check, passed=False, severity=severity,
+            failing_count=len(df), total_count=len(df), failing_examples=[],
+            message=f"Rule evaluation failed: {exc}",
+        )
+
+
+# M-113: params each check needs. Missing params are reported as failed
+# results here (runtime safety net); the parser rejects them earlier
+# with step context at validation time.
+_RULE_REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
+    "greater_than": ("value",),
+    "less_than": ("value",),
+    "between": ("min", "max"),
+    "in_values": ("values",),
+    "matches_pattern": ("pattern",),
+    "min_rows": ("value",),
+    "max_rows": ("value",),
+    "date_format": ("format",),
+}
+
+
+def _evaluate_rule(
+    df: pd.DataFrame, rule: dict, check: str, column: Any, severity: str
+) -> ValidationRuleResult:
+    """Evaluate a well-formed validation rule (may raise; caller guards)."""
 
     # Validate column exists
     if column and column not in df.columns:
@@ -88,6 +141,17 @@ def _execute_single_rule(df: pd.DataFrame, rule: dict) -> ValidationRuleResult:
             failing_count=len(df), total_count=len(df), failing_examples=[],
             message=f"Check '{check}' requires a column",
         )
+
+    for param in _RULE_REQUIRED_PARAMS.get(check, ()):
+        if param not in rule or rule[param] is None:
+            return ValidationRuleResult(
+                rule_name=f"{column or 'dataset'}.{check}", column=column,
+                check=check, passed=False, severity=severity,
+                failing_count=len(df), total_count=len(df),
+                failing_examples=[],
+                message=(f"Check '{check}' is missing required "
+                         f"parameter '{param}'"),
+            )
 
     if check == "not_null":
         mask = series.isnull()

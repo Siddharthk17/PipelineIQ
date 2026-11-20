@@ -231,14 +231,39 @@ class Contract:
 
 
 def parse_contract_from_yaml(data: dict) -> Contract:
-    """Parse a contract dict from pipeline YAML into a Contract object."""
+    """Parse a contract dict from pipeline YAML into a Contract object.
+
+    M-113: raises ValueError with a precise message on malformed
+    contracts instead of leaking KeyError/ValueError internals.
+    (The pipeline validator rejects these earlier with step context;
+    this is the runtime safety net.)
+    """
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Contract must be a mapping; got {type(data).__name__}")
     step_name = data.get("step_name", "")
     columns_data = data.get("columns", [])
+    if not isinstance(columns_data, list):
+        raise ValueError("Contract 'columns' must be a list")
     columns = []
 
-    for col in columns_data:
+    for idx, col in enumerate(columns_data):
+        if not isinstance(col, dict):
+            raise ValueError(
+                f"Contract column #{idx} must be a mapping; "
+                f"got {type(col).__name__}")
+        if not isinstance(col.get("name"), str) or not col["name"]:
+            raise ValueError(
+                f"Contract column #{idx} must have a non-empty "
+                f"string 'name'")
         dtype_raw = col.get("dtype")
-        dtype = DtypeKind(dtype_raw) if dtype_raw else None
+        try:
+            dtype = DtypeKind(dtype_raw) if dtype_raw else None
+        except ValueError as exc:
+            raise ValueError(
+                f"Contract column '{col['name']}' has unknown dtype "
+                f"'{dtype_raw}'. Valid: "
+                f"{sorted(d.value for d in DtypeKind)}") from exc
         columns.append(
             ColumnContract(
                 name=col["name"],
