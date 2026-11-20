@@ -253,6 +253,7 @@ def check_and_enforce_contract(
                     db,
                     pipeline_run.name or "",
                     active_contract.consumers or [],
+                    owner_id=active_contract.user_id,
                 )
             logger.warning("%s", report.summary)
 
@@ -806,9 +807,14 @@ def _collect_file_ids_from_config(yaml_config: str) -> list[str]:
 
 def _save_version_if_needed(*, db, pipeline_run: PipelineRun) -> None:
     config = get_parsed_pipeline(pipeline_run.yaml_config)
+    # Canonical identity (M-064): versions are stored under the run's
+    # canonical name (the same name the permission check granted on), not
+    # the YAML name, so a request name that differs from ``pipeline.name``
+    # cannot split one pipeline into two version histories.
+    pipeline_name = pipeline_run.name or config.name
     latest_version = (
         db.query(PipelineVersion)
-        .filter(PipelineVersion.pipeline_name == config.name)
+        .filter(PipelineVersion.pipeline_name == pipeline_name)
         .order_by(PipelineVersion.version_number.desc())
         .first()
     )
@@ -816,7 +822,7 @@ def _save_version_if_needed(*, db, pipeline_run: PipelineRun) -> None:
         return
 
     save_version(
-        pipeline_name=config.name,
+        pipeline_name=pipeline_name,
         yaml_config=pipeline_run.yaml_config,
         run_id=pipeline_run.id,
         db=db,
@@ -1096,51 +1102,68 @@ def _block_downstream_schedules(
     db,
     breached_pipeline_name: str,
     consumers: list[str],
+    owner_id=None,
 ) -> int:
     """Block downstream pipeline schedules when a contract breach has severity=block.
 
-    Finds all active schedules whose pipeline_name appears in the consumers list
-    and pushes their next_run_at forward by 1 hour to prevent immediate triggering.
-    This gives engineers time to investigate and fix the breach before dependent
-    pipelines run against bad data.
-
-    Returns the number of schedules blocked.
+    Matching is scoped to (owner, pipeline_name) (M-076): only active
+    schedules owned by the breaching contract's owner are paused. A bare
+    pipeline-name match would let one tenant's breach pause another
+    tenant's schedules that merely share the name.
     """
-    from datetime import timedelta
-
-    from sqlalchemy import update
+    from backend.contracts.enforcement import block_downstream_schedules
 
     if not consumers:
         return 0
 
-    blocked_count = 0
-    for consumer_name in consumers:
-        affected = db.execute(
-            update(PipelineSchedule)
-            .where(
-                PipelineSchedule.pipeline_name == consumer_name,
-                PipelineSchedule.is_active.is_(True),
-            )
-            .values(
-                next_run_at=utcnow() + timedelta(hours=1),
-                last_run_status="BLOCKED_BY_CONTRACT",
-            )
+    if owner_id is None:
+        # Fallback when the caller cannot provide the contract owner
+        # (legacy path): match by bare name. Callers that know the owner
+        # must pass it so cross-tenant schedules are never touched.
+        logger.warning(
+            "Blocking downstream schedules for '%s' without owner scope; "
+            "cross-tenant matches are still possible on this path",
+            breached_pipeline_name,
         )
-        count = affected.rowcount
-        if count > 0:
-            blocked_count += count
-            logger.info(
-                "Blocked %d schedule(s) for downstream pipeline '%s' "
-                "(breached: '%s')",
-                count,
-                consumer_name,
-                breached_pipeline_name,
+        from datetime import timedelta
+
+        from sqlalchemy import update
+
+        blocked_count = 0
+        for consumer_name in consumers:
+            affected = db.execute(
+                update(PipelineSchedule)
+                .where(
+                    PipelineSchedule.pipeline_name == consumer_name,
+                    PipelineSchedule.is_active.is_(True),
+                )
+                .values(
+                    next_run_at=utcnow() + timedelta(hours=1),
+                    last_run_status="BLOCKED_BY_CONTRACT",
+                )
             )
+            count = affected.rowcount
+            if count > 0:
+                blocked_count += count
+                logger.info(
+                    "Blocked %d schedule(s) for downstream pipeline '%s' "
+                    "(breached: '%s')",
+                    count,
+                    consumer_name,
+                    breached_pipeline_name,
+                )
 
-    if blocked_count > 0:
-        db.commit()
+        if blocked_count > 0:
+            db.commit()
 
-    return blocked_count
+        return blocked_count
+
+    return block_downstream_schedules(
+        db,
+        owner_id=owner_id,
+        breached_pipeline_name=breached_pipeline_name,
+        consumers=consumers,
+    )
 
 
 def _update_schedule_stats(db, pipeline_run: PipelineRun) -> None:
