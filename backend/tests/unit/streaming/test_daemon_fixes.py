@@ -709,6 +709,29 @@ class TestM078Transitions:
         assert active.status == PipelineStatus.STREAMING_STOPPED
 
 
+    def test_restart_cancelled_dispatches_new_task(self, test_db):
+        """R-R-008: a cancelled streaming run can be restarted."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.CANCELLED, user.id)
+        with (
+            patch.object(sp, "celery_app"),
+            patch.object(
+                sp.run_streaming_pipeline, "delay",
+                return_value=SimpleNamespace(id="task-new"),
+            ) as mock_delay,
+        ):
+            ok, error = sp.request_restart(str(run.id), user, test_db)
+        assert (ok, error) == (True, None), error
+        mock_delay.assert_called_once_with(str(run.id))
+        assert run.status == PipelineStatus.STREAMING_ACTIVE
+        assert run.celery_task_id == "task-new"
+
 class TestM006TopicAccess:
     """Publish path must enforce topic ownership (M-006, daemon side)."""
 
@@ -909,3 +932,84 @@ class TestM131BacklogReplay:
             "fresh daemon groups must replay backlog (earliest), "
             "not skip it (latest)"
         )
+
+
+class TestRR002QuarantinedBatchesDoNotTripShutdown:
+    """R-R-002: DLQ-quarantined batches commit offsets and must NOT count
+    toward the consecutive-error shutdown counter (data is safe)."""
+
+    def _boom_executor(self):
+        class BoomExecutor:
+            def execute(self, step, registry, recorder):
+                raise RuntimeError("poison transform")
+
+        return BoomExecutor()
+
+    def _fake_msg(self, partition=0, offset=0, value=b'{"amount": 200.0}'):
+        m = MagicMock()
+        m.topic.return_value = "orders"
+        m.partition.return_value = partition
+        m.offset.return_value = offset
+        m.value.return_value = value
+        m.key.return_value = None
+        m.error.return_value = None
+        return m
+
+    def _ctx(self):
+        consumer_calls = {"commit": []}
+
+        class FakeConsumer:
+            def commit(self, message=None, offsets=None, asynchronous=True):
+                consumer_calls["commit"].append((message, offsets, asynchronous))
+
+        produced = []
+
+        class FakeProducer:
+            def produce(self, topic, value=None, key=None, **kwargs):
+                produced.append((topic, value))
+
+            def poll(self, timeout=0):
+                return 0
+
+            def flush(self, timeout=None):
+                return 0
+
+        from backend.pipeline.lineage import LineageRecorder
+
+        return {
+            "consumer": FakeConsumer(),
+            "ccalls": consumer_calls,
+            "producer": FakeProducer(),
+            "dlq": FakeProducer(),
+            "produced": produced,
+            "publish_step": MagicMock(topic="out", key_column=None),
+            "middle_steps": [_make_filter_step(input="ingest")],
+            "consume_step": _make_consume_step("ingest", topic="orders"),
+            "executor": self._boom_executor(),
+            "recorder": LineageRecorder(),
+            "stats": {"batches": 0, "messages": 0, "failed": 0, "dlq": 0, "start": 0.0},
+        }
+
+    def test_quarantined_batch_does_not_increment_errors(self):
+        from backend.tasks.streaming_pipeline import _process_batch
+
+        ctx = self._ctx()
+        msgs = [self._fake_msg(partition=0, offset=7)]
+        errors = _process_batch(
+            msgs,
+            deserialize_fmt="json",
+            consecutive_errors=3,
+            on_success=lambda **kw: None,
+            consumer=ctx["consumer"],
+            producer=ctx["producer"],
+            dlq_producer=ctx["dlq"],
+            consume_step=ctx["consume_step"],
+            publish_step=None,
+            middle_steps=ctx["middle_steps"],
+            executor=ctx["executor"],
+            recorder=ctx["recorder"],
+            stats=ctx["stats"],
+        )
+        assert errors == 3, "quarantined batch must not trip the shutdown counter"
+        assert ctx["stats"]["dlq"] == 1
+        assert ctx["ccalls"]["commit"], "offsets must commit on DLQ preservation"

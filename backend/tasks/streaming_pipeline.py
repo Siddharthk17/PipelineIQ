@@ -215,7 +215,10 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
         consecutive_errors = 0
 
         # Idempotent processing: track processed offsets to avoid duplicates
-        processed_offsets: set = set()
+        # Insertion-ordered (dict used as an ordered set) so the trim
+        # below evicts oldest-first instead of an arbitrary hash-ordered
+        # half (R-R-010).
+        processed_offsets: dict = {}
 
         logger.info(
             "Subscribed to '%s' (group=%s, batch=%d, timeout=%.1fs)",
@@ -253,19 +256,21 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
             if not valid:
                 continue
 
-            # Idempotent processing: skip already-processed messages
+            # Idempotent processing: skip already-processed messages.
+            # R-R-010: evict oldest-first (insertion order), never an
+            # arbitrary hash-ordered half — evicting the newest batch's
+            # offsets would let its immediate redelivery double-process.
             deduped = []
             for msg in valid:
                 offset_key = (msg.topic(), msg.partition(), msg.offset())
                 if offset_key not in processed_offsets:
                     deduped.append(msg)
-                    processed_offsets.add(offset_key)
+                    processed_offsets[offset_key] = None
             # Trim cache to prevent unbounded growth
             if len(processed_offsets) > IDEMPOTENT_CACHE_TTL:
-                # Remove oldest 50%
-                to_remove = list(processed_offsets)[:len(processed_offsets)//2]
-                for key in to_remove:
-                    processed_offsets.discard(key)
+                # Remove oldest 50% (dicts preserve insertion order)
+                for key in list(processed_offsets)[:len(processed_offsets)//2]:
+                    del processed_offsets[key]
 
             if not deduped:
                 continue
@@ -343,7 +348,7 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
 #   ACTIVE  --request_pause-->  PAUSED
 #   PAUSED  --request_resume--> ACTIVE
 #   ACTIVE | PAUSED --request_stop--> STREAMING_STOPPED (+ revoke)
-#   STREAMING_STOPPED --request_restart--> ACTIVE (+ fresh daemon dispatch)
+#   STREAMING_STOPPED | CANCELLED --request_restart--> ACTIVE (+ fresh daemon dispatch)
 #
 # Each function returns (ok, error): (True, None) on success, otherwise
 # (False, human-readable reason). Foreign runs are reported as "not found"
@@ -355,7 +360,7 @@ _RESUME_FROM = frozenset({PipelineStatus.STREAMING_PAUSED})
 _STOP_FROM = frozenset({
     PipelineStatus.STREAMING_ACTIVE, PipelineStatus.STREAMING_PAUSED,
 })
-_RESTART_FROM = frozenset({PipelineStatus.STREAMING_STOPPED})
+_RESTART_FROM = frozenset({PipelineStatus.STREAMING_STOPPED, PipelineStatus.CANCELLED})
 
 
 def _coerce_run_uuid(run_id):
@@ -535,7 +540,7 @@ def request_restart(run_id, user, db=None) -> tuple:
             return False, denial
         if run.status not in _RESTART_FROM:
             return False, _transition_conflict(
-                session, run_uuid, run_id, "restart", "STREAMING_STOPPED")
+                session, run_uuid, run_id, "restart", "STREAMING_STOPPED or CANCELLED")
         try:
             dispatched = run_streaming_pipeline.delay(str(run_uuid))
         except Exception as exc:
@@ -555,7 +560,7 @@ def request_restart(run_id, user, db=None) -> tuple:
                     exc_info=True,
                 )
             return False, _transition_conflict(
-                session, run_uuid, run_id, "restart", "STREAMING_STOPPED")
+                session, run_uuid, run_id, "restart", "STREAMING_STOPPED or CANCELLED")
         logger.info(
             "Streaming run %s restarted by operator (task %s)",
             run_id, new_task_id,
@@ -1134,7 +1139,12 @@ def _process_batch(
         stats["failed"] += len(messages)
         stats["dlq"] += len(messages)
         _commit_offsets(consumer, messages)
-        return consecutive_errors + 1
+        # R-R-002: the batch is preserved in the DLQ *and* its offsets are
+        # committed, so the daemon made progress — do NOT count this toward
+        # the shutdown counter. Only uncommitted (redeliverable) failures
+        # wedge the loop; counting quarantined batches would shut down a
+        # healthy-data pipeline on a poison topic.
+        return consecutive_errors
     else:
         return 0
 

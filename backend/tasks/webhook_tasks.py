@@ -480,14 +480,16 @@ def deliver_webhooks_task(
     steps_count: int = 0,
     rows_processed: int = 0,
     user_id: str = "",
+    exclude_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Deliver webhooks for a pipeline run asynchronously.
 
     Enqueues individual deliver_webhook tasks for each active webhook
     subscribed to this event type. Returns immediately — the actual
     HTTP calls happen in separate worker tasks. A fan-out enqueue
-    failure retries the enqueue only; already-enqueued deliveries are
-    unaffected and per-webhook outcomes are recorded by deliver_webhook.
+    failure retries with the already-enqueued ids excluded, so a retry
+    never double-enqueues; per-webhook outcomes are recorded by
+    deliver_webhook.
     """
     try:
         from backend.database import SessionLocal
@@ -531,16 +533,36 @@ def deliver_webhooks_task(
         }
 
         matched = 0
+        enqueued_ids: list[str] = []
+        already_done = set(exclude_ids or [])
         for wh in webhooks:
             if event_type in (wh.events or []):
                 matched += 1
+                if str(wh.id) in already_done:
+                    continue
                 deliver_webhook.apply_async(
                     args=[str(wh.id), payload],
                     queue="critical",
                 )
+                enqueued_ids.append(str(wh.id))
     except Exception as exc:
         logger.exception("Webhook delivery failed for run %s", run_id)
-        raise self.retry(exc=exc) from exc
+        # Retry only the unenqueued remainder (R-R-001): a bare retry would
+        # re-run the whole loop and double-enqueue deliveries that already
+        # went out. Pass the completed ids forward so the retry skips them.
+        raise self.retry(
+            exc=exc,
+            kwargs={
+                "run_id": run_id,
+                "status": status,
+                "pipeline_name": pipeline_name,
+                "duration_ms": duration_ms,
+                "steps_count": steps_count,
+                "rows_processed": rows_processed,
+                "user_id": user_id,
+                "exclude_ids": enqueued_ids,
+            },
+        ) from exc
     else:
         return {
             "run_id": run_id,

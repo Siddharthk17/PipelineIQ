@@ -180,6 +180,70 @@ def _is_nullable(value: object) -> bool:
         "true", "1", "yes", "y")
 
 
+def _has_nested_quantifier(pattern: str) -> bool:
+    """Detect catastrophic-backtracking shapes (R-D-003).
+
+    Flags a quantifier (``* + ? {m,n}``) applied to a group that itself
+    contains a quantifier, e.g. ``(a+)+``. These make ``re`` exponential
+    on adversarial input; contract patterns run per value on shared
+    workers, so reject them at validation time instead of burning CPU.
+    Conservative syntactic scan: escaped chars ignored, character classes
+    treated as opaque (no quantifiers inside ``[...]`` count).
+    """
+    in_class = False
+    i = 0
+    n = len(pattern)
+    while i < n:
+        ch = pattern[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "[":
+            in_class = True
+        elif ch == "]":
+            in_class = False
+        elif ch == "(" and not in_class:
+            # Find the matching close paren, tracking nesting and classes.
+            depth = 1
+            j = i + 1
+            inner_class = False
+            inner_has_quant = False
+            while j < n and depth > 0:
+                cj = pattern[j]
+                if cj == "\\":
+                    j += 2
+                    continue
+                if cj == "[":
+                    inner_class = True
+                elif cj == "]":
+                    inner_class = False
+                elif cj == "(" and not inner_class:
+                    depth += 1
+                elif cj == ")" and not inner_class:
+                    depth -= 1
+                    if depth == 0:
+                        break
+                elif not inner_class and cj in "*+?":
+                    inner_has_quant = True
+                elif not inner_class and cj == "{":
+                    k = pattern.find("}", j + 1)
+                    if k != -1 and re.fullmatch(
+                        r"\{\d+(,\d*)?\}", pattern[j:k + 1]
+                    ):
+                        inner_has_quant = True
+                j += 1
+            if depth == 0 and inner_has_quant:
+                k = j + 1
+                if k < n and pattern[k] in "*+?":
+                    return True
+                if k < n and pattern[k] == "{":
+                    m = re.match(r"\{\d+(,\d*)?\}", pattern[k:])
+                    if m:
+                        return True
+        i += 1
+    return False
+
+
 def _check_pattern(
     col_name: str, col: pa.ChunkedArray, pattern: object
 ) -> ContractViolation | None:
@@ -201,6 +265,18 @@ def _check_pattern(
             "and cannot be evaluated",
             expected=str(pattern),
             actual="invalid regex",
+        )
+    if _has_nested_quantifier(str(pattern)):
+        return ContractViolation(
+            column=col_name,
+            rule="invalid_regex",
+            severity="error",
+            message=(
+                f"Column '{col_name}' pattern is rejected: nested "
+                "quantifiers (e.g. (a+)+) cause catastrophic backtracking"
+            ),
+            expected=str(pattern),
+            actual="rejected nested quantifier",
         )
     bad: list[str] = []
     for v in col.to_pylist():

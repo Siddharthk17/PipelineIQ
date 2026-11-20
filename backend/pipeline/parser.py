@@ -1425,7 +1425,19 @@ class PipelineParser:
                                 message="Each aggregation must specify a non-empty string 'column'",
                             ))
                     func_name = agg.get("function", "")
-                    if func_name not in VALID_AGGREGATION_FUNCTIONS:
+                    if not isinstance(func_name, str):
+                        errors.append(
+                            ValidationError(
+                                step_name=step.name,
+                                field="aggregations.function",
+                                message=(
+                                    "Each aggregation 'function' must be a "
+                                    "single function name string "
+                                    f"(got {func_name!r}); use one entry "
+                                    "per function instead of a list"
+                                ),
+                            ))
+                    elif func_name not in VALID_AGGREGATION_FUNCTIONS:
                         errors.append(
                             ValidationError(
                                 step_name=step.name, field="aggregations.function", message=(

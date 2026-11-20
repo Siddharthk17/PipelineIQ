@@ -319,14 +319,32 @@ def execute_pipeline_task(self, run_id: str) -> dict[str, str]:
             exc,
             exc_info=True,
         )
-        safe_error = _sanitize_error_message(exc) or ""
-        _mark_failed(db, run_id, safe_error)
-        _publish_terminal_event(
-            run_id,
-            "pipeline_failed",
-            PipelineStatus.FAILED.value,
-            safe_error,
+        # R-R-004: a user cancel landing mid-run (e.g. inside healing/LLM)
+        # must not be clobbered into FAILED. Re-read the row: if the run
+        # is CANCELLED, the worker lost the race — keep the user's verdict.
+        db.expire_all()
+        cancelled = (
+            db.query(PipelineRun.status)
+            .filter(PipelineRun.id == run_id)
+            .scalar()
         )
+        if str(cancelled) == PipelineStatus.CANCELLED.value or (
+            hasattr(cancelled, "value")
+            and cancelled.value == PipelineStatus.CANCELLED.value
+        ):
+            logger.info(
+                "Run %s was cancelled during execution; keeping CANCELLED",
+                run_id,
+            )
+        else:
+            safe_error = _sanitize_error_message(exc) or ""
+            _mark_failed(db, run_id, safe_error)
+            _publish_terminal_event(
+                run_id,
+                "pipeline_failed",
+                PipelineStatus.FAILED.value,
+                safe_error,
+            )
         raise
     else:
         return {"run_id": run_id, "status": pipeline_run.status.value}
@@ -986,6 +1004,30 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     # a user-requested stop must not mark violations or block downstream).
     if not cancelled:
         check_and_enforce_contract(db, pipeline_run, summary)
+
+    # R-R-009: close the lost-cancel race. A cancel that committed after
+    # our last refresh would be overwritten by the commit below (a late
+    # finish clobbering an explicit user stop). Re-read the status under
+    # a row lock immediately before commit; a concurrent CANCELLED wins.
+    # SQLite ignores FOR UPDATE, so only take the lock on PostgreSQL
+    # (SQLite tests are single-writer and deterministic).
+    if (
+        not cancelled
+        and db.bind is not None
+        and db.bind.dialect.name == "postgresql"
+    ):
+        fresh_status = (
+            db.query(PipelineRun.status)
+            .filter(PipelineRun.id == pipeline_run.id)
+            .with_for_update()
+            .scalar()
+        )
+        fresh_value = getattr(fresh_status, "value", fresh_status)
+        if str(fresh_value) == PipelineStatus.CANCELLED.value:
+            cancelled = True
+            pipeline_run.status = PipelineStatus.CANCELLED
+            pipeline_run.completed_at = utcnow()
+            event_type = "pipeline_cancelled"
 
     try:
         from backend.repositories.catalog import register_run_assets

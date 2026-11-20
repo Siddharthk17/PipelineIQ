@@ -44,6 +44,7 @@ def check_schedules() -> dict:
     """Find due schedules and trigger pipeline execution for each."""
     lock_token = str(uuid.uuid4())
     lock_acquired = False
+    redis_down = False
     try:
         redis = get_cache_redis()
         lock_acquired = bool(
@@ -55,9 +56,16 @@ def check_schedules() -> dict:
             )
         )
     except Exception as exc:
-        logger.warning("Schedule lock unavailable; continuing unlocked: %s", exc)
+        # R-R-005: a Redis outage must not silently stop all schedules.
+        # The PG row-level lock below (SELECT ... FOR UPDATE SKIP LOCKED)
+        # already serializes overlapping beats, so proceed and let the
+        # database be the single-flight guard. Report honestly.
+        redis_down = True
+        logger.warning(
+            "Schedule lock unavailable; continuing with PG row-lock "
+            "single-flight: %s", exc)
 
-    if not lock_acquired:
+    if not lock_acquired and not redis_down:
         logger.info("Schedule check skipped; another worker holds the lock")
         return {"triggered": 0, "locked": True}
 

@@ -135,12 +135,34 @@ def _replay_dlq_sync(
     budget_sec: float = DLQ_REPLAY_BUDGET_SEC,
     idle_polls_before_done: int = DLQ_IDLE_POLLS,
 ) -> int:
-    """Blocking DLQ replay. Runs in a worker thread (M-063)."""
+    """Blocking DLQ replay. Runs in a worker thread (M-063).
+
+    Honest accounting (R-R-007): only messages the broker acknowledges
+    count as replayed. A failed flush raises instead of reporting a
+    phantom count, and consumed offsets are committed so a repeated
+    replay resumes instead of re-sending the same prefix.
+    """
+    import hashlib
+
     admin = get_admin_client()
     admin.ensure_topic(topic)
-    group = f"dlq-replay-{uuid_module.uuid4().hex[:8]}"
+    # Stable group per DLQ topic so offsets persist across replays:
+    # a repeated replay continues where the last one stopped instead
+    # of duplicating the whole prefix.
+    group = "dlq-replay-" + hashlib.sha256(
+        dlq_topic.encode("utf-8")).hexdigest()[:16]
     consumer = make_consumer(group, auto_offset_reset="earliest")
     producer = make_producer()
+    delivered = 0
+    delivery_errors: list = []
+
+    def _on_delivery(err, _msg):
+        nonlocal delivered
+        if err is None:
+            delivered += 1
+        else:
+            delivery_errors.append(err)
+
     try:
         consumer.subscribe([dlq_topic])
         replayed = 0
@@ -161,15 +183,28 @@ def _replay_dlq_sync(
             for msg in batch:
                 if msg.error():
                     continue
-                producer.produce(topic=topic, value=msg.value(), key=msg.key())
+                producer.produce(
+                    topic=topic, value=msg.value(), key=msg.key(),
+                    callback=_on_delivery,
+                )
                 replayed += 1
                 if replayed >= limit:
                     break
             producer.poll(0)
         try:
             producer.flush(timeout=10)
+        except Exception as exc:
+            raise RuntimeError(
+                f"DLQ replay flush failed after {delivered} delivered"
+            ) from exc
+        if delivery_errors:
+            raise RuntimeError(
+                f"DLQ replay lost {len(delivery_errors)} messages at produce time"
+            )
+        try:
+            consumer.commit()
         except Exception:
-            logger.exception("DLQ replay flush failed for %s", topic)
+            logger.warning("DLQ replay offset commit failed for %s", dlq_topic)
         return replayed
     finally:
         try:
@@ -222,7 +257,7 @@ async def pause_streaming(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db_dependency),
 ):
-    await _get_run_or_404(run_id, current_user.id, db)
+    await _get_run_or_404(run_id, current_user, db)
     ok, error = _call_transition("request_pause", run_id, current_user)
     if not ok:
         raise _map_transition_error(error, "pause")
@@ -235,7 +270,7 @@ async def resume_streaming(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db_dependency),
 ):
-    await _get_run_or_404(run_id, current_user.id, db)
+    await _get_run_or_404(run_id, current_user, db)
     ok, error = _call_transition("request_resume", run_id, current_user)
     if not ok:
         raise _map_transition_error(error, "resume")
@@ -248,7 +283,7 @@ async def stop_streaming(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db_dependency),
 ):
-    await _get_run_or_404(run_id, current_user.id, db)
+    await _get_run_or_404(run_id, current_user, db)
     ok, error = _call_transition("request_stop", run_id, current_user)
     if not ok:
         raise _map_transition_error(error, "stop")
@@ -261,7 +296,7 @@ async def restart_streaming(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_write_db_dependency),
 ):
-    await _get_run_or_404(run_id, current_user.id, db)
+    await _get_run_or_404(run_id, current_user, db)
     ok, error = _call_transition("request_restart", run_id, current_user)
     if not ok:
         raise _map_transition_error(error, "restart")
@@ -274,7 +309,7 @@ async def get_streaming_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_read_db_dependency),
 ):
-    run = await _get_run_or_404(run_id, current_user.id, db)
+    run = await _get_run_or_404(run_id, current_user, db)
     stats = db.query(StreamingStats).filter(StreamingStats.run_id == run_id).first()
     if not stats:
         return {"run_id": run_id, "status": run.status.value, "stats": None}
@@ -408,21 +443,26 @@ async def replay_dlq(
         )
     except TimeoutError as exc:
         raise HTTPException(503, f"DLQ replay timed out: {dlq_topic}") from exc
+    except RuntimeError as exc:
+        # R-R-007: never report a phantom count — a failed flush means the
+        # replay did not complete; the caller can retry (offsets committed
+        # so far make the retry resume instead of duplicating everything).
+        raise HTTPException(502, str(exc)) from exc
     return {"replayed": replayed, "from": dlq_topic, "to": topic}
 
 
-async def _get_run_or_404(run_id: str, user_id, db: Session) -> PipelineRun:
+async def _get_run_or_404(
+    run_id: str, current_user: User, db: Session
+) -> PipelineRun:
     from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
     validate_uuid_format(run_id)
-    run = (
-        db.query(PipelineRun)
-        .filter(
-            PipelineRun.id == as_uuid(run_id),
-            PipelineRun.user_id == user_id,
-        )
-        .first()
-    )
+    query = db.query(PipelineRun).filter(PipelineRun.id == as_uuid(run_id))
+    # R-R-006: admins manage any run; the daemon-side transitions already
+    # allow admins, so the route gate must too (was owner-only -> 404).
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter(PipelineRun.user_id == current_user.id)
+    run = query.first()
     if not run:
         raise HTTPException(404, f"Run not found: {run_id}")
     return run
