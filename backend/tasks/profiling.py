@@ -17,10 +17,7 @@ from backend.celery_app import celery_app
 from backend.config import settings
 from backend.database import SessionLocal
 from backend.models import FileProfile, UploadedFile
-from backend.profiling.analyzer import (
-    compute_completeness,
-    profile_dataframe,
-)
+from backend.profiling.analyzer import profile_dataframe
 from backend.services.storage_service import storage_service
 from backend.utils.uuid_utils import as_uuid
 
@@ -189,7 +186,11 @@ def profile_file(self, file_id: str) -> dict:
         was_sampled = bool(df.attrs.get("_pipelineiq_sampled"))
 
         profile = profile_dataframe(df)
-        completeness = compute_completeness(df)
+        # M-142: derive completeness from the profile's per-column
+        # null_counts instead of a second full isna pass over the frame.
+        # Exactly equal to compute_completeness(df) (covered by
+        # test_profile_single_pass.py).
+        completeness = _completeness_from_profile(profile, len(df))
 
         if was_sampled:
             for col_profile in profile.values():
@@ -288,6 +289,21 @@ def _load_file_from_disk(file_id: str) -> pd.DataFrame:
 
     finally:
         db.close()
+
+
+def _completeness_from_profile(profile: dict, row_count: int) -> float:
+    """Overall completeness derived from a single profile pass (M-142).
+
+    profile_dataframe() already counts nulls per column; reusing those
+    counts avoids a second full-frame isna pass. Exactly equivalent to
+    compute_completeness(df): sum of per-column null_count equals
+    df.isna().sum().sum(), and an empty frame/columns yields 100.0.
+    """
+    if row_count == 0 or not profile:
+        return 100.0
+    total_cells = row_count * len(profile)
+    null_cells = sum(col.get("null_count", 0) for col in profile.values())
+    return round(100.0 - (null_cells / total_cells * 100), 2)
 
 
 def _read_profile_dataframe(handle, extension: str, max_rows: int | None) -> pd.DataFrame:

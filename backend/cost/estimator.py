@@ -114,10 +114,11 @@ def estimate_pipeline_cost(
         estimated_rows = 10_000
 
     step_types_in_pipeline = list(
-        {_get_step_attr(s, "type", "load") for s in steps}
+        {_step_type_of(s) for s in steps}
     )
 
     historical: dict[str, float] = {}
+    historical_points: dict[str, int] = {}
     data_points_used = 0
 
     if step_types_in_pipeline:
@@ -138,7 +139,9 @@ def estimate_pipeline_cost(
                 result = db.execute(sql, {"step_type": step_type}).first()
                 if result and result.p50_ms is not None:
                     historical[step_type] = float(result.p50_ms)
-                    data_points_used += result.data_points or 0
+                    points = int(result.data_points or 0)
+                    historical_points[step_type] = points
+                    data_points_used += points
         except Exception as e:
             logger.warning("Could not load historical step data: %s", e)
 
@@ -151,7 +154,7 @@ def estimate_pipeline_cost(
         (
             i
             for i, s in enumerate(steps)
-            if _get_step_attr(s, "type") == "aggregate"
+            if _step_type_of(s) == "aggregate"
         ),
         -1,
     )
@@ -159,7 +162,7 @@ def estimate_pipeline_cost(
         (
             i
             for i, s in enumerate(steps)
-            if _get_step_attr(s, "type") == "filter"
+            if _step_type_of(s) == "filter"
         ),
         -1,
     )
@@ -167,21 +170,25 @@ def estimate_pipeline_cost(
         filter_after_aggregate = True
 
     for step in steps:
-        step_type = _get_step_attr(step, "type", "load")
+        step_type = _step_type_of(step)
         step_name = _get_step_attr(step, "name", "step")
         engine = _determine_engine(step_type)
-
-        if step_type in historical:
-            predicted_ms = int(historical[step_type] * (estimated_rows / 10_000))
-            confidence_for_step = min(0.9, data_points_used / 20)
-        else:
-            rate = MS_PER_1000_ROWS.get(step_type, 10.0)
-            predicted_ms = int(rate * (estimated_rows / 1_000))
-            confidence_for_step = 0.4
 
         row_in = peak_rows
         row_out = _estimate_output_rows(step, step_type, row_in)
         peak_rows = max(row_out, 1)
+
+        if step_type in historical:
+            # M-142: scale by this step's own row_in (not the pipeline
+            # input max) and use this type's history depth for
+            # confidence (not the global total across types).
+            predicted_ms = int(historical[step_type] * (row_in / 10_000))
+            confidence_for_step = min(
+                0.9, historical_points.get(step_type, 0) / 20)
+        else:
+            rate = MS_PER_1000_ROWS.get(step_type, 10.0)
+            predicted_ms = int(rate * (row_in / 1_000))
+            confidence_for_step = 0.4
 
         step_estimates.append(
             StepEstimate(
@@ -204,7 +211,7 @@ def estimate_pipeline_cost(
 
     num_cols = 10
     has_join = any(
-        _get_step_attr(s, "type") == "join" for s in steps
+        _step_type_of(s) == "join" for s in steps
     )
     multiplier = 3.0 if has_join else 1.5
     peak_memory_mb = (
@@ -278,6 +285,27 @@ def _generate_optimization_tip(
         )
 
     return "Pipeline structure looks efficient for this data size."
+
+
+def _step_type_of(step) -> str:
+    """Resolve a step's type name from StepConfig, dict, or enum (M-142).
+
+    Parsed steps expose ``step_type`` (a StepType enum), not ``type``;
+    reading ``type`` silently defaulted every step to "load", so all
+    estimates used the load rate/history. Dicts (raw YAML) still use
+    the "type" key.
+    """
+    step_type = getattr(step, "step_type", None)
+    if step_type is None and isinstance(step, dict):
+        step_type = step.get("type")
+    if step_type is None:
+        legacy = getattr(step, "type", None)
+        if isinstance(legacy, str) and legacy:
+            return legacy
+        return "load"
+    if hasattr(step_type, "value"):
+        return str(step_type.value)
+    return str(step_type)
 
 
 def _get_step_attr(step, attr: str, default=None):

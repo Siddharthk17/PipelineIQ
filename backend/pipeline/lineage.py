@@ -12,6 +12,7 @@ Node naming convention (consistent everywhere):
 """
 
 import logging
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -123,6 +124,12 @@ class LineageRecorder:
 
     def __init__(self) -> None:
         self.graph: nx.DiGraph = nx.DiGraph()
+        # M-084: cached topological order. Every mutation goes through
+        # _add_node/_add_edge, which bump _graph_version and drop the
+        # cache — queries on an unchanged graph reuse it instead of
+        # re-sorting (M-140: keys are consistent; this changes cost only).
+        self._graph_version: int = 0
+        self._topo_cache: list[str] | None = None
 
     def record_load(
         self,
@@ -154,7 +161,7 @@ class LineageRecorder:
                 "step_type": "load",
             },
         )
-        self.graph.add_edge(file_node, step_node)
+        self._add_edge(file_node, step_node)
 
         for col in columns:
             col_node = _col_node_id(step_name, col)
@@ -168,7 +175,7 @@ class LineageRecorder:
                     "data_type": dtypes.get(col, "unknown"),
                 },
             )
-            self.graph.add_edge(step_node, col_node)
+            self._add_edge(step_node, col_node)
 
         logger.debug(
             "Recorded load: file=%s, step=%s, columns=%d",
@@ -208,8 +215,8 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(input_col, step_node)
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(input_col, step_node)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded passthrough: step=%s, type=%s, columns=%d",
@@ -253,13 +260,13 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(input_col, step_node)
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(input_col, step_node)
+            self._add_edge(step_node, output_col)
 
         # Record dropped columns as edges to step only (no output)
         for col in dropped_columns:
             input_col = _col_node_id(input_step, col)
-            self.graph.add_edge(input_col, step_node)
+            self._add_edge(input_col, step_node)
 
         logger.debug(
             "Recorded projection: step=%s, kept=%d, dropped=%d",
@@ -304,8 +311,8 @@ class LineageRecorder:
                     "column_name": new_name,
                 },
             )
-            self.graph.add_edge(input_col, step_node)
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(input_col, step_node)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded rename: step=%s, renamed=%d, total=%d",
@@ -355,7 +362,7 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded join: step=%s, how=%s, key=%s, output_cols=%d",
@@ -407,8 +414,8 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(input_col, step_node)
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(input_col, step_node)
+            self._add_edge(step_node, output_col)
             output_to_input[col] = col
 
         # Aggregated columns: create output nodes and track input mapping
@@ -416,7 +423,7 @@ class LineageRecorder:
             input_col_name = agg["column"]
             func_name = agg["function"]
             input_col = _col_node_id(input_step, input_col_name)
-            self.graph.add_edge(input_col, step_node)
+            self._add_edge(input_col, step_node)
             # Output column name is typically {column}_{function}
             output_col_name = f"{input_col_name}_{func_name}"
             output_to_input[output_col_name] = input_col_name
@@ -434,7 +441,7 @@ class LineageRecorder:
                     "source_column": output_to_input.get(col, col),
                 },
             )
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded aggregate: step=%s, group_by=%d, aggs=%d, output=%d",
@@ -480,9 +487,9 @@ class LineageRecorder:
 
         for col in columns:
             input_col = _col_node_id(input_step, col)
-            self.graph.add_edge(input_col, step_node)
+            self._add_edge(input_col, step_node)
 
-        self.graph.add_edge(step_node, output_file)
+        self._add_edge(step_node, output_file)
 
         logger.debug(
             "Recorded save: step=%s, filename=%s, columns=%d",
@@ -516,13 +523,13 @@ class LineageRecorder:
         visited: set[str] = set()
         visited.add(target_node)
 
-        # BFS: queue contains nodes to explore
-        queue: list[str] = [target_node]
+        # BFS: deque (was list.pop(0), O(n^2)) over cached topo order (M-084).
+        queue: deque[str] = deque([target_node])
         step_nodes_seen: list[str] = []
         source_col_nodes: list[str] = []
 
         while queue:
-            node = queue.pop(0)
+            node = queue.popleft()
             attrs = self.graph.nodes[node]
             node_type = attrs.get("node_type", "")
 
@@ -543,14 +550,8 @@ class LineageRecorder:
                     visited.add(pred)
                     queue.append(pred)
 
-        # Build transformation chain in topological order
-        try:
-            topo_order = list(nx.topological_sort(self.graph))
-        except nx.NetworkXUnfeasible:
-            logger.warning(
-                "Lineage graph contains cycles — ancestry trace may be incomplete"
-            )
-            topo_order = list(self.graph.nodes())
+        # Build transformation chain in topological order (cached, M-084).
+        topo_order = self._topological_order()
         topo_index = {node: idx for idx, node in enumerate(topo_order)}
         step_nodes_seen.sort(key=lambda n: topo_index.get(n, 0))
 
@@ -656,12 +657,7 @@ class LineageRecorder:
         if not self.graph.nodes:
             return []
 
-        try:
-            topo_order = list(nx.topological_sort(self.graph))
-        except nx.NetworkXUnfeasible:
-            logger.warning(
-                "Lineage graph contains cycles — layout may be suboptimal")
-            topo_order = list(self.graph.nodes())
+        topo_order = self._topological_order()
         layers = self._assign_layers(topo_order)
         return self._position_nodes(layers)
 
@@ -756,7 +752,7 @@ class LineageRecorder:
 
         for col in [index_col, columns_col, values_col]:
             input_col = _col_node_id(input_step, col)
-            self.graph.add_edge(input_col, step_node)
+            self._add_edge(input_col, step_node)
 
         for col in output_columns:
             output_col = _col_node_id(step_name, col)
@@ -769,7 +765,7 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded pivot: step=%s, index=%s, columns_to=%s, values=%s, output_cols=%d",
@@ -802,7 +798,7 @@ class LineageRecorder:
 
         for col in id_columns + value_columns:
             input_col = _col_node_id(input_step, col)
-            self.graph.add_edge(input_col, step_node)
+            self._add_edge(input_col, step_node)
 
         for col in output_columns:
             output_col = _col_node_id(step_name, col)
@@ -815,7 +811,7 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded unpivot: step=%s, id_cols=%d, value_cols=%d, output_cols=%d",
@@ -856,8 +852,8 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(input_col, step_node)
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(input_col, step_node)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded deduplicate: step=%s, columns=%d, subset=%s",
@@ -898,8 +894,8 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(input_col, step_node)
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(input_col, step_node)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded fill_nulls: step=%s, columns=%d, method=%s",
@@ -938,8 +934,8 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(input_col, step_node)
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(input_col, step_node)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded sample: step=%s, columns=%d",
@@ -973,7 +969,7 @@ class LineageRecorder:
 
         for col in input_columns:
             input_col = _col_node_id(input_step, col)
-            self.graph.add_edge(input_col, step_node)
+            self._add_edge(input_col, step_node)
 
         for col in output_columns:
             output_col = _col_node_id(step_name, col)
@@ -986,7 +982,7 @@ class LineageRecorder:
                     "column_name": col,
                 },
             )
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded SQL: step=%s, input_cols=%d, output_cols=%d",
@@ -1024,7 +1020,7 @@ class LineageRecorder:
 
         for col in input_columns:
             input_col = _col_node_id(input_step, col)
-            self.graph.add_edge(input_col, step_node)
+            self._add_edge(input_col, step_node)
 
         for col in columns:
             output_col = _col_node_id(step_name, col)
@@ -1039,7 +1035,7 @@ class LineageRecorder:
                     "is_wasm_output": is_new,
                 },
             )
-            self.graph.add_edge(step_node, output_col)
+            self._add_edge(step_node, output_col)
 
         logger.debug(
             "Recorded wasm_compute: step=%s, function=%s, input_cols=%d, output=%s",
@@ -1084,6 +1080,29 @@ class LineageRecorder:
     def _add_node(self, node_id: str, attrs: dict[str, Any]) -> None:
         """Add a node to the graph with the given attributes."""
         self.graph.add_node(node_id, **attrs)
+        self._invalidate_topo_cache()
+
+    def _add_edge(self, source: str, target: str, **attrs: Any) -> None:
+        """Add an edge, invalidating the cached topological order."""
+        self.graph.add_edge(source, target, **attrs)
+        self._invalidate_topo_cache()
+
+    def _invalidate_topo_cache(self) -> None:
+        """Drop the cached topological order after any mutation."""
+        self._graph_version += 1
+        self._topo_cache = None
+
+    def _topological_order(self) -> list[str]:
+        """Topological node order, cached until the next mutation (M-084)."""
+        if self._topo_cache is None:
+            try:
+                self._topo_cache = list(nx.topological_sort(self.graph))
+            except nx.NetworkXUnfeasible:
+                logger.warning(
+                    "Lineage graph contains cycles — ancestry trace may be incomplete"
+                )
+                self._topo_cache = list(self.graph.nodes())
+        return self._topo_cache
 
     def _connect_join_side(
         self,
@@ -1096,4 +1115,4 @@ class LineageRecorder:
         for col in columns:
             input_col = _col_node_id(input_step, col)
             is_key = col == join_key
-            self.graph.add_edge(input_col, step_node, is_join_key=is_key)
+            self._add_edge(input_col, step_node, is_join_key=is_key)
