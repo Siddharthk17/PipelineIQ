@@ -300,15 +300,20 @@ class PipelineRunner:
             raise
 
         contract_violations: list = []
-        try:
-            df = result.output_table.to_pandas()
-            contract_violations = validate_step_contract(
-                getattr(step, "contract", None),
-                df,
-                step.name,
-            )
-        except Exception as exc:
-            logger.warning("Contract validation error for step '%s': %s", step.name, exc)
+        contract_cfg = getattr(step, "contract", None)
+        # M-060: skip the full Arrow→pandas conversion when the step has no
+        # contract — validate_step_contract() returns [] for None without
+        # touching the frame.
+        if contract_cfg:
+            try:
+                df = result.output_table.to_pandas()
+                contract_violations = validate_step_contract(
+                    contract_cfg,
+                    df,
+                    step.name,
+                )
+            except Exception as exc:
+                logger.warning("Contract validation error for step '%s': %s", step.name, exc)
 
         if contract_violations:
             logger.warning(
