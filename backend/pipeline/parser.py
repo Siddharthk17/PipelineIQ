@@ -446,6 +446,16 @@ class PipelineParser:
         self._check_pipeline_name(config, errors)
         self._check_has_steps(config, errors)
         self._check_step_count_limit(config, errors)
+        if len(config.steps) > settings.MAX_PIPELINE_STEPS:
+            # M-015: the step-count cap fires before the O(n^2) reference
+            # walk below. Report the cheap errors and stop — validating
+            # hundreds of steps that will be rejected anyway wastes CPU
+            # and can only add noise to the response.
+            return ValidationResult(
+                is_valid=False,
+                errors=errors,
+                warnings=warnings,
+            )
         self._check_duplicate_step_names(config, errors)
         self._check_step_name_format(config, errors)
         self._check_step_types(config, errors)
@@ -1088,119 +1098,170 @@ class PipelineParser:
                             field="sample",
                             message="Sample step must specify only one of 'n' or 'fraction'",
                         ))
+                if (step.n is not None
+                        and (not isinstance(step.n, int)
+                             or isinstance(step.n, bool) or step.n <= 0)):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="sample",
+                            message="Sample step 'n' must be a positive integer",
+                        ))
+                if step.fraction is not None and (
+                        not isinstance(step.fraction, (int, float))
+                        or isinstance(step.fraction, bool)
+                        or not 0 < step.fraction <= 1):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="sample",
+                            message="Sample step 'fraction' must be a number in (0, 1]",
+                        ))
+                if (step.random_state is not None
+                        and not isinstance(step.random_state, int)):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="random_state",
+                            message="Sample step 'random_state' must be an integer",
+                        ))
+                if (step.stratify_by is not None
+                        and (not isinstance(step.stratify_by, str)
+                             or not step.stratify_by.strip())):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="stratify_by",
+                            message="Sample step 'stratify_by' must be a non-empty string",
+                        ))
 
-            if isinstance(step, SqlStepConfig) and not step.query.strip():
-                errors.append(
-                    ValidationError(
-                        step_name=step_name,
-                        field="query",
-                        message="SQL step must provide a non-empty query",
-                    )
-                )
+            if isinstance(step, SqlStepConfig):
+                self._must_be_nonempty_str(
+                    errors, step_name, step.query, "query",
+                    "SQL step must provide a non-empty query")
 
             if isinstance(step, WasmComputeStepConfig):
-                if not step.wasm_file_id or not step.wasm_file_id.strip():
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="wasm_file_id",
-                            message="wasm_compute step must specify a non-empty wasm_file_id",
-                        )
-                    )
-                if not step.function or not step.function.strip():
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="function",
-                            message="wasm_compute step must specify a non-empty function name",
-                        )
-                    )
-                if not step.input_columns:
+                self._must_be_nonempty_str(
+                    errors, step_name, step.wasm_file_id, "wasm_file_id",
+                    "wasm_compute step must specify a non-empty wasm_file_id")
+                self._must_be_nonempty_str(
+                    errors, step_name, step.function, "function",
+                    "wasm_compute step must specify a non-empty function name")
+                if (not isinstance(step.input_columns, list)
+                        or not step.input_columns or not all(
+                            isinstance(c, str) and c.strip()
+                            for c in step.input_columns)):
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="input_columns",
                             message="wasm_compute step must specify at least one input_column",
-                        )
-                    )
-                if not step.output_column or not step.output_column.strip():
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="output_column",
-                            message="wasm_compute step must specify a non-empty output_column",
-                        )
-                    )
+                        ))
+                self._must_be_nonempty_str(
+                    errors, step_name, step.output_column, "output_column",
+                    "wasm_compute step must specify a non-empty output_column")
 
-            if isinstance(step, TransformStepConfig) and (
-                not step.expression or not step.expression.strip()
-            ):
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="expression",
-                            message="Transform step must specify a non-empty expression",
-                        )
-                    )
+            if isinstance(step, TransformStepConfig):
+                self._must_be_nonempty_str(
+                    errors, step_name, step.expression, "expression",
+                    "Transform step must specify a non-empty expression")
 
-            if isinstance(step, StreamConsumeStepConfig) and (
-                not step.topic or not step.topic.strip()
-            ):
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="topic",
-                            message="Stream consume step must specify a non-empty topic",
-                        )
-                    )
+            if isinstance(step, StreamConsumeStepConfig):
+                self._must_be_nonempty_str(
+                    errors, step_name, step.topic, "topic",
+                    "Stream consume step must specify a non-empty topic")
+                for int_field in ("batch_size", "batch_timeout_ms"):
+                    int_value = getattr(step, int_field, None)
+                    if (not isinstance(int_value, int)
+                            or isinstance(int_value, bool)
+                            or int_value <= 0):
+                        errors.append(
+                            ValidationError(
+                                step_name=step_name,
+                                field=int_field,
+                                message=(
+                                    f"Stream consume step '{int_field}' "
+                                    f"must be a positive integer"
+                                ),
+                            ))
 
-            if isinstance(step, StreamPublishStepConfig) and (
-                not step.topic or not step.topic.strip()
-            ):
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="topic",
-                            message="Stream publish step must specify a non-empty topic",
-                        )
-                    )
+            if isinstance(step, StreamPublishStepConfig):
+                self._must_be_nonempty_str(
+                    errors, step_name, step.topic, "topic",
+                    "Stream publish step must specify a non-empty topic")
 
     def _check_step_references(
         self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check 5: All input/left/right references point to earlier steps."""
-        seen_steps: list[str] = []
+        seen_steps: set[str] = set()
+        seen_ordered: list[str] = []
         for step in config.steps:
             self._validate_step_reference(step, seen_steps, errors)
-            seen_steps.append(step.name)
+            if isinstance(step.name, str):
+                seen_steps.add(step.name)
+                seen_ordered.append(step.name)
 
     def _validate_step_reference(
         self,
         step: StepConfig,
-        available_steps: list[str],
+        available_steps: set[str],
         errors: list[ValidationError],
     ) -> None:
         """Validate all reference fields on a single step config."""
         refs_to_check: list[tuple] = []
 
         if isinstance(step, JoinStepConfig):
-            refs_to_check.append(("left", step.left))
-            refs_to_check.append(("right", step.right))
+            # M-113: non-string join operands are a 400, not a crash.
+            # (Empty strings are already reported by
+            # _check_required_step_fields, so only flag wrong types here.)
+            for field_name in ("left", "right"):
+                ref_value = getattr(step, field_name, "")
+                if not isinstance(ref_value, str):
+                    errors.append(
+                        ValidationError(
+                            step_name=step.name,
+                            field=field_name,
+                            message=(
+                                f"Join step '{field_name}' must be a string, "
+                                f"got {type(ref_value).__name__}"
+                            ),
+                        )
+                    )
+                elif ref_value.strip():
+                    refs_to_check.append((field_name, ref_value))
         else:
             input_ref = getattr(step, "input", None)
-            if isinstance(input_ref, str):
+            if input_ref is None:
+                return
+            if not isinstance(input_ref, str):
+                errors.append(
+                    ValidationError(
+                        step_name=step.name,
+                        field="input",
+                        message=(
+                            "Step input reference must be a string, got "
+                            f"{type(input_ref).__name__}"
+                        ),
+                    )
+                )
+            elif input_ref.strip():
                 refs_to_check.append(("input", input_ref))
 
         for field_name, ref_value in refs_to_check:
-            if ref_value and ref_value not in available_steps:
-                suggestion = find_closest_column(ref_value, available_steps)
+            # M-015: set membership is O(1); the old list scan made this
+            # whole check O(n^2) in the step count.
+            if ref_value not in available_steps:
+                suggestion = find_closest_column(
+                    ref_value, sorted(available_steps))
                 errors.append(
                     ValidationError(
                         step_name=step.name,
                         field=field_name,
                         message=(
                             f"References '{ref_value}' which does not exist "
-                            f"or comes after this step. Available: {available_steps}"
+                            f"or comes after this step. Available: "
+                            f"{sorted(available_steps)}"
                         ),
                         suggestion=suggestion,
                     )
