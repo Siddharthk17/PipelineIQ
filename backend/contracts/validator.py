@@ -176,9 +176,8 @@ def _is_nullable(value: object) -> bool:
     """
     if value is True:
         return True
-    if isinstance(value, str) and value.strip().lower() in ("true", "1", "yes", "y"):
-        return True
-    return False
+    return isinstance(value, str) and value.strip().lower() in (
+        "true", "1", "yes", "y")
 
 
 def _check_pattern(
