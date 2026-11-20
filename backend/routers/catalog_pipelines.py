@@ -99,16 +99,40 @@ def list_catalog_pipelines(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_read_db),
 ):
-    latest_runs_sql = text(
-        """
-        SELECT DISTINCT ON (name)
-            id, name, status, created_at, yaml_config, user_id
-        FROM pipeline_runs
-        WHERE user_id = :user_id
-        ORDER BY name, created_at DESC
-        """
-    )
-    rows = db.execute(latest_runs_sql, {"user_id": str(current_user.id)}).fetchall()
+    # M-090: DISTINCT ON is PostgreSQL-only and 500s on SQLite (dev/test).
+    # Latest-run-per-name via a portable GROUP BY + join instead.
+    # Raw SQL binds UUIDs as hex (no dashes): SQLite stores them that way
+    # and Postgres accepts undashed hex, while the dashed str() form
+    # matches on neither.
+    raw_id = current_user.id
+    user_key = raw_id.hex if hasattr(raw_id, "hex") else str(raw_id)
+    if db.get_bind().dialect.name == "postgresql":
+        latest_runs_sql = text(
+            """
+            SELECT DISTINCT ON (name)
+                id, name, status, created_at, yaml_config, user_id
+            FROM pipeline_runs
+            WHERE user_id = :user_id
+            ORDER BY name, created_at DESC
+            """
+        )
+        rows = db.execute(latest_runs_sql, {"user_id": user_key}).fetchall()
+    else:
+        latest_runs_sql = text(
+            """
+            SELECT pr.id, pr.name, pr.status, pr.created_at, pr.yaml_config, pr.user_id
+            FROM pipeline_runs pr
+            INNER JOIN (
+                SELECT name, MAX(created_at) AS max_created
+                FROM pipeline_runs
+                WHERE user_id = :user_id
+                GROUP BY name
+            ) latest
+                ON latest.name = pr.name AND latest.max_created = pr.created_at
+            WHERE pr.user_id = :user_id
+            """
+        )
+        rows = db.execute(latest_runs_sql, {"user_id": user_key}).fetchall()
 
     if q:
         q_lower = q.lower()
@@ -148,7 +172,11 @@ def list_catalog_pipelines(
                 "pipeline_name": run.name,
                 "last_run_id": str(run.id),
                 "last_run_status": run.status,
-                "last_run_at": run.created_at.isoformat(),
+                "last_run_at": (
+                    run.created_at.isoformat()
+                    if hasattr(run.created_at, "isoformat")
+                    else str(run.created_at)
+                ),
                 "description": description,
                 "schedule": (
                     {
