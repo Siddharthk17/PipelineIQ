@@ -211,7 +211,20 @@ async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: Req
       detail,
     );
   }
-  return res.json() as Promise<T>;
+  // M-184: 204/empty bodies have no JSON — res.json() throws
+  // "Unexpected end of JSON input" and masks delete/disconnect success.
+  if (res.status === 204) return undefined as T;
+  const okText = await res.text();
+  if (!okText) return undefined as T;
+  try {
+    return JSON.parse(okText) as T;
+  } catch {
+    throw new ApiError(
+      res.status,
+      res.statusText || "Request failed",
+      okText,
+    );
+  }
 }
 
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
