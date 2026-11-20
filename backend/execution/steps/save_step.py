@@ -49,6 +49,9 @@ def execute_save_step(
 ) -> SaveResult:
     """Write an Arrow Table to MinIO and return a presigned download URL.
 
+    Formula cells are neutralised before serializing so outputs cannot
+    inject spreadsheet code when opened in Excel/Sheets (M-075).
+
     Args:
         table:   The Arrow Table containing the pipeline output data.
         step:    The SaveStep model instance (or dict) with filename config.
@@ -67,6 +70,8 @@ def execute_save_step(
         logger.warning(
             "Empty run_id for save step '%s', using generated artifact id: %s",
             getattr(step, "name", "?"), run_id)
+
+    table = _neutralize_formula_cells(table)
 
     content, content_type = _serialize(table, ext)
 
@@ -253,3 +258,42 @@ def _get_minio_client():
                 logger.warning("Failed to initialize S3 bucket: %s", exc)
 
     return client
+
+
+# Spreadsheet-formula prefixes neutralised per OWASP CSV-injection guidance
+# (M-075). Mirrors backend/api/files.py::_FORMULA_PREFIXES so SAVE outputs
+# cannot inject formulas when opened in Excel/Sheets.
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralize_value(value: object) -> object:
+    """Prefix spreadsheet-formula strings so outputs cannot inject code (M-075)."""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def _neutralize_formula_cells(table: pa.Table) -> pa.Table:
+    """Neutralise formula cells in all string columns of an Arrow table.
+
+    Mirrors the preview neutralisation in backend/api/files.py at the
+    Arrow level so CSV, JSON and Parquet SAVE outputs are all covered:
+    a cell whose text starts with ``= + - @`` or tab/CR gains a leading
+    single quote (OWASP CSV-injection guidance). Non-string columns pass
+    through untouched.
+    """
+    columns: list = []
+    changed = False
+    for schema_field in table.schema:
+        column = table.column(schema_field.name)
+        if pa.types.is_string(column.type) or pa.types.is_large_string(column.type):
+            neutralised = [_neutralize_value(v) for v in column.to_pylist()]
+            columns.append(pa.array(neutralised, type=column.type))
+            changed = True
+        else:
+            columns.append(column)
+    if not changed:
+        return table
+    return pa.table(columns, names=table.schema.names)
+
+
