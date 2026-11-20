@@ -118,15 +118,23 @@ def test_sse_stream_owner_receives_events(sse_client, test_db, monkeypatch):
     token = _token_for(owner)
 
     async def fake_live_event_generator(
-            run_id: str, request, initial_status: str):
+            run_id: str, request, initial_status: str, user_key: str = ""):
         _ = request
         _ = initial_status
+        _ = user_key
         yield f"event: progress\ndata: {orjson.dumps({'run_id': run_id}).decode('utf-8')}\n\n"
+        if user_key:
+            await sse_module._release_stream_slot(user_key)
+
+    async def _no_preflight(run_id: str) -> None:
+        _ = run_id
 
     monkeypatch.setattr(
         sse_module,
         "_live_event_generator",
         fake_live_event_generator)
+    monkeypatch.setattr(
+        sse_module, "_require_redis_available", _no_preflight)
     # M-068: auth via Authorization header (cookies also work); ?token=
     # query auth was removed.
     response = sse_client.get(
@@ -204,6 +212,9 @@ class _FakeRedisClient:
     def pubsub(self):
         return self._pubsub
 
+    async def ping(self):
+        return True
+
     async def aclose(self):
         self.closed = True
 
@@ -217,19 +228,37 @@ class _FakeCacheClient:
         _ = key
         return self.payload
 
+    async def ping(self):
+        return True
+
     async def aclose(self):
         self.closed = True
 
 
+@pytest.fixture()
+def _clean_sse_state():
+    """Reset SSE caps + circuit between tests (isolation)."""
+    sse_module._ACTIVE_STREAMS.clear()
+    sse_module._ACTIVE_STREAMS_TOTAL = 0
+    sse_module._SSE_CIRCUIT["failures"] = 0
+    sse_module._SSE_CIRCUIT["open_until"] = 0.0
+    yield
+    sse_module._ACTIVE_STREAMS.clear()
+    sse_module._ACTIVE_STREAMS_TOTAL = 0
+    sse_module._SSE_CIRCUIT["failures"] = 0
+    sse_module._SSE_CIRCUIT["open_until"] = 0.0
+
+
 @pytest.mark.asyncio
 async def test_live_generator_emits_cached_terminal_and_stream_end(
-        monkeypatch):
+        monkeypatch, _clean_sse_state):
+    from backend.utils.sse_security import sign_sse_payload
     payload = orjson.dumps(
-        {
+        sign_sse_payload({
             "run_id": "r-1",
             "event_type": "pipeline_completed",
             "status": "COMPLETED",
-        }
+        })
     )
     fake_pubsub = _FakePubSub(messages=[])
     fake_pubsub_client = _FakeRedisClient(fake_pubsub)
@@ -257,7 +286,8 @@ async def test_live_generator_emits_cached_terminal_and_stream_end(
 
 
 @pytest.mark.asyncio
-async def test_live_generator_emits_heartbeat_when_idle(monkeypatch):
+async def test_live_generator_emits_heartbeat_when_idle(
+        monkeypatch, _clean_sse_state):
     fake_pubsub = _FakePubSub(messages=[])
     fake_pubsub_client = _FakeRedisClient(fake_pubsub)
     fake_cache = _FakeCacheClient(None)
@@ -341,3 +371,140 @@ def test_terminal_publish_caches_latest_terminal_status(monkeypatch):
     parsed = orjson.loads(payload_arg)
     assert key_arg == "pipeline_progress:last:run-term"
     assert parsed["status"] == "COMPLETED"
+
+
+# --- Wave 2 SSE remediation (M-156, M-106, M-170, M-171) ---
+
+
+def test_unsigned_payload_rejected_by_default(_clean_sse_state):
+    """M-156: no fail-open in test env — unsigned payloads rejected."""
+    from backend.utils.sse_security import verify_sse_payload
+    assert verify_sse_payload({"run_id": "x"}) is False
+
+
+def test_unsigned_opt_in_flag(monkeypatch, _clean_sse_state):
+    """M-156: explicit opt-in allows unsigned, never in production."""
+    from backend.config import settings
+    from backend.utils import sse_security
+    monkeypatch.setenv("PIPELINEIQ_ALLOW_UNSIGNED_SSE", "true")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
+    assert sse_security.verify_sse_payload({"run_id": "x"}) is True
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    assert sse_security.verify_sse_payload({"run_id": "x"}) is False
+    monkeypatch.setenv("PIPELINEIQ_ALLOW_UNSIGNED_SSE", "false")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
+    assert sse_security.verify_sse_payload({"run_id": "x"}) is False
+
+
+@pytest.mark.asyncio
+async def test_unsigned_cache_payload_ignored(
+        monkeypatch, _clean_sse_state):
+    """M-156: unsigned cached payloads are not served to streams."""
+    unsigned = orjson.dumps({"run_id": "r-u", "status": "COMPLETED"})
+    fake_cache = _FakeCacheClient(unsigned)
+    monkeypatch.setattr(
+        sse_module, "get_cache_redis_async", lambda: fake_cache)
+    assert await sse_module._get_cached_event(fake_cache, "r-u") is None
+
+
+@pytest.mark.asyncio
+async def test_per_user_stream_cap_enforced(_clean_sse_state):
+    """M-106: the (cap+1)-th concurrent stream for a user gets 429."""
+    from fastapi import HTTPException
+    for _ in range(sse_module.SSE_MAX_STREAMS_PER_USER):
+        await sse_module._acquire_stream_slot("user-cap")
+    with pytest.raises(HTTPException) as exc_info:
+        await sse_module._acquire_stream_slot("user-cap")
+    assert exc_info.value.status_code == 429
+    await sse_module._release_stream_slot("user-cap")
+    # Slot freed — acquire succeeds again.
+    await sse_module._acquire_stream_slot("user-cap")
+    await sse_module._release_stream_slot("user-cap")
+
+
+@pytest.mark.asyncio
+async def test_backpressure_coalesces_bursts(
+        monkeypatch, _clean_sse_state):
+    """M-106: bursts of progress events collapse to latest; terminal kept."""
+    from backend.utils.sse_security import sign_sse_payload
+
+    def _msg(status, event_type="progress"):
+        return {"data": orjson.dumps(
+            sign_sse_payload(
+                {"run_id": "r-b", "event_type": event_type,
+                 "status": status}))}
+
+    burst = [_msg("RUNNING") for _ in range(5)] + [
+        _msg("COMPLETED", "pipeline_completed")]
+    fake_pubsub = _FakePubSub(messages=list(burst))
+    fake_pubsub_client = _FakeRedisClient(fake_pubsub)
+    fake_cache = _FakeCacheClient(None)
+    monkeypatch.setattr(
+        sse_module, "get_pubsub_redis_async", lambda: fake_pubsub_client)
+    monkeypatch.setattr(
+        sse_module, "get_cache_redis_async", lambda: fake_cache)
+
+    request = _FakeRequest([False] * 30)
+    events = [
+        item async for item in
+        sse_module._live_event_generator("r-b", request, "RUNNING")]
+    # Initial status + coalesced progress + terminal + stream_end.
+    assert any("pipeline_status" in e for e in events)
+    assert any("pipeline_completed" in e for e in events)
+    assert events[-1].startswith("event: stream_end")
+    assert len(events) <= 5
+
+
+@pytest.mark.asyncio
+async def test_redis_outage_closes_stream_bounded(
+        monkeypatch, _clean_sse_state):
+    """M-171: sustained Redis failures end the stream (no retry storm)."""
+    import redis.exceptions as redis_exc
+
+    class _BoomPubSub(_FakePubSub):
+        async def get_message(self, ignore_subscribe_messages=True,
+                              timeout=1.0):
+            raise redis_exc.ConnectionError("down")
+
+    async def _boom_subscribe(channel: str):
+        return None
+
+    boom = _BoomPubSub(messages=[])
+    boom.subscribe = _boom_subscribe  # type: ignore[method-assign]
+    fake_client = _FakeRedisClient(boom)
+    fake_cache = _FakeCacheClient(None)
+    monkeypatch.setattr(
+        sse_module, "get_pubsub_redis_async", lambda: fake_client)
+    monkeypatch.setattr(
+        sse_module, "get_cache_redis_async", lambda: fake_cache)
+
+    request = _FakeRequest([False] * 30)
+    events = [
+        item async for item in
+        sse_module._live_event_generator("r-c", request, "RUNNING")]
+    # Only the initial status event, then a bounded degraded close.
+    assert len(events) == 1
+    assert boom.unsubscribed is True
+
+
+@pytest.mark.asyncio
+async def test_require_redis_down_returns_503(
+        monkeypatch, _clean_sse_state):
+    """M-170: pre-flight failure raises honest 503, not a dead 200."""
+    import redis.exceptions as redis_exc
+    from fastapi import HTTPException
+
+    class _DownClient:
+        async def ping(self):
+            raise redis_exc.ConnectionError("cache down")
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(
+        sse_module, "get_pubsub_redis_async", lambda: _DownClient())
+    monkeypatch.setattr(
+        sse_module, "get_cache_redis_async", lambda: _DownClient())
+    with pytest.raises(HTTPException) as exc_info:
+        await sse_module._require_redis_available("r-503")
+    assert exc_info.value.status_code == 503
