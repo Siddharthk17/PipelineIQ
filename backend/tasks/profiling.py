@@ -27,7 +27,6 @@ SUPPORTED_FORMATS = {
     ".csv",
     ".json",
     ".parquet",
-    ".xlsx",
 }
 
 
@@ -185,8 +184,6 @@ def _read_profile_dataframe(handle, extension: str, max_rows: int | None) -> pd.
             if rows >= max_rows:
                 break
         return pa.concat_tables(tables).to_pandas() if tables else pd.DataFrame()
-    if extension == ".xlsx":
-        return pd.read_excel(handle, engine="openpyxl", nrows=max_rows)
     raise ValueError(f"Unsupported file format: {extension}")
 
 

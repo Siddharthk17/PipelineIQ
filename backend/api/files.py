@@ -11,7 +11,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Any, BinaryIO, cast
+from typing import Any, BinaryIO, NoReturn, cast
 
 import orjson
 import pandas as pd
@@ -130,6 +130,12 @@ def _enforce_declared_size(request: Request, *, slack: int = 0) -> None:
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
         )
+
+
+def _delete_stored_quietly(stored_path: str) -> None:
+    """Best-effort removal of a stored object (never masks the real error)."""
+    with contextlib.suppress(Exception):
+        storage_service.delete(stored_path)
 
 
 def _pending_upload_key(file_id: str) -> str:
@@ -398,8 +404,7 @@ async def upload_file(
         )
         written = storage_service.get_size(stored_path)
     except _UploadTooLargeError:
-        with contextlib.suppress(Exception):
-            storage_service.delete(stored_path)
+        _delete_stored_quietly(stored_path)
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
@@ -642,6 +647,17 @@ def _decode_csv_bytes(raw: bytes) -> tuple[str, str]:
     raise UnicodeDecodeError("csv", raw, 0, 1, "no suitable text encoding")
 
 
+def _reject_unsupported_xlsx(filename: str) -> NoReturn:
+    """Reject .xlsx uploads: openpyxl is not installed (M-066)."""
+    raise HTTPException(
+        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        detail=(
+            f"XLSX files such as '{filename}' are not supported by this "
+            "deployment: the optional openpyxl dependency is not installed."
+        ),
+    )
+
+
 def _validate_file_extension(filename: str) -> None:
     """Raise 400 if the file extension is not in ALLOWED_EXTENSIONS."""
     extension = Path(filename).suffix.lower()
@@ -653,6 +669,8 @@ def _validate_file_extension(filename: str) -> None:
                 f"Allowed: {sorted(settings.ALLOWED_EXTENSIONS)}"
             ),
         )
+    if extension == ".xlsx":
+        _reject_unsupported_xlsx(filename)
 
 
 def _validate_file_content(filename: str, stored_path: str) -> None:
@@ -704,12 +722,8 @@ def _check_sample_content(extension: str, sample: bytes) -> None:
             orjson.loads(first_line)
         else:
             orjson.loads(sample)
-    elif extension == ".parquet":
-        if sample != b"PAR1":
-            raise ValueError("Parquet magic header is missing")
-    elif extension == ".xlsx":
-        if sample != b"PK\x03\x04":
-            raise ValueError("XLSX ZIP header is missing")
+    elif extension == ".parquet" and sample != b"PAR1":
+        raise ValueError("Parquet magic header is missing")
 
 
 def _resolve_upload_request_payload(
@@ -740,7 +754,7 @@ def _extract_file_metadata(
     if extension == ".parquet":
         return _extract_parquet_metadata(stored_path)
     if extension == ".xlsx":
-        return _extract_xlsx_metadata(filename, stored_path)
+        _reject_unsupported_xlsx(filename)
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Cannot parse file with extension '{extension}'",
@@ -762,13 +776,13 @@ def _extract_csv_metadata(
             detail=f"Failed to parse file '{stored_path}': not decodable text "
             "(tried UTF-8, UTF-16 and Windows-1252)",
         ) from exc
+    if "\x00" in text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Malformed CSV in file '{stored_path}': "
+            "NUL byte in text content",
+        )
     try:
-        if "\x00" in text:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Malformed CSV in file '{stored_path}': "
-                "NUL byte in text content",
-            )
         reader = csv.reader(io.StringIO(text, newline=""), strict=True)
         header = next(reader, None)
         if header is None:
@@ -863,20 +877,6 @@ def _extract_parquet_metadata(stored_path: str) -> tuple[int, list[str], dict[st
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse parquet file '{stored_path}': {exc}",
-        ) from exc
-
-
-def _extract_xlsx_metadata(filename: str, stored_path: str) -> tuple[int, list[str], dict[str, str]]:
-    try:
-        with storage_service.download(stored_path) as handle:
-            df = pd.read_excel(handle, nrows=1000)
-        columns = [str(column) for column in df.columns]
-        dtypes = {column: str(dtype) for column, dtype in df.dtypes.items()}
-        return len(df), columns, dtypes
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
 
 
@@ -986,16 +986,16 @@ def _finalize_uploaded_file(
         _validate_file_content(original_filename, stored_path)
         row_count, columns, dtypes = _extract_file_metadata(
             original_filename, stored_path)
-        if row_count > settings.MAX_ROWS_PER_FILE:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
-            )
     except HTTPException:
         # Never orphan the stored object when validation/metadata fails (M-101).
-        with contextlib.suppress(Exception):
-            storage_service.delete(stored_path)
+        _delete_stored_quietly(str(stored_path))
         raise
+    if row_count > settings.MAX_ROWS_PER_FILE:
+        _delete_stored_quietly(str(stored_path))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
+        )
 
     uploaded_file = UploadedFile(
         id=file_id,
@@ -1091,7 +1091,7 @@ def _parse_file_preview(
             df = pd.read_parquet(handle)
             return df.head(nrows)
         elif extension == ".xlsx":
-            return pd.read_excel(handle, nrows=nrows)
+            _reject_unsupported_xlsx(filename)
         else:
             _unsupported_preview_extension(extension)
     except HTTPException:
