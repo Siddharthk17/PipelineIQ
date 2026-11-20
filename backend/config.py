@@ -216,6 +216,45 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def validate_storage_config(self) -> "Settings":
+        """Fail fast on unknown STORAGE_TYPE or incomplete S3 credentials.
+
+        M-188: an unknown STORAGE_TYPE previously fell through to local
+        file handling silently, and S3 mode with missing credentials failed
+        only at first upload. Production (ENVIRONMENT=production) fails
+        closed; other environments raise only on unknown types and warn
+        on missing S3 credentials so local dev keeps working.
+        """
+        storage_type = (self.STORAGE_TYPE or "").strip().lower()
+        if storage_type not in {"local", "s3"}:
+            raise ValueError(
+                f"Invalid STORAGE_TYPE '{self.STORAGE_TYPE}'. "
+                "Must be one of: local, s3"
+            )
+        self.STORAGE_TYPE = storage_type
+        if storage_type == "s3":
+            missing = [
+                name
+                for name, value in (
+                    ("S3_ACCESS_KEY", self.S3_ACCESS_KEY),
+                    ("S3_SECRET_KEY", self.S3_SECRET_KEY),
+                    ("S3_BUCKET", self.S3_BUCKET),
+                )
+                if not value
+            ]
+            if not self.S3_ENDPOINT_URL:
+                missing.append("S3_ENDPOINT_URL")
+            if missing:
+                message = (
+                    "STORAGE_TYPE=s3 requires missing settings: "
+                    + ", ".join(missing)
+                )
+                if self.ENVIRONMENT == "production":
+                    raise ValueError(message)
+                logging.getLogger(__name__).warning(message)
+        return self
+
+    @model_validator(mode="after")
     def validate_secret_key_strength(self) -> "Settings":
         """Prevent startup with default or weak signing keys.
 
