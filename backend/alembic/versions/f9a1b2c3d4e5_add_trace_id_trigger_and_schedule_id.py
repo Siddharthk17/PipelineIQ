@@ -43,10 +43,26 @@ def upgrade() -> None:
         )
 
 
+def _drop_schedule_id_fk() -> None:
+    """Drop whichever FK constrains pipeline_runs.schedule_id.
+
+    The FK was auto-named ``pipeline_runs_schedule_id_fkey`` at creation
+    (the old downgrade guessed ``fk_pipeline_runs_schedule_id`` and the
+    failed drop was swallowed, wedging every later statement). Introspect
+    instead of guessing.
+    """
+    bind = op.get_bind()
+    for const in inspect(bind).get_foreign_keys("pipeline_runs"):
+        if const.get("constrained_columns") == ["schedule_id"]:
+            with contextlib.suppress(Exception):
+                op.drop_constraint(
+                    const["name"], "pipeline_runs", type_="foreignkey")
+            return
+
+
 def downgrade() -> None:
     if _has_column("pipeline_runs", "schedule_id"):
-        with contextlib.suppress(Exception):
-            op.drop_constraint("fk_pipeline_runs_schedule_id", "pipeline_runs", type_="foreignkey")
+        _drop_schedule_id_fk()
         op.drop_column("pipeline_runs", "schedule_id")
     if _has_column("pipeline_runs", "trigger"):
         op.drop_column("pipeline_runs", "trigger")

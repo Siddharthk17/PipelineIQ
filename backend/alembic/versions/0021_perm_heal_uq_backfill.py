@@ -95,11 +95,29 @@ def downgrade() -> None:
         return
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    # 0020 owns the healing_attempts constraint under the SAME name when it
+    # ran below us (the normal chain). Dropping it here would clobber 0020's
+    # constraint and break 0020's later downgrade (R-D-001). Only drop a
+    # shared name when 0020 did not run (its own marker constraint is
+    # absent), i.e. this migration actually created it.
+    marker_present = False
+    if "pipeline_permissions" in inspector.get_table_names():
+        marker_present = any(
+            const["name"] == "pipeline_permissions_pipeline_name_user_id_key"
+            for const in inspector.get_unique_constraints("pipeline_permissions")
+        )
     for table, name, _columns in _CONSTRAINTS:
         if table not in inspector.get_table_names():
             continue
         existing = {
             const["name"] for const in inspector.get_unique_constraints(table)
         }
-        if name in existing:
-            op.drop_constraint(name, table, type_="unique")
+        if name not in existing:
+            continue
+        if (
+            table == "healing_attempts"
+            and name == "uq_healing_attempts_run_attempt"
+            and marker_present
+        ):
+            continue
+        op.drop_constraint(name, table, type_="unique")

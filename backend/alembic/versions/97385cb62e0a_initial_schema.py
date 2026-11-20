@@ -137,4 +137,9 @@ def downgrade() -> None:
     op.drop_table('lineage_graphs')
     op.drop_table('uploaded_files')
     op.drop_table('pipeline_runs')
+    # Drop the enum type created by upgrade() so downgrade-then-upgrade
+    # round-trips cleanly (Postgres keeps types after the last user drops).
+    # IF EXISTS: other revisions' enums are handled by their own downgrades.
+    op.execute("DROP TYPE IF EXISTS pipelinestatus")
+    op.execute("DROP TYPE IF EXISTS stepstatus")
     # ### end Alembic commands ###

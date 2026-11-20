@@ -766,6 +766,48 @@ class FileProfile(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class StorageEvent(Base):
+    """Arrow data-bus tier event (hot/warm/cold writes, reads, evictions).
+
+    Mirrors backend/alembic/versions/i1a2b3c4d5e8_add_storage_events.py
+    exactly (table, columns, check constraints, indexes). The event logger
+    and tier-health endpoints use raw SQL against this table; the model
+    exists so create_all/migrations stay in sync (M-172).
+    """
+
+    __tablename__ = "storage_events"
+
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('write_hot','write_warm','write_cold',"
+            "'read_hot','read_warm','read_cold',"
+            "'evict_hot_to_warm','evict_warm_to_cold',"
+            "'cleanup_run','lifecycle_expire')",
+            name="ck_storage_event_type",
+        ),
+        CheckConstraint(
+            "tier IN ('hot','warm','cold')",
+            name="ck_storage_tier",
+        ),
+        Index("idx_storage_events_run", "run_id"),
+        Index("idx_storage_events_time", "created_at"),
+        Index("idx_storage_events_tier", "tier", "event_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid)
+    run_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    step_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    tier: Mapped[str] = mapped_column(String(10), nullable=False)
+    payload_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    object_name: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+
 class WasmModule(Base):
     """Registered WebAssembly UDF module for wasm_compute pipeline steps.
 
