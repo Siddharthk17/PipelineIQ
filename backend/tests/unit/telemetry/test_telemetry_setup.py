@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from backend.config import settings
 from backend.telemetry import (
-    OTEL_SERVICE_NAME,
     _get_otel_endpoint,
     _get_otel_sample_rate,
+    _get_otel_service_name,
     _is_otel_enabled,
     current_span_context,
     format_span_id,
@@ -42,7 +42,8 @@ class TestOTelConfigHelpers:
         assert _is_otel_enabled() is True
 
     def test_otel_service_name_from_settings(self):
-        assert OTEL_SERVICE_NAME == settings.OTEL_SERVICE_NAME
+        # M-176: read live from settings, never from a frozen import-time copy.
+        assert _get_otel_service_name() == settings.OTEL_SERVICE_NAME
 
 
 class TestFormatUtilities:
