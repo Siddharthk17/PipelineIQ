@@ -695,13 +695,6 @@ class PipelinePermission(Base):
 
     __tablename__ = "pipeline_permissions"
 
-    __table_args__ = (
-        UniqueConstraint(
-            "pipeline_name", "user_id",
-            name="uq_pipeline_permissions_name_user",
-        ),
-    )
-
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     pipeline_name: Mapped[str] = mapped_column(

@@ -213,3 +213,67 @@ def test_m162_contract_by_id_with_garbage_uuid_is_4xx(auth_client):
         "/api/v1/contracts/pipelines/nope/not-a-uuid", headers=headers
     )
     assert 400 <= resp.status_code < 500
+
+
+# --- C2-005: dedup keep modes validated at parse time -----------------------
+def test_c2_005_garbage_keep_rejected_not_crashed():
+    """keep='middle' must 400 at validate time, not crash/50k-diverge."""
+    from backend.pipeline.parser import PipelineParser
+
+    yaml_text = """pipeline:
+  name: t
+  steps:
+    - name: a
+      type: deduplicate
+      input: load
+      subset: [x]
+      keep: middle
+    - name: s
+      type: save
+      input: a
+      filename: out.csv
+"""
+    result = PipelineParser().validate(PipelineParser().parse(yaml_text), set())
+    assert result.errors, "garbage keep mode must be rejected"
+    assert any(e.field == "keep" for e in result.errors)
+
+
+def test_c2_005_none_without_subset_rejected():
+    """keep='none' without subset diverges by engine; require subset."""
+    from backend.pipeline.parser import PipelineParser
+
+    yaml_text = """pipeline:
+  name: t
+  steps:
+    - name: a
+      type: deduplicate
+      keep: none
+    - name: s
+      type: save
+      input: a
+      filename: out.csv
+"""
+    result = PipelineParser().validate(PipelineParser().parse(yaml_text), set())
+    assert result.errors, "subset-less keep='none' must be rejected"
+    assert any(e.field == "subset" for e in result.errors)
+
+
+def test_c2_005_valid_keep_modes_accepted():
+    from backend.pipeline.parser import PipelineParser
+
+    for keep in ("first", "last"):
+        yaml_text = f"""pipeline:
+  name: t
+  steps:
+    - name: a
+      type: deduplicate
+      input: load
+      subset: [x]
+      keep: {keep}
+    - name: s
+      type: save
+      input: a
+      filename: out.csv
+"""
+        result = PipelineParser().validate(PipelineParser().parse(yaml_text), set())
+        assert not [e for e in result.errors if e.field == "keep"], keep

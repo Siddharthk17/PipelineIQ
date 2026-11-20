@@ -42,6 +42,12 @@ VALID_FILL_NULLS_STRATEGIES = frozenset({
     "constant", "forward_fill", "backward_fill", "mean", "median", "mode",
 })
 
+# M-112/C2-005: the only dedup keep modes both engines implement.
+# Anything else crashes on pandas (ValueError) while DuckDB silently
+# substitutes SELECT DISTINCT — same YAML, different outcome depending on
+# which side of the 50k-row threshold the table falls.
+VALID_DEDUP_KEEP = frozenset({"first", "last", "none"})
+
 
 class StepType(str, Enum):
     """Supported pipeline step types."""
@@ -1122,6 +1128,45 @@ class PipelineParser:
                             step_name=step_name,
                             field="columns",
                             message="Fill nulls step 'columns' must be a list of strings",
+                        ))
+
+            if isinstance(step, DeduplicateStepConfig):
+                # C2-005: keep modes outside {first,last,none} crash on
+                # pandas but silently become SELECT DISTINCT on DuckDB.
+                # keep='none' without subset is also engine-divergent
+                # (pandas drops every duplicated row, DuckDB dedups to one
+                # copy), so require an explicit subset for uniform behavior.
+                keep = (step.keep or "first")
+                if not isinstance(keep, str) or keep.lower() not in VALID_DEDUP_KEEP:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="keep",
+                            message=(
+                                "Deduplicate step 'keep' must be one of "
+                                f"{sorted(VALID_DEDUP_KEEP)}; "
+                                f"got {step.keep!r}"
+                            ),
+                        ))
+                elif keep.lower() == "none" and not step.subset:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="subset",
+                            message=(
+                                "Deduplicate step with keep='none' requires "
+                                "'subset' columns (engines disagree on "
+                                "subset-less 'none')"
+                            ),
+                        ))
+                if step.subset is not None and (
+                        not isinstance(step.subset, list) or not all(
+                            isinstance(c, str) for c in step.subset)):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="subset",
+                            message="Deduplicate step 'subset' must be a list of strings",
                         ))
 
             if isinstance(step, SampleStepConfig):
