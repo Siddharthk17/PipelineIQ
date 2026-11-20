@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_admin, get_current_user
+from backend.auth import get_current_admin
 from backend.dependencies import get_read_db_dependency
 from backend.execution.arrow_bus import get_arrow_bus
 from backend.models import User
@@ -22,9 +22,14 @@ logger = logging.getLogger(__name__)
 
 @router.get("/stats")
 def get_storage_stats(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
     db: Session = Depends(get_read_db_dependency),
 ):
+    """Cluster storage analytics — admin only (M-092).
+
+    Tier utilization, bucket sizes, lifecycle policies and growth trends
+    expose infrastructure-wide operational data; viewers must not see it.
+    """
     tier_stats: dict[str, Any] = {}
     try:
         bus = get_arrow_bus()
@@ -99,7 +104,7 @@ def get_storage_stats(
 
 @router.get("/tier-health")
 def get_tier_health(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_admin),
 ):
     """Per-tier health with honest down-state reporting (M-061).
 
