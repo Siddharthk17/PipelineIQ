@@ -1,12 +1,16 @@
 """Celery task for asynchronous webhook delivery.
 
-Uses httpx.AsyncClient with connection pooling to avoid blocking the
-event loop. Delivery is fully async — the Celery worker thread creates
-a temporary event loop to execute the async HTTP call.
+Each delivery creates its own httpx.AsyncClient inside the task's event
+loop and closes it before the loop is torn down. A shared (pooled) client
+must NOT be reused across deliveries: every task run executes on a fresh
+event loop, and a client bound to an earlier, now-closed loop fails with
+``Event loop is closed`` while leaving no delivery record.
 
-WebhookTask base class provides a shared httpx.AsyncClient per worker
-process. Connection pooling means multiple webhooks share TCP connections
-to the same host.
+Retry policy: only transient failures are retried — HTTP 429 / 5xx and
+timeouts, via Celery autoretry with exponential backoff and jitter.
+Permanent 4xx, DNS/validation rejections and other transport errors are
+recorded once as dead-letter outcomes without retry. Every attempt writes
+exactly one delivery record.
 """
 
 import asyncio
@@ -28,28 +32,33 @@ logger = logging.getLogger(__name__)
 
 
 class WebhookTask(Task):
-    _client: httpx.AsyncClient | None = None
+    """Celery base for webhook delivery tasks.
 
-    @property
-    def client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(
-                    connect=5.0,
-                    read=10.0,
-                    write=5.0,
-                    pool=2.0,
-                ),
-                limits=httpx.Limits(
-                    max_connections=100,
-                    max_keepalive_connections=20,
-                ),
-                # Redirects are followed manually by _post_with_safe_redirects
-                # so every hop can be re-validated. Never enable httpx-level
-                # redirects here: they would skip the egress allow-list.
-                follow_redirects=False,
-            )
-        return self._client
+    HTTP clients are deliberately NOT shared here: use :func:`_make_client`
+    to create a per-delivery client inside the running event loop.
+    """
+
+
+def _make_client() -> httpx.AsyncClient:
+    """Create a fresh async HTTP client for a single delivery attempt."""
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            connect=5.0,
+            read=10.0,
+            write=5.0,
+            pool=2.0,
+        ),
+        limits=httpx.Limits(
+            max_connections=100,
+            max_keepalive_connections=20,
+        ),
+        # Redirects are followed manually by _post_with_safe_redirects
+        # so every hop can be re-validated and re-pinned. Never enable
+        # httpx-level redirects here: they would fetch whatever Location
+        # the server returns, including link-local/metadata addresses
+        # that validate_public_http_url forbids.
+        follow_redirects=False,
+    )
 
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
