@@ -5,6 +5,7 @@ extension, and content parsing. Uploaded files are stored on disk
 with metadata persisted to the database.
 """
 
+import asyncio
 import codecs
 import contextlib
 import csv
@@ -64,6 +65,27 @@ legacy_router = APIRouter(prefix="/files", tags=["files-legacy"])
 
 LARGE_FILE_THRESHOLD = 10 * 1024 * 1024
 DIRECT_UPLOAD_TTL_SECONDS = 30 * 60
+
+# Bounds for off-loop work (M-103): sync Redis/parse calls must never stall
+# the event loop. Redis helpers get a short leash; metadata parsing gets a
+# longer one proportional to MAX_UPLOAD_SIZE-bounded inputs.
+_REDIS_TIMEOUT_SECONDS = 5.0
+_METADATA_TIMEOUT_SECONDS = 30.0
+
+
+async def _bounded_to_thread(fn, /, *args, timeout: float, service: str):
+    """Run sync blocking work off the event loop with a hard timeout.
+
+    Timeouts surface as 503 (degraded, retryable) instead of stalling the
+    loop; inner HTTPExceptions (400/415/422) propagate unchanged.
+    """
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout)
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"{service} timed out; retry the request",
+        ) from exc
 MAX_DIRECT_UPLOAD_SIZE = settings.MAX_UPLOAD_SIZE
 PENDING_UPLOAD_PREFIX = "files:pending-upload:"
 # Multipart framing overhead tolerated when comparing a declared
@@ -242,7 +264,8 @@ async def request_upload_url(
     absolute_api_prefix = f"{str(request.base_url).rstrip('/')}{api_prefix}"
 
     if request_payload.file_size > LARGE_FILE_THRESHOLD:
-        _cache_pending_upload(
+        await _bounded_to_thread(
+            _cache_pending_upload,
             file_id,
             {
                 "filename": filename,
@@ -250,6 +273,8 @@ async def request_upload_url(
                 "stored_path": str(stored_path),
                 "user_id": str(current_user.id),
             },
+            timeout=_REDIS_TIMEOUT_SECONDS,
+            service="Upload state store",
         )
 
         presigned_url = storage_service.get_presigned_upload_url(
@@ -296,7 +321,12 @@ async def direct_upload_file(
 ) -> dict:
     """Receive direct upload payload and stream it to disk without buffering entire content."""
     _validate_uuid_format(file_id)
-    pending = _get_pending_upload(file_id)
+    pending = await _bounded_to_thread(
+        _get_pending_upload,
+        file_id,
+        timeout=_REDIS_TIMEOUT_SECONDS,
+        service="Upload state store",
+    )
     if pending is None or pending.get("user_id") != str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -341,7 +371,12 @@ async def confirm_direct_upload(
 ) -> FileUploadResponse:
     """Confirm a direct upload and persist its metadata."""
     _validate_uuid_format(file_id)
-    pending = _get_pending_upload(file_id)
+    pending = await _bounded_to_thread(
+        _get_pending_upload,
+        file_id,
+        timeout=_REDIS_TIMEOUT_SECONDS,
+        service="Upload state store",
+    )
     if pending is None or pending.get("user_id") != str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -372,7 +407,7 @@ async def confirm_direct_upload(
             detail="Uploaded file is empty",
         )
 
-    finalized = _finalize_uploaded_file(
+    finalized = await _finalize_uploaded_file(
         db=db,
         file_id=_as_uuid(file_id),
         original_filename=pending["filename"],
@@ -381,7 +416,12 @@ async def confirm_direct_upload(
         request=request,
         current_user=current_user,
     )
-    _clear_pending_upload(file_id)
+    await _bounded_to_thread(
+        _clear_pending_upload,
+        file_id,
+        timeout=_REDIS_TIMEOUT_SECONDS,
+        service="Upload state store",
+    )
     return finalized
 
 
@@ -448,7 +488,7 @@ async def upload_file(
             detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
         )
 
-    return _finalize_uploaded_file(
+    return await _finalize_uploaded_file(
         db=db,
         file_id=file_id,
         original_filename=original_filename,
@@ -1292,7 +1332,7 @@ def _enqueue_profile_task(file_id: str) -> None:
         )
 
 
-def _finalize_uploaded_file(
+async def _finalize_uploaded_file(
     db: Session,
     file_id,
     original_filename: str,
@@ -1304,8 +1344,13 @@ def _finalize_uploaded_file(
     """Persist uploaded file metadata, snapshot, and optional drift report."""
     try:
         _validate_file_content(original_filename, stored_path)
-        row_count, columns, dtypes = _extract_file_metadata(
-            original_filename, stored_path)
+        row_count, columns, dtypes = await _bounded_to_thread(
+            _extract_file_metadata,
+            original_filename,
+            stored_path,
+            timeout=_METADATA_TIMEOUT_SECONDS,
+            service="File metadata extraction",
+        )
     except HTTPException:
         # Never orphan the stored object when validation/metadata fails (M-101).
         _delete_stored_quietly(str(stored_path))
