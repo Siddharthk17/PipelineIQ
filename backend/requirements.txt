@@ -1,7 +1,7 @@
-fastapi==0.109.1
+fastapi==0.133.1
 uvicorn[standard]==0.54.0
 gunicorn==22.0.0
-pydantic==2.5.3
+pydantic==2.7.0
 pydantic-settings==2.1.0
 sqlalchemy==2.0.25
 alembic==1.13.1
@@ -19,6 +19,9 @@ kombu==5.7.0
 redis==8.1.0
 slowapi==0.1.9
 python-multipart==0.0.32
+# Pinned explicitly: fastapi>=0.133 leaves starlette unbounded, so pip would
+# float to the newest starlette. Pin the audited 1.x line directly (M-027).
+starlette==1.10.0
 python-dotenv==1.2.4
 pytest==9.2.0
 pytest-asyncio==1.4.1
@@ -39,7 +42,7 @@ duckdb==2.0.0
 psutil==7.2.2
 google-genai==1.2.0
 jellyfish==1.2.1
-wasmtime>=18.0.0
+wasmtime==50.0.1
 structlog==24.1.0
 confluent-kafka==2.16.1
 opentelemetry-api==1.45.2
