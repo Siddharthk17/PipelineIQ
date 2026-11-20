@@ -213,6 +213,25 @@ def _coerce_run_id(payload: dict) -> Any:
         return None
 
 
+def _coerce_user_id(user_id: str | None) -> Any:
+    """Best-effort user_id coercion for webhook owner filters (M-162).
+
+    Callers pass ``str(user.id)``, but ``Webhook.user_id`` is a ``Uuid``
+    column: comparing a raw string raises on SQLite (PostgreSQL coerces
+    it). Unparseable values degrade to None (no-match), never raise —
+    fan-out must skip, not 500.
+    """
+    if not user_id:
+        return None
+    try:
+        from backend.utils.uuid_utils import as_uuid as _as_uuid
+
+        return _as_uuid(user_id)
+    except Exception:
+        logger.warning("Dropping unparseable webhook user_id: %r", user_id)
+        return None
+
+
 @celery_app.task(
     name="tasks.deliver_webhook",
     base=WebhookTask,
@@ -474,11 +493,20 @@ def deliver_webhooks_task(
         from backend.database import SessionLocal
         from backend.models import Webhook
 
+        if user_id and _coerce_user_id(user_id) is None:
+            # Unparseable owner id: nothing can match, and broadening the
+            # filter to all users would misdeliver (M-162).
+            return {
+                "run_id": run_id,
+                "status": "skipped",
+                "matched_webhooks": 0,
+            }
         db = SessionLocal()
         try:
             query = db.query(Webhook).filter(Webhook.is_active)
             if user_id:
-                query = query.filter(Webhook.user_id == user_id)
+                query = query.filter(
+                    Webhook.user_id == _coerce_user_id(user_id))
             webhooks = query.all()
         except Exception:
             # Session cleanup on query failure (M-173).
@@ -532,6 +560,11 @@ def fire_webhooks_for_event(
     if not user_id:
         return
 
+    owner_id = _coerce_user_id(user_id)
+    if owner_id is None:
+        # Unparseable owner id: nothing can match (M-162).
+        return
+
     from backend.database import SessionLocal
     from backend.models import Webhook
 
@@ -539,7 +572,7 @@ def fire_webhooks_for_event(
     try:
         webhooks = (
             db.query(Webhook)
-            .filter(Webhook.user_id == user_id, Webhook.is_active.is_(True))
+            .filter(Webhook.user_id == owner_id, Webhook.is_active.is_(True))
             .all()
         )
     except Exception:
