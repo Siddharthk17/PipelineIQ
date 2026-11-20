@@ -47,7 +47,7 @@ class TestGaugeSetters:
                 for _ in range(50):
                     metrics.set_celery_queue_depth(value)
                     metrics.set_active_users_total(value)
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 errors.append(exc)
 
         threads = [threading.Thread(target=_write, args=(i,)) for i in range(8)]
