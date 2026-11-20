@@ -163,6 +163,7 @@ class PipelineRunner:
         lineage_callback: Callable[[nx.DiGraph], None] | None = None,
         wasm_modules: dict[str, bytes] | None = None,
         user_role: str | None = None,
+        revalidate: bool = True,
     ) -> PipelineExecutionSummary:
         """Execute a complete pipeline from a parsed configuration."""
         run_id = run_id or str(uuid.uuid4())
@@ -174,6 +175,13 @@ class PipelineRunner:
         total_rows_processed: int = 0
         pipeline_start = time.perf_counter()
         consumers = _compute_consumer_counts(config.steps)
+
+        # M-159: stored YAML is parsed but historically never re-validated
+        # before execution, so a config that became invalid (bad refs,
+        # unknown file_ids, unsupported steps) ran until it blew up
+        # mid-flight. Fail closed here, before any step executes.
+        if revalidate:
+            self._revalidate_or_raise(config, file_paths)
 
         logger.info(
             "Pipeline '%s' (run_id=%s) starting with %d steps",
@@ -237,6 +245,29 @@ class PipelineRunner:
             total_duration_ms=total_duration,
             total_rows_processed=total_rows_processed,
         )
+
+    def _revalidate_or_raise(
+        self,
+        config: PipelineConfig,
+        file_paths: dict[str, str],
+    ) -> None:
+        """Re-validate a parsed config immediately before execution.
+
+        Raises:
+            StepExecutionError: If the stored config no longer validates
+                (dangling refs, unregistered file_ids, unsupported steps).
+        """
+        from backend.pipeline.parser import PipelineParser
+
+        result = PipelineParser().validate(config, set(file_paths or {}))
+        if not result.is_valid:
+            first = result.errors[0]
+            raise StepExecutionError(
+                first.step_name or config.name,
+                f"Stored pipeline failed re-validation and will not run: "
+                f"[{first.field}] {first.message} "
+                f"({len(result.errors)} error(s) total)",
+            )
 
     def _execute_single_step(
         self,
