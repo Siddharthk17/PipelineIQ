@@ -268,7 +268,7 @@ Backups (do this before anything risky):
 
 ```bash
 cd ~/PipelineIQ
-make backup                                   # pg_dump (-Fc) + gzip into ./backups/, 7-day retention
+make backup                                   # pg_dump (plain SQL) + gzip into ./backups/, 7-day retention
 ls -la backups/
 ```
 
@@ -278,6 +278,17 @@ Restore (destructive — replaces the live database; practice on a scratch box f
 cd ~/PipelineIQ
 make restore BACKUP=backups/pg-<date>.sql.gz  # stops writers, drops, loads, migrates, restarts, verifies
 ```
+
+`scripts/restore.sh` validates the dump *before* touching the live database
+(gzip integrity plus a format sniff). Current `scripts/backup.sh` dumps emit
+plain SQL, which restore loads with
+`gunzip -c <file> | docker compose exec -T postgres psql -U "$POSTGRES_USER" "$POSTGRES_DB" -v ON_ERROR_STOP=1`.
+Legacy `-Fc` custom-format archives (pre-plain-format backups) are detected
+by the `PGDMP` magic and loaded with `pg_restore` instead (`pg_restore --list`
+validates readability first — `psql` cannot read custom-format archives).
+After loading, restore runs `alembic upgrade head` from a one-off container
+(the api service is stopped at that point, so exec-ing into it would fail),
+then restarts the stack and checks `/health`.
 
 The dump covers PostgreSQL only. MinIO objects (uploads, pipeline outputs,
 WASM modules) are not in `pg_dump` — mirror buckets separately with a local
