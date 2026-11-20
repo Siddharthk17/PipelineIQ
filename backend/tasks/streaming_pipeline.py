@@ -75,6 +75,18 @@ class StreamingDLQError(RuntimeError):
     """Raised when a failed batch cannot be durably preserved in the DLQ."""
 
 
+class StreamingCommitError(RuntimeError):
+    """Raised when offsets cannot be committed after bounded retries.
+
+    Unlike publish/DLQ failures this must NOT route the batch to the DLQ:
+    the batch was already published, so DLQ-ing it would both poison the
+    DLQ with healthy data and (via the generic handler) wedge the daemon
+    on a transient broker blip (R2-001). Callers back off and let the
+    daemon loop decide; redelivery on restart may duplicate already
+    published rows (at-least-once), never lose them.
+    """
+
+
 class _UnlimitedTask(Task):
     """Base for daemon tasks that must never be time-limited.
 
@@ -348,7 +360,12 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
 #   ACTIVE  --request_pause-->  PAUSED
 #   PAUSED  --request_resume--> ACTIVE
 #   ACTIVE | PAUSED --request_stop--> STREAMING_STOPPED (+ revoke)
-#   STREAMING_STOPPED | CANCELLED --request_restart--> ACTIVE (+ fresh daemon dispatch)
+#   STREAMING_STOPPED | CANCELLED | FAILED --request_restart--> ACTIVE (+ fresh daemon dispatch)
+#
+# FAILED is restartable by design (R2-001): a transient offset-commit
+# failure marks the run FAILED (honest, restartable) instead of wedging
+# it; restart dispatches a fresh daemon from the last committed offset
+# (at-least-once redelivery, never loss).
 #
 # Each function returns (ok, error): (True, None) on success, otherwise
 # (False, human-readable reason). Foreign runs are reported as "not found"
@@ -360,7 +377,7 @@ _RESUME_FROM = frozenset({PipelineStatus.STREAMING_PAUSED})
 _STOP_FROM = frozenset({
     PipelineStatus.STREAMING_ACTIVE, PipelineStatus.STREAMING_PAUSED,
 })
-_RESTART_FROM = frozenset({PipelineStatus.STREAMING_STOPPED, PipelineStatus.CANCELLED})
+_RESTART_FROM = frozenset({PipelineStatus.STREAMING_STOPPED, PipelineStatus.CANCELLED, PipelineStatus.FAILED})
 
 
 def _coerce_run_uuid(run_id):
@@ -463,7 +480,16 @@ def request_pause(run_id, user, db=None) -> tuple:
 
 
 def request_resume(run_id, user, db=None) -> tuple:
-    """Transition STREAMING_PAUSED -> STREAMING_ACTIVE (M-078)."""
+    """Transition STREAMING_PAUSED -> STREAMING_ACTIVE (M-078).
+
+    After the atomic claim, ensure a daemon is actually running: a paused
+    daemon whose worker died leaves no task behind, and merely flipping
+    the row would park the run ACTIVE-with-nothing-running until the
+    reconciler TIMEOUTs it (R2-002). If the recorded task is dead or
+    missing, dispatch a fresh daemon like request_restart does.
+    """
+    from celery.result import AsyncResult as _AsyncResult
+
     session, owned = _transition_session(db)
     try:
         run, run_uuid, error = _load_transition_run(session, run_id)
@@ -478,6 +504,30 @@ def request_resume(run_id, user, db=None) -> tuple:
             return False, _transition_conflict(
                 session, run_uuid, run_id, "resume", "STREAMING_PAUSED")
         logger.info("Streaming run %s resumed by operator", run_id)
+        task_id = run.celery_task_id
+        alive = False
+        if task_id:
+            try:
+                # R2-002: only STARTED/RETRY prove liveness. PENDING is
+                # ambiguous (queued-live vs unknown/expired) so it must NOT
+                # count as alive — dispatching a duplicate is safe (the
+                # daemon single-flight in _claim_run lets exactly one win).
+                alive = _AsyncResult(str(task_id)).state in ("STARTED", "RETRY")
+            except Exception:
+                alive = False
+        if not alive:
+            try:
+                dispatched = run_streaming_pipeline.delay(str(run_uuid))
+            except Exception as exc:
+                return False, f"failed to dispatch daemon for run {run_id}: {exc}"
+            new_task_id = getattr(dispatched, "id", None)
+            session.query(PipelineRun).filter(
+                PipelineRun.id == run_uuid
+            ).update({"celery_task_id": new_task_id})
+            try:
+                session.commit()
+            except Exception:
+                session.rollback()
         return True, None
     finally:
         if owned:
@@ -522,7 +572,7 @@ def request_stop(run_id, user, db=None) -> tuple:
 
 
 def request_restart(run_id, user, db=None) -> tuple:
-    """Transition STREAMING_STOPPED -> STREAMING_ACTIVE (M-078).
+    """Transition STREAMING_STOPPED/CANCELLED/FAILED -> STREAMING_ACTIVE (M-078, R2-001).
 
     Dispatches a fresh daemon, then atomically claims ACTIVE with the new
     task id. The state gate is checked *before* dispatching so a refused
@@ -540,7 +590,7 @@ def request_restart(run_id, user, db=None) -> tuple:
             return False, denial
         if run.status not in _RESTART_FROM:
             return False, _transition_conflict(
-                session, run_uuid, run_id, "restart", "STREAMING_STOPPED or CANCELLED")
+                session, run_uuid, run_id, "restart", "STREAMING_STOPPED, CANCELLED or FAILED")
         try:
             dispatched = run_streaming_pipeline.delay(str(run_uuid))
         except Exception as exc:
@@ -560,7 +610,7 @@ def request_restart(run_id, user, db=None) -> tuple:
                     exc_info=True,
                 )
             return False, _transition_conflict(
-                session, run_uuid, run_id, "restart", "STREAMING_STOPPED or CANCELLED")
+                session, run_uuid, run_id, "restart", "STREAMING_STOPPED, CANCELLED or FAILED")
         logger.info(
             "Streaming run %s restarted by operator (task %s)",
             run_id, new_task_id,
@@ -1063,6 +1113,31 @@ def _commit_offsets(consumer, messages) -> None:
     )
 
 
+def _commit_offsets_guarded(consumer, messages, *, attempts: int = 3) -> None:
+    """Commit offsets with bounded retries (R2-001).
+
+    A transient broker blip must not kill the daemon or poison the DLQ
+    with an already-published batch. Retries with 1s/2s/4s backoff; on
+    persistent failure raises StreamingCommitError so the caller can
+    stop the daemon WITHOUT DLQ-ing healthy data. Redelivery after a
+    restart may duplicate already-published rows (at-least-once).
+    """
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            _commit_offsets(consumer, messages)
+        except Exception as exc:
+            last = exc
+            logger.warning(
+                "Offset commit attempt %d/%d failed; backing off",
+                attempt + 1, attempts)
+            time.sleep(min(2 ** attempt, 4))
+        else:
+            return
+    raise StreamingCommitError(
+        f"offset commit failed after {attempts} attempts: {last}") from last
+
+
 def _process_batch(
     messages,
     *,
@@ -1118,12 +1193,19 @@ def _process_batch(
         throughput = stats["messages"] / elapsed if elapsed > 0 else 0
         if on_success is not None:
             on_success(stats=stats, throughput=throughput, batch_ms=batch_ms)
-        _commit_offsets(consumer, messages)
+        _commit_offsets_guarded(consumer, messages)
     except (StreamingPublishError, StreamingDLQError):
         logger.exception(
             "Batch persist failed; withholding offset commit for redelivery")
         stats["failed"] += len(messages)
         return consecutive_errors + 1
+    except StreamingCommitError:
+        # R2-001: the batch was already published; DLQ-ing it would poison
+        # the DLQ with healthy data AND the throw below stops the daemon.
+        # Backoff already happened inside the guarded commit; surface the
+        # failure so the daemon loop marks FAILED honestly (restartable),
+        # without touching the DLQ.
+        raise
     except Exception as exc:
         # Transform (or unexpected) error: preserve the batch in the DLQ
         # and commit only if that preservation succeeded.
@@ -1138,7 +1220,7 @@ def _process_batch(
         logger.exception("Batch processing error; batch preserved in DLQ")
         stats["failed"] += len(messages)
         stats["dlq"] += len(messages)
-        _commit_offsets(consumer, messages)
+        _commit_offsets_guarded(consumer, messages)
         # R-R-002: the batch is preserved in the DLQ *and* its offsets are
         # committed, so the daemon made progress — do NOT count this toward
         # the shutdown counter. Only uncommitted (redeliverable) failures

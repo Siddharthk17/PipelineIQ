@@ -1013,3 +1013,223 @@ class TestRR002QuarantinedBatchesDoNotTripShutdown:
         assert errors == 3, "quarantined batch must not trip the shutdown counter"
         assert ctx["stats"]["dlq"] == 1
         assert ctx["ccalls"]["commit"], "offsets must commit on DLQ preservation"
+
+
+class TestR2001CommitFailureHonesty:
+    """R2-001: transient commit failure must not DLQ healthy data (High).
+
+    Pre-fix: _commit_offsets raised inside the generic try, the handler
+    DLQ'd the healthy batch, then the unguarded recovery commit raised
+    again -> FAILED with no API restart (FAILED not in _RESTART_FROM).
+    Post-fix: bounded retries, StreamingCommitError propagates WITHOUT
+    touching the DLQ, and FAILED is restartable.
+    """
+
+    def _fake_msg(self, partition=0, offset=0, value=b'{"amount": 200.0}'):
+        from unittest.mock import MagicMock
+
+        m = MagicMock()
+        m.topic.return_value = "orders"
+        m.partition.return_value = partition
+        m.offset.return_value = offset
+        m.value.return_value = value
+        m.key.return_value = None
+        m.error.return_value = None
+        return m
+
+    def _ctx(self, commit_behavior="ok"):
+        from unittest.mock import MagicMock
+
+        from backend.execution.smart_executor import SmartExecutor
+        from backend.pipeline.lineage import LineageRecorder
+
+        calls = {"commit": 0, "dlq_produce": 0}
+
+        class FakeConsumer:
+            def commit(self, message=None, offsets=None, asynchronous=True):
+                calls["commit"] += 1
+                if commit_behavior == "always_fail":
+                    raise RuntimeError("broker blip")
+                if commit_behavior == "flaky" and calls["commit"] < 3:
+                    raise RuntimeError("broker blip")
+
+        class FakeProducer:
+            def produce(self, topic, value=None, key=None, headers=None,
+                        on_delivery=None, **kwargs):
+                if topic.endswith(".dlq"):
+                    calls["dlq_produce"] += 1
+                if on_delivery is not None:
+                    on_delivery(None, MagicMock())
+
+            def poll(self, timeout=0):
+                return 0
+
+            def flush(self, timeout=None):
+                return 0
+
+        consumer = FakeConsumer()
+        return {
+            "consumer": consumer,
+            "calls": calls,
+            "producer": FakeProducer(),
+            "dlq": FakeProducer(),
+            "consume_step": _make_consume_step("ingest", topic="orders"),
+            "publish_step": None,
+            "middle_steps": [_make_filter_step(input="ingest")],
+            "executor": SmartExecutor(),
+            "recorder": LineageRecorder(),
+            "stats": {"batches": 0, "messages": 0, "failed": 0,
+                      "dlq": 0, "start": 0.0},
+        }
+
+    def test_commit_blip_never_dlqs_healthy_batch(self):
+        """Healthy batch + dead broker: no DLQ, StreamingCommitError."""
+        from unittest.mock import patch
+
+        import pytest
+
+        from backend.tasks import streaming_pipeline as sp
+
+        ctx = self._ctx(commit_behavior="always_fail")
+        msgs = [self._fake_msg(partition=0, offset=41)]
+        with patch.object(sp.time, "sleep", lambda s: None), \
+                pytest.raises(sp.StreamingCommitError):
+                sp._process_batch(
+                    msgs,
+                    deserialize_fmt="json",
+                    consecutive_errors=0,
+                    on_success=lambda **kw: None,
+                    consumer=ctx["consumer"],
+                    producer=ctx["producer"],
+                    dlq_producer=ctx["dlq"],
+                    consume_step=ctx["consume_step"],
+                    publish_step=ctx["publish_step"],
+                    middle_steps=ctx["middle_steps"],
+                    executor=ctx["executor"],
+                    recorder=ctx["recorder"],
+                    stats=ctx["stats"],
+                )
+        assert ctx["calls"]["commit"] == 3, "must retry with bounds, then give up"
+        assert ctx["calls"]["dlq_produce"] == 0, (
+            "healthy data must NEVER reach the DLQ on commit failure (R2-001)")
+        assert ctx["stats"]["dlq"] == 0
+
+    def test_commit_recovers_on_retry(self):
+        from unittest.mock import patch
+
+        from backend.tasks import streaming_pipeline as sp
+
+        ctx = self._ctx(commit_behavior="flaky")
+        msgs = [self._fake_msg(partition=0, offset=41)]
+        with patch.object(sp.time, "sleep", lambda s: None):
+            errors = sp._process_batch(
+                msgs,
+                deserialize_fmt="json",
+                consecutive_errors=0,
+                on_success=lambda **kw: None,
+                consumer=ctx["consumer"],
+                producer=ctx["producer"],
+                dlq_producer=ctx["dlq"],
+                consume_step=ctx["consume_step"],
+                publish_step=ctx["publish_step"],
+                middle_steps=ctx["middle_steps"],
+                executor=ctx["executor"],
+                recorder=ctx["recorder"],
+                stats=ctx["stats"],
+            )
+        assert errors == 0
+        assert ctx["calls"]["commit"] == 3
+        assert ctx["calls"]["dlq_produce"] == 0
+
+
+class TestR2002ResumeDispatch:
+    """R2-002: resume on a dead worker must dispatch a daemon (High)."""
+
+    def _user(self, role="viewer"):
+        import uuid as uuid_module
+        from types import SimpleNamespace
+        return SimpleNamespace(id=uuid_module.uuid4(), role=role)
+
+    def _run(self, db, status, user_id=None):
+        import uuid as uuid_module
+
+        from backend.models import PipelineRun
+        run = PipelineRun(
+            id=uuid_module.uuid4(),
+            name="stream-run",
+            status=status,
+            yaml_config="pipeline:\n  name: s\n  steps: []\n",
+            user_id=user_id,
+            celery_task_id="task-dead",
+        )
+        db.add(run)
+        db.commit()
+        return run
+
+    def test_resume_dead_worker_dispatches_daemon(self, test_db):
+        """PAUSED + dead task -> ACTIVE with a fresh task id."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_PAUSED, user.id)
+        dead = MagicMock()
+        dead.state = "FAILURE"
+        with (
+            patch("celery.result.AsyncResult", return_value=dead),
+            patch.object(
+                sp.run_streaming_pipeline, "delay",
+                return_value=SimpleNamespace(id="task-fresh"),
+            ) as mock_delay,
+        ):
+            ok, error = sp.request_resume(str(run.id), user, test_db)
+        assert (ok, error) == (True, None), error
+        mock_delay.assert_called_once_with(str(run.id))
+        assert run.status == PipelineStatus.STREAMING_ACTIVE
+        assert run.celery_task_id == "task-fresh"
+
+    def test_resume_live_daemon_no_dispatch(self, test_db):
+        """PAUSED + live task -> ACTIVE without a duplicate dispatch."""
+        from unittest.mock import MagicMock, patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.STREAMING_PAUSED, user.id)
+        live = MagicMock()
+        live.state = "STARTED"
+        with (
+            patch("celery.result.AsyncResult", return_value=live),
+            patch.object(
+                sp.run_streaming_pipeline, "delay") as mock_delay,
+        ):
+            ok, error = sp.request_resume(str(run.id), user, test_db)
+        assert (ok, error) == (True, None), error
+        mock_delay.assert_not_called()
+        assert run.status == PipelineStatus.STREAMING_ACTIVE
+
+    def test_restart_failed_dispatches(self, test_db):
+        """R2-001 follow-on: FAILED streaming runs are restartable."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from backend.models import PipelineStatus
+        from backend.tasks import streaming_pipeline as sp
+
+        user = self._user()
+        run = self._run(test_db, PipelineStatus.FAILED, user.id)
+        with (
+            patch.object(sp, "celery_app"),
+            patch.object(
+                sp.run_streaming_pipeline, "delay",
+                return_value=SimpleNamespace(id="task-new"),
+            ) as mock_delay,
+        ):
+            ok, error = sp.request_restart(str(run.id), user, test_db)
+        assert (ok, error) == (True, None), error
+        mock_delay.assert_called_once_with(str(run.id))
+        assert run.status == PipelineStatus.STREAMING_ACTIVE
