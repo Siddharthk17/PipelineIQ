@@ -26,6 +26,7 @@ task_routes = {
     "tasks.run_streaming_pipeline": {"queue": "streaming"},
     "tasks.deliver_webhook": {"queue": "critical"},
     "tasks.maintain_storage": {"queue": "bulk"},
+    "tasks.sweep_orphaned_uploads": {"queue": "bulk"},
     "tasks.reconcile_stuck_runs": {"queue": "bulk"},
 }
 
@@ -61,6 +62,10 @@ beat_schedule = {
     "maintain-storage": {
         "task": "tasks.maintain_storage",
         "schedule": 300.0,  # every 5 minutes
+    },
+    "sweep-orphaned-uploads": {
+        "task": "tasks.sweep_orphaned_uploads",
+        "schedule": 86400.0,  # daily; bounded batch, lock-guarded (M-107)
     },
     "reconcile-stuck-runs": {
         "task": "tasks.reconcile_stuck_runs",
