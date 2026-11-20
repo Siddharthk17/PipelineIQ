@@ -23,6 +23,21 @@ Five queues with isolated workers. Routing, concurrency, and the beat schedule a
 - Result backend expiry: 3600 s.
 - Celery Beat (`celery-beat`, one replica): `check-pipeline-schedules` every 60 s, `maintain-storage` every 300 s, `reconcile-stuck-runs` every 600 s. Reconciliation marks orphaned `RUNNING`/`HEALING` runs `TIMEOUT`/`FAILED` via Celery inspect.
 
+## Retry and queue-routing policy (M-171)
+
+- Retries are bounded everywhere on the SSE path: at most
+  `SSE_REDIS_MAX_RETRIES` attempts with exponential backoff + jitter and
+  a per-op timeout, plus a circuit breaker that cools down after
+  `SSE_CIRCUIT_THRESHOLD` consecutive failures. Never retry blindly or
+  unboundedly — a down dependency must degrade (503 / degraded-close),
+  not storm.
+- `worker-default` runs `--queues=critical,default`, i.e. it drains
+  `critical` as overflow. Under default-queue saturation this delays
+  latency-sensitive critical work (webhooks, notifications). Keep
+  `worker-critical` dedicated; for strict isolation serve `critical`
+  only from `worker-critical` and restrict `worker-default` to
+  `--queues=default`.
+
 ## Redis roles
 
 | Instance | Port | Memory | Holds |
