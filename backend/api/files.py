@@ -701,8 +701,27 @@ def _reject_unsupported_xlsx(filename: str) -> NoReturn:
     )
 
 
+# UploadedFile.original_filename is String(255): reject overlong basenames
+# here so an oversized filename is a clean 400, never a DB overflow 500
+# (M-099). The column constraint stays as the backstop.
+_MAX_FILENAME_LENGTH = 255
+
+
+def _validate_filename_length(filename: str) -> None:
+    """Raise 400 naming the field if the filename exceeds the DB column."""
+    if len(filename) > _MAX_FILENAME_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Field 'filename' is too long ({len(filename)} characters; "
+                f"maximum is {_MAX_FILENAME_LENGTH})"
+            ),
+        )
+
+
 def _validate_file_extension(filename: str) -> None:
     """Raise 400 if the file extension is not in ALLOWED_EXTENSIONS."""
+    _validate_filename_length(filename)
     extension = Path(filename).suffix.lower()
     if extension not in settings.ALLOWED_EXTENSIONS:
         raise HTTPException(

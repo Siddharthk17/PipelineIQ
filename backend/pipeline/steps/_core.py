@@ -120,6 +120,7 @@ FILTER_OPERATIONS: dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] =
 SUPPORTED_FILE_EXTENSIONS: dict[str, Callable[..., pd.DataFrame]] = {
     ".csv": pd.read_csv,
     ".json": pd.read_json,
+    ".parquet": pd.read_parquet,
 }
 
 TableLike: TypeAlias = pa.Table | pd.DataFrame
