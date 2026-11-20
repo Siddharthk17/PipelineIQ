@@ -5,12 +5,13 @@ Provides access to pipeline version history, diffs, and restore.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from backend.api.authz import check_pipeline_access
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import PipelinePermission, PipelineVersion, User
+from backend.models import PipelineVersion, User
 from backend.pipeline.versioning import diff_pipelines, save_version
 
 logger = logging.getLogger(__name__)
@@ -23,33 +24,15 @@ def _check_pipeline_permission(
     user: User,
     pipeline_name: str,
     required_levels: list[str],
-) -> None:
-    """Verify user has required permission level for the pipeline."""
-    if user.role == "admin":
-        return
+) -> str:
+    """Verify user has required permission level for the pipeline.
 
-    permission = (
-        db.query(PipelinePermission)
-        .filter(
-            PipelinePermission.pipeline_name == pipeline_name,
-            PipelinePermission.user_id == user.id,
-        )
-        .first()
-    )
-
-    if not permission or permission.permission_level not in required_levels:
-        # No grant at all: return 404 instead of 403 so the existence of
-        # another user's pipeline cannot be probed via the status code.
-        # Insufficient-level grants stay 403.
-        if not permission:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Pipeline run or pipeline not found, or access denied.",
-            )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"User lacks required permissions ({', '.join(required_levels)}) to access pipeline '{pipeline_name}'",
-        )
+    Thin wrapper around the shared :func:`check_pipeline_access` helper
+    (M-093): admin bypass, own-contract ownership, or an explicit grant.
+    Returns the canonical pipeline name. Raises 404 when no grant exists
+    (anti-oracle) and 403 on insufficient level.
+    """
+    return check_pipeline_access(db, user, pipeline_name, required_levels)
 
 
 @router.get("/{pipeline_name}")
@@ -59,7 +42,7 @@ def list_versions(
     current_user: User = Depends(get_current_user),
 ):
     """List all versions of a pipeline."""
-    _check_pipeline_permission(
+    pipeline_name = _check_pipeline_permission(
         db, current_user, pipeline_name, ["owner", "runner", "viewer"]
     )
     versions = (
@@ -89,7 +72,7 @@ def get_version(
     current_user: User = Depends(get_current_user),
 ):
     """Get a specific pipeline version."""
-    _check_pipeline_permission(
+    pipeline_name = _check_pipeline_permission(
         db, current_user, pipeline_name, ["owner", "runner", "viewer"]
     )
     version = (
@@ -123,7 +106,7 @@ def diff_versions(
     current_user: User = Depends(get_current_user),
 ):
     """Diff two versions of a pipeline."""
-    _check_pipeline_permission(
+    pipeline_name = _check_pipeline_permission(
         db, current_user, pipeline_name, ["owner", "runner", "viewer"]
     )
     va = (
@@ -176,9 +159,8 @@ def restore_version(
     current_user: User = Depends(get_current_user),
 ):
     """Restore a pipeline to a previous version by creating a new version."""
-    _check_pipeline_permission(
-        db, current_user, pipeline_name, [
-            "owner", "runner"])
+    pipeline_name = _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner"])
     old_version = (
         db.query(PipelineVersion)
         .filter(

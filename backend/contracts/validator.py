@@ -192,12 +192,13 @@ def _check_pattern(
     """
     try:
         rx = re.compile(str(pattern))
-    except re.error as exc:
+    except re.error:
         return ContractViolation(
             column=col_name,
             rule="invalid_regex",
             severity="error",
-            message=f"Column '{col_name}' has an invalid regex pattern: {exc}",
+            message=f"Column '{col_name}' has an invalid regex pattern "
+            "and cannot be evaluated",
             expected=str(pattern),
             actual="invalid regex",
         )
@@ -382,7 +383,7 @@ def validate_against_contract(
                 try:
                     below = pc.less(col, min_val)  # type: ignore[attr-defined]  # pyarrow stubs omit kernels (present at runtime)
                     below_count = pc.sum(below).as_py() or 0  # type: ignore[attr-defined]  # pyarrow stubs omit kernels (present at runtime)
-                except Exception as exc:
+                except Exception:
                     # Incompatible dtype (M-059) fails closed, never aborts.
                     violations.append(
                         ContractViolation(
@@ -391,7 +392,7 @@ def validate_against_contract(
                             severity="error",
                             message=(
                                 f"Column '{col_name}' min_value check could not "
-                                f"be evaluated on dtype {col.type}: {exc}"
+                                f"be evaluated on dtype {col.type}"
                             ),
                             expected=f">= {min_val}",
                             actual=str(col.type),
@@ -413,7 +414,7 @@ def validate_against_contract(
                 try:
                     above = pc.greater(col, max_val)  # type: ignore[attr-defined]  # pyarrow stubs omit kernels (present at runtime)
                     above_count = pc.sum(above).as_py() or 0  # type: ignore[attr-defined]  # pyarrow stubs omit kernels (present at runtime)
-                except Exception as exc:
+                except Exception:
                     violations.append(
                         ContractViolation(
                             column=col_name,
@@ -421,7 +422,7 @@ def validate_against_contract(
                             severity="error",
                             message=(
                                 f"Column '{col_name}' max_value check could not "
-                                f"be evaluated on dtype {col.type}: {exc}"
+                                f"be evaluated on dtype {col.type}"
                             ),
                             expected=f"<= {max_val}",
                             actual=str(col.type),
@@ -448,15 +449,15 @@ def validate_against_contract(
                 unique_vals = pc.unique(col).to_pylist()  # type: ignore[attr-defined]  # pyarrow stubs omit kernels (present at runtime)
                 allowed_set = set(str(v) for v in allowed)
                 disallowed = [v for v in unique_vals if str(v) not in allowed_set]
-            except Exception as exc:
+            except Exception:
                 violations.append(
                     ContractViolation(
                         column=col_name,
                         rule="allowed_values",
                         severity="error",
                         message=(
-                            f"Column '{col_name}' allowed_values check could not "
-                            f"be evaluated: {exc}"
+                            f"Column '{col_name}' allowed_values check "
+                            "could not be evaluated"
                         ),
                         expected=str(allowed),
                         actual="check error",
@@ -481,15 +482,15 @@ def validate_against_contract(
             col = output_table.column(field_idx)
             try:
                 unique_count = pc.count_distinct(col).as_py() or 0  # type: ignore[attr-defined]  # pyarrow stubs omit kernels (present at runtime)
-            except Exception as exc:
+            except Exception:
                 violations.append(
                     ContractViolation(
                         column=col_name,
                         rule="unique",
                         severity="error",
                         message=(
-                            f"Column '{col_name}' uniqueness check could not "
-                            f"be evaluated: {exc}"
+                            f"Column '{col_name}' uniqueness check "
+                            "could not be evaluated"
                         ),
                         expected="all unique",
                         actual="check error",

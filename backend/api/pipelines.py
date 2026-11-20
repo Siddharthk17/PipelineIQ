@@ -6,7 +6,6 @@ result retrieval, cancellation, and export.
 
 import logging
 import os
-import re
 import time
 from datetime import UTC
 
@@ -17,6 +16,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from backend.api.authz import canonical_pipeline_name
 from backend.auth import get_current_user
 from backend.config import settings
 from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
@@ -80,7 +80,10 @@ def _create_and_queue_pipeline_run(
 ) -> RunPipelineResponse:
     """Create a PipelineRun record and queue Celery execution."""
     config = parsed_config or get_parsed_pipeline(yaml_config)
-    pipeline_name = name or config.name
+    # Canonical identity (M-064): the explicit request name wins, else the
+    # YAML name. This is the same resolver the permission check validated,
+    # so the grant and the stored run can never diverge.
+    pipeline_name = canonical_pipeline_name(name, config.name)
 
     pipeline_run = PipelineRun(
         name=pipeline_name,
@@ -298,28 +301,17 @@ def _validate_claim_name(pipeline_name: str | None) -> str:
 
     Names are validated BEFORE the first-run OWNER grant (M-089) so a
     caller cannot squat or probe names with requests that will fail
-    validation anyway. Allowed: letters/digits, space, underscore, dot,
-    dash; must start alphanumeric; max 255 chars.
+    validation anyway. Delegates to the shared canonical resolver
+    (backend.api.authz) so the claim, the stored run, and the saved
+    version all use one identity (M-064).
     """
-    name = pipeline_name or ""
-    if not name.strip():
+    try:
+        return canonical_pipeline_name(pipeline_name)
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Pipeline name must be a non-empty string",
-        )
-    if len(name) > 255 or _PIPELINE_NAME_RE.match(name) is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                "Pipeline name contains invalid characters: only letters, "
-                "digits, spaces, underscores, dots and dashes are allowed "
-                "(max 255 characters)"
-            ),
-        )
-    return name
-
-
-_PIPELINE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.\- ]{0,254}")
+            detail=str(exc),
+        ) from exc
 
 
 def _get_idempotency_key(request: Request) -> str | None:
