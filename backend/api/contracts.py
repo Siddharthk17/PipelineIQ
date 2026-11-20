@@ -5,19 +5,24 @@ read-only access to contract violations detected during pipeline execution.
 """
 
 import logging
+import time
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import yaml
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
 from backend.database import get_db
 from backend.models import (
     ContractViolationRecord,
+    PermissionLevel,
     PipelineContract,
     PipelinePermission,
     PipelineRun,
     User,
 )
+from backend.models.data_contract import IdempotencyKey
 from backend.schemas import (
     ContractCreateRequest,
     ContractDefResponse,
@@ -30,6 +35,14 @@ from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
+
+# Idempotency-Key polling budget for a concurrent duplicate create that is
+# still in flight (seconds). Sequential replays never wait.
+_IDEMPOTENT_INFLIGHT_TIMEOUT_S = 5.0
+_IDEMPOTENT_POLL_INTERVAL_S = 0.2
+
+# Upper bound on retries for deactivate-then-insert version races (M-008).
+_VERSION_WRITE_MAX_ATTEMPTS = 3
 
 
 def _ensure_pipeline_contract_access(
@@ -84,6 +97,292 @@ def _contract_query(db: Session, current_user: User):
     return query
 
 
+def _ordered_versions(query):
+    """Deterministic newest-first ordering (M-008): version ties break by id."""
+    return query.order_by(
+        PipelineContract.version.desc(), PipelineContract.id.desc()
+    )
+
+
+def _validate_consumers(
+    db: Session,
+    current_user: User,
+    consumers: list[str] | None,
+) -> None:
+    """Reject consumer entries naming pipelines the caller does not own (M-076).
+
+    A breach with severity=block makes workers pause every active schedule
+    whose pipeline_name appears in ``consumers``. Without this check any
+    contract owner could block another tenant's schedules by name. Entries
+    that do not match a known pipeline (e.g. e-mail/Slack notification
+    targets) are allowed; entries that match an existing pipeline require
+    owner-level access (own contract, OWNER grant, or admin).
+    """
+    if current_user.role == "admin":
+        return
+    bad: list[str] = []
+    for entry in consumers or []:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        name = entry.strip()
+        in_use = (
+            db.query(PipelineRun.id)
+            .filter(PipelineRun.name == name)
+            .first()
+            or db.query(PipelineContract.id)
+            .filter(PipelineContract.pipeline_name == name)
+            .first()
+            or db.query(PipelinePermission.id)
+            .filter(PipelinePermission.pipeline_name == name)
+            .first()
+        )
+        if not in_use:
+            continue
+        own_contract = (
+            db.query(PipelineContract.id)
+            .filter(
+                PipelineContract.pipeline_name == name,
+                PipelineContract.user_id == current_user.id,
+            )
+            .first()
+        )
+        permission = (
+            db.query(PipelinePermission)
+            .filter(
+                PipelinePermission.pipeline_name == name,
+                PipelinePermission.user_id == current_user.id,
+            )
+            .first()
+        )
+        if own_contract or (
+            permission is not None
+            and permission.permission_level == PermissionLevel.OWNER
+        ):
+            continue
+        bad.append(entry)
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Consumers must not name pipelines you do not own: "
+                + ", ".join(sorted(set(bad)))
+            ),
+        )
+def _validate_contract_yaml(yaml_content: str) -> dict:
+    """Reject unparseable/non-mapping contract YAML at write time (M-088).
+
+    Invalid YAML must never be stored as the active contract: it would
+    shadow the last good version while only failing at run time.
+    """
+    try:
+        data = yaml.safe_load(yaml_content)
+    except yaml.YAMLError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Contract YAML is invalid: {exc}",
+        ) from exc
+    if not isinstance(data, dict) or not data:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Contract YAML must be a non-empty mapping",
+        )
+    return data
+
+
+def _get_idempotency_key(request: Request) -> str | None:
+    """Extract and validate the Idempotency-Key header (M-062)."""
+    raw = request.headers.get("idempotency-key")
+    if raw is None:
+        return None
+    key = raw.strip()
+    if not key or len(key) > 255 or any(c in key for c in ("\r", "\n")):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid Idempotency-Key header: must be 1-255 characters "
+            "without line breaks",
+        )
+    return key
+
+
+def _idempotency_lookup(
+    db: Session, *, scope: str, key: str, user_id
+) -> IdempotencyKey | None:
+    return (
+        db.query(IdempotencyKey)
+        .filter(
+            IdempotencyKey.scope == scope,
+            IdempotencyKey.key == key,
+            IdempotencyKey.user_id == user_id,
+        )
+        .first()
+    )
+
+
+def _idempotency_claim(
+    db: Session, *, scope: str, key: str, user_id
+) -> tuple[str, IdempotencyKey | None]:
+    """Claim an idempotency key or return the stored outcome (M-062).
+
+    Returns ("owner", row) when this request won the key, ("replay", row)
+    when a completed response is stored, or ("inflight", row) when another
+    request is still producing the response. The unique constraint makes
+    concurrent duplicate claims collapse to a single owner.
+    """
+    existing = _idempotency_lookup(db, scope=scope, key=key, user_id=user_id)
+    if existing is not None:
+        if existing.status_code is not None:
+            return "replay", existing
+        return "inflight", existing
+    row = IdempotencyKey(
+        scope=scope,
+        key=key,
+        user_id=user_id,
+        status_code=None,
+        response_body=None,
+    )
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = _idempotency_lookup(db, scope=scope, key=key, user_id=user_id)
+        if existing is not None and existing.status_code is not None:
+            return "replay", existing
+        return "inflight", existing
+    db.refresh(row)
+    return "owner", row
+
+
+def _idempotency_wait(
+    db: Session, row: IdempotencyKey
+) -> IdempotencyKey | None:
+    """Wait briefly for an in-flight duplicate to complete (M-062)."""
+    deadline = time.monotonic() + _IDEMPOTENT_INFLIGHT_TIMEOUT_S
+    while time.monotonic() < deadline:
+        time.sleep(_IDEMPOTENT_POLL_INTERVAL_S)
+        db.expire(row)
+        refreshed = (
+            db.query(IdempotencyKey).filter(IdempotencyKey.id == row.id).first()
+        )
+        if refreshed is not None and refreshed.status_code is not None:
+            return refreshed
+    return None
+
+
+def _idempotency_release(db: Session, row: IdempotencyKey) -> None:
+    """Release a claim placeholder that never produced a response (M-062).
+
+    Only removes the row while it is still incomplete, so a concurrent
+    completion can never be deleted by a loser.
+    """
+    try:
+        doomed = (
+            db.query(IdempotencyKey)
+            .filter(
+                IdempotencyKey.id == row.id,
+                IdempotencyKey.status_code.is_(None),
+            )
+            .first()
+        )
+        if doomed is not None:
+            db.delete(doomed)
+            db.commit()
+    except Exception:  # best-effort cleanup only
+        logger.warning("Failed to release idempotency placeholder", exc_info=True)
+        db.rollback()
+
+
+def _idempotency_complete(
+    db: Session,
+    row: IdempotencyKey,
+    *,
+    status_code: int,
+    body: dict,
+    resource_id: str | None = None,
+) -> None:
+    row.status_code = status_code
+    row.response_body = body
+    row.resource_id = resource_id
+    db.add(row)
+    db.commit()
+
+
+def _create_contract_version(
+    db: Session,
+    *,
+    pipeline_name: str,
+    yaml_content: str,
+    severity: str,
+    consumers: list[str],
+    user_id,
+) -> PipelineContract:
+    """Deactivate-then-insert a new contract version atomically (M-008).
+
+    The deactivate UPDATE and the INSERT run in one transaction guarded by
+    the partial unique index on the active (pipeline_name) and the
+    (pipeline_name, version) unique constraint. On a concurrent-write
+    IntegrityError the version base is recomputed from MAX(version) and
+    the attempt retried, so two racing writers produce versions N+1/N+2
+    with exactly one active row instead of duplicates.
+    """
+    last_exc: Exception | None = None
+    for _ in range(_VERSION_WRITE_MAX_ATTEMPTS):
+        latest_version = (
+            db.query(PipelineContract.version)
+            .filter(PipelineContract.pipeline_name == pipeline_name)
+            .order_by(PipelineContract.version.desc())
+            .limit(1)
+            .scalar()
+        )
+        # Single-statement deactivation of every active row for the pipeline.
+        db.query(PipelineContract).filter(
+            PipelineContract.pipeline_name == pipeline_name,
+            PipelineContract.is_active.is_(True),
+        ).update(
+            {PipelineContract.is_active: False},
+            synchronize_session=False,
+        )
+        contract = PipelineContract(
+            pipeline_name=pipeline_name,
+            version=(latest_version + 1) if latest_version is not None else 1,
+            yaml_content=yaml_content,
+            severity=severity,
+            consumers=consumers,
+            user_id=user_id,
+            is_active=True,
+        )
+        db.add(contract)
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            last_exc = exc
+            continue
+        db.refresh(contract)
+        return contract
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Concurrent contract write conflict for pipeline "
+            f"'{pipeline_name}'; please retry"
+        ),
+    ) from last_exc
+
+
+def _to_def_response(contract: PipelineContract) -> ContractDefResponse:
+    return ContractDefResponse(
+        id=str(contract.id),
+        pipeline_name=contract.pipeline_name,
+        version=contract.version,
+        yaml_content=contract.yaml_content,
+        severity=contract.severity.value if hasattr(contract.severity, "value") else str(contract.severity),
+        consumers=contract.consumers or [],
+        is_active=contract.is_active,
+        created_at=contract.created_at,
+        updated_at=contract.updated_at,
+    )
+
+
 # Contract definition CRUD
 
 
@@ -98,9 +397,11 @@ def list_contracts(
         db, current_user, pipeline_name, {"owner", "runner", "viewer"}
     )
     contracts = (
-        _contract_query(db, current_user)
-        .filter(PipelineContract.pipeline_name == pipeline_name)
-        .order_by(PipelineContract.version.desc())
+        _ordered_versions(
+            _contract_query(db, current_user).filter(
+                PipelineContract.pipeline_name == pipeline_name
+            )
+        )
         .all()
     )
     return ContractListResponse(
@@ -131,6 +432,7 @@ def list_contracts(
 def create_contract(
     pipeline_name: str,
     body: ContractCreateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -138,37 +440,164 @@ def create_contract(
     _ensure_pipeline_contract_access(
         db, current_user, pipeline_name, {"owner"}, allow_new=True
     )
-    latest = (
-        _contract_query(db, current_user)
-        .filter(PipelineContract.pipeline_name == pipeline_name)
-        .order_by(PipelineContract.version.desc())
+    _validate_contract_yaml(body.yaml_content)
+    _validate_consumers(db, current_user, body.consumers)
+
+    idem_key = _get_idempotency_key(request)
+    idem_row: IdempotencyKey | None = None
+    if idem_key is not None:
+        action, idem_row = _idempotency_claim(
+            db, scope="contract_create", key=idem_key, user_id=current_user.id
+        )
+        if action == "replay":
+            assert idem_row is not None and idem_row.response_body is not None
+            return ContractDefResponse(**idem_row.response_body)
+        if action == "inflight":
+            assert idem_row is not None
+            done = _idempotency_wait(db, idem_row)
+            if done is not None and done.response_body is not None:
+                return ContractDefResponse(**done.response_body)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotent request still in progress",
+            )
+
+    try:
+        contract = _create_contract_version(
+            db,
+            pipeline_name=pipeline_name,
+            yaml_content=body.yaml_content,
+            severity=body.severity,
+            consumers=body.consumers,
+            user_id=current_user.id,
+        )
+    except HTTPException as exc:
+        # A version race with the same idempotency key means the winner
+        # already stored the outcome — replay it instead of 409.
+        if idem_key is not None and exc.status_code == status.HTTP_409_CONFLICT:
+            stored = _idempotency_lookup(
+                db, scope="contract_create", key=idem_key,
+                user_id=current_user.id,
+            )
+            if stored is not None and stored.response_body is not None:
+                return ContractDefResponse(**stored.response_body)
+        if idem_row is not None:
+            _idempotency_release(db, idem_row)
+        raise
+
+    response = _to_def_response(contract)
+    if idem_row is not None:
+        _idempotency_complete(
+            db,
+            idem_row,
+            status_code=status.HTTP_201_CREATED,
+            body=response.model_dump(mode="json"),
+            resource_id=str(contract.id),
+        )
+    return response
+
+
+# NOTE (M-030): literal sub-routes MUST be registered before
+# /pipelines/{pipeline_name}/{contract_id} — otherwise "status"/"breaches"
+# are captured as a contract_id and the endpoints are unreachable.
+@router.get(
+    "/pipelines/{pipeline_name}/status",
+    response_model=ContractStatusResponse,
+)
+def get_contract_status(
+    pipeline_name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get the status of a pipeline's active contract against its latest run."""
+    _ensure_pipeline_contract_access(
+        db, current_user, pipeline_name, {"owner", "runner", "viewer"}
+    )
+    active = (
+        _ordered_versions(
+            _contract_query(db, current_user).filter(
+                PipelineContract.pipeline_name == pipeline_name,
+                PipelineContract.is_active.is_(True),
+            )
+        )
         .first()
     )
-    next_version = (latest.version + 1) if latest else 1
 
-    contract = PipelineContract(
+    last_run_query = db.query(PipelineRun).filter(PipelineRun.name == pipeline_name)
+    if current_user.role != "admin":
+        last_run_query = last_run_query.filter(PipelineRun.user_id == current_user.id)
+    last_run = last_run_query.order_by(
+        PipelineRun.created_at.desc(), PipelineRun.id.desc()
+    ).first()
+
+    total_violations = 0
+    if active and last_run:
+        total_violations = (
+            db.query(ContractViolationRecord)
+            .filter(ContractViolationRecord.run_id == last_run.id)
+            .count()
+        )
+
+    return ContractStatusResponse(
         pipeline_name=pipeline_name,
-        version=next_version,
-        yaml_content=body.yaml_content,
-        severity=body.severity,
-        consumers=body.consumers,
-        user_id=current_user.id,
+        has_contract=active is not None,
+        active_contract_id=str(active.id) if active else None,
+        active_contract_version=active.version if active else None,
+        last_run_id=str(last_run.id) if last_run else None,
+        last_run_status=last_run.status.value if last_run else None,
+        total_violations=total_violations,
     )
-    db.add(contract)
-    db.commit()
-    db.refresh(contract)
 
-    return ContractDefResponse(
-        id=str(contract.id),
-        pipeline_name=contract.pipeline_name,
-        version=contract.version,
-        yaml_content=contract.yaml_content,
-        severity=contract.severity.value if hasattr(contract.severity, "value") else str(contract.severity),
-        consumers=contract.consumers or [],
-        is_active=contract.is_active,
-        created_at=contract.created_at,
-        updated_at=contract.updated_at,
+
+@router.get("/pipelines/{pipeline_name}/breaches")
+def list_pipeline_breaches(
+    pipeline_name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List contract violations for the latest run of a pipeline."""
+    _ensure_pipeline_contract_access(
+        db, current_user, pipeline_name, {"owner", "runner", "viewer"}
     )
+    last_run_query = db.query(PipelineRun).filter(PipelineRun.name == pipeline_name)
+    if current_user.role != "admin":
+        last_run_query = last_run_query.filter(PipelineRun.user_id == current_user.id)
+    last_run = last_run_query.order_by(
+        PipelineRun.created_at.desc(), PipelineRun.id.desc()
+    ).first()
+    if not last_run:
+        return {"run_id": None, "total_violations": 0, "violations": []}
+
+    violations = (
+        db.query(ContractViolationRecord)
+        .filter(ContractViolationRecord.run_id == last_run.id)
+        .order_by(
+            ContractViolationRecord.step_index,
+            ContractViolationRecord.severity.desc(),
+        )
+        .all()
+    )
+
+    return {
+        "run_id": str(last_run.id),
+        "total_violations": len(violations),
+        "violations": [
+            {
+                "id": str(v.id),
+                "step_name": v.step_name,
+                "step_index": v.step_index,
+                "step_type": v.step_type,
+                "column": v.column,
+                "rule": v.rule,
+                "severity": v.severity,
+                "message": v.message,
+                "actual": v.actual,
+                "expected": v.expected,
+                "created_at": v.created_at.isoformat() if v.created_at else None,
+            }
+            for v in violations
+        ],
+    }
 
 
 @router.get(
@@ -182,6 +611,7 @@ def get_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Get a specific contract definition by ID."""
+    validate_uuid_format(contract_id)
     _ensure_pipeline_contract_access(
         db, current_user, pipeline_name, {"owner", "runner", "viewer"}
     )
@@ -223,7 +653,10 @@ def update_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Update an existing contract definition (creates a new version)."""
+    validate_uuid_format(contract_id)
     _ensure_pipeline_contract_access(db, current_user, pipeline_name, {"owner"})
+    _validate_contract_yaml(body.yaml_content)
+    _validate_consumers(db, current_user, body.consumers)
     existing = (
         _contract_query(db, current_user)
         .filter(
@@ -238,34 +671,18 @@ def update_contract(
             detail=f"Contract {contract_id} not found for pipeline {pipeline_name}",
         )
 
-    # Deactivate the existing version, create a new one
-    existing.is_active = False
-
-    next_version = existing.version + 1
-    new_contract = PipelineContract(
+    # New version via the same atomic deactivate-then-insert path as
+    # create (M-008): never two actives, never duplicate versions.
+    new_contract = _create_contract_version(
+        db,
         pipeline_name=pipeline_name,
-        version=next_version,
         yaml_content=body.yaml_content,
         severity=body.severity,
         consumers=body.consumers,
         user_id=current_user.id,
-        is_active=True,
     )
-    db.add(new_contract)
-    db.commit()
-    db.refresh(new_contract)
 
-    return ContractDefResponse(
-        id=str(new_contract.id),
-        pipeline_name=new_contract.pipeline_name,
-        version=new_contract.version,
-        yaml_content=new_contract.yaml_content,
-        severity=new_contract.severity.value if hasattr(new_contract.severity, "value") else str(new_contract.severity),
-        consumers=new_contract.consumers or [],
-        is_active=new_contract.is_active,
-        created_at=new_contract.created_at,
-        updated_at=new_contract.updated_at,
-    )
+    return _to_def_response(new_contract)
 
 
 @router.delete(
@@ -279,6 +696,7 @@ def delete_contract(
     current_user: User = Depends(get_current_user),
 ):
     """Delete a contract definition."""
+    validate_uuid_format(contract_id)
     _ensure_pipeline_contract_access(db, current_user, pipeline_name, {"owner"})
     contract = (
         _contract_query(db, current_user)
@@ -296,101 +714,6 @@ def delete_contract(
     db.delete(contract)
     db.commit()
     return None
-
-
-@router.get(
-    "/pipelines/{pipeline_name}/status",
-    response_model=ContractStatusResponse,
-)
-def get_contract_status(
-    pipeline_name: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Get the status of a pipeline's active contract against its latest run."""
-    _ensure_pipeline_contract_access(
-        db, current_user, pipeline_name, {"owner", "runner", "viewer"}
-    )
-    active = (
-        _contract_query(db, current_user)
-        .filter(
-            PipelineContract.pipeline_name == pipeline_name,
-            PipelineContract.is_active.is_(True),
-        )
-        .first()
-    )
-
-    last_run_query = db.query(PipelineRun).filter(PipelineRun.name == pipeline_name)
-    if current_user.role != "admin":
-        last_run_query = last_run_query.filter(PipelineRun.user_id == current_user.id)
-    last_run = last_run_query.order_by(PipelineRun.created_at.desc()).first()
-
-    total_violations = 0
-    if active and last_run:
-        total_violations = (
-            db.query(ContractViolationRecord)
-            .filter(ContractViolationRecord.run_id == last_run.id)
-            .count()
-        )
-
-    return ContractStatusResponse(
-        pipeline_name=pipeline_name,
-        has_contract=active is not None,
-        active_contract_id=str(active.id) if active else None,
-        active_contract_version=active.version if active else None,
-        last_run_id=str(last_run.id) if last_run else None,
-        last_run_status=last_run.status.value if last_run else None,
-        total_violations=total_violations,
-    )
-
-
-@router.get("/pipelines/{pipeline_name}/breaches")
-def list_pipeline_breaches(
-    pipeline_name: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """List contract violations for the latest run of a pipeline."""
-    _ensure_pipeline_contract_access(
-        db, current_user, pipeline_name, {"owner", "runner", "viewer"}
-    )
-    last_run_query = db.query(PipelineRun).filter(PipelineRun.name == pipeline_name)
-    if current_user.role != "admin":
-        last_run_query = last_run_query.filter(PipelineRun.user_id == current_user.id)
-    last_run = last_run_query.order_by(PipelineRun.created_at.desc()).first()
-    if not last_run:
-        return {"run_id": None, "total_violations": 0, "violations": []}
-
-    violations = (
-        db.query(ContractViolationRecord)
-        .filter(ContractViolationRecord.run_id == last_run.id)
-        .order_by(
-            ContractViolationRecord.step_index,
-            ContractViolationRecord.severity.desc(),
-        )
-        .all()
-    )
-
-    return {
-        "run_id": str(last_run.id),
-        "total_violations": len(violations),
-        "violations": [
-            {
-                "id": str(v.id),
-                "step_name": v.step_name,
-                "step_index": v.step_index,
-                "step_type": v.step_type,
-                "column": v.column,
-                "rule": v.rule,
-                "severity": v.severity,
-                "message": v.message,
-                "actual": v.actual,
-                "expected": v.expected,
-                "created_at": v.created_at.isoformat() if v.created_at else None,
-            }
-            for v in violations
-        ],
-    }
 
 
 # Contract violation read endpoints
