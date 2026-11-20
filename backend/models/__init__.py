@@ -249,6 +249,13 @@ class HealingAttempt(Base):
 
     __tablename__ = "healing_attempts"
 
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id", "attempt_number",
+            name="uq_healing_attempts_run_attempt",
+        ),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     run_id: Mapped[uuid.UUID] = mapped_column(
@@ -628,6 +635,13 @@ class PipelinePermission(Base):
     """Per-pipeline role-based access control entry."""
 
     __tablename__ = "pipeline_permissions"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_name", "user_id",
+            name="uq_pipeline_permissions_name_user",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
