@@ -23,6 +23,10 @@ WEAK_SECRET_VALUES = frozenset(
         "ci_test_secret_key_not_for_production",
         "pipelineiq-dev-secret-key-change-in-production-2024-minimum-32chars",
         "pipelineiq-dev-jwt-secret-change-in-production-2024",
+        # The .env.example placeholder (S2-002): it is exactly 32 chars,
+        # so length checks alone accept it — blocklist it explicitly so a
+        # verbatim copy of the example can never boot in production.
+        "REPLACE_WITH_OPENSSL_RAND_HEX_32",
     }
 )
 MAX_SCHEDULE_CONFIG_BYTES = 51200
