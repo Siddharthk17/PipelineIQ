@@ -10,13 +10,17 @@ import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 
 from backend.config import settings
 from backend.execution.sql_builder import validate_sql_step_query
-from backend.pipeline.exceptions import InvalidYAMLError, MissingRequiredFieldError
+from backend.pipeline.exceptions import (
+    InvalidYAMLError,
+    MissingRequiredFieldError,
+    PipelineYAMLTooLargeError,
+)
 from backend.utils.string_utils import (
     find_closest_column,
     is_safe_filename,
@@ -24,6 +28,19 @@ from backend.utils.string_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# M-164: hard cap on raw pipeline YAML accepted for parsing. Pipelines are
+# kilobytes; a 51-step pipeline serializes to ~10KB. Anything beyond this
+# is a client bug or a DoS attempt — reject before PyYAML allocates.
+# Routes should map PipelineYAMLTooLargeError to HTTP 413.
+MAX_PIPELINE_YAML_BYTES = 256_000
+
+# M-112/M-113: the only fill_nulls strategies the batch executor
+# implements (backend/pipeline/steps/_core.py::execute_fill_nulls).
+# Anything else silently no-ops there, so the validator rejects it here.
+VALID_FILL_NULLS_STRATEGIES = frozenset({
+    "constant", "forward_fill", "backward_fill", "mean", "median", "mode",
+})
 
 
 class StepType(str, Enum):
@@ -431,11 +448,24 @@ class PipelineParser:
 
     def _parse_yaml(self, yaml_string: str) -> dict:
         """Parse raw YAML string into a dictionary."""
+        if not isinstance(yaml_string, str):
+            raise InvalidYAMLError("Pipeline YAML must be a string")
+        # M-164: reject oversized payloads before PyYAML allocates.
+        size = len(yaml_string.encode("utf-8"))
+        if size > MAX_PIPELINE_YAML_BYTES:
+            raise PipelineYAMLTooLargeError(size, MAX_PIPELINE_YAML_BYTES)
         try:
             # Strip potential diff markers before parsing
             from backend.pipeline.diff_utils import strip_diff_markers
             cleaned_yaml = strip_diff_markers(yaml_string)
             raw = yaml.safe_load(cleaned_yaml.strip())
+        except RecursionError as exc:
+            # M-100: deeply nested YAML (e.g. "[[[[...") exhausts the
+            # parser stack. Report a 400 with step context, never a 500.
+            raise InvalidYAMLError(
+                "Pipeline YAML is nested too deeply; "
+                "reduce nesting levels and retry"
+            ) from exc
         except yaml.YAMLError as exc:
             # Attempt auto-recovery for js-yaml vs PyYAML incompatibilities
             try:
@@ -443,6 +473,11 @@ class PipelineParser:
                 cleaned_yaml = strip_diff_markers(yaml_string).strip()
                 repaired = _repair_quoted_values(cleaned_yaml)
                 raw = yaml.safe_load(repaired)
+            except RecursionError as nested_exc:
+                raise InvalidYAMLError(
+                    "Pipeline YAML is nested too deeply; "
+                    "reduce nesting levels and retry"
+                ) from nested_exc
             except yaml.YAMLError:
                 line = getattr(exc, "problem_mark", None)
                 line_num = line.line + 1 if line else None
