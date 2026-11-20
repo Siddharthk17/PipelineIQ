@@ -209,6 +209,19 @@ def _evaluate_rule(
     elif check == "matches_pattern":
         pattern = rule["pattern"]
         try:
+            # S2-008: reject catastrophic-backtracking shapes before
+            # evaluating per value on workers (same guard as the contract
+            # layers; invalid/nested patterns fail closed, never burn CPU).
+            from backend.contracts.validator import _has_nested_quantifier
+
+            if _has_nested_quantifier(str(pattern)):
+                return ValidationRuleResult(
+                    rule_name=f"{column}.{check}", column=column, check=check,
+                    passed=False, severity=severity, failing_count=0,
+                    total_count=len(df), failing_examples=[],
+                    message="Regex pattern has nested quantifiers "
+                    "(ReDoS risk); simplify the pattern.",
+                )
             mask = ~series.astype(str).str.match(re.compile(pattern))
             count = int(mask.sum())
             examples = series[mask].head(3).tolist()
