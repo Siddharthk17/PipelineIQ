@@ -174,7 +174,8 @@ def delete_webhook(
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
     if str(webhook.user_id) != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Not your webhook")
+        # R2-006: 404 (not 403) so webhook IDs cannot be probed.
+        raise HTTPException(status_code=404, detail="Webhook not found")
 
     # Audit AFTER commit: log_action writes through its own session, so
     # logging before the delete commits would record deletions that later
@@ -227,7 +228,8 @@ def list_deliveries(
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
     if str(webhook.user_id) != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Not your webhook")
+        # R2-006: 404 (not 403) so webhook IDs cannot be probed.
+        raise HTTPException(status_code=404, detail="Webhook not found")
 
     deliveries = (
         db.query(WebhookDelivery)
@@ -262,7 +264,8 @@ def test_webhook(
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
     if str(webhook.user_id) != str(current_user.id):
-        raise HTTPException(status_code=403, detail="Not your webhook")
+        # R2-006: 404 (not 403) so webhook IDs cannot be probed.
+        raise HTTPException(status_code=404, detail="Webhook not found")
     try:
         validate_public_http_url(webhook.url)
         pinned_url, host_header, extensions = pin_url_to_validated_ip(

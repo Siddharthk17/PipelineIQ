@@ -153,6 +153,18 @@ class ArrowDataBus:
     def _redis_key(self, run_id: str, key: str) -> str:
         return f"arrow_bus:{run_id}:{key}"
 
+    @staticmethod
+    def _mem_key(run_id: str, key: str) -> str:
+        """In-memory index key (C2-011).
+
+        The dict was keyed by bare step name, so concurrent runs sharing
+        step names evicted each other's entries (put() starts with
+        delete(key) regardless of run). Namespacing by run keeps the
+        in-memory index consistent with the already run-scoped Redis keys
+        and manifest.
+        """
+        return f"{run_id}:{key}"
+
     def _manifest_key(self, run_id: str) -> str:
         return f"arrow_bus:manifest:{run_id}"
 
@@ -176,7 +188,7 @@ class ArrowDataBus:
 
     def _record_location(self, location: _ArrowLocation) -> None:
         with self._lock:
-            self._locations[location.key] = location
+            self._locations[self._mem_key(location.run_id, location.key)] = location
         self._persist_manifest_entry(location)
 
     def _persist_manifest_entry(self, location: _ArrowLocation) -> None:
@@ -320,7 +332,9 @@ class ArrowDataBus:
             raise ValueError("Arrow bus accepts only pyarrow.Table inputs")
 
         start = time.perf_counter()
-        self.delete(key)
+        # C2-011: pre-delete is scoped to this run — a bare delete(key)
+        # would evict a concurrent run's entry sharing the step name.
+        self._delete_mem(run_id, key)
         size_bytes = self._estimated_size(table)
 
         if size_bytes <= self._small_threshold_bytes:
@@ -403,10 +417,27 @@ class ArrowDataBus:
         """Compatibility wrapper for storing a table on the Arrow bus."""
         return self.put(key, table, run_id=run_id)
 
-    def get(self, key: str) -> pa.Table:
+    def get(self, key: str, *, run_id: str | None = None) -> pa.Table:
         start = time.perf_counter()
         with self._lock:
-            location = self._locations.get(key)
+            location = None
+            if run_id is not None:
+                location = self._locations.get(self._mem_key(run_id, key))
+            else:
+                # Legacy single-arg form: exact bare-key hit (pre-C2-011
+                # data / single-run tests) else unique suffix match.
+                location = self._locations.get(key)
+                if location is None:
+                    matches = [
+                        meta for mk, meta in self._locations.items()
+                        if mk.split(":", 1)[-1] == key
+                    ]
+                    if len(matches) == 1:
+                        location = matches[0]
+                    elif len(matches) > 1:
+                        raise KeyError(
+                            f"Arrow bus key '{key}' is ambiguous across "
+                            f"{len(matches)} runs; pass run_id")
             if location is None:
                 raise KeyError(f"Arrow bus key '{key}' not found")
 
@@ -464,17 +495,37 @@ class ArrowDataBus:
 
         raise KeyError(f"Arrow bus key '{key}' has unknown tier")
 
-    def load(self, key: str) -> pa.Table:
+    def load(self, key: str, *, run_id: str | None = None) -> pa.Table:
         """Compatibility wrapper for loading a table from the Arrow bus."""
-        return self.get(key)
+        return self.get(key, run_id=run_id)
 
-    def delete(self, key: str) -> None:
+    def _delete_mem(self, run_id: str, key: str) -> _ArrowLocation | None:
+        """Pop one run's in-memory entry, with payload + manifest cleanup."""
         with self._lock:
-            location = self._locations.pop(key, None)
+            location = self._locations.pop(
+                self._mem_key(run_id, key), None)
         if location is None:
-            return
+            return None
         self._delete_location_payload(location)
-        self._remove_manifest_entry(location.run_id, key)
+        self._remove_manifest_entry(run_id, key)
+        return location
+
+    def delete(self, key: str, *, run_id: str | None = None) -> None:
+        if run_id is not None:
+            self._delete_mem(run_id, key)
+            return
+        # Legacy single-arg form (tests/benchmarks): exact bare-key hit,
+        # else delete every namespaced entry sharing the step name.
+        with self._lock:
+            doomed = [mk for mk in self._locations
+                      if mk == key or mk.split(":", 1)[-1] == key]
+        for mem_key in doomed:
+            with self._lock:
+                location = self._locations.pop(mem_key, None)
+            if location is None:
+                continue
+            self._delete_location_payload(location)
+            self._remove_manifest_entry(location.run_id, location.key)
 
     def cleanup_run(self, run_id: str) -> dict[str, int]:
         deleted = {"hot": 0, "warm": 0, "cold": 0}
@@ -483,8 +534,10 @@ class ArrowDataBus:
             keys = [k for k, meta in self._locations.items()
                     if meta.run_id == run_id]
 
-        for key in keys:
-            loc = self._locations.get(key)
+        bare_keys = {k.split(":", 1)[-1] for k in keys}
+        for mem_key in keys:
+            with self._lock:
+                loc = self._locations.pop(mem_key, None)
             if loc:
                 if loc.tier == "redis":
                     deleted["hot"] += 1
@@ -492,10 +545,11 @@ class ArrowDataBus:
                     deleted["warm"] += 1
                 elif loc.tier == "spill":
                     deleted["cold"] += 1
-            self.delete(key)
+                self._delete_location_payload(loc)
+                self._remove_manifest_entry(run_id, loc.key)
 
         for location in self._load_manifest_locations(run_id):
-            if location.key in keys:
+            if location.key in bare_keys:
                 continue
             if location.tier == "redis":
                 deleted["hot"] += 1
@@ -518,8 +572,14 @@ class ArrowDataBus:
 
     def clear_all(self) -> None:
         with self._lock:
-            for key in list(self._locations.keys()):
-                self.delete(key)
+            mem_keys = list(self._locations.keys())
+        for key in mem_keys:
+            with self._lock:
+                location = self._locations.pop(key, None)
+            if location is None:
+                continue
+            self._delete_location_payload(location)
+            self._remove_manifest_entry(location.run_id, location.key)
 
     def maybe_evict_hot_to_warm(self) -> int:
         """Demote large Redis entries to /dev/shm when cache memory pressure is high.

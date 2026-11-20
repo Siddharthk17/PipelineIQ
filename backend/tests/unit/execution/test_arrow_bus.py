@@ -76,7 +76,7 @@ def test_store_small_table_in_redis(tmp_path) -> None:
     )
     tier = bus.put("small", _table(10), run_id="run-1")
     assert tier == "redis"
-    assert bus.locations["small"]["tier"] == "redis"
+    assert bus.locations["run-1:small"]["tier"] == "redis"
 
 
 def test_store_medium_table_in_shm(tmp_path) -> None:
@@ -88,7 +88,7 @@ def test_store_medium_table_in_shm(tmp_path) -> None:
     )
     tier = bus.put("medium", _table(5_000), run_id="run-1")
     assert tier == "shm"
-    assert bus.locations["medium"]["tier"] == "shm"
+    assert bus.locations["run-1:medium"]["tier"] == "shm"
     assert bus.get("medium").num_rows == 5_000
 
 
@@ -105,7 +105,7 @@ def test_store_large_table_in_spill(monkeypatch, tmp_path) -> None:
     )
     tier = bus.put("large", _table(10_000), run_id="run-1")
     assert tier == "spill"
-    assert bus.locations["large"]["tier"] == "spill"
+    assert bus.locations["run-1:large"]["tier"] == "spill"
     assert bus.get("large").num_rows == 10_000
 
 
@@ -122,9 +122,9 @@ def test_cleanup_run_data_removes_only_matching_run_keys(tmp_path) -> None:
 
     bus.cleanup_run("run-1")
 
-    assert "run1_a" not in bus.locations
-    assert "run1_b" not in bus.locations
-    assert "run2_a" in bus.locations
+    assert "run-1:run1_a" not in bus.locations
+    assert "run-1:run1_b" not in bus.locations
+    assert "run-2:run2_a" in bus.locations
 
 
 def test_cleanup_run_recovers_spill_from_manifest_after_restart(
@@ -144,7 +144,7 @@ def test_cleanup_run_recovers_spill_from_manifest_after_restart(
     )
     tier = bus_one.put("large", _table(10_000), run_id="run-1")
     assert tier == "spill"
-    spill_pointer = bus_one.locations["large"]["pointer"]
+    spill_pointer = bus_one.locations["run-1:large"]["pointer"]
     assert spill_pointer in fake_storage._store
 
     # Simulate process restart: new bus has no in-memory locations.
@@ -172,7 +172,7 @@ def test_cleanup_run_removes_orphaned_shm_files_by_run_pattern(
     )
     tier = bus_one.put("medium", _table(5_000), run_id="run-1")
     assert tier == "shm"
-    shm_pointer = bus_one.locations["medium"]["pointer"]
+    shm_pointer = bus_one.locations["run-1:medium"]["pointer"]
     assert shm_pointer is not None
 
     # Simulate crash + restart with lost in-memory and lost manifest.
@@ -186,3 +186,22 @@ def test_cleanup_run_removes_orphaned_shm_files_by_run_pattern(
     bus_two.cleanup_run("run-1")
 
     assert not Path(shm_pointer).exists()
+
+
+def test_concurrent_runs_sharing_step_name_do_not_clobber(tmp_path) -> None:
+    """C2-011: runs sharing step names keep independent entries."""
+    bus = ArrowDataBus(
+        small_threshold_mb=1.0,
+        medium_threshold_mb=2.0,
+        redis_client=_FakeRedis(),
+        shm_dir=str(tmp_path),
+    )
+    bus.put("transform", _table(10), run_id="run-A")
+    bus.put("transform", _table(20), run_id="run-B")
+    assert "run-A:transform" in bus.locations
+    assert "run-B:transform" in bus.locations
+    assert bus.get("transform", run_id="run-A").num_rows == 10
+    assert bus.get("transform", run_id="run-B").num_rows == 20
+    bus.cleanup_run("run-A")
+    assert "run-A:transform" not in bus.locations
+    assert "run-B:transform" in bus.locations

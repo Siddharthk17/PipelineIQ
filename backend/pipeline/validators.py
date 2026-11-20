@@ -161,7 +161,10 @@ def _evaluate_rule(
         msg = f"{count} null values in '{column}'"
 
     elif check == "not_empty":
-        mask = series.astype(str).str.strip() == ""
+        # C2-004: NULLs must fail the emptiness gate. astype(str) renders
+        # None->'None'/NaN->'nan' (non-empty strings), so nulls previously
+        # slipped through; OR the null mask in explicitly.
+        mask = series.isnull() | (series.astype(str).str.strip() == "")
         count = int(mask.sum())
         examples = series[mask].head(3).tolist()
         passed = count == 0

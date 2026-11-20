@@ -259,7 +259,10 @@ class SmartExecutor:
                     ]
                     result = self._as_result(
                         step, output_table,
-                        rows_in=max(left_table.num_rows, right_table.num_rows),
+                        # C2-007: rows_in must match the pandas engine
+                        # (left+right), not max — telemetry must not depend
+                        # on which side of the 50k threshold a table falls.
+                        rows_in=left_table.num_rows + right_table.num_rows,
                         columns_in=columns_in,
                         duration_ms=duration_ms,
                         engine="duckdb",

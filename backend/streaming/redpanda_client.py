@@ -347,13 +347,18 @@ def make_consumer(consumer_group: str, auto_offset_reset: str = "latest") -> Con
 
 
 def make_producer() -> Producer:
+    # R2-007: output producer uses strong delivery guarantees like the DLQ
+    # producer below. acks=1 + no idempotence duplicated into the output
+    # topic on every redelivery (publish-then-crash-before-commit, R2-001
+    # path, rebalance); receivers cannot dedupe (no batch IDs).
     return Producer({
         "bootstrap.servers":  _get_brokers(),
-        "acks":               1,
+        "acks":               "all",
+        "enable.idempotence": True,
         "linger.ms":          5,
         "batch.size":         16_384,
         "compression.type":   "snappy",
-        "retries":            3,
+        "retries":            10,
         "retry.backoff.ms":   100,
     })
 

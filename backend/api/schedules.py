@@ -124,14 +124,14 @@ def _get_schedule_or_404(
     schedule_id: str, current_user: User, db: Session,
 ) -> PipelineSchedule:
     validate_uuid_format(schedule_id)
-    schedule = (
-        db.query(PipelineSchedule)
-        .filter(
-            PipelineSchedule.id == as_uuid(schedule_id),
-            PipelineSchedule.user_id == current_user.id,
-        )
-        .first()
+    query = db.query(PipelineSchedule).filter(
+        PipelineSchedule.id == as_uuid(schedule_id),
     )
+    # R2-006: admins bypass ownership (mirrors streaming _check_streaming_access);
+    # anyone else is scoped to their own rows, 404 otherwise (no oracle).
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter(PipelineSchedule.user_id == current_user.id)
+    schedule = query.first()
     if not schedule:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -262,11 +262,12 @@ def list_schedules(
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
+    # R2-006: admins list all schedules; owners see their own.
+    query = db.query(PipelineSchedule)
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter(PipelineSchedule.user_id == current_user.id)
     schedules = (
-        db.query(PipelineSchedule)
-        .filter(PipelineSchedule.user_id == current_user.id)
-        .order_by(PipelineSchedule.created_at.desc())
-        .all()
+        query.order_by(PipelineSchedule.created_at.desc()).all()
     )
     return {
         "schedules": [_schedule_to_response(s) for s in schedules],
