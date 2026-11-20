@@ -305,10 +305,10 @@ def test_m112_sort_false_and_fill_nulls_strategy_pinned():
     # Every fill_nulls strategy the batch executor implements validates;
     # anything else is rejected (it silently no-ops in the executor).
     from backend.pipeline.parser import VALID_FILL_NULLS_STRATEGIES
-    assert VALID_FILL_NULLS_STRATEGIES == {
+    assert {
         "constant", "forward_fill", "backward_fill",
         "mean", "median", "mode",
-    }
+    } == VALID_FILL_NULLS_STRATEGIES
     for strategy in VALID_FILL_NULLS_STRATEGIES:
         raw = {"pipeline": {"name": "p", "steps": [
             {"name": "load", "type": "load", "file_id": "f1"},
