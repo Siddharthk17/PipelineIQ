@@ -681,14 +681,25 @@ class WasmModule(Base):
 
     Modules are stored in MinIO/S3 and referenced by pipeline YAML configs.
     Each module is validated on upload (exports, fuel budget, no WASI imports).
+
+    Names are unique per owning user (M-154), not globally: two tenants
+    may each register a module called e.g. ``clean`` without colliding or
+    probing each other's names through 500s/409s.
     """
 
     __tablename__ = "wasm_modules"
 
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "name",
+            name="uq_wasm_modules_user_name",
+        ),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     name: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False, index=True)
+        String(255), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     storage_key: Mapped[str] = mapped_column(
         String(512), nullable=False, unique=True)
