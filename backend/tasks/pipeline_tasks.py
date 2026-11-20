@@ -319,15 +319,18 @@ def execute_pipeline_task(self, run_id: str) -> dict[str, str]:
             exc,
             exc_info=True,
         )
-        # R-R-004: a user cancel landing mid-run (e.g. inside healing/LLM)
-        # must not be clobbered into FAILED. Re-read the row: if the run
-        # is CANCELLED, the worker lost the race — keep the user's verdict.
+        # R-R-004/R2-003: a user cancel landing mid-run (e.g. inside
+        # healing/LLM) must not be clobbered into FAILED. Re-read the row
+        # under a row lock on PG (like _persist_results): if the run is
+        # CANCELLED, the worker lost the race — keep the user's verdict.
+        # _mark_failed below is additionally conditional, so even a cancel
+        # landing between this read and the write still wins.
         db.expire_all()
-        cancelled = (
-            db.query(PipelineRun.status)
-            .filter(PipelineRun.id == run_id)
-            .scalar()
-        )
+        status_q = db.query(PipelineRun.status).filter(
+            PipelineRun.id == run_id)
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            status_q = status_q.with_for_update()
+        cancelled = status_q.scalar()
         if str(cancelled) == PipelineStatus.CANCELLED.value or (
             hasattr(cancelled, "value")
             and cancelled.value == PipelineStatus.CANCELLED.value
@@ -458,16 +461,31 @@ def _mark_running(db, pipeline_run: PipelineRun) -> None:
 
 
 def _mark_failed(db, run_id: str, error_message: str) -> None:
-    """Mark a pipeline run as FAILED in the database."""
+    """Mark a pipeline run as FAILED in the database.
+
+    R2-003: a concurrent user cancel must win. The UPDATE is conditional
+    on the run NOT being CANCELLED, so a cancel that landed between the
+    worker's last read and this write is never clobbered into FAILED.
+    """
     safe_error = _sanitize_error_message(error_message) or ""
     try:
-        pipeline_run = db.query(PipelineRun).filter(
-            PipelineRun.id == run_id).first()
-        if pipeline_run:
-            pipeline_run.status = PipelineStatus.FAILED
-            pipeline_run.completed_at = utcnow()
-            pipeline_run.error_message = safe_error
-            db.commit()
+        updated = (
+            db.query(PipelineRun)
+            .filter(
+                PipelineRun.id == run_id,
+                PipelineRun.status != PipelineStatus.CANCELLED,
+            )
+            .update(
+                {
+                    "status": PipelineStatus.FAILED,
+                    "completed_at": utcnow(),
+                    "error_message": safe_error,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        if updated == 1:
             _cache_progress_payload(
                 run_id,
                 {
@@ -477,6 +495,8 @@ def _mark_failed(db, run_id: str, error_message: str) -> None:
                     "error_message": safe_error,
                 },
             )
+        else:
+            db.expire_all()
     except Exception:
         logger.exception("Failed to mark pipeline %s as FAILED", run_id)
         db.rollback()

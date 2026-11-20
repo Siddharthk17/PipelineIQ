@@ -1314,22 +1314,67 @@ def cancel_pipeline_run(
 
     _check_run_permission(db, current_user, pipeline_run, ["owner", "runner"])
 
+    # R2-003: cancel is idempotent — a second cancel returns the current
+    # CANCELLED state instead of 409 (safe for retried requests).
+    if pipeline_run.status == PipelineStatus.CANCELLED:
+        return {"run_id": run_id, "status": "CANCELLED"}
+
     # HEALING runs hold a live worker task (autonomous healing executes
     # synchronously inside execute_pipeline_task), so they are cancellable
     # like any other in-flight state (M-152). Revoke SIGTERMs the worker;
     # the CANCELLED flip below sticks because the worker is gone.
-    if pipeline_run.status not in (
+    _CANCELLABLE = (
             PipelineStatus.PENDING,
             PipelineStatus.RUNNING,
             PipelineStatus.HEALING,
             PipelineStatus.STREAMING_ACTIVE,
-            PipelineStatus.STREAMING_PAUSED):
+            PipelineStatus.STREAMING_PAUSED)
+    if pipeline_run.status not in _CANCELLABLE:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot cancel pipeline with status '{pipeline_run.status.value}'",
         )
 
-    # Revoke the Celery task
+    # R2-003: atomic check-and-set. The pre-check above is only a fast
+    # path; the UPDATE below claims CANCELLED only from a cancellable
+    # state, so a worker that finished between our read and write wins
+    # (rowcount 0 -> re-read -> honest 409) instead of being clobbered.
+    from backend.utils.time_utils import utcnow
+
+    claimed = (
+        db.query(PipelineRun)
+        .filter(
+            PipelineRun.id == pipeline_run.id,
+            PipelineRun.status.in_(_CANCELLABLE),
+        )
+        .update(
+            {
+                "status": PipelineStatus.CANCELLED,
+                "completed_at": utcnow(),
+                "error_message": "Cancelled by user",
+            },
+            synchronize_session=False,
+        )
+    )
+    if claimed != 1:
+        # Lost the race: re-read to report honestly. Already-CANCELLED
+        # (concurrent cancel) is idempotent success; anything else is 409.
+        db.expire_all()
+        fresh = db.query(PipelineRun).filter(
+            PipelineRun.id == pipeline_run.id).first()
+        if fresh is not None and fresh.status == PipelineStatus.CANCELLED:
+            return {"run_id": run_id, "status": "CANCELLED"}
+        detail = fresh.status.value if fresh is not None else "unknown"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot cancel pipeline with status '{detail}'",
+        )
+    db.commit()
+    db.refresh(pipeline_run)
+
+    # Revoke the Celery task best-effort AFTER the claim sticks: a revoke
+    # failure must not un-cancel the run (the worker polls status and the
+    # reconciler reaps orphans). The task id is read from the claimed row.
     from backend.celery_app import celery_app as _celery_app
 
     task_id = pipeline_run.celery_task_id or run_id
@@ -1342,13 +1387,6 @@ def cancel_pipeline_run(
             task_id,
             exc,
         )
-
-    from backend.utils.time_utils import utcnow
-
-    pipeline_run.status = PipelineStatus.CANCELLED
-    pipeline_run.completed_at = utcnow()
-    pipeline_run.error_message = "Cancelled by user"
-    db.commit()
 
     cancel_payload = {
         "run_id": run_id,
