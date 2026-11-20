@@ -67,11 +67,16 @@ class PipelineConfigError(PipelineIQError):
 class InvalidYAMLError(PipelineConfigError):
     """Raised when the YAML string cannot be parsed."""
 
+    # M-031: YAML alias/anchor chains can expand a single scalar into
+    # megabytes of error context. Cap what we store/echo so one bad
+    # pipeline cannot blow up API error bodies and logs.
+    MAX_YAML_ERROR_CHARS = 2000
+
     def __init__(self, yaml_error: str, line: int | None = None) -> None:
-        self.yaml_error = yaml_error
+        self.yaml_error = yaml_error[: self.MAX_YAML_ERROR_CHARS]
         self.line = line
         location = f" at line {line}" if line else ""
-        super().__init__(f"Invalid YAML{location}: {yaml_error}")
+        super().__init__(f"Invalid YAML{location}: {self.yaml_error}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -79,6 +84,31 @@ class InvalidYAMLError(PipelineConfigError):
             "message": self.message,
             "yaml_error": self.yaml_error,
             "line": self.line,
+        }
+
+
+class PipelineYAMLTooLargeError(PipelineConfigError):
+    """Raised when the raw pipeline YAML exceeds the parse size cap.
+
+    Routes should map this to HTTP 413 (Payload Too Large); the base
+    handler maps it like any other PipelineConfigError so callers that
+    do not special-case it still get a 4xx, never a 500.
+    """
+
+    def __init__(self, size_bytes: int, max_bytes: int) -> None:
+        self.size_bytes = size_bytes
+        self.max_bytes = max_bytes
+        super().__init__(
+            f"Pipeline YAML is {size_bytes} bytes, exceeding the limit "
+            f"of {max_bytes} bytes. Split the pipeline or reduce step count."
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "error_type": self.__class__.__name__,
+            "message": self.message,
+            "size_bytes": self.size_bytes,
+            "max_bytes": self.max_bytes,
         }
 
 
