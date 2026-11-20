@@ -158,9 +158,38 @@ async function authorizeRoom({ payload, token, roomName }) {
     }
   }
 
-  // Admins bypass per-pipeline checks (mirrors backend behavior).
+  // Admins bypass per-pipeline checks (mirrors backend behavior), but a
+  // bare JWT claim is not re-verified: if PIPELINE_API_URL is configured,
+  // confirm admin status against the backend so a demoted admin loses
+  // access at most one cache TTL after revocation (R-S-004). Without an
+  // API (offline/dev), the claim stands.
   if (payload.role === 'admin') {
-    return { allowed: true }
+    if (!PIPELINE_API_URL) {
+      return { allowed: true }
+    }
+    const cacheKey = `admin|${userId}`;
+    const cached = authzCacheGet(cacheKey);
+    if (cached !== null) {
+      return cached.allowed ? { allowed: true } : { ...cached.denied };
+    }
+    const verdict = await checkMembershipViaApi(token, roomName);
+    if (verdict.allowed) {
+      authzCacheSet(cacheKey, { allowed: true });
+      return { allowed: true };
+    }
+    const denied = verdict.revokedOrInactive
+      ? {
+        allowed: false,
+        closeCode: CLOSE_CODE_AUTH_FAILURE,
+        reason: CLOSE_REASON_TOKEN_REVOKED,
+      }
+      : {
+        allowed: false,
+        closeCode: CLOSE_CODE_ROOM_FORBIDDEN,
+        reason: CLOSE_REASON_ROOM_FORBIDDEN,
+      };
+    authzCacheSet(cacheKey, { allowed: false, denied });
+    return denied;
   }
 
   if (payloadGrantsRoom(payload, roomName)) {
