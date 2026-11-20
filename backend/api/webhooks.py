@@ -1,7 +1,5 @@
 """Webhook CRUD and delivery endpoints."""
 
-import hashlib
-import hmac
 import logging
 from datetime import UTC, datetime
 
@@ -93,9 +91,15 @@ def create_webhook(
     current_user: User = Depends(get_current_user),
 ):
     """Register a new webhook URL."""
+    # Serialize creation per user so the cap below is atomic under
+    # concurrency: without the row lock, two concurrent requests can both
+    # observe count == 9 and both insert, overshooting the limit (M-155).
+    # The lock is held until commit; on SQLite it is a no-op.
+    db.query(User).filter(User.id == current_user.id).with_for_update().first()
     count = db.query(Webhook).filter(
         Webhook.user_id == current_user.id).count()
     if count >= 10:
+        db.rollback()
         raise HTTPException(
             status_code=400,
             detail="Maximum 10 webhooks per user")
@@ -163,15 +167,19 @@ def delete_webhook(
     if str(webhook.user_id) != str(current_user.id):
         raise HTTPException(status_code=403, detail="Not your webhook")
 
+    # Audit AFTER commit: log_action writes through its own session, so
+    # logging before the delete commits would record deletions that later
+    # roll back. Capture the id first — the instance is expired post-commit.
+    resource_id = webhook.id
+    db.delete(webhook)
+    db.commit()
+
     log_action(
         db,
         "webhook_deleted",
         user_id=current_user.id,
         resource_type="webhook",
-        resource_id=webhook.id)
-
-    db.delete(webhook)
-    db.commit()
+        resource_id=resource_id)
 
 
 @router.get("/{webhook_id}/deliveries", response_model=list[DeliveryResponse])
@@ -239,17 +247,17 @@ def test_webhook(
         "timestamp": datetime.now(UTC).isoformat(),
         "data": {"message": "This is a test webhook from PipelineIQ"},
     }
-    body = orjson.dumps(payload)
+    # Identical serialization and HMAC construction as the async delivery
+    # task (see build_webhook_signature): the receiver must verify the
+    # same bytes the worker would send.
+    body = orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)
     headers = {
         "Content-Type": "application/json",
         "X-PipelineIQ-Event": "test",
         "Host": host_header,
     }
     if webhook.secret:
-        sig = hmac.new(
-            webhook.secret.encode(),
-            body,
-            hashlib.sha256).hexdigest()
+        sig = build_webhook_signature(webhook.secret, body)
         headers["X-PipelineIQ-Signature"] = f"sha256={sig}"
 
     try:
