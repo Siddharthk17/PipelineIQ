@@ -119,3 +119,41 @@ class TestParseCeleryCrontab:
     def test_invalid_cron_raises(self):
         with pytest.raises(ValueError):
             parse_celery_crontab("0 6 * *")
+
+
+class TestTimezoneAwareScheduling:
+    """M-117: IANA timezone per schedule, default UTC."""
+
+    def test_default_is_utc(self):
+        from backend.scheduling.cron_utils import resolve_timezone
+        assert str(resolve_timezone(None)) == "UTC"
+        assert str(resolve_timezone("")) == "UTC"
+        nxt = get_next_run_at("0 6 * * *")
+        assert str(nxt.tzinfo) == "UTC"
+
+    def test_named_timezone_returned_in_zone(self):
+        nxt = get_next_run_at("0 6 * * *", tz="America/New_York")
+        assert str(nxt.tzinfo) == "America/New_York"
+
+    def test_same_instant_different_zones(self):
+        from datetime import UTC as _UTC
+        utc_run = get_next_run_at("0 12 * * *", tz="UTC")
+        ny_run = get_next_run_at("0 12 * * *", tz="America/New_York")
+        # Noon wall-time in NY is not noon UTC — zones shift the instant.
+        assert utc_run.astimezone(_UTC) != ny_run.astimezone(_UTC)
+
+    def test_unknown_timezone_raises(self):
+        with pytest.raises(ValueError):
+            get_next_run_at("0 6 * * *", tz="Mars/Olympus")
+
+    def test_preview_respects_timezone(self):
+        runs = get_next_n_runs("0 6 * * *", n=3, tz="Asia/Kathmandu")
+        assert len(runs) == 3
+        assert all(str(r.tzinfo) == "Asia/Kathmandu" for r in runs)
+
+    def test_celery_crontab_carries_timezone(self):
+        crontab = parse_celery_crontab("0 6 * * *", timezone="Asia/Kathmandu")
+        assert crontab.tz is not None
+        assert str(crontab.tz) == "Asia/Kathmandu"
+        utc_crontab = parse_celery_crontab("0 6 * * *")
+        assert str(utc_crontab.tz) == "UTC"
