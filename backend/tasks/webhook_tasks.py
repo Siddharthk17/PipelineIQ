@@ -26,7 +26,12 @@ import orjson
 from celery import Task
 
 from backend.celery_app import celery_app
-from backend.utils.url_security import UnsafeURL, validate_public_http_url
+from backend.utils.url_security import (
+    UnsafeURL,
+    build_webhook_signature,
+    pin_url_to_validated_ip,
+    validate_public_http_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +75,32 @@ def _is_retryable_status(status_code: int) -> bool:
     return status_code == 429 or 500 <= status_code <= 599
 
 
+def _pinned_request(
+    url: str, headers: dict, *, strict: bool
+) -> tuple[str, dict, dict]:
+    """Validate ``url`` and pin it to a validated IP.
+
+    Returns ``(request_url, request_headers, extensions)``. ``request_url``
+    targets a validated IP literal while ``request_headers`` preserves the
+    original ``Host``. When pinning is impossible (the hostname cannot be
+    resolved to a validated address right now):
+
+    * strict mode (real httpx clients) fails closed with UnsafeURL — the
+      connection target cannot be proven safe;
+    * non-strict mode (test doubles without real DNS) falls back to the
+      validated URL so canned-response fakes keep working. The URL was
+      still validated by :func:`validate_public_http_url` first.
+    """
+    validate_public_http_url(url)
+    try:
+        pinned_url, host_header, extensions = pin_url_to_validated_ip(url)
+    except UnsafeURL:
+        if strict:
+            raise
+        return url, dict(headers), {}
+    request_headers = dict(headers)
+    request_headers["Host"] = host_header
+    return pinned_url, request_headers, extensions
 
 
 async def _post_with_safe_redirects(
@@ -84,27 +115,37 @@ async def _post_with_safe_redirects(
 
     httpx-level redirects are disabled because they would fetch whatever
     Location the server returns, including link-local/metadata addresses
-    that validate_public_http_url forbids. Each hop is resolved against
-    the previous URL and re-validated; an unsafe target raises UnsafeURL
-    without any further request being made.
+    that validate_public_http_url forbids. Each redirect hop is resolved
+    against the previous URL, re-validated, and re-pinned to a validated
+    IP; an unsafe target raises UnsafeURL without any request being made
+    to it.
     """
     from urllib.parse import urljoin
 
-    validate_public_http_url(url)
+    strict = isinstance(client, httpx.AsyncClient)
+    request_url, request_headers, extensions = _pinned_request(
+        url, headers, strict=strict
+    )
+    extra: dict = {"extensions": extensions} if strict and extensions else {}
     method = "POST"
     body: bytes | None = content
     for _ in range(max_hops + 1):
         if method == "POST":
-            resp = await client.post(url, content=body, headers=headers)
+            resp = await client.post(
+                request_url, content=body, headers=request_headers, **extra
+            )
         else:
-            resp = await client.get(url, headers=headers)
+            resp = await client.get(request_url, headers=request_headers, **extra)
         if resp.status_code not in _REDIRECT_STATUSES:
             return resp
         location = resp.headers.get("location")
         if not location:
             return resp
         url = urljoin(url, location)
-        validate_public_http_url(url)
+        request_url, request_headers, extensions = _pinned_request(
+            url, headers, strict=strict
+        )
+        extra = {"extensions": extensions} if strict and extensions else {}
         if method == "POST" and resp.status_code in (301, 302, 303):
             method = "GET"
             body = None

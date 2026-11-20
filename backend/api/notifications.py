@@ -18,7 +18,11 @@ from backend.services.notification_service import (
     send_email_notification,
     send_slack_notification,
 )
-from backend.utils.url_security import UnsafeURL, validate_public_http_url
+from backend.utils.url_security import (
+    UnsafeURL,
+    resolve_public_ips,
+    validate_public_http_url,
+)
 from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
 logger = logging.getLogger(__name__)
@@ -237,6 +241,29 @@ def test_notification(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(exc),
+            ) from exc
+
+        # Re-resolve immediately before sending: the stored URL was
+        # validated at write time, but DNS answers can change between
+        # validation and use (rebinding TOCTOU). A fresh resolution that
+        # hits a non-public address aborts the send. The shared guard
+        # also blocks CGNAT and metadata ranges for the send path inside
+        # send_slack_notification.
+        try:
+            from urllib.parse import urlparse as _urlparse
+
+            _parsed = _urlparse(str(webhook_url))
+            _port = _parsed.port or (443 if _parsed.scheme == "https" else 80)
+            resolve_public_ips(_parsed.hostname or "", _port)
+        except UnsafeURL as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Slack webhook URL is invalid",
             ) from exc
 
         success = send_slack_notification(
