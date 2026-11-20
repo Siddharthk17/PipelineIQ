@@ -44,11 +44,22 @@ const YJS_AUTH_TIMEOUT_MS = parseInt(
   10,
 )
 const YJS_AUTH_CACHE_TTL_MS = parseInt(
-  process.env.YJS_AUTH_CACHE_TTL_MS || '30000',
+  process.env.YJS_AUTH_CACHE_TTL_MS || '10000',
   10,
 )
 const YJS_ALLOW_UNVERIFIED_ROOMS =
   process.env.YJS_ALLOW_UNVERIFIED_ROOMS === '1'
+if (
+  YJS_ALLOW_UNVERIFIED_ROOMS &&
+  (process.env.NODE_ENV === 'production' ||
+    process.env.ENVIRONMENT === 'production')
+) {
+  console.error(
+    'Refusing to start: YJS_ALLOW_UNVERIFIED_ROOMS=1 disables all room '
+    + 'authorization and must never be enabled in production.',
+  )
+  process.exit(1)
+}
 
 let STATIC_ROOM_MEMBERS = {}
 try {
