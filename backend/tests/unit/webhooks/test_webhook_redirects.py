@@ -160,7 +160,6 @@ class TestS2003SyncPinning:
         hook = Webhook(
             id=uuid_module.uuid4(), user_id=uuid_module.uuid4(),
             url="https://hooks.example.test/hook", events=["x"])
-        import datetime as dt
         from unittest.mock import MagicMock
         db = MagicMock()
         ws.deliver_webhook_sync(hook, "ping", {"data": {}}, db=db)
