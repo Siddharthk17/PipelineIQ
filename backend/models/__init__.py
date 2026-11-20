@@ -25,6 +25,7 @@ from sqlalchemy import (
     Uuid,
     event,
     func,
+    text,
 )
 from sqlalchemy import (
     Enum as SQLEnum,
@@ -275,7 +276,7 @@ class HealingAttempt(Base):
     gemini_patch = mapped_column(PgJSONB, nullable=True)
     sandbox_result = mapped_column(PgJSONB, nullable=True)
     applied: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     confidence: Mapped[float | None] = mapped_column(
         Numeric(5, 4), nullable=True)
@@ -331,7 +332,7 @@ class UploadedFile(Base):
     columns: Mapped[list] = mapped_column(PgJSONB, nullable=False)
     dtypes: Mapped[dict] = mapped_column(PgJSONB, nullable=False)
     version: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1, server_default="1"
+        Integer, nullable=False, default=1, server_default=text("1")
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
@@ -444,7 +445,7 @@ class Webhook(Base):
         default=lambda: ["pipeline_completed", "pipeline_failed"],
     )
     is_active: Mapped[bool] = mapped_column(
-        Boolean, server_default="true", default=True
+        Boolean, server_default=text("true"), default=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -544,7 +545,7 @@ class PipelineSchedule(Base):
     cron_human: Mapped[str | None] = mapped_column(
         String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
     last_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -555,13 +556,13 @@ class PipelineSchedule(Base):
     last_run_status: Mapped[str | None] = mapped_column(
         String(20), nullable=True)
     total_runs: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     successful_runs: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     failed_runs: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     healed_runs: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -616,7 +617,7 @@ class NotificationConfig(Base):
         default=lambda: ["pipeline_completed", "pipeline_failed"],
     )
     is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -711,9 +712,9 @@ class WasmModule(Base):
     fuel_budget: Mapped[int] = mapped_column(
         Integer, nullable=False, default=10_000_000)
     pipeline_usage_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true")
+        Boolean, nullable=False, default=True, server_default=text("true"))
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -733,13 +734,13 @@ class StreamingStats(Base):
         Uuid, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), primary_key=True
     )
     batches_processed: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="0")
+        Integer, nullable=False, server_default=text("0"))
     messages_processed: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, server_default="0")
+        BigInteger, nullable=False, server_default=text("0"))
     messages_failed: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, server_default="0")
+        BigInteger, nullable=False, server_default=text("0"))
     messages_dlq: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, server_default="0")
+        BigInteger, nullable=False, server_default=text("0"))
     throughput_per_sec: Mapped[float | None] = mapped_column(
         Float, nullable=True)
     consumer_lag: Mapped[int | None] = mapped_column(
@@ -763,7 +764,7 @@ class DataAsset(Base):
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     namespace: Mapped[str] = mapped_column(String(500), nullable=False)
     metadata_: Mapped[dict | None] = mapped_column(
-        "metadata", PgJSONB, nullable=True, server_default="{}")
+        "metadata", PgJSONB, nullable=True, server_default=text("'{}'"))
     owner_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
