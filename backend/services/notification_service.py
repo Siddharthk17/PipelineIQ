@@ -15,7 +15,11 @@ from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.models import NotificationConfig, NotificationType
-from backend.utils.url_security import UnsafeURL, validate_public_http_url
+from backend.utils.url_security import (
+    UnsafeURL,
+    pin_url_to_validated_ip,
+    validate_public_http_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +34,18 @@ def send_slack_notification(webhook_url: str, message: str) -> bool:
         return False
     try:
         validate_public_http_url(webhook_url)
+        # S2-003: pin to a validated IP (see webhook_service). The async
+        # delivery path re-validates each redirect hop; the sync Slack
+        # path disables redirects and reports 3xx instead of fetching the
+        # Location target.
+        pinned_url, host_header, _extensions = pin_url_to_validated_ip(
+            webhook_url)
         response = httpx.post(
-            webhook_url,
+            pinned_url,
             json={"text": message},
+            headers={"Host": host_header},
             timeout=10.0,
+            follow_redirects=False,
         )
         if response.status_code == 200:
             logger.info("Slack notification sent successfully")

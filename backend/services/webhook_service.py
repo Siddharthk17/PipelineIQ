@@ -15,7 +15,11 @@ import orjson
 
 from backend.database import SessionLocal
 from backend.models import Webhook, WebhookDelivery
-from backend.utils.url_security import UnsafeURL, validate_public_http_url
+from backend.utils.url_security import (
+    UnsafeURL,
+    pin_url_to_validated_ip,
+    validate_public_http_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +61,22 @@ def deliver_webhook_sync(
 
     try:
         validate_public_http_url(webhook.url)
+        # S2-003: pin to a validated IP like the async delivery path.
+        # Validating then connecting by hostname re-resolves DNS at
+        # connect time (rebinding TOCTOU); connecting to the validated
+        # literal with the original Host header closes it. Redirects
+        # are disabled so a 3xx Location is reported, never fetched
+        # (per-hop re-validation lives in the async path).
+        pinned_url, host_header, extensions = pin_url_to_validated_ip(
+            webhook.url)
+        headers["Host"] = host_header
         import httpx
 
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(webhook.url, content=body, headers=headers)
+        with httpx.Client(timeout=10, follow_redirects=False) as client:
+            resp = client.post(
+                pinned_url, content=body, headers=headers,
+                extensions=extensions or None,
+            )
         delivery.response_status = resp.status_code
         delivery.response_body = resp.text[:1000] if resp.text else None
         if 200 <= resp.status_code < 300:

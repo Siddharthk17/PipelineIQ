@@ -503,12 +503,19 @@ def _mark_failed(db, run_id: str, error_message: str) -> None:
 
 
 def _load_wasm_modules(
-    db, wasm_ids: set[str]
+    db, wasm_ids: set[str], owner_id=None,
 ) -> dict[str, bytes]:
     """Load Wasm module binaries from MinIO/S3 storage.
 
     Returns a dict mapping wasm_file_id to raw .wasm binary bytes.
     Only loads modules that are active and belong to the query set.
+
+    S2-001: scoped to the run owner. Save-time gates
+    (``assert_wasm_ids_owned``) check ownership, but the worker trusted
+    stored YAML outright — any stored YAML reaching the worker with a
+    foreign id (pre-gate rows, healing/migration mutations) executed
+    another tenant's bytes. UUIDs are unguessable so exploitation needs
+    a UUID-disclosure primitive; still, defense in depth is cheap here.
     """
     if not wasm_ids:
         return {}
@@ -525,10 +532,13 @@ def _load_wasm_modules(
     if not uuid_ids:
         return {}
 
-    modules = db.query(WasmModule).filter(
+    query = db.query(WasmModule).filter(
         WasmModule.id.in_(uuid_ids),
         WasmModule.is_active.is_(True),
-    ).all()
+    )
+    if owner_id is not None:
+        query = query.filter(WasmModule.user_id == owner_id)
+    modules = query.all()
 
     if not modules:
         return {}
@@ -577,11 +587,15 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
         for fid in referenced_file_ids:
             with contextlib.suppress(ValueError, AttributeError):
                 uuid_ids.append(as_uuid(fid))
-        uploaded_files = (
-            db.query(UploadedFile).filter(UploadedFile.id.in_(uuid_ids)).all()
-            if uuid_ids
-            else []
-        )
+        # S2-001: scope file loads to the run owner (mirrors the WASM
+        # scoping below). Save-time gates check ownership, but the worker
+        # must not trust stored YAML outright.
+        file_query = db.query(UploadedFile).filter(
+            UploadedFile.id.in_(uuid_ids))
+        if pipeline_run.user_id is not None:
+            file_query = file_query.filter(
+                UploadedFile.user_id == pipeline_run.user_id)
+        uploaded_files = file_query.all() if uuid_ids else []
     else:
         uploaded_files = []
 
@@ -590,7 +604,8 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
         str(f.id): {"original_filename": f.original_filename} for f in uploaded_files
     }
 
-    wasm_modules = _load_wasm_modules(db, referenced_wasm_ids)
+    wasm_modules = _load_wasm_modules(
+        db, referenced_wasm_ids, owner_id=pipeline_run.user_id)
 
     user_role = "viewer"
     if pipeline_run.user_id:
