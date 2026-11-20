@@ -565,6 +565,29 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add baseline security headers to every API response (M-138).
+
+    The API serves JSON, never HTML: a deny-by-default frame policy plus
+    nosniff/referrer/permissions policies. HSTS is emitted only when the
+    request arrived over TLS (compose terminates plain HTTP on loopback;
+    production TLS terminates at the ingress).
+    """
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=()"
+    )
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+
+@app.middleware("http")
 async def api_version_middleware(request: Request, call_next):
     """Add API-Version header to all responses for version awareness."""
     try:
@@ -713,8 +736,22 @@ def live_check() -> dict:
     include_in_schema=False,
     response_model=None,
 )
-def readiness_check() -> dict:
-    """Readiness probe for all critical runtime dependencies."""
+def readiness_check() -> Response:
+    """Readiness probe for all critical runtime dependencies.
+
+    Truthful HTTP semantics (M-170): 200 only when every check passes,
+    503 while any dependency (DB, Redis, storage) is down so load
+    balancers and Kubernetes (readinessProbe) stop routing traffic here.
+    """
+    body = _readiness_body()
+    return JSONResponse(
+        status_code=200 if body["status"] == "ok" else 503,
+        content=body,
+    )
+
+
+def _readiness_body() -> dict:
+    """Shared readiness payload for /readyz (truthful code) and /health."""
     checks = _collect_health_checks()
     overall = "ok" if all(value == "ok" for value in checks.values()) else "degraded"
     redis_summary = (
@@ -756,8 +793,13 @@ def readiness_check() -> dict:
     response_model=None,
 )
 def health_check() -> dict:
-    """Backward-compatible alias for readiness checks."""
-    return readiness_check()
+    """Backward-compatible alias for readiness checks.
+
+    Always 200 with a status field (existing tests, compose healthchecks
+    and CI smoke assert 200 + status in ok/degraded). The truthful
+    gate is /readyz, which returns 503 while degraded.
+    """
+    return _readiness_body()
 
 
 def _collect_health_checks() -> dict[str, str]:

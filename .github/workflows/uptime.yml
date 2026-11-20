@@ -23,8 +23,10 @@ jobs:
     steps:
       - name: Check PRODUCTION_URL secret
         id: cfg
+        env:
+          PRODUCTION_URL_CFG: ${{ secrets.PRODUCTION_URL }}
         run: |
-          if [ -z "${{ secrets.PRODUCTION_URL }}" ]; then
+          if [ -z "$PRODUCTION_URL_CFG" ]; then
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::notice title=Uptime skipped::Set the PRODUCTION_URL repository secret to enable external monitoring."
           else
@@ -33,8 +35,10 @@ jobs:
 
       - name: Probe health + frontend + docs
         if: steps.cfg.outputs.configured == 'true'
+        env:
+          PRODUCTION_URL_BASE: ${{ secrets.PRODUCTION_URL }}
         run: |
-          BASE="${{ secrets.PRODUCTION_URL }}"
+          BASE="$PRODUCTION_URL_BASE"
           fail=0
           for p in "/health" "/" "/docs"; do
             code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 "$BASE$p" || echo "000")

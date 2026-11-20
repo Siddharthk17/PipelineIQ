@@ -1,12 +1,21 @@
 name: Deploy to Civo k3s
 
+# Gated on CI: runs only after the CI workflow completes successfully on
+# main (tests/lint/smoke green). Direct pushes never deploy. Manual runs are
+# allowed from main only and still require the production environment's
+# approval rules. (M-025, M-139)
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  workflow_dispatch:
 
 concurrency:
   group: deploy-production
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 env:
   REGISTRY: ghcr.io
@@ -16,7 +25,19 @@ env:
 jobs:
   build-and-push:
     name: Build and Push to GHCR
+    # Only run for CI success on main, or a manual dispatch from main.
+    if: >
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      ) ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref_name == 'main'
+      )
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}
 
@@ -62,6 +83,7 @@ jobs:
     name: Deploy to Production
     needs: build-and-push
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
 
     environment:
       name: production
@@ -72,8 +94,10 @@ jobs:
 
       - name: Check if KUBE_CONFIG is available
         id: check-kube
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
         run: |
-          if [ -z "${{ secrets.KUBE_CONFIG }}" ]; then
+          if [ -z "$KUBE_CONFIG_B64" ]; then
             echo "KUBE_CONFIG secret not set — running in dry-run mode"
             echo "dry-run=true" >> $GITHUB_OUTPUT
           else
@@ -88,9 +112,11 @@ jobs:
 
       - name: Configure kubectl for Civo
         if: steps.check-kube.outputs.dry-run == 'false'
+        env:
+          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
         run: |
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          printf '%s' "$KUBE_CONFIG_B64" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
           kubectl config current-context
 
@@ -100,25 +126,63 @@ jobs:
 
       - name: Update Kubernetes secrets
         if: steps.check-kube.outputs.dry-run == 'false'
+        env:
+          DB_URL: ${{ secrets.DATABASE_URL }}
+          DB_WRITE_URL: ${{ secrets.DATABASE_WRITE_URL }}
+          DB_READ_URL: ${{ secrets.DATABASE_READ_URL }}
+          PG_USER: ${{ secrets.POSTGRES_USER }}
+          PG_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          PG_DB: ${{ secrets.POSTGRES_DB }}
+          REDIS_PW: ${{ secrets.REDIS_PASSWORD }}
+          REDIS_BROKER: ${{ secrets.REDIS_BROKER_URL }}
+          REDIS_BACKEND: ${{ secrets.REDIS_BACKEND_URL }}
+          REDIS_PUBSUB: ${{ secrets.REDIS_PUBSUB_URL }}
+          REDIS_CACHE: ${{ secrets.REDIS_CACHE_URL }}
+          REDIS_YJS: ${{ secrets.REDIS_YJS_URL }}
+          CELERY_BACKEND: ${{ secrets.CELERY_RESULT_BACKEND }}
+          JWT_S: ${{ secrets.JWT_SECRET }}
+          APP_S: ${{ secrets.SECRET_KEY }}
+          FLOWER_U: ${{ secrets.FLOWER_USER }}
+          FLOWER_P: ${{ secrets.FLOWER_PASSWORD }}
+          GRAFANA_U: ${{ secrets.GRAFANA_USER }}
+          GRAFANA_P: ${{ secrets.GRAFANA_PASSWORD }}
+          GEMINI_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL_V: ${{ secrets.GEMINI_MODEL }}
+          GEMINI_FALLBACK_V: ${{ secrets.GEMINI_FALLBACK_MODELS }}
+          MINIO_U: ${{ secrets.MINIO_ROOT_USER }}
+          MINIO_P: ${{ secrets.MINIO_ROOT_PASSWORD }}
+          S3_AK: ${{ secrets.S3_ACCESS_KEY }}
+          S3_SK: ${{ secrets.S3_SECRET_KEY }}
         run: |
           kubectl delete secret pipelineiq-secrets -n pipelineiq --ignore-not-found
           kubectl create secret generic pipelineiq-secrets \
             --namespace=pipelineiq \
-            --from-literal=DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-            --from-literal=DATABASE_WRITE_URL="${{ secrets.DATABASE_WRITE_URL }}" \
-            --from-literal=DATABASE_READ_URL="${{ secrets.DATABASE_READ_URL }}" \
-            --from-literal=POSTGRES_USER="${{ secrets.POSTGRES_USER }}" \
-            --from-literal=POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}" \
-            --from-literal=POSTGRES_DB="${{ secrets.POSTGRES_DB }}" \
-            --from-literal=JWT_SECRET="${{ secrets.JWT_SECRET }}" \
-            --from-literal=SECRET_KEY="${{ secrets.SECRET_KEY }}" \
-            --from-literal=GEMINI_API_KEY="${{ secrets.GEMINI_API_KEY }}" \
-            --from-literal=GEMINI_MODEL="${{ secrets.GEMINI_MODEL }}" \
-            --from-literal=GEMINI_FALLBACK_MODELS="${{ secrets.GEMINI_FALLBACK_MODELS }}" \
-            --from-literal=MINIO_ROOT_USER="${{ secrets.MINIO_ROOT_USER }}" \
-            --from-literal=MINIO_ROOT_PASSWORD="${{ secrets.MINIO_ROOT_PASSWORD }}" \
-            --from-literal=S3_ACCESS_KEY="${{ secrets.S3_ACCESS_KEY }}" \
-            --from-literal=S3_SECRET_KEY="${{ secrets.S3_SECRET_KEY }}"
+            --from-literal=DATABASE_URL="$DB_URL" \
+            --from-literal=DATABASE_WRITE_URL="$DB_WRITE_URL" \
+            --from-literal=DATABASE_READ_URL="$DB_READ_URL" \
+            --from-literal=POSTGRES_USER="$PG_USER" \
+            --from-literal=POSTGRES_PASSWORD="$PG_PASSWORD" \
+            --from-literal=POSTGRES_DB="$PG_DB" \
+            --from-literal=REDIS_PASSWORD="$REDIS_PW" \
+            --from-literal=REDIS_BROKER_URL="$REDIS_BROKER" \
+            --from-literal=REDIS_BACKEND_URL="$REDIS_BACKEND" \
+            --from-literal=REDIS_PUBSUB_URL="$REDIS_PUBSUB" \
+            --from-literal=REDIS_CACHE_URL="$REDIS_CACHE" \
+            --from-literal=REDIS_YJS_URL="$REDIS_YJS" \
+            --from-literal=CELERY_RESULT_BACKEND="$CELERY_BACKEND" \
+            --from-literal=JWT_SECRET="$JWT_S" \
+            --from-literal=SECRET_KEY="$APP_S" \
+            --from-literal=FLOWER_USER="$FLOWER_U" \
+            --from-literal=FLOWER_PASSWORD="$FLOWER_P" \
+            --from-literal=GRAFANA_USER="$GRAFANA_U" \
+            --from-literal=GRAFANA_PASSWORD="$GRAFANA_P" \
+            --from-literal=GEMINI_API_KEY="$GEMINI_KEY" \
+            --from-literal=GEMINI_MODEL="$GEMINI_MODEL_V" \
+            --from-literal=GEMINI_FALLBACK_MODELS="$GEMINI_FALLBACK_V" \
+            --from-literal=MINIO_ROOT_USER="$MINIO_U" \
+            --from-literal=MINIO_ROOT_PASSWORD="$MINIO_P" \
+            --from-literal=S3_ACCESS_KEY="$S3_AK" \
+            --from-literal=S3_SECRET_KEY="$S3_SK"
 
       - name: Apply Kubernetes manifests
         if: steps.check-kube.outputs.dry-run == 'false'

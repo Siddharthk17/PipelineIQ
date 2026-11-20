@@ -15,6 +15,12 @@ spec:
       labels:
         app: y-websocket
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: y-websocket
           image: ghcr.io/siddharthk17/pipelineiq-y-websocket:latest

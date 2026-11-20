@@ -9,6 +9,26 @@ services:
     envVars:
       - key: DATABASE_URL
         sync: false
+      - key: DATABASE_WRITE_URL
+        sync: false
+      - key: DATABASE_READ_URL
+        sync: false
+      - key: REDIS_BROKER_URL
+        sync: false
+      - key: REDIS_BACKEND_URL
+        sync: false
+      - key: REDIS_PUBSUB_URL
+        sync: false
+      - key: REDIS_CACHE_URL
+        sync: false
+      - key: REDIS_YJS_URL
+        sync: false
+      - key: CELERY_RESULT_BACKEND
+        sync: false
+      - key: FLOWER_PASSWORD
+        sync: false
+      - key: GRAFANA_PASSWORD
+        sync: false
       - key: SECRET_KEY
         generateValue: true
       - key: ENVIRONMENT

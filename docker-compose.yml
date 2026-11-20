@@ -152,6 +152,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-api
+    mem_limit: 2g
+    security_opt:
+      - no-new-privileges:true
     command:
       - sh
       - -c
@@ -229,6 +232,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-sse-service
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
     command: >
       sh -c "mkdir -p /tmp/gunicorn &&
       gunicorn backend.sse_app:sse_app
@@ -300,6 +306,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-worker-critical
+    mem_limit: 2g
+    security_opt:
+      - no-new-privileges:true
     command: >
       celery -A backend.celery_app:celery_app worker -E
       --queues=critical
@@ -369,6 +378,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-worker-default
+    mem_limit: 2g
+    security_opt:
+      - no-new-privileges:true
     command: >
       celery -A backend.celery_app:celery_app worker
       --queues=critical,default
@@ -439,6 +451,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-worker-bulk
+    mem_limit: 2g
+    security_opt:
+      - no-new-privileges:true
     command: >
       celery -A backend.celery_app:celery_app worker -E
       --queues=bulk
@@ -509,6 +524,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-worker-gemini
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
     command: >
       celery -A backend.celery_app:celery_app worker -E
       --queues=gemini
@@ -584,6 +602,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-celery-beat
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
     command: >
       celery -A backend.celery_app:celery_app beat
       --loglevel=info
@@ -619,6 +640,14 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app/backend
+    healthcheck:
+      # Beat has no network endpoint: verify the scheduler process is alive
+      # and its schedule file is being maintained.
+      test: ["CMD-SHELL", "python -c \"import pathlib; p=pathlib.Path('/tmp/celerybeat-schedule'); raise SystemExit(0 if b'celery' in pathlib.Path('/proc/1/cmdline').read_bytes() else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
     networks:
       - pipelineiq-network
@@ -626,6 +655,9 @@ services:
   redis-broker:
     image: redis:7.4.2-alpine
     container_name: pipelineiq-redis-broker
+    # M-123 (static note): every redis role enforces --requirepass wired to
+    # the same REDIS_PASSWORD. With an empty REDIS_PASSWORD the server would
+    # fail closed at startup; no daemon here to live-verify, see REPORT.md.
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     sysctls:
@@ -771,7 +803,7 @@ services:
       - pipelineiq-network
 
   minio:
-    image: pgsty/minio:${MINIO_IMAGE_TAG:-latest}
+    image: pgsty/minio:${MINIO_IMAGE_TAG:-RELEASE.2024-12-13T22-19-12Z}
     container_name: pipelineiq-minio
     command: server /data --console-address ":9001"
     environment:
@@ -826,6 +858,9 @@ services:
   flower:
     build: ./backend
     container_name: pipelineiq-flower
+    mem_limit: 512m
+    security_opt:
+      - no-new-privileges:true
     command: >
       sh -c "sleep 5 &&
       celery --broker=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
@@ -880,6 +915,15 @@ services:
   nginx:
     build: ./nginx
     container_name: pipelineiq-nginx
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     environment:
       - API_HOST=api
       - API_PORT=8000
@@ -916,8 +960,10 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
-      - "--web.enable-lifecycle"
       - "--web.route-prefix=/prometheus"
+    # NOTE: --web.enable-lifecycle intentionally absent (M-049). The
+    # lifecycle API (/-/quit, /-/reload) allows remote shutdown/reload and
+    # must never be exposed; nginx also denies those paths explicitly.
     ports:
       - "127.0.0.1:9090:9090"
     healthcheck:
@@ -981,7 +1027,10 @@ services:
     volumes:
       - ./promtail/promtail.yml:/etc/promtail/promtail.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # NOTE: the Docker socket (/var/run/docker.sock) is intentionally NOT
+    # mounted (M-050) — it grants root-equivalent container escape. Log
+    # collection uses static json-file log paths below instead of the
+    # Docker daemon service-discovery API.
     command: -config.file=/etc/promtail/promtail.yml
     depends_on:
       loki:
@@ -1133,6 +1182,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pipelineiq-worker-streaming
+    mem_limit: 2g
+    security_opt:
+      - no-new-privileges:true
     command: >
       celery -A backend.celery_app:celery_app worker -E
       --queues=streaming

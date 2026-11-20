@@ -17,10 +17,13 @@ spec:
       labels:
         app: minio
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: minio
           # Pinned mirror per ADR-0001 (upstream minio/minio is gone from Hub).
-          image: pgsty/minio:latest
+          image: pgsty/minio:RELEASE.2024-12-13T22-19-12Z
           command:
             - minio
             - server

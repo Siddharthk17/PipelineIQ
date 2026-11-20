@@ -15,13 +15,19 @@ spec:
       labels:
         app: sse-service
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: sse
           image: ghcr.io/siddharthk17/pipelineiq-backend:latest
           imagePullPolicy: Always
           command:
             - gunicorn
-            - backend.sse_app:app
+            - backend.sse_app:sse_app
             - -k
             - uvicorn.workers.UvicornWorker
             - -w
