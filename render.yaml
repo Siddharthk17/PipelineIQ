@@ -37,10 +37,12 @@ services:
         value: "12.8.4"
       - key: UPLOAD_DIR
         value: /tmp/uploads
-      - key: FIRST_SUPERUSER_EMAIL
-        value: admin@pipelineiq.app
-      - key: FIRST_SUPERUSER_PASSWORD
-        sync: false
+      # NOTE (M-048/R-O-003): no FIRST_SUPERUSER_* vars — the backend never
+      # consumed them, so they created a false impression that an admin is
+      # provisioned. Create the first admin explicitly after first deploy:
+      #   PIPELINEIQ_BOOTSTRAP_ADMIN=1 ADMIN_EMAIL=you@example.com \
+      #     ADMIN_PASSWORD=$(openssl rand -hex 24) \
+      #     python -m backend.scripts.create_admin
       - key: CORS_ORIGINS
         value: '["https://pipeline-iq0.vercel.app","https://pipelineiq-api.onrender.com"]'
       - key: GEMINI_API_KEY

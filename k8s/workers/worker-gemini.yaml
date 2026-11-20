@@ -39,7 +39,31 @@ spec:
                 name: pipelineiq-config
             - secretRef:
                 name: pipelineiq-secrets
-          resources:
+          livenessProbe:
+          exec:
+            command:
+              - celery
+              - -A
+              - backend.celery_app
+              - inspect
+              - ping
+              - --timeout=5
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+              - celery
+              - -A
+              - backend.celery_app
+              - inspect
+              - ping
+              - --timeout=5
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 3
+        resources:
             requests:
               memory: "256Mi"
               cpu: "100m"

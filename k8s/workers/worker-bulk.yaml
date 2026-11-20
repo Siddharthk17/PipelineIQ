@@ -42,7 +42,31 @@ spec:
           env:
             - name: OTEL_SERVICE_NAME
               value: pipelineiq-worker-bulk
-          resources:
+          livenessProbe:
+          exec:
+            command:
+              - celery
+              - -A
+              - backend.celery_app
+              - inspect
+              - ping
+              - --timeout=5
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+              - celery
+              - -A
+              - backend.celery_app
+              - inspect
+              - ping
+              - --timeout=5
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 3
+        resources:
             requests:
               memory: "1Gi"
               cpu: "500m"

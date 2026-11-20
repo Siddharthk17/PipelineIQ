@@ -20,6 +20,26 @@ function AuthConsumer() {
   );
 }
 
+
+/** Build a fetch-mock response carrying matching text() and json() bodies.
+ * fetchWithAuth reads res.text() then JSON-parses, so mocks must provide
+ * text() consistent with json() (plain strings pass through as-is). */
+function mockJsonResponse(
+  body: unknown,
+  init: { ok?: boolean; status?: number; statusText?: string } = {},
+) {
+  const status = init.status ?? 200;
+  const text = typeof body === "string" ? body : JSON.stringify(body);
+  return {
+    ok: init.ok ?? status < 400,
+    status,
+    statusText: init.statusText ?? "",
+    json: () =>
+      Promise.resolve(typeof body === "string" ? JSON.parse(body) : body),
+    text: () => Promise.resolve(text),
+  };
+}
+
 describe("AuthProvider", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -60,16 +80,12 @@ describe("AuthProvider", () => {
       text: () => Promise.resolve(JSON.stringify({ detail: "Not authenticated" })),
       } as Response)
       // apiLogin call
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
+      .mockResolvedValueOnce(mockJsonResponse({
             access_token: "tok-123",
             token_type: "bearer",
             expires_in: 3600,
             user: { id: "u1", email: "test@test.com", username: "tester", role: "admin", is_active: true, created_at: "" },
-          }),
-      } as Response);
+          }));
 
     render(
       <AuthProvider>
@@ -100,16 +116,12 @@ describe("AuthProvider", () => {
       text: () => Promise.resolve(JSON.stringify({ detail: "Not authenticated" })),
       } as Response)
       // apiLogin (demo)
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
+      .mockResolvedValueOnce(mockJsonResponse({
             access_token: "demo-tok",
             token_type: "bearer",
             expires_in: 3600,
             user: { id: "demo", email: "demo@pipelineiq.app", username: "demo", role: "viewer", is_active: true, created_at: "" },
-          }),
-      } as Response);
+          }));
 
     render(
       <AuthProvider>
@@ -140,22 +152,14 @@ describe("AuthProvider", () => {
       text: () => Promise.resolve(JSON.stringify({ detail: "Not authenticated" })),
       } as Response)
       // apiLogin
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
+      .mockResolvedValueOnce(mockJsonResponse({
             access_token: "tok",
             token_type: "bearer",
             expires_in: 3600,
             user: { id: "u1", email: "t@t.com", username: "tester", role: "admin", is_active: true, created_at: "" },
-          }),
-      } as Response)
+          }))
       // apiLogout
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({ message: "Logged out successfully" }),
-      } as Response);
+      .mockResolvedValueOnce(mockJsonResponse({ message: "Logged out successfully" }));
 
     render(
       <AuthProvider>

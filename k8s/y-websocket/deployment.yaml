@@ -41,6 +41,11 @@ spec:
                 secretKeyRef:
                   name: pipelineiq-secrets
                   key: SECRET_KEY
+            # Room membership source for the Yjs authz gate (M-005/R-O-002).
+            # The relay GETs ${PIPELINE_API_URL}/api/v1/versions/{room} with
+            # the caller's JWT: 200 = member, anything else = deny.
+            - name: PIPELINE_API_URL
+              value: "http://pipelineiq-api:8000"
           envFrom:
             - configMapRef:
                 name: pipelineiq-config

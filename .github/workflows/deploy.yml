@@ -40,6 +40,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       image-tag: ${{ steps.meta.outputs.version }}
+      yws-image-tag: ${{ steps.yws-meta.outputs.version }}
 
     permissions:
       contents: read
@@ -75,6 +76,28 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Extract y-websocket Docker metadata
+        id: yws-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/pipelineiq-y-websocket
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push y-websocket image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./y-websocket
+          file: ./y-websocket/Dockerfile
+          push: true
+          tags: ${{ steps.yws-meta.outputs.tags }}
+          labels: ${{ steps.yws-meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
@@ -209,6 +232,8 @@ jobs:
           kubectl set image deployment/worker-streaming worker=$IMAGE -n pipelineiq
           kubectl set image deployment/worker-beat beat=$IMAGE -n pipelineiq
           kubectl set image deployment/sse-service sse=$IMAGE -n pipelineiq
+          YWS_IMAGE="${{ env.REGISTRY }}/${{ github.repository_owner }}/pipelineiq-y-websocket:${{ needs.build-and-push.outputs.yws-image-tag }}"
+          kubectl set image deployment/y-websocket y-websocket=$YWS_IMAGE -n pipelineiq
 
       - name: Wait for rollout to complete
         if: steps.check-kube.outputs.dry-run == 'false'
