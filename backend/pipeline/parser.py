@@ -520,24 +520,6 @@ class PipelineParser:
                 "YAML root must be a mapping, not a scalar or list")
         return raw
 
-    def _strip_diff_markers(self, text: str) -> str:
-        """Strip unified diff markers from text to recover the 'after' state."""
-        lines = text.splitlines()
-        if not any(line.startswith(('+', '-', '@@')) for line in lines):
-            return text
-
-        result = []
-        for line in lines:
-            if line.startswith(('---', '+++', '@@')):
-                continue
-            if line.startswith('-'):
-                continue
-            if line.startswith('+') or line.startswith(' '):
-                result.append(line[1:])
-            else:
-                result.append(line)
-        return "\n".join(result)
-
     def _build_pipeline_config(self, raw: dict) -> PipelineConfig:
         """Build a PipelineConfig from parsed YAML dictionary."""
         pipeline_raw = raw.get("pipeline", raw)
