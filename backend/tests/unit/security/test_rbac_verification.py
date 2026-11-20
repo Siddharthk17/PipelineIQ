@@ -212,11 +212,12 @@ def test_run_pipeline_rbac(rbac_client, users, sample_pipeline, test_db):
         "/api/v1/pipelines/run",
         json=payload).status_code == 404
 
-    # Viewer cannot run
+    # Viewer cannot run (no grant at all -> 404 anti-oracle, not 403,
+    # so pipeline existence cannot be probed via the status code).
     set_current_user(users["viewer"])
     assert rbac_client.post(
         "/api/v1/pipelines/run",
-        json=payload).status_code == 403
+        json=payload).status_code == 404
 
 
 def test_cancel_pipeline_rbac(rbac_client, users, test_db, sample_pipeline):

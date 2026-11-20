@@ -1,9 +1,12 @@
 """Regression tests for M-154 (name oracle) and M-077 (ownership wiring).
 
-M-154: WasmModule.name is globally unique in the DB while the
-application-level duplicate check is per-user. A second user uploading an
-already-taken name must get a clean 409 — never a 500 from the global
-UNIQUE constraint, and never an error that reveals who owns the name.
+M-154: WasmModule.name was globally unique in the DB while the
+application-level duplicate check was per-user. Resolved by scoping
+names per user (composite unique constraint, migration 0019): a second
+user uploading an already-taken name succeeds with their own module
+(200, distinct id), while the SAME user re-uploading a name gets a
+clean 409 — never a 500 from the global UNIQUE constraint, and never
+an error that reveals who owns the name.
 
 M-077: ownership helpers (get_owned_wasm_module / assert_wasm_ids_owned,
 added in Wave 1) must be wired at pipeline-save validation and run-start
@@ -57,8 +60,9 @@ def _upload(client, headers, wasm_bytes, name):
 
 
 class TestNameConflictHandling:
-    def test_second_user_same_name_is_409_not_500(self, auth_client, simple_add_wasm, monkeypatch):
-
+    def test_second_user_same_name_is_allowed_distinct_module(
+        self, auth_client, simple_add_wasm, monkeypatch
+    ):
         mock_client = MagicMock()
         mock_client.bucket_exists.return_value = True
         monkeypatch.setattr("backend.routers.wasm.get_minio_client", lambda: mock_client)
@@ -70,10 +74,13 @@ class TestNameConflictHandling:
         assert first.status_code == 200, first.text
 
         second = _upload(auth_client, headers_b, simple_add_wasm, "shared-name")
-        # Global UNIQUE(name) blocks true per-user names (needs a composite
-        # migration — see REPORT.md). Until then this must be a clean 409,
-        # never a 500 integrity-error traceback.
-        assert second.status_code == 409, second.text
+        # Names are scoped per user (composite unique constraint,
+        # migration 0019): the second user gets their own module (200 with
+        # a distinct id) — never a 500 integrity-error traceback, and the
+        # response reveals nothing about the other owner's module.
+        assert second.status_code == 200, second.text
+        assert second.json()["id"] != first.json()["id"]
+        assert second.json()["name"] == "shared-name"
 
     def test_same_user_duplicate_name_is_409(self, client, simple_add_wasm, monkeypatch):
 
