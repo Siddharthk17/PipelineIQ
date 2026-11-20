@@ -13,6 +13,7 @@ from backend.tasks import gemini_tasks as gemini_tasks
 from backend.tasks import notification_tasks as notification_tasks
 from backend.tasks import pipeline_tasks as pipeline_tasks
 from backend.tasks import profiling as profiling
+from backend.tasks import reconciliation as reconciliation
 from backend.tasks import schedule_tasks as schedule_tasks
 from backend.tasks import storage_maintenance as storage_maintenance
 from backend.tasks import streaming_pipeline as streaming_pipeline
@@ -23,6 +24,7 @@ _REGISTERED_TASK_MODULES = (
     notification_tasks,
     pipeline_tasks,
     profiling,
+    reconciliation,
     schedule_tasks,
     storage_maintenance,
     streaming_pipeline,
