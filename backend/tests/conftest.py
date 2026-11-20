@@ -34,8 +34,8 @@ from sqlalchemy.pool import StaticPool
 
 import backend.models  # noqa: F401 (model registration side effect)
 from backend.database import Base, get_db, get_read_db, get_write_db
-from backend.models import User
 from backend.main import app
+from backend.models import User
 from backend.pipeline.lineage import LineageRecorder
 from backend.utils.rate_limiter import limiter
 

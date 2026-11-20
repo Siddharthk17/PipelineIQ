@@ -470,7 +470,7 @@ async def test_redis_outage_closes_stream_bounded(
         return None
 
     boom = _BoomPubSub(messages=[])
-    boom.subscribe = _boom_subscribe  # type: ignore[method-assign]
+    boom.subscribe = _boom_subscribe
     fake_client = _FakeRedisClient(boom)
     fake_cache = _FakeCacheClient(None)
     monkeypatch.setattr(

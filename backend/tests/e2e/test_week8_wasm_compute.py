@@ -894,7 +894,7 @@ class TestPipelineTasksWasmLoading:
         mock_minio.get_object.return_value = mock_response
 
         with (
-            patch("backend.db.minio_client.get_minio_client", return_value=mock_minio),
+            patch("backend.repositories.wasm.get_minio_client", return_value=mock_minio),
             patch("backend.tasks.pipeline_tasks.settings") as mock_settings,
         ):
                 mock_settings.WASM_BUCKET = "test-bucket"
@@ -948,9 +948,18 @@ class TestWasmModuleORM:
         assert WasmModule.__tablename__ == "wasm_modules"
 
     def test_wasm_module_name_is_unique(self):
+        from sqlalchemy import UniqueConstraint
+
         from backend.models import WasmModule
-        name_col = WasmModule.__table__.columns["name"]
-        assert name_col.unique is True
+        constraints = list(WasmModule.__table__.constraints)
+        unique_name_constraints = [
+            c for c in constraints
+            if isinstance(c, UniqueConstraint)
+            and {col.name for col in c.columns} == {"user_id", "name"}
+        ]
+        assert unique_name_constraints, (
+            "expected composite unique constraint on (user_id, name)"
+        )
 
 
 # SECTION 15: Schemas — Wasm Module Response Schemas
