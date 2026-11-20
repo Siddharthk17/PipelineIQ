@@ -5,6 +5,7 @@ extension, and content parsing. Uploaded files are stored on disk
 with metadata persisted to the database.
 """
 
+import codecs
 import contextlib
 import csv
 import logging
@@ -721,6 +722,14 @@ _READ_CHUNK_SIZE = 256 * 1024
 _JSON_SCHEMA_SAMPLE_VALUES = 100
 _JSON_WS = frozenset((0x20, 0x09, 0x0A, 0x0D))
 _UTF8_BOM = b"\xef\xbb\xbf"
+# Cap a single CSV field so one huge field cannot exhaust memory (M-017),
+# and bound the dtype sample to the first records (M-017).
+_CSV_MAX_FIELD_BYTES = 16 * 1024 * 1024
+_CSV_DTYPE_SAMPLE_RECORDS = 1000
+
+
+class _MalformedCsvError(ValueError):
+    """Raised when CSV text is structurally invalid (e.g. NUL byte)."""
 
 
 class _JsonMalformedError(ValueError):
@@ -920,54 +929,129 @@ def _extract_file_metadata(
     )
 
 
+def _detect_csv_encoding(sample: bytes) -> str:
+    """Mirror _decode_csv_bytes codec choice from a prefix (M-017)."""
+    if sample.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return "utf-16"
+    if b"\x00" in sample:
+        try:
+            if "\x00" not in sample.decode("utf-16"):
+                return "utf-16"
+        except (UnicodeDecodeError, ValueError):
+            pass
+    try:
+        sample.decode("utf-8-sig")
+    except (UnicodeDecodeError, ValueError):
+        return "windows-1252"
+    else:
+        return "utf-8-sig"
+
+
+def _iter_csv_text_lines(
+    handle: BinaryIO, encoding: str, initial: bytes = b""
+) -> Iterator[str]:
+    """Yield decoded text lines reading the handle in bounded chunks (M-017)."""
+    decoder = codecs.getincrementaldecoder(encoding)()
+    buf = ""
+    chunk = initial
+    first = True
+    while True:
+        if not first:
+            chunk = handle.read(_READ_CHUNK_SIZE)
+        first = False
+        if not chunk:
+            break
+        buf += decoder.decode(chunk)
+        *lines, buf = buf.split("\n")
+        for line in lines:
+            if "\x00" in line:
+                raise _MalformedCsvError("NUL byte in text content")
+            yield line[:-1] if line.endswith("\r") else line
+    buf += decoder.decode(b"", final=True)
+    if buf:
+        if "\x00" in buf:
+            raise _MalformedCsvError("NUL byte in text content")
+        yield buf[:-1] if buf.endswith("\r") else buf
+
+
+@contextlib.contextmanager
+def _bounded_csv_fields() -> Iterator[None]:
+    """Cap single CSV field size so one huge field cannot exhaust memory."""
+    previous = csv.field_size_limit(_CSV_MAX_FIELD_BYTES)
+    try:
+        yield
+    finally:
+        csv.field_size_limit(previous)
+
+
 def _extract_csv_metadata(
         stored_path: str) -> tuple[int, list[str], dict[str, str]]:
-    """Read CSV metadata with bounded memory usage."""
+    """Read CSV metadata streaming row by row with bounded memory (M-017)."""
     import io
 
-    try:
-        with storage_service.download(stored_path) as handle:
-            raw = handle.read()
-        text, encoding = _decode_csv_bytes(raw)
-    except UnicodeDecodeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to parse file '{stored_path}': not decodable text "
-            "(tried UTF-8, UTF-16 and Windows-1252)",
-        ) from exc
-    if "\x00" in text:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Malformed CSV in file '{stored_path}': "
-            "NUL byte in text content",
-        )
-    try:
-        reader = csv.reader(io.StringIO(text, newline=""), strict=True)
-        header = next(reader, None)
-        if header is None:
+    with storage_service.download(stored_path) as handle:
+        peek = handle.read(_READ_CHUNK_SIZE)
+        if not peek:
             return 0, [], {}
-        row_count = sum(1 for _ in reader)
-        columns = [str(column) for column in header]
-    except HTTPException:
-        raise
-    except csv.Error as exc:
+        encoding = _detect_csv_encoding(peek)
+        with _bounded_csv_fields():
+            reader = csv.reader(
+                _iter_csv_text_lines(handle, encoding, initial=peek),
+                strict=True,
+            )
+            try:
+                header = next(reader, None)
+                if header is None:
+                    return 0, [], {}
+                columns = [str(column) for column in header]
+                sample_records: list[list[str]] = []
+                row_count = 0
+                capped = False
+                for record in reader:
+                    row_count += 1
+                    if len(sample_records) < _CSV_DTYPE_SAMPLE_RECORDS:
+                        sample_records.append(record)
+                    if row_count > settings.MAX_ROWS_PER_FILE:
+                        capped = True
+                        break
+            except _MalformedCsvError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Malformed CSV in file '{stored_path}': {exc}",
+                ) from exc
+            except csv.Error as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Malformed CSV in file '{stored_path}': {exc}",
+                ) from exc
+            except UnicodeDecodeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Failed to parse file '{stored_path}': {exc}",
+                ) from exc
+    if capped:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Malformed CSV in file '{stored_path}': {exc}",
-        ) from exc
+            detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
+        )
+    if not sample_records:
+        return row_count, columns, {}
+    try:
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(columns)
+        writer.writerows(sample_records)
+        buf.seek(0)
+        sample_df = pd.read_csv(buf, nrows=_CSV_DTYPE_SAMPLE_RECORDS)
+        dtypes = {
+            str(column): str(dtype)
+            for column, dtype in sample_df.dtypes.items()
+        }
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{stored_path}': {exc}",
         ) from exc
-
-    if not columns:
-        return row_count, columns, {}
-
-    sample_rows = max(1, min(1000, row_count))
-    sample_df = pd.read_csv(
-        io.BytesIO(raw), nrows=sample_rows, encoding=encoding)
-    dtypes = {column: str(dtype) for column, dtype in sample_df.dtypes.items()}
     return row_count, columns, dtypes
 
 
@@ -1240,7 +1324,7 @@ def _finalize_uploaded_file(
     )
 
 
-def _unsupported_preview_extension(extension: str) -> None:
+def _unsupported_preview_extension(extension: str) -> NoReturn:
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Cannot parse file with extension '{extension}'",
@@ -1251,21 +1335,15 @@ def _parse_file_preview(
         filename: str,
         handle: BinaryIO,
         nrows: int) -> pd.DataFrame:
-    """Parse only the first N rows of a file for preview (avoids reading full file)."""
+    """Parse only the first N rows of a file for preview (bounded reads)."""
     extension = Path(filename).suffix.lower()
     try:
         if extension == ".csv":
-            import io
-
-            raw = handle.read()
-            text, _ = _decode_csv_bytes(raw)
-            return pd.read_csv(io.StringIO(text), nrows=nrows)
+            return _preview_csv(handle, nrows)
         elif extension == ".json":
-            df = pd.read_json(handle)
-            return df.head(nrows)
+            return _preview_json(filename, handle, nrows)
         elif extension == ".parquet":
-            df = pd.read_parquet(handle)
-            return df.head(nrows)
+            return _preview_parquet(handle, nrows)
         elif extension == ".xlsx":
             _reject_unsupported_xlsx(filename)
         else:
@@ -1277,6 +1355,69 @@ def _parse_file_preview(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
+
+
+def _preview_csv(handle: BinaryIO, nrows: int) -> pd.DataFrame:
+    """Read only the first nrows of a CSV with bounded memory."""
+    import io
+
+    peek = handle.read(_READ_CHUNK_SIZE)
+    if not peek:
+        return pd.DataFrame()
+    encoding = _detect_csv_encoding(peek)
+    with _bounded_csv_fields():
+        reader = csv.reader(
+            _iter_csv_text_lines(handle, encoding, initial=peek),
+            strict=True,
+        )
+        header = next(reader, None)
+        if header is None:
+            return pd.DataFrame()
+        records = []
+        for record in reader:
+            records.append(record)
+            if len(records) >= nrows:
+                break
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    writer.writerows(records)
+    buf.seek(0)
+    return pd.read_csv(buf, nrows=nrows)
+
+
+def _preview_json(
+        filename: str, handle: BinaryIO, nrows: int) -> pd.DataFrame:
+    """Read only the first nrows JSON records with bounded memory."""
+    records = []
+    for raw in _iter_json_raw_values(handle):
+        records.append(_parse_json_value(raw, filename))
+        if len(records) >= nrows:
+            break
+    if not records:
+        return pd.DataFrame()
+    return pd.DataFrame(records)
+
+
+def _preview_parquet(handle: BinaryIO, nrows: int) -> pd.DataFrame:
+    """Read only the first nrows of a parquet file via row groups."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    parquet_file = pq.ParquetFile(handle)
+    tables = []
+    rows = 0
+    for index in range(parquet_file.num_row_groups):
+        table = parquet_file.read_row_group(index)
+        take = min(table.num_rows, nrows - rows)
+        if take > 0:
+            tables.append(table.slice(0, take))
+            rows += take
+        if rows >= nrows:
+            break
+    if not tables:
+        return pd.DataFrame()
+    return pa.concat_tables(tables).to_pandas()
 
 
 @router.get(
