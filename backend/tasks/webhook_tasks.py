@@ -65,12 +65,11 @@ _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECT_HOPS = 3
 
 
-def _raise_for_bad_status(response: httpx.Response) -> None:
-    """Raise for retry accounting when a webhook endpoint returns non-2xx."""
-    raise httpx.RequestError(
-        f"Webhook returned {response.status_code}: {response.text[:200]}",
-        request=response.request,
-    )
+def _is_retryable_status(status_code: int) -> bool:
+    """Only 429 and 5xx are transient. All other statuses are final."""
+    return status_code == 429 or 500 <= status_code <= 599
+
+
 
 
 async def _post_with_safe_redirects(
@@ -301,7 +300,9 @@ def deliver_webhooks_task(
 
     Enqueues individual deliver_webhook tasks for each active webhook
     subscribed to this event type. Returns immediately — the actual
-    HTTP calls happen in separate worker tasks.
+    HTTP calls happen in separate worker tasks. A fan-out enqueue
+    failure retries the enqueue only; already-enqueued deliveries are
+    unaffected and per-webhook outcomes are recorded by deliver_webhook.
     """
     try:
         from backend.database import SessionLocal
