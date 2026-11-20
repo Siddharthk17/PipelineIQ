@@ -622,31 +622,32 @@ done
 
 | Area | Files | What is covered |
 |------|-------|-----------------|
-| `unit/api/` | 10 | Auth flows, RBAC, run ownership, rate limits, public endpoints, upload encodings, plan checks |
-| `unit/pipeline/` | 12 | Parser, all 19 step types, validators, versioning, planner, cache/diff |
+| `unit/api/` | 13 | Auth flows, RBAC, run ownership, rate limits, public endpoints, upload encodings, plan checks, audit + dashboard |
+| `unit/pipeline/` | 13 | Parser, all 19 step types, validators, versioning, planner, cache/diff |
 | `unit/security/` | 14 | Auth bypass, isolation, trusted hosts, token revocation, column policies, permissions |
-| `unit/ai/` | 11 | Generation, repair prompts, Gemini queue/routing/retry, rate limits, YAML cache/diff |
+| `unit/ai/` | 17 | Generation, repair prompts, Gemini queue/routing/retry, rate limits, YAML cache/diff, disconnect guard, timeouts, PII redaction |
 | `unit/catalog/` | 8 | Asset registration, isolation, lineage cache, blast-radius CTE, OpenLineage, descriptions |
 | `unit/infrastructure/` | 7 | Celery queue/task registry, worker topology vs Compose, Redis wiring, SSE lifecycle, caching |
 | `unit/healing/` | 8 | Classifier, prompts, patch application, sandbox, schema diff |
 | `unit/contracts/` | 4 | Contract validation, enforcement, severity mapping, type categories |
-| `unit/execution/` | 4 | SmartExecutor routing, DuckDB/Pandas parity, save step, error types |
-| `unit/scheduling/` | 4 | Cron utils, schedule API, stream_consume rejection |
+| `unit/execution/` | 8 | SmartExecutor routing, DuckDB/Pandas parity, save step, error types, SQL sandbox |
+| `unit/scheduling/` | 6 | Cron utils, schedule API, stream_consume rejection, beat resilience |
 | `unit/save_step/` | 4 | Output persistence, presigned URLs, formats |
 | `unit/storage/` | 3 | Arrow bus tiers, spills, eviction, S3 operations |
 | `unit/webhooks/` | 2 | Delivery, HMAC signing, retry logic |
 | `unit/templates/` | 2 | Template listing, fork validation |
-| `unit/streaming/` | 2 | Daemon config, SSE streaming |
-| `unit/wasm/` | 2 | Module validation, sandbox isolation |
+| `unit/streaming/` | 4 | Daemon config, SSE streaming (auth, negative paths, backpressure), provisioning |
+| `unit/wasm/` | 6 | Module validation, sandbox isolation, trap isolation, fuel budget |
 | `unit/profiling/` | 2 | Data profiling, profiler task |
 | `unit/notifications/` | 1 | Notification dispatch |
 | `unit/telemetry/` | 1 | Tracing setup, span attributes |
 | `unit/week11/` | 1 | Regression coverage |
 | `unit/cost/` | 1 | Cost estimation |
+| `unit/` (root) | 1 | Metrics gauge write paths (M-176) |
 
 `tests/integration/` (8 files: AI, stress, extreme stress, performance, profiling, healing E2E, infrastructure, week8/9/10) runs behind `RUN_INTEGRATION_TESTS=1` against the live Compose stack; `tests/e2e/` holds server-side week-3/8/9/10 suites with their own gates. SQLite in-memory is the default in `conftest.py`; never weaken a fail-closed test (auth revocation, permission checks) to make it pass locally — run those against real Redis/Postgres or in CI.
 
-### Frontend — 241 tests, 23 files
+### Frontend — 245 tests, 24 files
 
 ```bash
 cd frontend
@@ -666,11 +667,15 @@ Chromium is the only browser in CI (`ubuntu-24.04` runner; Firefox is appended l
 ### Load and chaos
 
 ```bash
-k6 run k6/load-auth.js            # 20→100 VUs; p95 < 500 ms, login success > 99%
-k6 run k6/load-pipeline-api.js    # 200 rps constant arrival; p99 < 100 ms on validate-yaml
-k6 run k6/load-file-upload.js     # 10→50 VUs multipart; p95 < 2 s, success > 95%
-bash chaos/chaos-scenarios.sh     # fault injection against a live stack
-bash scripts/run-load-tests.sh    # runs all three k6 profiles, defaults to the Render API URL
+# Local/dev stacks answer on localhost — these just work:
+BASE_URL=http://localhost:8000 k6 run k6/load-auth.js            # 20→100 VUs; p95 < 500 ms, login success > 99%
+BASE_URL=http://localhost:8000 k6 run k6/load-pipeline-api.js    # 200 rps constant arrival; p99 < 100 ms on validate-yaml
+BASE_URL=http://localhost:8000 k6 run k6/load-file-upload.js     # 10→50 VUs multipart; p95 < 2 s, success > 95%
+# Non-local targets (staging/prod) are refused unless you opt in:
+ALLOW_PROD_LOAD=1 BASE_URL=https://staging.example.com k6 run k6/load-auth.js
+bash chaos/chaos-scenarios.sh                      # fault injection; defaults to http://localhost:8000,
+                                                   # needs CHAOS_ALLOW_PROD=1 for non-local targets
+bash scripts/run-load-tests.sh                     # runs all three k6 profiles (defaults to BASE_URL or the Render API URL)
 ```
 
 
@@ -948,7 +953,7 @@ All 69 settings with defaults in `.env.example`. `*` marks values you must repla
 |----------|---------|---------|
 | `UPLOAD_DIR` | `./uploads` | Local-dev upload dir (`STORAGE_TYPE=local`) |
 | `MAX_UPLOAD_SIZE` | `524288000` (500 MB) | Upload cap |
-| `STORAGE_TYPE` | `s3` | `s3` (MinIO) or `local` |
+| `STORAGE_TYPE` | `s3` | `s3` (MinIO) or `local`; anything else aborts boot, and `s3` with missing credentials aborts boot in production |
 | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | * | Console + S3 credentials |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | * (must match MinIO pair) | S3 API credentials |
 | `S3_BUCKET` | `pipelineiq-uploads` | Source-file bucket |
@@ -1007,8 +1012,8 @@ All 69 settings with defaults in `.env.example`. `*` marks values you must repla
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `PUBLIC_HOST` | `localhost` | External hostname/IP (Grafana URL, trusted hosts); written by bootstrap |
-| `MINIO_IMAGE_TAG` | `latest` | MinIO server image tag |
-| `JWT_SECRET` | (must be ≥ 32 chars for y-websocket) | Collab relay signing key; must match the JWT issuer |
+| `MINIO_IMAGE_TAG` | `RELEASE.2024-12-13T22-19-12Z` | Pinned MinIO server image tag (override only to a tested tag) |
+| `JWT_SECRET` | (maps to `SECRET_KEY`) | y-websocket relay signing key; Compose maps `JWT_SECRET=${SECRET_KEY}` — keep identical or relay auth breaks |
 
 
 ## Postman Collection
