@@ -101,39 +101,75 @@ def get_storage_stats(
 def get_tier_health(
     current_user: User = Depends(get_current_user),
 ):
+    """Per-tier health with honest down-state reporting (M-061).
+
+    A tier that reports ``{"error": ...}`` (e.g. Redis down, spill store
+    unreachable) is ``unavailable`` and makes the overall result
+    unhealthy — previously any non-exceptional stats dict, including one
+    full of errors, reported ``healthy: true``.
+    """
     warnings: list[dict] = []
+    tier_status: dict[str, str] = {}
 
     try:
         bus = get_arrow_bus()
         stats = bus.get_tier_stats()
-
-        hot = stats.get("hot", {})
-        if isinstance(hot, dict) and "utilization" in hot:
-            util = hot["utilization"]
-            if util > 0.95:
-                warnings.append({
-                    "tier": "hot", "severity": "critical",
-                    "message": f"Redis cache at {util*100:.0f}%",
-                })
-            elif util > 0.85:
-                warnings.append({
-                    "tier": "hot", "severity": "warning",
-                    "message": f"Redis cache at {util*100:.0f}%",
-                })
-
-        warm = stats.get("warm", {})
-        if isinstance(warm, dict) and "utilization" in warm:
-            util = warm["utilization"]
-            if util > 0.80:
-                warnings.append({
-                    "tier": "warm", "severity": "warning",
-                    "message": f"/dev/shm at {util*100:.0f}%",
-                })
-
     except Exception as exc:
-        warnings.append({"tier": "unknown", "severity": "error", "message": str(exc)})
+        return {
+            "healthy": False,
+            "status": "unavailable",
+            "tiers": {},
+            "warnings": [
+                {"tier": "unknown", "severity": "error", "message": str(exc)}
+            ],
+        }
 
-    return {"healthy": len(warnings) == 0, "warnings": warnings}
+    for tier in ("hot", "warm", "cold"):
+        entry = stats.get(tier)
+        if isinstance(entry, dict) and entry.get("error"):
+            tier_status[tier] = "unavailable"
+            warnings.append({
+                "tier": tier, "severity": "error",
+                "message": f"{tier} tier unavailable: {entry['error']}",
+            })
+        else:
+            tier_status[tier] = "ok"
+
+    hot = stats.get("hot", {})
+    if isinstance(hot, dict) and "utilization" in hot:
+        util = hot["utilization"]
+        if util > 0.95:
+            warnings.append({
+                "tier": "hot", "severity": "critical",
+                "message": f"Redis cache at {util*100:.0f}%",
+            })
+        elif util > 0.85:
+            warnings.append({
+                "tier": "hot", "severity": "warning",
+                "message": f"Redis cache at {util*100:.0f}%",
+            })
+
+    warm = stats.get("warm", {})
+    if isinstance(warm, dict) and "utilization" in warm:
+        util = warm["utilization"]
+        if util > 0.80:
+            warnings.append({
+                "tier": "warm", "severity": "warning",
+                "message": f"/dev/shm at {util*100:.0f}%",
+            })
+
+    status = "healthy"
+    if any(t == "unavailable" for t in tier_status.values()):
+        status = "degraded"
+    if warnings:
+        status = "degraded" if status == "healthy" else status
+
+    return {
+        "healthy": len(warnings) == 0,
+        "status": status,
+        "tiers": tier_status,
+        "warnings": warnings,
+    }
 
 
 @router.post("/evict")

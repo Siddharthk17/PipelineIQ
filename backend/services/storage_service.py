@@ -14,7 +14,15 @@ from backend.config import settings
 
 # MinIO rejects SigV2 query-auth (AWSAccessKeyId/Signature/Expires).
 # botocore may default to SigV2 for HTTP/IP endpoints, so pin SigV4.
-_SIGV4 = Config(signature_version="s3v4")
+# M-061: bound every S3 control-plane call — without connect/read timeouts
+# a dead MinIO hangs tier stats and health checks indefinitely.
+S3_CLIENT_CONFIG = Config(
+    signature_version="s3v4",
+    connect_timeout=5,
+    read_timeout=30,
+    retries={"max_attempts": 2},
+)
+_SIGV4 = S3_CLIENT_CONFIG
 
 
 def _validate_storage_key(key: str) -> str:
@@ -165,7 +173,7 @@ class S3StorageProvider(StorageProvider):
             aws_access_key_id=settings.S3_ACCESS_KEY,
             aws_secret_access_key=settings.S3_SECRET_KEY,
             endpoint_url=settings.S3_ENDPOINT_URL,
-            config=_SIGV4,
+            config=S3_CLIENT_CONFIG,
         )
         self.bucket = settings.S3_BUCKET
         self._presign_client = None
@@ -189,7 +197,7 @@ class S3StorageProvider(StorageProvider):
                     aws_access_key_id=settings.S3_ACCESS_KEY,
                     aws_secret_access_key=settings.S3_SECRET_KEY,
                     endpoint_url=endpoint,
-                    config=_SIGV4,
+                    config=S3_CLIENT_CONFIG,
                 )
         return self._presign_client
 
