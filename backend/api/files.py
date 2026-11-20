@@ -763,12 +763,25 @@ def _extract_csv_metadata(
             "(tried UTF-8, UTF-16 and Windows-1252)",
         ) from exc
     try:
-        reader = csv.reader(io.StringIO(text, newline=""))
+        if "\x00" in text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Malformed CSV in file '{stored_path}': "
+                "NUL byte in text content",
+            )
+        reader = csv.reader(io.StringIO(text, newline=""), strict=True)
         header = next(reader, None)
         if header is None:
             return 0, [], {}
         row_count = sum(1 for _ in reader)
         columns = [str(column) for column in header]
+    except HTTPException:
+        raise
+    except csv.Error as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Malformed CSV in file '{stored_path}': {exc}",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -969,15 +982,20 @@ def _finalize_uploaded_file(
     current_user: User,
 ) -> FileUploadResponse:
     """Persist uploaded file metadata, snapshot, and optional drift report."""
-    _validate_file_content(original_filename, stored_path)
-    row_count, columns, dtypes = _extract_file_metadata(
-        original_filename, stored_path)
-    if row_count > settings.MAX_ROWS_PER_FILE:
-        storage_service.delete(stored_path)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
-        )
+    try:
+        _validate_file_content(original_filename, stored_path)
+        row_count, columns, dtypes = _extract_file_metadata(
+            original_filename, stored_path)
+        if row_count > settings.MAX_ROWS_PER_FILE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
+            )
+    except HTTPException:
+        # Never orphan the stored object when validation/metadata fails (M-101).
+        with contextlib.suppress(Exception):
+            storage_service.delete(stored_path)
+        raise
 
     uploaded_file = UploadedFile(
         id=file_id,
