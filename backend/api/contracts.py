@@ -16,6 +16,7 @@ from backend.auth import get_current_user
 from backend.database import get_db
 from backend.models import (
     ContractViolationRecord,
+    PermissionLevel,
     PipelineContract,
     PipelinePermission,
     PipelineRun,
@@ -103,6 +104,70 @@ def _ordered_versions(query):
     )
 
 
+def _validate_consumers(
+    db: Session,
+    current_user: User,
+    consumers: list[str] | None,
+) -> None:
+    """Reject consumer entries naming pipelines the caller does not own (M-076).
+
+    A breach with severity=block makes workers pause every active schedule
+    whose pipeline_name appears in ``consumers``. Without this check any
+    contract owner could block another tenant's schedules by name. Entries
+    that do not match a known pipeline (e.g. e-mail/Slack notification
+    targets) are allowed; entries that match an existing pipeline require
+    owner-level access (own contract, OWNER grant, or admin).
+    """
+    if current_user.role == "admin":
+        return
+    bad: list[str] = []
+    for entry in consumers or []:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        name = entry.strip()
+        in_use = (
+            db.query(PipelineRun.id)
+            .filter(PipelineRun.name == name)
+            .first()
+            or db.query(PipelineContract.id)
+            .filter(PipelineContract.pipeline_name == name)
+            .first()
+            or db.query(PipelinePermission.id)
+            .filter(PipelinePermission.pipeline_name == name)
+            .first()
+        )
+        if not in_use:
+            continue
+        own_contract = (
+            db.query(PipelineContract.id)
+            .filter(
+                PipelineContract.pipeline_name == name,
+                PipelineContract.user_id == current_user.id,
+            )
+            .first()
+        )
+        permission = (
+            db.query(PipelinePermission)
+            .filter(
+                PipelinePermission.pipeline_name == name,
+                PipelinePermission.user_id == current_user.id,
+            )
+            .first()
+        )
+        if own_contract or (
+            permission is not None
+            and permission.permission_level == PermissionLevel.OWNER
+        ):
+            continue
+        bad.append(entry)
+    if bad:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Consumers must not name pipelines you do not own: "
+                + ", ".join(sorted(set(bad)))
+            ),
+        )
 def _validate_contract_yaml(yaml_content: str) -> dict:
     """Reject unparseable/non-mapping contract YAML at write time (M-088).
 
@@ -376,6 +441,7 @@ def create_contract(
         db, current_user, pipeline_name, {"owner"}, allow_new=True
     )
     _validate_contract_yaml(body.yaml_content)
+    _validate_consumers(db, current_user, body.consumers)
 
     idem_key = _get_idempotency_key(request)
     idem_row: IdempotencyKey | None = None
@@ -590,6 +656,7 @@ def update_contract(
     validate_uuid_format(contract_id)
     _ensure_pipeline_contract_access(db, current_user, pipeline_name, {"owner"})
     _validate_contract_yaml(body.yaml_content)
+    _validate_consumers(db, current_user, body.consumers)
     existing = (
         _contract_query(db, current_user)
         .filter(
