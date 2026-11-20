@@ -45,6 +45,7 @@ export default function CatalogPage() {
   const [typeFilter, setTypeFilter] = useState<AssetType>(null);
   const [searchResults, setResults] = useState<CatalogAsset[]>([]);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [selectedAsset, setSelected] = useState<CatalogAsset | null>(null);
   const [blastRadius, setBlastRadius] = useState<BlastRadiusResult[] | null>(null);
   const [loadingImpact, setLoadingImpact] = useState(false);
@@ -61,6 +62,7 @@ export default function CatalogPage() {
       const controller = new AbortController();
       abortRef.current = controller;
       setSearching(true);
+      setSearchError(null);
       try {
         const params = new URLSearchParams({ q: query, limit: "20" });
         if (typeFilter) params.append("asset_type", typeFilter);
@@ -68,10 +70,26 @@ export default function CatalogPage() {
           signal: controller.signal,
           credentials: "include",
         });
+        // M-090: a 500/HTML error page previously crashed resp.json() with
+        // an unhandled rejection and left stale results on screen.
+        if (!resp.ok) {
+          let detail = `Search failed (${resp.status})`;
+          try {
+            const body = await resp.json();
+            if (body && typeof body.detail === "string") detail = body.detail;
+          } catch {
+            /* non-JSON error page — keep the status summary */
+          }
+          setSearchError(detail);
+          setResults([]);
+          return;
+        }
         const data = await resp.json();
         setResults(data.results || []);
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === "AbortError") return;
+        setSearchError("Search failed — please retry");
+        setResults([]);
       } finally {
         setSearching(false);
       }
@@ -93,6 +111,10 @@ export default function CatalogPage() {
         { signal: controller.signal, credentials: "include" },
       );
       if (controller.signal.aborted) return;
+      if (!resp.ok) {
+        setBlastRadius([]);
+        return;
+      }
       const data = await resp.json();
       setBlastRadius(data.downstream || []);
     } catch (err: unknown) {
@@ -158,7 +180,12 @@ export default function CatalogPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-[calc(100vh-12rem)]">
         <div className="overflow-y-auto rounded border border-[var(--widget-border)] bg-[var(--widget-bg)] p-2" data-testid="catalog-results">
           {searching && <p className="text-sm text-[var(--text-muted)] p-2">Searching...</p>}
-          {!searching && searchResults.length === 0 && query.length >= 2 && (
+          {searchError && (
+            <p className="text-sm text-[var(--accent-error)] p-2" role="alert" data-testid="catalog-search-error">
+              {searchError}
+            </p>
+          )}
+          {!searching && !searchError && searchResults.length === 0 && query.length >= 2 && (
              <p className="text-sm text-[var(--text-muted)] p-2">No assets found for &ldquo;{query}&rdquo;</p>
           )}
           {searchResults.map((asset) => (

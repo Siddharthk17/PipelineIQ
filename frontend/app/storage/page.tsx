@@ -24,6 +24,7 @@ import {
 
 import { useAuth } from "@/lib/auth-context";
 import {
+  ApiError,
   getStorageStats,
   getTierHealth,
   triggerEviction,
@@ -817,20 +818,30 @@ export default function StorageAnalyticsPage() {
         {statsError ? (
           <div
             className="rounded-lg border p-6 text-center"
+            role="alert"
             style={{
               backgroundColor: "var(--bg-surface)",
               borderColor: "var(--widget-border)",
             }}
           >
-            <p className="text-sm text-[var(--danger)]">
-              Failed to load storage statistics
-            </p>
-            <button
-              onClick={() => refetchStats()}
-              className="mt-2 text-xs underline text-[var(--accent-primary)]"
-            >
-              Retry
-            </button>
+            {/* M-092: stats/tier-health are admin-only; viewers get 403. */}
+            {statsError instanceof ApiError && statsError.status === 403 ? (
+              <p className="text-sm text-[var(--text-secondary)]">
+                Storage analytics is restricted to administrators.
+              </p>
+            ) : (
+              <>
+                <p className="text-sm text-[var(--danger)]">
+                  Failed to load storage statistics
+                </p>
+                <button
+                  onClick={() => refetchStats()}
+                  className="mt-2 text-xs underline text-[var(--accent-primary)]"
+                >
+                  Retry
+                </button>
+              </>
+            )}
           </div>
         ) : statsLoading && !stats ? (
           <div className="space-y-4">
