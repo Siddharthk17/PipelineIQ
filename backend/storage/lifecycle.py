@@ -35,11 +35,20 @@ BUCKETS = [
 
 
 def _minio_client() -> Minio:
+    # M-061: bound lifecycle/stats calls so a dead MinIO fails fast
+    # instead of hanging the storage analytics endpoints.
+    import urllib3
+
+    http_client = urllib3.PoolManager(
+        timeout=urllib3.Timeout(connect=5.0, read=30.0),
+        retries=urllib3.Retry(total=1),
+    )
     return Minio(
         os.environ.get("MINIO_ENDPOINT", "minio:9000"),
         access_key=os.environ.get("MINIO_ROOT_USER", "minio"),
         secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minio123"),
         secure=False,
+        http_client=http_client,
     )
 
 

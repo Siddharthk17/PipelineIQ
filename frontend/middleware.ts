@@ -28,7 +28,13 @@ async function verifyJwt(token: string): Promise<boolean> {
   const parts = token.split(".");
   if (parts.length !== 3) return false;
 
-  let payload: { exp?: number; alg?: string };
+  // M-136: the edge can only verify authenticity + expiry, not Redis
+  // revocation or the DB-backed role. Revoked-token and role checks are
+  // enforced fail-closed by the API (backend/auth.get_current_user); the
+  // edge additionally requires the claims the API depends on (sub for
+  // identity, jti for revocation, role for admin gates) so visibly
+  // malformed tokens never reach a page shell.
+  let payload: { exp?: number; sub?: unknown; jti?: unknown; role?: unknown; alg?: string };
   try {
     const header = JSON.parse(new TextDecoder().decode(base64UrlToBytes(parts[0])));
     if (header.alg !== "HS256") return false;
@@ -37,6 +43,9 @@ async function verifyJwt(token: string): Promise<boolean> {
     return false;
   }
   if (!payload.exp || payload.exp * 1000 <= Date.now()) return false;
+  if (typeof payload.sub !== "string" || payload.sub.length === 0) return false;
+  if (typeof payload.jti !== "string" || payload.jti.length === 0) return false;
+  if (typeof payload.role !== "string" || payload.role.length === 0) return false;
 
   const key = await crypto.subtle.importKey(
     "raw",

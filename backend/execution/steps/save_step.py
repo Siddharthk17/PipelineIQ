@@ -50,6 +50,12 @@ def execute_save_step(
 ) -> SaveResult:
     """Write an Arrow Table to MinIO and return a presigned download URL.
 
+    Formula cells are neutralised before serializing so outputs cannot
+    inject spreadsheet code when opened in Excel/Sheets (M-075).
+    With no S3 configured (default local deployment) the output is
+    persisted via the configured storage provider and a ``storage://``
+    object reference is returned instead of a presigned URL (M-095).
+
     Args:
         table:   The Arrow Table containing the pipeline output data.
         step:    The SaveStep model instance (or dict) with filename config.
@@ -69,37 +75,47 @@ def execute_save_step(
             "Empty run_id for save step '%s', using generated artifact id: %s",
             getattr(step, "name", "?"), run_id)
 
+    table = _neutralize_formula_cells(table)
+
     content, content_type = _serialize(table, ext)
 
     object_name = f"outputs/{run_id}/{filename}"
     minio = _get_minio_client()
 
-    bucket = settings.S3_BUCKET
-    minio.put_object(
-        Bucket=bucket,
-        Key=object_name,
-        Body=io.BytesIO(content),
-        ContentLength=len(content),
-        ContentType=content_type,
-        Metadata={
-            "run-id": run_id,
-            "row-count": str(table.num_rows),
-            "format": ext,
-        },
-    )
+    if minio is None:
+        # M-095: no S3 configured (default local deployment). Persist via
+        # the configured storage provider instead of an AWS-bound client.
+        from backend.services.storage_service import storage_service
+
+        storage_service.upload(io.BytesIO(content), object_name)
+        download_url = f"storage://{object_name}"
+    else:
+        bucket = settings.S3_BUCKET
+        minio.put_object(
+            Bucket=bucket,
+            Key=object_name,
+            Body=io.BytesIO(content),
+            ContentLength=len(content),
+            ContentType=content_type,
+            Metadata={
+                "run-id": run_id,
+                "row-count": str(table.num_rows),
+                "format": ext,
+            },
+        )
+
+        download_url = _get_presign_client(minio).generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": bucket,
+                "Key": object_name,
+            },
+            ExpiresIn=int(DOWNLOAD_URL_EXPIRY.total_seconds()),
+        )
 
     logger.info(
         "Saved pipeline output: run_id=%s, filename=%s, size=%s, rows=%d",
         run_id, filename, format_bytes(len(content)), table.num_rows)
-
-    download_url = _get_presign_client(minio).generate_presigned_url(
-        "get_object",
-        Params={
-            "Bucket": bucket,
-            "Key": object_name,
-        },
-        ExpiresIn=int(DOWNLOAD_URL_EXPIRY.total_seconds()),
-    )
 
     return SaveResult(
         filename=filename,
@@ -126,20 +142,25 @@ def _get_presign_client(server_client):
     if not public_endpoint or public_endpoint == _settings.S3_ENDPOINT_URL:
         return server_client
     import boto3
-    from botocore.config import Config
+
+    from backend.services.storage_service import S3_CLIENT_CONFIG
 
     return boto3.client(
         "s3",
         aws_access_key_id=_settings.S3_ACCESS_KEY,
         aws_secret_access_key=_settings.S3_SECRET_KEY,
         endpoint_url=public_endpoint,
-        config=Config(signature_version="s3v4"),
+        config=S3_CLIENT_CONFIG,
     )
 
 
 def refresh_download_url(object_name: str) -> str:
     """Generate a fresh presigned URL for an existing output file."""
     minio = _get_minio_client()
+    if minio is None:
+        # M-095: local deployments have no presigned URLs; callers fall
+        # back to the stored download reference on this error.
+        raise RuntimeError("S3 storage is not configured for this deployment")
     return _get_presign_client(minio).generate_presigned_url(
         "get_object",
         Params={
@@ -232,20 +253,26 @@ _bucket_ensured = False
 
 
 def _get_minio_client():
-    from backend.services.storage_service import storage_service
-    if hasattr(storage_service, "provider") and hasattr(
-            storage_service.provider, "s3"):
-        client = storage_service.provider.s3
-    else:
+    from backend.services.storage_service import S3_CLIENT_CONFIG, storage_service
+    provider = getattr(storage_service, "provider", None)
+    if provider is not None and hasattr(provider, "s3"):
+        client = provider.s3
+    elif settings.STORAGE_TYPE == "s3" or settings.S3_ENDPOINT_URL:
+        # Explicit S3 deployment without a provider-backed client.
         import boto3
-        from botocore.config import Config
+
         client = boto3.client(
             "s3",
             aws_access_key_id=settings.S3_ACCESS_KEY,
             aws_secret_access_key=settings.S3_SECRET_KEY,
             endpoint_url=settings.S3_ENDPOINT_URL,
-            config=Config(signature_version="s3v4"),
+            config=S3_CLIENT_CONFIG,
         )
+    else:
+        # M-095: default local deployment with no S3 endpoint configured.
+        # Return None so callers persist via the configured (local)
+        # storage provider instead of an AWS-bound client.
+        return None
 
     global _bucket_ensured
     if not _bucket_ensured:
@@ -265,3 +292,42 @@ def _get_minio_client():
                 logger.warning("Failed to initialize S3 bucket: %s", exc)
 
     return client
+
+
+# Spreadsheet-formula prefixes neutralised per OWASP CSV-injection guidance
+# (M-075). Mirrors backend/api/files.py::_FORMULA_PREFIXES so SAVE outputs
+# cannot inject formulas when opened in Excel/Sheets.
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralize_value(value: object) -> object:
+    """Prefix spreadsheet-formula strings so outputs cannot inject code (M-075)."""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def _neutralize_formula_cells(table: pa.Table) -> pa.Table:
+    """Neutralise formula cells in all string columns of an Arrow table.
+
+    Mirrors the preview neutralisation in backend/api/files.py at the
+    Arrow level so CSV, JSON and Parquet SAVE outputs are all covered:
+    a cell whose text starts with ``= + - @`` or tab/CR gains a leading
+    single quote (OWASP CSV-injection guidance). Non-string columns pass
+    through untouched.
+    """
+    columns: list = []
+    changed = False
+    for schema_field in table.schema:
+        column = table.column(schema_field.name)
+        if pa.types.is_string(column.type) or pa.types.is_large_string(column.type):
+            neutralised = [_neutralize_value(v) for v in column.to_pylist()]
+            columns.append(pa.array(neutralised, type=column.type))
+            changed = True
+        else:
+            columns.append(column)
+    if not changed:
+        return table
+    return pa.table(columns, names=table.schema.names)
+
+

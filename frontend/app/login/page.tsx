@@ -9,7 +9,7 @@ import { APP_VERSION } from "@/lib/constants";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, loginAsDemo } = useAuth();
+  const { login, loginAsDemo, user, isLoading: authLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -17,6 +17,14 @@ export default function LoginPage() {
   const [demoLoading, setDemoLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [mounted, setMounted] = useState(false);
+
+  // M-090: an authenticated visitor bouncing on /login saw the login form
+  // again; send them to the dashboard instead.
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace("/");
+    }
+  }, [authLoading, user, router]);
 
   useEffect(() => {
     const t = setTimeout(() => setMounted(true), 50);

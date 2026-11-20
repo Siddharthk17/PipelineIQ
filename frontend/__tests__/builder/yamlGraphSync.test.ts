@@ -197,7 +197,7 @@ describe("graphToYAML", () => {
     expect(loadPos).toBeLessThan(filterPos);
   });
 
-  it("cycle detection returns empty string", () => {
+  it("cycle detection throws instead of wiping YAML", () => {
     const nodes = [
       makeNode("a", "filter"),
       makeNode("b", "filter"),
@@ -206,8 +206,9 @@ describe("graphToYAML", () => {
       { id: "a__b", source: "a", target: "b" },
       { id: "b__a", source: "b", target: "a" },
     ];
-    const result = graphToYAML(nodes, edges, "cycle_test");
-    expect(result).toBe("");
+    // M-119: returning "" let the emit path overwrite user YAML with an
+    // empty document; the caller now catches and keeps the YAML intact.
+    expect(() => graphToYAML(nodes, edges, "cycle_test")).toThrow(/cycle/i);
   });
 
   it("preserves step config values", () => {

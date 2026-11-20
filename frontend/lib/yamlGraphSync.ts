@@ -583,7 +583,10 @@ export function graphToYAML(nodesOrGraph: BuilderNode[] | BuilderGraph, edgesPar
 
   const orderedNodes = topologicalSort(nodes, edges);
   if (!orderedNodes) {
-    return "";
+    // M-119: a cyclic graph must never serialize to "" — the emit path
+    // would overwrite the user's YAML with an empty document. Throw so
+    // the caller surfaces a parse error and keeps the YAML intact.
+    throw new Error("Graph contains a cycle; resolve it before emitting YAML");
   }
 
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
