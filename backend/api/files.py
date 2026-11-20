@@ -10,6 +10,7 @@ import csv
 import logging
 import os
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, BinaryIO, NoReturn, cast
 
@@ -711,19 +712,177 @@ def _check_sample_content(extension: str, sample: bytes) -> None:
         if not next(csv.reader(text.splitlines()), None):
             raise ValueError("CSV file has no header row")
     elif extension == ".json":
-        stripped = sample.lstrip()
-        if not stripped.startswith((b"{", b"[")):
-            raise ValueError("JSON file does not start with an object or array")
-        if stripped.startswith(b"{"):
-            first_line = next(
-                (line.strip() for line in sample.splitlines() if line.strip()),
-                b"",
-            )
-            orjson.loads(first_line)
-        else:
-            orjson.loads(sample)
+        _check_json_sample(sample)
     elif extension == ".parquet" and sample != b"PAR1":
         raise ValueError("Parquet magic header is missing")
+
+
+_READ_CHUNK_SIZE = 256 * 1024
+_JSON_SCHEMA_SAMPLE_VALUES = 100
+_JSON_WS = frozenset((0x20, 0x09, 0x0A, 0x0D))
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+class _JsonMalformedError(ValueError):
+    """Raised when streamed JSON is structurally invalid."""
+
+
+class _JsonTruncatedError(_JsonMalformedError):
+    """Raised when input ends mid-value (tolerated by the sniff window)."""
+
+
+def _iter_json_raw_values(handle: BinaryIO) -> Iterator[bytes]:
+    """Yield raw bytes of each top-level JSON record, streaming (M-017/M-038).
+
+    Array mode (first non-whitespace char ``[``): yields each element of the
+    single top-level array; anything but whitespace after the closing bracket
+    is malformed. Otherwise yields each top-level value in turn (a single
+    object, JSONL/whitespace-separated values). Raises _JsonMalformedError on
+    unbalanced brackets and _JsonTruncatedError when input ends mid-value.
+    Reads the handle in bounded chunks; callers must not reuse the handle.
+    """
+    data = bytearray()
+    scanned = 0
+    eof = False
+    depth = 0
+    stack: list[bool] = []
+    in_string = False
+    escape = False
+    started = False
+    composite = False
+    value_start = 0
+    array_mode: bool | None = None
+    closed_top = False
+    first_read = True
+    while True:
+        if scanned == len(data) and not eof:
+            chunk = handle.read(_READ_CHUNK_SIZE)
+            if chunk:
+                if first_read:
+                    first_read = False
+                    if chunk.startswith(_UTF8_BOM):
+                        chunk = chunk[len(_UTF8_BOM):]
+                data += chunk
+            else:
+                eof = True
+        n = len(data)
+        i = scanned
+        while i < n:
+            ch = data[i]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == 0x5C:
+                    escape = True
+                elif ch == 0x22:
+                    in_string = False
+            elif ch == 0x22:
+                if closed_top:
+                    raise _JsonMalformedError(
+                        "trailing content after top-level array"
+                    )
+                in_string = True
+                if not started:
+                    if array_mode is None and depth == 0:
+                        array_mode = False
+                    started = True
+                    value_start = i
+            elif ch in _JSON_WS or ch == 0x2C:
+                if closed_top:
+                    pass  # trailing whitespace after top-level array
+                elif started and depth == (1 if array_mode else 0):
+                    yield bytes(data[value_start:i])
+                    started = False
+            elif ch == 0x5B or ch == 0x7B:
+                if closed_top:
+                    raise _JsonMalformedError(
+                        "trailing content after top-level array"
+                    )
+                if array_mode is None and depth == 0:
+                    array_mode = ch == 0x5B
+                    if array_mode:
+                        depth += 1
+                        stack.append(True)
+                        i += 1
+                        continue
+                if not started:
+                    started = True
+                    composite = True
+                    value_start = i
+                depth += 1
+                stack.append(ch == 0x5B)
+            elif ch == 0x5D or ch == 0x7D:
+                want_open = ch == 0x5D
+                if not stack or stack[-1] != want_open:
+                    raise _JsonMalformedError("unbalanced brackets")
+                yield_depth = 1 if array_mode else 0
+                if started and depth == yield_depth + 1 and composite:
+                    yield bytes(data[value_start:i + 1])
+                    started = False
+                elif started and depth == yield_depth and not composite:
+                    yield bytes(data[value_start:i])
+                    started = False
+                stack.pop()
+                depth -= 1
+                if array_mode and depth == 0:
+                    closed_top = True
+            else:
+                if closed_top:
+                    raise _JsonMalformedError(
+                        "trailing content after top-level array"
+                    )
+                if not started:
+                    if array_mode is None and depth == 0:
+                        array_mode = False
+                    started = True
+                    composite = False
+                    value_start = i
+            i += 1
+        scanned = n
+        if eof:
+            break
+        if started:
+            del data[:value_start]
+            scanned -= value_start
+            value_start = 0
+        else:
+            data.clear()
+            scanned = 0
+    if in_string or escape:
+        raise _JsonTruncatedError("input ends inside a string")
+    if array_mode and not closed_top:
+        raise _JsonTruncatedError("input ends inside a top-level array")
+    if started:
+        if depth == (1 if array_mode else 0):
+            yield bytes(data[value_start:])
+        else:
+            raise _JsonTruncatedError("input ends inside a JSON value")
+
+
+def _check_json_sample(sample: bytes) -> None:
+    """Validate the head of a JSON upload without requiring all of it (M-038)."""
+    import io as _io
+
+    nosig = sample[3:] if sample.startswith(_UTF8_BOM) else sample
+    if not nosig.lstrip().startswith((b"{", b"[")):
+        raise ValueError("JSON file does not start with an object or array")
+    try:
+        for raw in _iter_json_raw_values(_io.BytesIO(sample)):
+            orjson.loads(raw)
+            break
+    except _JsonTruncatedError:
+        pass  # First value extends past the sniff window; metadata validates fully.
+
+
+def _parse_json_value(raw: bytes, filename: str) -> Any:
+    """Parse one streamed JSON record, mapping errors to 422."""
+    try:
+        return orjson.loads(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': invalid JSON value",
+        ) from exc
 
 
 def _resolve_upload_request_payload(
@@ -815,52 +974,69 @@ def _extract_csv_metadata(
 def _extract_json_metadata(
     filename: str, stored_path: str
 ) -> tuple[int, list[str], dict[str, str]]:
-    """Extract metadata for JSON uploads."""
+    """Extract metadata for JSON uploads with bounded memory (M-017/M-038)."""
     try:
-        # Try JSONL (newline-delimited JSON) first for efficiency
         with storage_service.download(stored_path) as handle:
-            import io
-
-            text_handle = io.TextIOWrapper(handle, encoding="utf-8")
-            first_line = text_handle.readline()
-            if not first_line:
-                return 0, [], {}
-
-            if first_line.strip().startswith("{"):
-                # Process as JSONL
-                row_count = 1
-                with storage_service.download(stored_path) as handle:
-                    # Re-open to read all lines
-                    import io
-
-                    text_handle = io.TextIOWrapper(handle, encoding="utf-8")
-                    for _ in text_handle:
-                        row_count += 1
-
-                import orjson
-
-                # We already have first_line from the first attempt
-                first_obj = orjson.loads(first_line)
-                columns = list(first_obj.keys())
-
-                # Sample first line for dtypes
-                sample_df = pd.DataFrame([first_obj])
-                dtypes = {col: str(dtype)
-                          for col, dtype in sample_df.dtypes.items()}
-                return row_count - 1, columns, dtypes
-
-        # Fallback to standard JSON list
-        with storage_service.download(stored_path) as handle:
-            df = pd.read_json(handle)
-            columns = list(df.columns)
-            dtypes = {column: str(dtype)
-                      for column, dtype in df.dtypes.items()}
-            return len(df), columns, dtypes
+            row_count, sample, capped = _scan_json_records(handle, filename)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
+    if capped:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
+        )
+    try:
+        sample_df = pd.DataFrame(sample)
+        columns = [str(column) for column in sample_df.columns]
+        dtypes = {str(col): str(dtype) for col, dtype in sample_df.dtypes.items()}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': {exc}",
+        ) from exc
+    return row_count, columns, dtypes
+
+
+def _scan_json_records(
+    handle: BinaryIO, filename: str
+) -> tuple[int, list[Any], bool]:
+    """Stream JSON records; return (row_count, schema sample, row_capped)."""
+    records = _iter_json_raw_values(handle)
+    try:
+        first_raw = next(records, None)
+    except _JsonMalformedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': {exc}",
+        ) from exc
+    if first_raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': empty file",
+        )
+    sample = [_parse_json_value(first_raw, filename)]
+    row_count = 1
+    capped = False
+    try:
+        for raw in records:
+            value = _parse_json_value(raw, filename)
+            row_count += 1
+            if len(sample) < _JSON_SCHEMA_SAMPLE_VALUES:
+                sample.append(value)
+            if row_count > settings.MAX_ROWS_PER_FILE:
+                capped = True
+                break
+    except _JsonMalformedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': {exc}",
+        ) from exc
+    return row_count, sample, capped
 
 
 def _extract_parquet_metadata(stored_path: str) -> tuple[int, list[str], dict[str, str]]:
