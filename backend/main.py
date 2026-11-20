@@ -59,8 +59,7 @@ logger = logging.getLogger(__name__)
 # Import the shared `ClientDisconnected` from the exceptions module to
 # avoid a circular import between `main.py` and the routers that
 # raise it. (Routers are imported at module load time below.)
-from backend.pipeline.exceptions import ClientDisconnected
-from backend.pipeline.exceptions import PipelineYAMLTooLargeError
+from backend.pipeline.exceptions import ClientDisconnected, PipelineYAMLTooLargeError
 
 
 # Silence health check and metrics access log noise
