@@ -41,6 +41,55 @@ class PipelineDiff:
     change_summary: str
 
 
+def _pipeline_name(yaml_text: str) -> str:
+    """Extract a pipeline name leniently; "unknown" on ragged input."""
+    try:
+        config = yaml.safe_load(yaml_text) or {}
+    except yaml.YAMLError:
+        return "unknown"
+    if not isinstance(config, dict):
+        return "unknown"
+    pipeline = config.get("pipeline", config)
+    if not isinstance(pipeline, dict):
+        return "unknown"
+    name = pipeline.get("name", "unknown")
+    return name if isinstance(name, str) and name else "unknown"
+
+
+def _steps_by_name(yaml_text: str) -> dict[str, dict]:
+    """Index a pipeline's steps by name, defensively.
+
+    M-145: version diffs must survive ragged stored YAML — steps that
+    are not mappings, entries without names, or YAML 1.1 boolean keys
+    (bare `on:`/`yes:`/`no:` parse as True/False). Non-conforming
+    entries are skipped instead of raising KeyError/TypeError (HTTP
+    500) from the versions endpoint.
+    """
+    try:
+        config = yaml.safe_load(yaml_text) or {}
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(config, dict):
+        return {}
+    pipeline = config.get("pipeline", config)
+    if not isinstance(pipeline, dict):
+        return {}
+    steps_raw = pipeline.get("steps", [])
+    if isinstance(steps_raw, dict):
+        steps_raw = list(steps_raw.values())
+    if not isinstance(steps_raw, list):
+        return {}
+    steps: dict[str, dict] = {}
+    for idx, entry in enumerate(steps_raw):
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            name = f"<unnamed-{idx}>"
+        steps.setdefault(str(name), entry)
+    return steps
+
+
 def diff_pipelines(
     yaml_a: str,
     yaml_b: str,
@@ -48,15 +97,8 @@ def diff_pipelines(
     version_b: int,
 ) -> PipelineDiff:
     """Compute a structured diff between two YAML pipeline configs."""
-    config_a = yaml.safe_load(yaml_a) or {}
-    config_b = yaml.safe_load(yaml_b) or {}
-
-    # Handle both top-level and nested pipeline configs
-    pipeline_a = config_a.get("pipeline", config_a)
-    pipeline_b = config_b.get("pipeline", config_b)
-
-    steps_a = {s["name"]: s for s in pipeline_a.get("steps", [])}
-    steps_b = {s["name"]: s for s in pipeline_b.get("steps", [])}
+    steps_a = _steps_by_name(yaml_a)
+    steps_b = _steps_by_name(yaml_b)
 
     names_a = set(steps_a.keys())
     names_b = set(steps_b.keys())
@@ -109,7 +151,7 @@ def diff_pipelines(
     return PipelineDiff(
         version_a=version_a,
         version_b=version_b,
-        pipeline_name=pipeline_b.get("name", "unknown"),
+        pipeline_name=_pipeline_name(yaml_b),
         steps_added=steps_added,
         steps_removed=steps_removed,
         steps_modified=steps_modified,
