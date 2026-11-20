@@ -5,12 +5,13 @@ extension, and content parsing. Uploaded files are stored on disk
 with metadata persisted to the database.
 """
 
+import contextlib
 import csv
 import logging
 import os
 import uuid
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import Any, BinaryIO, cast
 
 import orjson
 import pandas as pd
@@ -63,6 +64,72 @@ LARGE_FILE_THRESHOLD = 10 * 1024 * 1024
 DIRECT_UPLOAD_TTL_SECONDS = 30 * 60
 MAX_DIRECT_UPLOAD_SIZE = settings.MAX_UPLOAD_SIZE
 PENDING_UPLOAD_PREFIX = "files:pending-upload:"
+# Multipart framing overhead tolerated when comparing a declared
+# Content-Length against the size cap (M-102). A declaration beyond
+# cap + slack cannot be a legal upload, so it is rejected before the
+# body is consumed.
+MULTIPART_OVERHEAD_SLACK = 1024 * 1024
+
+
+class _UploadTooLargeError(Exception):
+    """Raised when a streamed upload exceeds the configured size cap."""
+
+
+class _CappedReader:
+    """File-like proxy enforcing a byte cap on reads (M-102).
+
+    Bounds unbounded upload amplification: the first byte past ``limit``
+    aborts the copy so the caller can delete the partial object and
+    answer 413. All other attributes delegate to the wrapped stream, so
+    it stays compatible with readers that also seek/tell (e.g. S3
+    multipart upload).
+    """
+
+    def __init__(self, raw: BinaryIO, limit: int) -> None:
+        self._raw = raw
+        self._limit = limit
+        self._total = 0
+
+    def read(self, size: int = -1) -> bytes:
+        if self._total > self._limit:
+            raise _UploadTooLargeError(
+                f"Upload exceeds maximum size ({self._limit} bytes)"
+            )
+        allowance = self._limit - self._total + 1
+        chunk = self._raw.read(
+            allowance if size is None or size < 0 else min(size, allowance)
+        )
+        self._total += len(chunk)
+        if self._total > self._limit:
+            raise _UploadTooLargeError(
+                f"Upload exceeds maximum size ({self._limit} bytes)"
+            )
+        return chunk
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._raw, name)
+
+
+def _declared_content_length(request: Request) -> int | None:
+    """Return the request's declared Content-Length, if parseable."""
+    raw = request.headers.get("content-length")
+    if raw is None:
+        return None
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _enforce_declared_size(request: Request, *, slack: int = 0) -> None:
+    """Reject hopelessly oversized bodies before consuming them (M-102)."""
+    declared = _declared_content_length(request)
+    if declared is not None and declared > settings.MAX_UPLOAD_SIZE + slack:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
+        )
 
 
 def _pending_upload_key(file_id: str) -> str:
@@ -230,6 +297,7 @@ async def direct_upload_file(
 
     stored_path = Path(_validated_pending_stored_path(file_id, pending))
     expected_size = int(pending["expected_size"])
+    _enforce_declared_size(request)
     try:
         written = await storage_service.upload_stream(
             request.stream(), str(stored_path), MAX_DIRECT_UPLOAD_SIZE
@@ -317,14 +385,25 @@ async def upload_file(
 
     original_filename = os.path.basename(file.filename or "upload.csv")
     _validate_file_extension(original_filename)
+    _enforce_declared_size(request, slack=MULTIPART_OVERHEAD_SLACK)
 
     file_id = uuid.uuid4()
     extension = Path(original_filename).suffix.lower()
     stored_path = f"{file_id}{extension}"
 
     try:
-        storage_service.upload(file.file, stored_path)
+        storage_service.upload(
+            cast(BinaryIO, _CappedReader(file.file, settings.MAX_UPLOAD_SIZE)),
+            stored_path,
+        )
         written = storage_service.get_size(stored_path)
+    except _UploadTooLargeError:
+        with contextlib.suppress(Exception):
+            storage_service.delete(stored_path)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
+        ) from None
     except HTTPException:
         raise
     except Exception as exc:
