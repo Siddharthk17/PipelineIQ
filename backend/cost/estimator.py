@@ -5,6 +5,14 @@ before the pipeline runs. Displayed as a pre-run card.
 
 Data source: historical step_results.duration_ms, row_in, row_out.
 Confidence: based on how much historical data exists for these step types.
+
+Heuristic bounds (M-142): per-step rates in MS_PER_1000_ROWS are coarse
+static fallbacks used when no historical data exists for a step type
+(data_points_used == 0, per-step confidence 0.4, step note records the
+fallback). They scale linearly with estimated input rows and do NOT
+model join fan-out, UDF cost, or hardware differences — treat totals as
+order-of-magnitude. The historical percentile query uses PERCENTILE_CONT
+on PostgreSQL and AVG elsewhere (SQLite has no ordered-set aggregates).
 """
 
 import logging
@@ -121,20 +129,38 @@ def estimate_pipeline_cost(
     data_points_used = 0
 
     if step_types_in_pipeline:
+        # M-142: PERCENTILE_CONT is PostgreSQL-only; use a portable AVG
+        # fallback on other dialects (SQLite) instead of failing the
+        # whole historical lookup.
+        is_postgres = db.get_bind().dialect.name == "postgresql"
         try:
             for step_type in step_types_in_pipeline:
-                sql = text(
+                if is_postgres:
+                    sql = text(
+                        """
+                        SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_ms) AS p50_ms,
+                               COUNT(*) AS data_points
+                        FROM step_results
+                        WHERE step_type = :step_type
+                          AND duration_ms IS NOT NULL
+                          AND duration_ms > 0
+                          AND row_in IS NOT NULL
+                          AND row_in > 0
                     """
-                    SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_ms) AS p50_ms,
-                           COUNT(*) AS data_points
-                    FROM step_results
-                    WHERE step_type = :step_type
-                      AND duration_ms IS NOT NULL
-                      AND duration_ms > 0
-                      AND row_in IS NOT NULL
-                      AND row_in > 0
-                """
-                )
+                    )
+                else:
+                    sql = text(
+                        """
+                        SELECT AVG(duration_ms) AS p50_ms,
+                               COUNT(*) AS data_points
+                        FROM step_results
+                        WHERE step_type = :step_type
+                          AND duration_ms IS NOT NULL
+                          AND duration_ms > 0
+                          AND row_in IS NOT NULL
+                          AND row_in > 0
+                    """
+                    )
                 result = db.execute(sql, {"step_type": step_type}).first()
                 if result and result.p50_ms is not None:
                     historical[step_type] = float(result.p50_ms)
@@ -171,6 +197,7 @@ def estimate_pipeline_cost(
         step_name = _get_step_attr(step, "name", "step")
         engine = _determine_engine(step_type)
 
+        note = ""
         if step_type in historical:
             predicted_ms = int(historical[step_type] * (estimated_rows / 10_000))
             confidence_for_step = min(0.9, data_points_used / 20)
@@ -178,6 +205,7 @@ def estimate_pipeline_cost(
             rate = MS_PER_1000_ROWS.get(step_type, 10.0)
             predicted_ms = int(rate * (estimated_rows / 1_000))
             confidence_for_step = 0.4
+            note = "No historical data for this step type; heuristic rate."
 
         row_in = peak_rows
         row_out = _estimate_output_rows(step, step_type, row_in)
@@ -192,6 +220,7 @@ def estimate_pipeline_cost(
                 confidence=confidence_for_step,
                 row_in_est=row_in,
                 row_out_est=row_out,
+                note=note,
             )
         )
         total_ms += max(predicted_ms, 1)
