@@ -5,6 +5,7 @@ This separation makes the core logic fully unit testable.
 """
 
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -24,6 +25,21 @@ def _safe_float(value: object) -> float:
     if math.isnan(result) or math.isinf(result):
         return 0.0
     return result
+
+
+def _looks_like_ipv4(value: str) -> bool:
+    """Strict IPv4 shape check (four 0-255 octets, no leading-zero octets)."""
+    parts = value.split(".")
+    if len(parts) != 4:
+        return False
+    for part in parts:
+        if not part.isdigit() or not 1 <= len(part) <= 3:
+            return False
+        if len(part) > 1 and part.startswith("0"):
+            return False
+        if not 0 <= int(part) <= 255:
+            return False
+    return True
 
 
 def infer_semantic_type(series: pd.Series, column_name: str) -> str:
@@ -90,6 +106,62 @@ def infer_semantic_type(series: pd.Series, column_name: str) -> str:
             sample.str.match(email_pattern).mean() > 0.8
         ):
             return "email"
+
+        # M-163: the PII suggestion layer (detect_pii_columns) keys off
+        # ssn / credit_card / ip_address / person_name / address, but no
+        # branch below ever produced them, so 5 of 7 PII types could never
+        # fire. These checks run BEFORE the phone/url/datetime/identifier
+        # fallbacks: SSN and card shapes also match the loose phone
+        # character class, and id-flavoured names (tax_id) would otherwise
+        # be swallowed by the identifier branch.
+        ssn_pattern = r"^\d{3}-\d{2}-\d{4}$"
+        if any(x in name_lower for x in ["ssn", "social_security"]) or (
+            sample.str.match(ssn_pattern).mean() > 0.5
+        ):
+            return "ssn"
+
+        card_pattern = r"^(?:\d[ \-]?){13,19}$"
+        if any(
+            x in name_lower
+            for x in [
+                "credit_card",
+                "credit card",
+                "card_number",
+                "card number",
+                "cardnumber",
+                "pan",
+            ]
+        ) or (sample.str.match(card_pattern).mean() > 0.5):
+            return "credit_card"
+
+        ip_tokens = set(re.split(r"[^a-z0-9]+", name_lower))
+        if ip_tokens & {"ip", "ipv4", "ipv6", "ipaddr"} or (
+            sample.map(
+                lambda v: _looks_like_ipv4(str(v))
+            ).mean() > 0.5
+        ):
+            return "ip_address"
+
+        if any(
+            x in name_lower
+            for x in [
+                "name",
+                "first_name",
+                "last_name",
+                "full_name",
+                "surname",
+                "given_name",
+                "family_name",
+            ]
+        ):
+            return "person_name"
+
+        zip_pattern = r"^\d{5}(?:-\d{4})?$"
+        if any(
+            x in name_lower
+            for x in ["address", "street", "postal", "zipcode", "zip_code"]
+        ) or (sample.str.match(zip_pattern).mean() > 0.5):
+            return "address"
 
         phone_pattern = r"^[\+\d\-\(\)\s]{7,15}$"
         if any(
