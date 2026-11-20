@@ -904,7 +904,10 @@ def list_pipeline_runs(
     current_user: User = Depends(get_current_user),
 ) -> PipelineRunListResponse:
     """List pipeline runs with pagination, ordered by creation time."""
-    page = max(1, page)
+    # M-144: cap the page as well as the limit — (page-1)*limit feeds
+    # OFFSET, and an unbounded page overflows the integer binding (500)
+    # on SQLite and Postgres alike.
+    page = max(1, min(page, 1_000_000))
     limit = max(1, min(limit, 100))
 
     query = db.query(PipelineRun).filter(
