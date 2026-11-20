@@ -50,6 +50,8 @@ def _pg_available():
         return True
     except Exception:
         return False
+    else:
+        return True
 
 
 def test_exception_after_concurrent_cancel_keeps_cancelled(monkeypatch):
