@@ -57,6 +57,17 @@ if (
   console.error(
     'Refusing to start: YJS_ALLOW_UNVERIFIED_ROOMS=1 disables all room '
     + 'authorization and must never be enabled in production.',
+  );
+  process.exit(1);
+}
+if (
+  YJS_ALLOW_UNVERIFIED_ROOMS &&
+  (process.env.NODE_ENV === 'production' ||
+    process.env.ENVIRONMENT === 'production')
+) {
+  console.error(
+    'Refusing to start: YJS_ALLOW_UNVERIFIED_ROOMS=1 disables all room '
+    + 'authorization and must never be enabled in production.',
   )
   process.exit(1)
 }
