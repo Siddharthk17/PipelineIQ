@@ -4,13 +4,25 @@ Handles upload, validation, listing, and deletion of Wasm UDF modules.
 Modules are stored in MinIO/S3 with metadata tracked in the database.
 """
 
+import asyncio
 import hashlib
 import logging
 import uuid
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from minio import Minio
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.auth import get_current_user
@@ -18,18 +30,30 @@ from backend.config import settings
 from backend.db.minio_client import get_minio_client
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
 from backend.models import User, WasmModule
+from backend.repositories.wasm import load_wasm_bytes_sync
 from backend.schemas import (
     WasmModuleExport,
     WasmModuleListResponse,
     WasmModuleUploadResponse,
     WasmModuleValidateResponse,
 )
+from backend.utils.rate_limiter import limiter
 from backend.utils.uuid_utils import as_uuid
 
 router = APIRouter(prefix="/api/v1/wasm", tags=["Wasm Modules"])
 logger = logging.getLogger(__name__)
 
 MAX_WASM_SIZE = 10 * 1024 * 1024  # 10 MB
+
+# M-037: bound attacker-controlled compilation. Size is checked before
+# compile; compile itself runs off the event loop with a wall-clock cap
+# so a pathological module cannot stall a server worker (~12s observed).
+WASM_COMPILE_TIMEOUT_SECONDS = 20.0
+
+# M-040/M-154: module-metadata bounds.
+MIN_FUEL_BUDGET = 1_000
+MAX_FUEL_BUDGET = 100_000_000
+DEFAULT_FUEL_BUDGET = 10_000_000
 
 
 def get_owned_wasm_module(db: Session, module_id: str, owner_id: object) -> WasmModule:
@@ -42,10 +66,14 @@ def get_owned_wasm_module(db: Session, module_id: str, owner_id: object) -> Wasm
     through this helper — or :func:`assert_wasm_ids_owned` — so a
     pipeline can never load or execute another user's module (M-077).
     """
-    module = db.query(WasmModule).filter(
-        WasmModule.id == as_uuid(module_id),
-        WasmModule.user_id == as_uuid(str(owner_id)),
-    ).first()
+    module = (
+        db.query(WasmModule)
+        .filter(
+            WasmModule.id == as_uuid(module_id),
+            WasmModule.user_id == as_uuid(str(owner_id)),
+        )
+        .first()
+    )
 
     if not module:
         raise HTTPException(status_code=404, detail="Wasm module not found")
@@ -67,10 +95,107 @@ def assert_wasm_ids_owned(
     return resolved
 
 
+def extract_wasm_ids_from_yaml(yaml_text: str) -> set[str]:
+    """Return every ``wasm_file_id`` referenced by a pipeline YAML (M-077).
+
+    Unparseable YAML yields an empty set — YAML validity itself is enforced
+    by the pipeline parser; this helper only collects references.
+    """
+    try:
+        import yaml as _yaml
+
+        document = _yaml.safe_load(yaml_text)
+    except Exception:
+        return set()
+    if not isinstance(document, dict):
+        return set()
+    pipeline = document.get("pipeline", document)
+    if not isinstance(pipeline, dict):
+        return set()
+    steps = pipeline.get("steps", [])
+    if not isinstance(steps, list):
+        return set()
+    ids: set[str] = set()
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        wid = step.get("wasm_file_id")
+        if isinstance(wid, str) and wid.strip():
+            wid = wid.strip()
+        elif wid is not None:
+            wid = str(wid)
+        else:
+            continue
+        if wid:
+            ids.add(wid)
+    return ids
+
+
+def validate_pipeline_wasm_ownership(
+    db: Session, yaml_text: str, owner_id: object
+) -> dict[str, WasmModule]:
+    """Pipeline-save gate (M-077): every ``wasm_file_id`` in the YAML must
+    belong to ``owner_id``.
+
+    Returns the owned id -> module mapping. Raises 404 (no oracle:
+    missing and foreign ids are indistinguishable) on the first
+    violation, so a pipeline can never be saved referencing another
+    user's module.
+    """
+    return assert_wasm_ids_owned(db, extract_wasm_ids_from_yaml(yaml_text), owner_id)
+
+
+def load_owned_wasm_modules_for_run(
+    db: Session, wasm_ids: set[str] | list[str], owner_id: object
+) -> dict[str, bytes]:
+    """Run-start loader (M-077): owner-filtered Wasm bytes for execution.
+
+    Ownership is resolved first via :func:`assert_wasm_ids_owned` (404,
+    no oracle), then each module binary is fetched from storage. Storage
+    failures raise 502 — the module exists but its bytes are unavailable.
+    """
+    resolved = assert_wasm_ids_owned(db, wasm_ids, owner_id)
+    loaded: dict[str, bytes] = {}
+    for wid, module in resolved.items():
+        try:
+            loaded[wid] = load_wasm_bytes_sync(module.storage_key)
+        except Exception as exc:
+            logger.warning(
+                "Failed to load Wasm module bytes for run: id=%s, key=%s",
+                wid,
+                module.storage_key,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Wasm module storage unavailable. Please try again later.",
+            ) from exc
+    return loaded
+
+
 def _ensure_wasm_bucket(minio_client: Minio) -> None:
     """Create the Wasm bucket if it doesn't exist."""
     if not minio_client.bucket_exists(settings.WASM_BUCKET):
         minio_client.make_bucket(settings.WASM_BUCKET)
+
+
+async def _inspect_wasm_async(wasm_bytes: bytes) -> tuple[list[dict], list[str]]:
+    """Compile + inspect a Wasm binary off the event loop (M-037).
+
+    Compilation of attacker-controlled bytes is CPU-heavy: it runs in a
+    worker thread and is bounded by WASM_COMPILE_TIMEOUT_SECONDS so one
+    upload cannot stall a server worker. Raises TimeoutError on expiry,
+    ValueError on invalid binaries.
+    """
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_inspect_wasm, wasm_bytes),
+            timeout=WASM_COMPILE_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"Wasm compilation timed out after "
+            f"{WASM_COMPILE_TIMEOUT_SECONDS:g}s; module is too complex"
+        ) from exc
 
 
 def _inspect_wasm(wasm_bytes: bytes) -> tuple[list[dict], list[str]]:
@@ -93,11 +218,13 @@ def _inspect_wasm(wasm_bytes: bytes) -> tuple[list[dict], list[str]]:
         if hasattr(export_type, "params") and hasattr(export_type, "results"):
             params = [str(p) for p in export_type.params]
             results = [str(r) for r in export_type.results]
-            exports.append({
-                "name": export.name,
-                "params": params,
-                "result": results[0] if results else None,
-            })
+            exports.append(
+                {
+                    "name": export.name,
+                    "params": params,
+                    "result": results[0] if results else None,
+                }
+            )
 
     imports = []
     for import_ in module.imports:
@@ -107,7 +234,10 @@ def _inspect_wasm(wasm_bytes: bytes) -> tuple[list[dict], list[str]]:
 
 
 @router.post("/validate", response_model=WasmModuleValidateResponse)
+@limiter.limit(settings.RATE_LIMIT_FILE_UPLOAD)
 async def validate_wasm_module(
+    request: Request,
+    response: Response,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
@@ -121,7 +251,7 @@ async def validate_wasm_module(
     if len(wasm_bytes) > MAX_WASM_SIZE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Wasm module exceeds {MAX_WASM_SIZE // (1024*1024)}MB limit",
+            detail=f"Wasm module exceeds {MAX_WASM_SIZE // (1024 * 1024)}MB limit",
         )
 
     errors: list[str] = []
@@ -130,7 +260,12 @@ async def validate_wasm_module(
     imports: list[str] = []
 
     try:
-        exports, imports = _inspect_wasm(wasm_bytes)
+        exports, imports = await _inspect_wasm_async(wasm_bytes)
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         errors.append(str(exc))
         return WasmModuleValidateResponse(
@@ -167,11 +302,17 @@ async def validate_wasm_module(
 
 
 @router.post("/upload", response_model=WasmModuleUploadResponse)
+@limiter.limit(settings.RATE_LIMIT_FILE_UPLOAD)
 async def upload_wasm_module(
-    name: str,
+    request: Request,
+    response: Response,
     file: UploadFile = File(...),
-    description: str | None = None,
-    fuel_budget: int = 10_000_000,
+    # M-040: the UI posts these as multipart form fields (see
+    # frontend/lib/api.ts uploadWasmModule). Accept form fields, falling
+    # back to query params for backwards compatibility.
+    name: str | None = Form(default=None),
+    description: str | None = Form(default=None),
+    fuel_budget: int | None = Form(default=None),
     db: Session = Depends(get_write_db_dependency),
     current_user: User = Depends(get_current_user),
 ):
@@ -179,10 +320,33 @@ async def upload_wasm_module(
 
     The module is validated, stored in MinIO/S3, and registered in the database.
     """
+    query = request.query_params
+    if name is None:
+        name = query.get("name")
+    if description is None:
+        description = query.get("description")
+    if fuel_budget is None:
+        raw_budget = query.get("fuel_budget")
+        if raw_budget is not None:
+            try:
+                fuel_budget = int(raw_budget)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="fuel_budget must be an integer",
+                ) from exc
+    if fuel_budget is None:
+        fuel_budget = DEFAULT_FUEL_BUDGET
+
     if not name or len(name) < 2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Module name must be at least 2 characters",
+        )
+    if fuel_budget < MIN_FUEL_BUDGET or fuel_budget > MAX_FUEL_BUDGET:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(f"fuel_budget must be between {MIN_FUEL_BUDGET} and {MAX_FUEL_BUDGET}"),
         )
 
     wasm_bytes = await file.read()
@@ -190,11 +354,16 @@ async def upload_wasm_module(
     if len(wasm_bytes) > MAX_WASM_SIZE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Wasm module exceeds {MAX_WASM_SIZE // (1024*1024)}MB limit",
+            detail=f"Wasm module exceeds {MAX_WASM_SIZE // (1024 * 1024)}MB limit",
         )
 
     try:
-        exports, imports = _inspect_wasm(wasm_bytes)
+        exports, imports = await _inspect_wasm_async(wasm_bytes)
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -217,10 +386,14 @@ async def upload_wasm_module(
     sha256_hash = hashlib.sha256(wasm_bytes).hexdigest()
     file_size = len(wasm_bytes)
 
-    existing = db.query(WasmModule).filter(
-        WasmModule.name == name,
-        WasmModule.user_id == current_user.id,
-    ).first()
+    existing = (
+        db.query(WasmModule)
+        .filter(
+            WasmModule.name == name,
+            WasmModule.user_id == current_user.id,
+        )
+        .first()
+    )
 
     if existing:
         raise HTTPException(
@@ -254,7 +427,20 @@ async def upload_wasm_module(
         user_id=current_user.id,
     )
     db.add(module)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # M-154: WasmModule.name is globally UNIQUE in the DB while the
+        # application check above is per-user. A cross-user collision must
+        # not surface as a 500 or leak who owns the name: report a plain
+        # 409 scoped to the caller's library. (True per-user namespaces
+        # need a composite (user_id, name) migration — see REPORT.md.)
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A module named '{name}' already exists. "
+            "Delete it first or use a different name.",
+        ) from exc
     db.refresh(module)
 
     logger.info(

@@ -8,12 +8,30 @@ Jaro-Winkler was chosen over simple Levenshtein because:
 - Better for short strings (column names are typically 5-20 chars)
 - Produces a 0.0-1.0 score (easier to threshold than edit distance)
 """
+
 import jellyfish
 
 # Minimum similarity to offer a suggestion
 # 0.85 avoids false positives — "name" should NOT suggest "amount" (too different)
 # But "reveue" SHOULD suggest "revenue" (transposed letters, high similarity)
 SIMILARITY_THRESHOLD = 0.85
+
+# M-016: bounds so attacker-sized inputs cannot stall the event loop.
+# suggest_column is O(len(available_columns)) jellyfish comparisons and
+# jaro-winkler itself is O(len(a)*len(b)); batch multiplies the two.
+MAX_TYPED_LENGTH = 256
+MAX_COLUMNS = 2000
+MAX_BATCH_ITEMS = 200
+
+
+def _cap_inputs(typed: str, available_columns: list[str]) -> tuple[str, list[str]]:
+    """Truncate oversized inputs to the M-016 caps."""
+    if len(typed) > MAX_TYPED_LENGTH:
+        typed = typed[:MAX_TYPED_LENGTH]
+    if len(available_columns) > MAX_COLUMNS:
+        available_columns = available_columns[:MAX_COLUMNS]
+    return typed, available_columns
+
 
 def suggest_column(typed: str, available_columns: list[str]) -> str | None:
     """
@@ -34,6 +52,8 @@ def suggest_column(typed: str, available_columns: list[str]) -> str | None:
     """
     if not typed or not available_columns:
         return None
+
+    typed, available_columns = _cap_inputs(typed, available_columns)
 
     # Exact match: no suggestion needed
     if typed in available_columns:
@@ -63,12 +83,16 @@ def suggest_column(typed: str, available_columns: list[str]) -> str | None:
 
     return None
 
+
 def suggest_columns_batch(
     queries: list[str], available_columns: list[str]
 ) -> dict[str, str | None]:
     """
     Batch version of suggest_column for checking multiple column references at once.
     Returns a dict mapping each query to its suggestion (or None if no suggestion).
+
+    The query list is capped at MAX_BATCH_ITEMS (M-016) so a single request
+    cannot force unbounded O(n*m) comparison work.
     """
-    return {typed: suggest_column(typed, available_columns)
-            for typed in queries}
+    capped_columns = available_columns[:MAX_COLUMNS]
+    return {typed: suggest_column(typed, capped_columns) for typed in queries[:MAX_BATCH_ITEMS]}

@@ -4,6 +4,16 @@ from __future__ import annotations
 
 import orjson
 
+# M-074: fields an AI healing patch must never mutate. Step identity
+# (name), step semantics (type), and data/module references (file_id,
+# wasm_file_id) are ownership and execution boundaries — a schema-drift
+# fix may only retarget data columns (column, columns, mapping, ...).
+IMMUTABLE_PATCH_FIELDS = frozenset({"name", "type", "file_id", "wasm_file_id"})
+
+# M-074: upper bound on patch operations per healing attempt so one AI
+# response cannot rewrite the whole pipeline.
+MAX_HEALING_PATCHES = 10
+
 HEALING_SYSTEM_PROMPT = """You are an autonomous data pipeline repair agent for PipelineIQ.
 A data pipeline failed because the source data schema changed.
 Return the minimal JSON patch needed to repair the YAML.
@@ -55,6 +65,7 @@ Schema diff:
 
 Patch every step that references the renamed or missing column, not only the failed step."""
 
+
 def build_healing_prompt(
     *,
     broken_yaml: str,
@@ -93,16 +104,11 @@ def build_healing_prompt(
             new_schema,
             option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS,
         ).decode("utf-8"),
-        removed_columns=orjson.dumps(
-            schema_diff.get(
-                "removed_columns",
-                [])).decode("utf-8"),
-        added_columns=orjson.dumps(
-            schema_diff.get(
-                "added_columns",
-                [])).decode("utf-8"),
+        removed_columns=orjson.dumps(schema_diff.get("removed_columns", [])).decode("utf-8"),
+        added_columns=orjson.dumps(schema_diff.get("added_columns", [])).decode("utf-8"),
         renamed_candidates_formatted=formatted_candidates,
     )
+
 
 def validate_healing_patch(patch: dict) -> tuple[bool, str]:
     """Validate the JSON patch schema returned by Gemini."""
@@ -123,6 +129,9 @@ def validate_healing_patch(patch: dict) -> tuple[bool, str]:
     if not isinstance(patches, list):
         return False, "Missing or invalid 'patches' field"
 
+    if len(patches) > MAX_HEALING_PATCHES:
+        return False, (f"Too many patch operations: {len(patches)} (max {MAX_HEALING_PATCHES})")
+
     required_patch_fields = {"step_name", "field", "old_value", "new_value"}
     for index, patch_item in enumerate(patches):
         if not isinstance(patch_item, dict):
@@ -130,5 +139,12 @@ def validate_healing_patch(patch: dict) -> tuple[bool, str]:
         missing = required_patch_fields - set(patch_item.keys())
         if missing:
             return False, f"patches[{index}] missing fields: {sorted(missing)}"
+        field_name = str(patch_item.get("field", ""))
+        if field_name in IMMUTABLE_PATCH_FIELDS:
+            return False, (
+                f"patches[{index}] targets immutable identity field "
+                f"'{field_name}': healing may only retarget data columns, "
+                f"never step identity, types, or file/module references"
+            )
 
     return True, ""

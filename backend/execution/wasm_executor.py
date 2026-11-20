@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 FUEL_PER_STEP = 10_000_000
 FUEL_PER_ROW = 1_000
 VALIDATION_FUEL = 100_000
+# M-130: absolute ceiling for a single step's fuel budget. The per-row
+# slice is total // rows (floored at FUEL_PER_ROW) so a configured budget
+# is honored across rows instead of being reset to a fixed trickle.
+MAX_STEP_FUEL = 100_000_000
 MAX_CACHED_MODULES = 100
 MAX_WASM_MEMORY_BYTES = 16 * 1024 * 1024
 MAX_WASM_TABLE_ELEMENTS = 10_000
@@ -72,12 +76,23 @@ class WasmExecutor:
         table: pa.Table,
         step,
         wasm_bytes: bytes | bytearray,
+        fuel_budget: int | None = None,
     ) -> pa.Table:
         """Execute a Wasm UDF against every row of an Arrow Table.
 
         The Wasm function receives input_columns as f64 arguments and returns f64.
         The return value is added as a new column (output_column).
         Rows where the Wasm function raises an error receive None in the output.
+
+        M-012: a trap isolates to the output column only — input columns are
+        taken verbatim from the input table and are never nulled by row
+        failures. ``output_column`` must differ from every input column;
+        aliasing is rejected loudly instead of duplicating/corrupting rows.
+
+        M-130: ``fuel_budget`` (explicit arg, else the step's fuel_budget
+        attr, else FUEL_PER_STEP) is the total step budget, distributed
+        across rows as total // num_rows (floored at FUEL_PER_ROW) so
+        non-trivial UDFs run instead of being starved by a fixed trickle.
         """
         function_name = getattr(step, "function", None) or step.get("function")
         input_columns = getattr(step, "input_columns", []) or step.get("input_columns", [])
@@ -90,12 +105,31 @@ class WasmExecutor:
         if not output_column:
             raise ValueError("wasm_compute step missing 'output_column' field")
 
+        if output_column in list(input_columns):
+            raise ValueError(
+                f"wasm_compute step output_column '{output_column}' must differ "
+                f"from input_columns {list(input_columns)}"
+            )
+
         missing_cols = [c for c in input_columns if c not in table.schema.names]
         if missing_cols:
             raise ValueError(
                 f"wasm_compute step input_columns not found in data: {missing_cols}. "
                 f"Available columns: {table.schema.names}"
             )
+
+        if fuel_budget is None:
+            if isinstance(step, dict):
+                fuel_budget = step.get("fuel_budget")
+            else:
+                fuel_budget = getattr(step, "fuel_budget", None)
+        try:
+            total_fuel = int(fuel_budget) if fuel_budget is not None else FUEL_PER_STEP
+        except (TypeError, ValueError):
+            total_fuel = FUEL_PER_STEP
+        total_fuel = max(FUEL_PER_ROW, min(total_fuel, MAX_STEP_FUEL))
+        num_rows = table.num_rows
+        per_row_fuel = max(FUEL_PER_ROW, total_fuel // max(1, num_rows))
 
         module = self._get_or_compile(wasm_bytes)
 
@@ -107,7 +141,7 @@ class WasmExecutor:
             tables=1,
             memories=1,
         )
-        store.set_fuel(FUEL_PER_STEP)
+        store.set_fuel(total_fuel)
 
         linker = Linker(self._engine)
         instance = linker.instantiate(store, module)
@@ -122,40 +156,31 @@ class WasmExecutor:
             ) from exc
 
         if not callable(wasm_func):
-            raise ValueError(
-                f"Export '{function_name}' is not a callable function"
-            )
+            raise ValueError(f"Export '{function_name}' is not a callable function")
 
-        columns = [*list(input_columns), output_column]
-        result_arrays: dict[str, list] = {c: [] for c in columns}
-        for col in table.schema.names:
-            if col not in result_arrays:
-                result_arrays[col] = table.column(col).to_pylist()
+        # M-012: inputs come straight from the table — row failures can only
+        # ever affect the output list, never the input data.
+        input_data = {col: table.column(col).to_pylist() for col in input_columns}
+        output_values: list = []
         error_count = 0
-        max_errors = max(10, len(table) // 10)
+        max_errors = max(10, num_rows // 10)
 
         try:
             old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
             signal.alarm(WASM_EXECUTION_TIMEOUT_SECONDS)
             try:
-                df = table.to_pandas()
-                for _, row in df[input_columns].iterrows():
+                for i in range(num_rows):
                     try:
-                        args = [float(row[col]) for col in input_columns]
+                        args = [float(input_data[col][i]) for col in input_columns]
                     except (TypeError, ValueError) as e:
                         logger.debug("Row conversion error: %s", e)
-                        for col in input_columns:
-                            result_arrays[col].append(None)
-                        result_arrays[output_column].append(None)
+                        output_values.append(None)
                         continue
 
                     try:
-                        store.set_fuel(FUEL_PER_ROW)
+                        store.set_fuel(per_row_fuel)
                         result = wasm_func(store, *args)
-                        val = float(result) if result is not None else None
-                        for col in input_columns:
-                            result_arrays[col].append(row[col])
-                        result_arrays[output_column].append(val)
+                        output_values.append(float(result) if result is not None else None)
                     except Trap as trap:
                         error_count += 1
                         if error_count > max_errors:
@@ -164,9 +189,7 @@ class WasmExecutor:
                                 f"Last trap: {trap}"
                             ) from trap
                         logger.debug("Wasm trap on row (fuel exhausted or invalid operation)")
-                        for col in input_columns:
-                            result_arrays[col].append(None)
-                        result_arrays[output_column].append(None)
+                        output_values.append(None)
                     except _WasmTimeout:
                         raise
                     except Exception as e:
@@ -177,19 +200,21 @@ class WasmExecutor:
                                 f"Last error: {e}"
                             ) from e
                         logger.debug("Wasm execution error on row: %s", e)
-                        for col in input_columns:
-                            result_arrays[col].append(None)
-                        result_arrays[output_column].append(None)
+                        output_values.append(None)
             finally:
                 signal.alarm(0)
                 signal.signal(signal.SIGALRM, old_handler)
         except _WasmTimeout as exc:
-            logger.warning("WASM execution timed out after %d seconds", WASM_EXECUTION_TIMEOUT_SECONDS)
+            logger.warning(
+                "WASM execution timed out after %d seconds", WASM_EXECUTION_TIMEOUT_SECONDS
+            )
             raise HTTPException(
                 status_code=408,
                 detail=f"WASM execution timed out after {WASM_EXECUTION_TIMEOUT_SECONDS}s",
             ) from exc
 
+        result_arrays = {col: table.column(col).to_pylist() for col in table.schema.names}
+        result_arrays[output_column] = output_values
         result_table = pa.table(result_arrays)
         ordered_columns = list(table.schema.names)
         if output_column not in ordered_columns:
