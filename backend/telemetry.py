@@ -52,9 +52,6 @@ def _get_otel_service_name() -> str:
     return settings.OTEL_SERVICE_NAME
 
 
-OTEL_SERVICE_NAME = _get_otel_service_name()
-
-
 def setup_telemetry() -> None:
     global _TRACER_PROVIDER, _TRACER
 

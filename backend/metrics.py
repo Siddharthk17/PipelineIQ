@@ -2,6 +2,14 @@
 
 Centralizes all custom metric definitions to avoid circular imports
 when metrics are needed in multiple modules (e.g., files.py, pipeline_tasks.py).
+
+M-176 note: ACTIVE_USERS_TOTAL and CELERY_QUEUE_DEPTH are gauges — they
+only move when something calls the setters below. The counters/histograms
+are wired at their call sites (files.py, pipeline_tasks.py); wiring these
+two setters into a periodic collector (Celery beat task reading user count
+and broker queue depth) is a product-code owner action, tracked in REPORT.md.
+Dashboard panels and the CeleryQueueDepthHigh alert already reference these
+series, so the definitions must stay even before the writer lands.
 """
 
 from prometheus_client import Counter, Gauge, Histogram
@@ -28,3 +36,18 @@ CELERY_QUEUE_DEPTH = Gauge(
     "pipelineiq_celery_queue_depth",
     "Current Celery task queue depth",
 )
+
+
+def set_active_users_total(count: float) -> None:
+    """Record the current registered-user count (M-176 write side).
+
+    Intended caller: a periodic collector (Celery beat) that counts users
+    and broker queue depth. Kept here so the write path is unit-testable
+    without importing task modules.
+    """
+    ACTIVE_USERS.set(count)
+
+
+def set_celery_queue_depth(depth: float) -> None:
+    """Record the current Celery queue depth (M-176 write side)."""
+    CELERY_QUEUE_DEPTH.set(depth)
