@@ -480,6 +480,10 @@ def deliver_webhooks_task(
             if user_id:
                 query = query.filter(Webhook.user_id == user_id)
             webhooks = query.all()
+        except Exception:
+            # Session cleanup on query failure (M-173).
+            db.rollback()
+            raise
         finally:
             db.close()
 
@@ -538,6 +542,10 @@ def fire_webhooks_for_event(
             .filter(Webhook.user_id == user_id, Webhook.is_active.is_(True))
             .all()
         )
+    except Exception:
+        # Session cleanup on query failure (M-173).
+        db.rollback()
+        raise
     finally:
         db.close()
 

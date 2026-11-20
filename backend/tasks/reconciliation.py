@@ -227,7 +227,16 @@ def reconcile_stuck_runs(
             run.status = PipelineStatus.TIMEOUT
             run.completed_at = utcnow()
             run.error_message = error_message
-            db.commit()
+            try:
+                db.commit()
+            except Exception:
+                # One poisoned commit must not wedge the whole sweep
+                # (M-173): roll back and continue with the remaining runs.
+                db.rollback()
+                logger.warning(
+                    "Failed to mark stale run %s TIMEOUT; continuing",
+                    run.id, exc_info=True)
+                continue
             timed_out += 1
             logger.warning(
                 "Marked stale run %s TIMEOUT (task state: %s)",
