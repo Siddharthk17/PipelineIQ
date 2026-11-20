@@ -295,7 +295,20 @@ def test_export_pipeline_rbac(rbac_client, users, sample_run):
 
 def test_permission_management_rbac(rbac_client, users, sample_pipeline):
     pipeline_name = sample_pipeline
-    target_user_id = str(users["viewer"].id)
+    # Fresh target with no existing grant (the fixture pre-grants viewer /
+    # runner / owner, so reuse of those ids would be a duplicate or a level
+    # change rather than a fresh grant).
+    newbie_email = f"newbie_{_uuid.uuid4().hex[:8]}@test.com"
+    created = rbac_client.post(
+        "/auth/register",
+        json={
+            "email": newbie_email,
+            "username": newbie_email.split("@")[0],
+            "password": "Testpass123!",
+        },
+    )
+    assert created.status_code == 201, created.text
+    target_user_id = created.json()["id"]
     payload = {"user_id": target_user_id, "permission_level": "runner"}
 
     # Admin can grant
@@ -307,13 +320,26 @@ def test_permission_management_rbac(rbac_client, users, sample_pipeline):
         == 201
     )
 
-    # Owner can grant
+    # Owner can grant (level change on the same target exercises the
+    # owner path without depending on grant pre-state)
     set_current_user(users["owner"])
     assert (
         rbac_client.post(
-            f"/api/v1/pipelines/{pipeline_name}/permissions", json=payload
+            f"/api/v1/pipelines/{pipeline_name}/permissions",
+            json={"user_id": target_user_id, "permission_level": "viewer"},
         ).status_code
-        == 201
+        in (200, 201)
+    )
+
+    # Re-granting the identical level is an explicit conflict now (M-153):
+    # duplicate grants must never apply silently.
+    set_current_user(users["admin"])
+    assert (
+        rbac_client.post(
+            f"/api/v1/pipelines/{pipeline_name}/permissions",
+            json={"user_id": target_user_id, "permission_level": "viewer"},
+        ).status_code
+        == 409
     )
 
     # Runner cannot grant
