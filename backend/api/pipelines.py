@@ -652,6 +652,31 @@ def run_pipeline(
         raise
 
 
+def _referenced_wasm_ids(config) -> list[str]:
+    """Collect wasm_file_id references from a parsed pipeline config."""
+    ids: list[str] = []
+    for step in getattr(config, "steps", []):
+        wid = getattr(step, "wasm_file_id", None)
+        if isinstance(wid, str) and wid.strip():
+            ids.append(wid.strip())
+    return ids
+
+
+def _validate_wasm_ownership(db: Session, config, user_id) -> None:
+    """Reject runs referencing Wasm modules owned by another user (M-077).
+
+    Every ``wasm_file_id`` must resolve through the aiwasm ownership
+    helpers: missing and foreign ids both 404 with the same message, so
+    module ids cannot be probed across tenants.
+    """
+    ids = _referenced_wasm_ids(config)
+    if not ids:
+        return
+    from backend.routers.wasm import assert_wasm_ids_owned
+
+    assert_wasm_ids_owned(db, ids, user_id)
+
+
 def _run_validated_and_queued(
     body,
     config,
@@ -715,6 +740,9 @@ def _run_validated_and_queued(
         )
 
     # Ownership is claimed only after the request is known-valid (M-089).
+    # Wasm module ownership is validated here too: a run referencing
+    # another tenant's module must 404 before any ownership claim (M-077).
+    _validate_wasm_ownership(db, config, current_user.id)
     _check_pipeline_permission(
         db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
     )
@@ -844,6 +872,8 @@ def _run_legacy_validated_and_queued(
             },
         )
     # Ownership is claimed only after the request is known-valid (M-089).
+    # Wasm module ownership is validated here too (M-077).
+    _validate_wasm_ownership(db, config, current_user.id)
     _check_pipeline_permission(
         db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
     )
