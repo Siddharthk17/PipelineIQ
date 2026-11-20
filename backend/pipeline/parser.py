@@ -1454,14 +1454,15 @@ class PipelineParser:
         self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Check that all save step filenames are safe and don't allow path traversal."""
+        seen_filenames: dict[str, str] = {}
         for step in config.steps:
             if isinstance(step, SaveStepConfig):
-                if not step.filename:
+                if not isinstance(step.filename, str) or not step.filename:
                     errors.append(
                         ValidationError(
                             step_name=step.name,
                             field="filename",
-                            message="Save step must specify a filename",
+                            message="Save step must specify a string filename",
                         )
                     )
                 elif not is_safe_filename(step.filename):
@@ -1471,6 +1472,41 @@ class PipelineParser:
                             field="filename",
                             message=f"Invalid filename '{step.filename}'. Path traversal characters are forbidden.",
                         ))
+                else:
+                    # M-143: run-scoped save outputs live at
+                    # outputs/{run_id}/{filename}, so two saves with the
+                    # same filename in one pipeline overwrite each other.
+                    # Reject duplicates instead of silently clobbering.
+                    first = seen_filenames.setdefault(
+                        step.filename, step.name)
+                    if first != step.name:
+                        errors.append(
+                            ValidationError(
+                                step_name=step.name,
+                                field="filename",
+                                message=(
+                                    f"Duplicate save filename '{step.filename}' "
+                                    f"(also used by step '{first}'). Each save "
+                                    f"step must use a unique filename."
+                                ),
+                            ))
+
+    # M-113: params each check type needs beyond "check". Missing params
+    # used to surface as KeyError 500s inside the validator at runtime.
+    _VALIDATE_RULE_PARAMS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "not_null": ("column",),
+        "not_empty": ("column",),
+        "greater_than": ("column", "value"),
+        "less_than": ("column", "value"),
+        "between": ("column", "min", "max"),
+        "in_values": ("column", "values"),
+        "matches_pattern": ("column", "pattern"),
+        "no_duplicates": ("column",),
+        "min_rows": ("value",),
+        "max_rows": ("value",),
+        "date_format": ("column", "format"),
+        "positive": ("column",),
+    }
 
     def _check_validate_rules(
         self,
