@@ -6,12 +6,15 @@ result retrieval, cancellation, and export.
 
 import logging
 import os
+import re
+import time
 from datetime import UTC
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from backend.auth import get_current_user
@@ -27,6 +30,7 @@ from backend.models import (
     UploadedFile,
     User,
 )
+from backend.models.data_contract import IdempotencyKey
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.parser import PipelineParser, StepType
 from backend.pipeline.planner import generate_execution_plan
@@ -289,6 +293,152 @@ def _owned_file_ids(db: Session, user: User) -> set[str]:
     return {str(row[0]) for row in query.all()}
 
 
+def _validate_claim_name(pipeline_name: str | None) -> str:
+    """Validate the effective pipeline/run name before any ownership claim.
+
+    Names are validated BEFORE the first-run OWNER grant (M-089) so a
+    caller cannot squat or probe names with requests that will fail
+    validation anyway. Allowed: letters/digits, space, underscore, dot,
+    dash; must start alphanumeric; max 255 chars.
+    """
+    name = pipeline_name or ""
+    if not name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Pipeline name must be a non-empty string",
+        )
+    if len(name) > 255 or _PIPELINE_NAME_RE.match(name) is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Pipeline name contains invalid characters: only letters, "
+                "digits, spaces, underscores, dots and dashes are allowed "
+                "(max 255 characters)"
+            ),
+        )
+    return name
+
+
+_PIPELINE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.\- ]{0,254}")
+
+
+def _get_idempotency_key(request: Request) -> str | None:
+    """Extract and validate the Idempotency-Key header (M-062)."""
+    raw = request.headers.get("idempotency-key")
+    if raw is None:
+        return None
+    key = raw.strip()
+    if not key or len(key) > 255 or any(c in key for c in ("\r", "\n")):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid Idempotency-Key header: must be 1-255 characters "
+            "without line breaks",
+        )
+    return key
+
+
+_IDEMPOTENT_INFLIGHT_TIMEOUT_S = 5.0
+_IDEMPOTENT_POLL_INTERVAL_S = 0.2
+
+
+def _idempotency_claim(
+    db: Session, *, scope: str, key: str, user_id
+) -> tuple[str, IdempotencyKey | None]:
+    """Claim an idempotency key or return the stored outcome (M-062).
+
+    Returns ("owner", row) when this request won the key, ("replay", row)
+    when a completed response is stored, or ("inflight", row) when another
+    request is still producing the response.
+    """
+    existing = (
+        db.query(IdempotencyKey)
+        .filter(
+            IdempotencyKey.scope == scope,
+            IdempotencyKey.key == key,
+            IdempotencyKey.user_id == user_id,
+        )
+        .first()
+    )
+    if existing is not None:
+        if existing.status_code is not None:
+            return "replay", existing
+        return "inflight", existing
+    row = IdempotencyKey(
+        scope=scope, key=key, user_id=user_id,
+        status_code=None, response_body=None,
+    )
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(IdempotencyKey)
+            .filter(
+                IdempotencyKey.scope == scope,
+                IdempotencyKey.key == key,
+                IdempotencyKey.user_id == user_id,
+            )
+            .first()
+        )
+        if existing is not None and existing.status_code is not None:
+            return "replay", existing
+        return "inflight", existing
+    db.refresh(row)
+    return "owner", row
+
+
+def _idempotency_wait(db: Session, row: IdempotencyKey) -> IdempotencyKey | None:
+    """Wait briefly for an in-flight duplicate to complete (M-062)."""
+    deadline = time.monotonic() + _IDEMPOTENT_INFLIGHT_TIMEOUT_S
+    while time.monotonic() < deadline:
+        time.sleep(_IDEMPOTENT_POLL_INTERVAL_S)
+        refreshed = (
+            db.query(IdempotencyKey).filter(IdempotencyKey.id == row.id).first()
+        )
+        if refreshed is not None and refreshed.status_code is not None:
+            return refreshed
+    return None
+
+
+def _idempotency_release(db: Session, row: IdempotencyKey) -> None:
+    """Release a claim placeholder that never produced a response (M-062).
+
+    Only removes the row while it is still incomplete, so a concurrent
+    completion can never be deleted by a loser.
+    """
+    try:
+        doomed = (
+            db.query(IdempotencyKey)
+            .filter(
+                IdempotencyKey.id == row.id,
+                IdempotencyKey.status_code.is_(None),
+            )
+            .first()
+        )
+        if doomed is not None:
+            db.delete(doomed)
+            db.commit()
+    except Exception:  # best-effort cleanup only
+        logger.warning("Failed to release idempotency placeholder", exc_info=True)
+        db.rollback()
+
+
+def _idempotency_complete(
+    db: Session,
+    row: IdempotencyKey,
+    *,
+    status_code: int,
+    body: dict,
+    resource_id: str | None = None,
+) -> None:
+    row.status_code = status_code
+    row.response_body = body
+    row.resource_id = resource_id
+    db.add(row)
+    db.commit()
+
+
 def _check_pipeline_permission(
     db: Session,
     user: User,
@@ -336,6 +486,11 @@ def _check_pipeline_permission(
             # becomes its owner. Names already in use by anyone else stay
             # off-limits — otherwise anyone could co-opt another user's
             # pipeline, contracts and versions just by reusing its name.
+            # The claim is atomic (M-007): the partial unique index on
+            # (pipeline_name) WHERE permission_level='owner' plus the
+            # (pipeline_name, user_id) unique constraint turn a concurrent
+            # double-claim into an IntegrityError for exactly one loser,
+            # which is re-checked below instead of becoming a second OWNER.
             from backend.models import PermissionLevel, PipelineContract, PipelinePermission
 
             name_in_use = (
@@ -359,13 +514,30 @@ def _check_pipeline_permission(
                     permission_level=PermissionLevel.OWNER,
                 )
                 db.add(new_perm)
-                db.commit()
-                logger.info(
-                    "Granted owner permission to user %s for pipeline %s",
-                    user.id,
-                    pipeline_name,
+                try:
+                    db.commit()
+                except IntegrityError:
+                    # Lost a concurrent first-claim race, or this user
+                    # already holds a row: re-read before deciding.
+                    db.rollback()
+                else:
+                    logger.info(
+                        "Granted owner permission to user %s for pipeline %s",
+                        user.id,
+                        pipeline_name,
+                    )
+                    return
+                own_row = (
+                    db.query(PipelinePermission.id)
+                    .filter(
+                        PipelinePermission.pipeline_name == pipeline_name,
+                        PipelinePermission.user_id == user.id,
+                    )
+                    .first()
                 )
-                return
+                if own_row:
+                    # Same-user concurrent retry won elsewhere; proceed.
+                    return
 
         # No grant at all: 404 (not 403) so the existence of another
         # user's pipeline/run cannot be probed via the status code.
@@ -444,12 +616,52 @@ def run_pipeline(
     """Create a pipeline run record and queue it for execution."""
     # Parse YAML to get the pipeline name for permission check
     config = get_parsed_pipeline(body.yaml_config)
-    pipeline_name = body.name or config.name
+    # Name validation runs BEFORE any ownership claim (M-089): a request
+    # that will fail validation must never squat the pipeline name.
+    pipeline_name = _validate_claim_name(body.name or config.name)
 
-    _check_pipeline_permission(
-        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
-    )
+    # Idempotency-Key replay short-circuits before any side effect (M-062).
+    idem_key = _get_idempotency_key(request)
+    idem_row: IdempotencyKey | None = None
+    if idem_key is not None:
+        action, idem_row = _idempotency_claim(
+            db, scope="pipeline_run", key=idem_key, user_id=current_user.id
+        )
+        if action == "replay":
+            assert idem_row is not None and idem_row.response_body is not None
+            return RunPipelineResponse(**idem_row.response_body)
+        if action == "inflight":
+            assert idem_row is not None
+            done = _idempotency_wait(db, idem_row)
+            if done is not None and done.response_body is not None:
+                return RunPipelineResponse(**done.response_body)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotent request still in progress",
+            )
 
+    try:
+        return _run_validated_and_queued(
+            body, config, pipeline_name, request, db, current_user, idem_row
+        )
+    except Exception:
+        # A request that never produced a response must not pin its key:
+        # release the placeholder so retries get a fresh attempt (M-062).
+        if idem_row is not None:
+            _idempotency_release(db, idem_row)
+        raise
+
+
+def _run_validated_and_queued(
+    body,
+    config,
+    pipeline_name: str,
+    request: Request,
+    db: Session,
+    current_user: User,
+    idem_row: IdempotencyKey | None,
+) -> RunPipelineResponse:
+    """Validate, claim ownership, queue execution, record idempotency."""
     # Verify all referenced file IDs exist in the database and general config
     # is valid
     registered_ids = _owned_file_ids(db, current_user)
@@ -502,7 +714,12 @@ def run_pipeline(
             },
         )
 
-    return _create_and_queue_pipeline_run(
+    # Ownership is claimed only after the request is known-valid (M-089).
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
+    )
+
+    run_resp = _create_and_queue_pipeline_run(
         yaml_config=body.yaml_config,
         name=body.name,
         parsed_config=config,
@@ -510,6 +727,15 @@ def run_pipeline(
         db=db,
         current_user=current_user,
     )
+    if idem_row is not None:
+        _idempotency_complete(
+            db,
+            idem_row,
+            status_code=status.HTTP_202_ACCEPTED,
+            body=run_resp.model_dump(mode="json"),
+            resource_id=run_resp.run_id,
+        )
+    return run_resp
 
 
 @legacy_runs_router.post(
@@ -552,12 +778,55 @@ async def run_pipeline_legacy(
             detail="'name' must be a string when provided",
         )
     config = get_parsed_pipeline(yaml_config)
-    pipeline_name = name or config.name
-    _check_pipeline_permission(
-        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
-    )
+    # Name validation runs BEFORE any ownership claim (M-089).
+    pipeline_name = _validate_claim_name(name or config.name)
+
+    # Idempotency-Key replay short-circuits before any side effect (M-062).
+    idem_key = _get_idempotency_key(request)
+    idem_row: IdempotencyKey | None = None
+    if idem_key is not None:
+        action, idem_row = _idempotency_claim(
+            db, scope="pipeline_run", key=idem_key, user_id=current_user.id
+        )
+        if action == "replay":
+            assert idem_row is not None and idem_row.response_body is not None
+            return RunPipelineResponse(**idem_row.response_body)
+        if action == "inflight":
+            assert idem_row is not None
+            done = _idempotency_wait(db, idem_row)
+            if done is not None and done.response_body is not None:
+                return RunPipelineResponse(**done.response_body)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotent request still in progress",
+            )
+
     registered_ids = _owned_file_ids(db, current_user)
     validation_result = _pipeline_parser.validate(config, registered_ids)
+    try:
+        return _run_legacy_validated_and_queued(
+            yaml_config, name, config, validation_result,
+            pipeline_name, request, db, current_user, idem_row,
+        )
+    except Exception:
+        # A request that never produced a response must not pin its key (M-062).
+        if idem_row is not None:
+            _idempotency_release(db, idem_row)
+        raise
+
+
+def _run_legacy_validated_and_queued(
+    yaml_config: str,
+    name: str | None,
+    config,
+    validation_result,
+    pipeline_name: str,
+    request: Request,
+    db: Session,
+    current_user: User,
+    idem_row: IdempotencyKey | None,
+) -> RunPipelineResponse:
+    """Validate, claim ownership, queue execution, record idempotency."""
     if not validation_result.is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -574,7 +843,11 @@ async def run_pipeline_legacy(
                 ],
             },
         )
-    return _create_and_queue_pipeline_run(
+    # Ownership is claimed only after the request is known-valid (M-089).
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
+    )
+    response_model = _create_and_queue_pipeline_run(
         yaml_config=yaml_config,
         name=name,
         parsed_config=config,
@@ -582,6 +855,15 @@ async def run_pipeline_legacy(
         db=db,
         current_user=current_user,
     )
+    if idem_row is not None:
+        _idempotency_complete(
+            db,
+            idem_row,
+            status_code=status.HTTP_202_ACCEPTED,
+            body=response_model.model_dump(mode="json"),
+            resource_id=response_model.run_id,
+        )
+    return response_model
 
 
 @router.get(
