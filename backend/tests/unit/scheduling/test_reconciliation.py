@@ -76,3 +76,50 @@ def test_completed_run_untouched(test_db):
     assert result == {"checked": 0, "timed_out": 0}
     test_db.refresh(run)
     assert run.status == PipelineStatus.COMPLETED
+
+
+def test_streaming_active_dead_task_times_out(test_db):
+    """R-R-003: dead streaming daemon must not wedge the run forever."""
+    run = _user_and_run(test_db, PipelineStatus.STREAMING_ACTIVE, 60, "dead-daemon")
+    with patch.object(recon, "_task_state", return_value="FAILURE"), patch(
+        "backend.tasks.reconciliation._publish_terminal_event",
+        create=True,
+    ):
+        result = recon.reconcile_stuck_runs(
+            db=test_db, timeout=timedelta(minutes=30))
+    assert result == {"checked": 1, "timed_out": 1}
+    test_db.refresh(run)
+    assert run.status == PipelineStatus.TIMEOUT
+
+
+def test_streaming_active_live_task_left_alone(test_db):
+    run = _user_and_run(test_db, PipelineStatus.STREAMING_ACTIVE, 600, "live-daemon")
+    with patch.object(recon, "_task_state", return_value="STARTED"):
+        result = recon.reconcile_stuck_runs(
+            db=test_db, timeout=timedelta(minutes=30))
+    assert result == {"checked": 1, "timed_out": 0}
+    test_db.refresh(run)
+    assert run.status == PipelineStatus.STREAMING_ACTIVE
+
+
+def test_streaming_active_unknown_task_left_alone(test_db):
+    """Indeterminate broker/task state must never reap a live stream."""
+    run = _user_and_run(test_db, PipelineStatus.STREAMING_ACTIVE, 600, "mystery-task")
+    with patch.object(recon, "_task_state", return_value=None), patch.object(
+        recon, "_is_task_known_to_workers", return_value=None
+    ):
+        result = recon.reconcile_stuck_runs(
+            db=test_db, timeout=timedelta(minutes=30))
+    assert result == {"checked": 1, "timed_out": 0}
+    test_db.refresh(run)
+    assert run.status == PipelineStatus.STREAMING_ACTIVE
+
+
+def test_streaming_paused_never_reaped(test_db):
+    run = _user_and_run(test_db, PipelineStatus.STREAMING_PAUSED, 600, "dead-daemon")
+    with patch.object(recon, "_task_state", return_value="FAILURE"):
+        result = recon.reconcile_stuck_runs(
+            db=test_db, timeout=timedelta(minutes=30))
+    assert result["timed_out"] == 0
+    test_db.refresh(run)
+    assert run.status == PipelineStatus.STREAMING_PAUSED

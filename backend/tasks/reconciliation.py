@@ -39,6 +39,13 @@ RECONCILABLE_STATUSES = (
     PipelineStatus.PENDING,
     PipelineStatus.RUNNING,
     PipelineStatus.HEALING,
+    # R-R-003: a SIGKILLed/OOM streaming daemon leaves STREAMING_ACTIVE with
+    # a dead task id and nothing ever reaps it (silent forever-hang). These
+    # runs are reconciliable BUT never on age alone: streaming runs are
+    # legitimately long-lived, so a streaming run is only reaped when its
+    # task is *definitively* dead (see below). STREAMING_PAUSED is
+    # intentional operator state and is never reaped here.
+    PipelineStatus.STREAMING_ACTIVE,
 )
 # Result-backend states that prove a worker is actively holding the task.
 # PENDING is deliberately excluded: AsyncResult defaults to PENDING for
@@ -197,6 +204,19 @@ def reconcile_stuck_runs(
             task_state = _task_state(run.celery_task_id)
             if task_state in LIVE_TASK_STATES:
                 continue
+            if run.status == PipelineStatus.STREAMING_ACTIVE:
+                # Streaming runs are legitimately long-lived: never reap on
+                # age alone. Reap only when the daemon task is definitively
+                # dead — result backend says so, or the broker answered and
+                # no worker holds the task id. Indeterminate (no task id,
+                # broker unreachable, ambiguous PENDING) always keeps the run.
+                dead = task_state in ("FAILURE", "REVOKED")
+                if not dead and run.celery_task_id:
+                    worker_knowledge = _is_task_known_to_workers(
+                        run.celery_task_id)
+                    dead = worker_knowledge is False
+                if not dead:
+                    continue
             if task_state in AMBIGUOUS_TASK_STATES and run.celery_task_id:
                 # PENDING from the result backend alone proves nothing.
                 # Only a broker sighting keeps the run alive.
