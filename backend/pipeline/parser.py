@@ -345,6 +345,27 @@ class ValidationResult:
     warnings: list[ValidationWarning] = field(default_factory=list)
 
 
+def extract_envelope(raw: Any) -> tuple[str, Any]:
+    """Split raw parsed YAML into (pipeline_name, raw_steps), leniently.
+
+    M-110: the single shared envelope extraction used by both the
+    validator (`_build_pipeline_config` semantics) and the dry-run
+    planner. Never raises: ragged input (scalar root, missing keys,
+    non-list steps) yields "" / [] shapes and lets the caller decide
+    how to report them, instead of AttributeError 500s.
+    """
+    if not isinstance(raw, dict):
+        return "", []
+    pipeline_raw = raw.get("pipeline", raw)
+    if not isinstance(pipeline_raw, dict):
+        return "", []
+    name = pipeline_raw.get("name", "")
+    if not isinstance(name, str):
+        name = ""
+    steps = pipeline_raw.get("steps", [])
+    return name, steps
+
+
 _STEP_CONFIG_MAP: dict[StepType, type] = {
     StepType.LOAD: LoadStepConfig,
     StepType.FILTER: FilterStepConfig,
