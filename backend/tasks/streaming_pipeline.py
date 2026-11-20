@@ -628,7 +628,13 @@ def _settle_final_status(db, run_id):
     anything else (FAILED with a reason, CANCELLED, ...) is preserved so
     loop exit never clobbers a terminal status. Returns the final status,
     or None when the run no longer exists.
+
+    R2-005: settling to STOPPED publishes a terminal event so watchers
+    on the run's channel get stream_end instead of hanging on heartbeats
+    until the status-cache TTL expires.
     """
+    from backend.db.redis_pools import get_cache_redis
+
     run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
     if run is None:
         return None
@@ -637,6 +643,24 @@ def _settle_final_status(db, run_id):
     ):
         run.status = PipelineStatus.STREAMING_STOPPED
         db.commit()
+        try:
+            payload = sign_sse_payload({
+                "run_id": str(run_id),
+                "event_type": "pipeline_cancelled",
+                "status": PipelineStatus.STREAMING_STOPPED.value,
+                "error_message": "",
+            })
+            get_pubsub_redis().publish(
+                f"pipeline_progress:{run_id}", orjson.dumps(payload))
+            get_cache_redis().setex(
+                f"pipeline_progress:last:{run_id}", 3600,
+                orjson.dumps(payload),
+            )
+        except Exception:
+            logger.warning(
+                "Failed to publish streaming-stop terminal event for %s",
+                run_id, exc_info=True,
+            )
         return PipelineStatus.STREAMING_STOPPED
     return run.status
 

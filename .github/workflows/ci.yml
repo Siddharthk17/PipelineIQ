@@ -1,5 +1,10 @@
 name: CI
 
+# O2-004: least-privilege token for the most-run workflow (matches
+# cd.yml/deploy.yml/release.yml/security.yml/uptime.yml).
+permissions:
+  contents: read
+
 on:
   push:
     branches: ["**"]

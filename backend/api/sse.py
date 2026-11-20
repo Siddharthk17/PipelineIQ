@@ -72,6 +72,13 @@ _TERMINAL_STATUSES = frozenset({
     PipelineStatus.FAILED.value,
     PipelineStatus.CANCELLED.value,
     PipelineStatus.TIMEOUT.value,
+    # R2-005/C2-010: contract-violation runs terminate with this status
+    # but publish event_type pipeline_completed; without the status here
+    # late attachers take the live-stream path and hang on heartbeats.
+    PipelineStatus.CONTRACT_VIOLATION.value,
+    # ... same for operator-stopped streaming runs (no terminal event was
+    # published at all pre-fix; _settle_final_status now publishes one).
+    PipelineStatus.STREAMING_STOPPED.value,
 })
 _TERMINAL_EVENT_TYPES = frozenset({
     "pipeline_completed",
@@ -616,9 +623,19 @@ def _is_terminal_event(event_type: str, payload: dict) -> bool:
 
 
 def _terminal_event_type(status_value: PipelineStatus) -> str:
-    if status_value in {PipelineStatus.COMPLETED, PipelineStatus.HEALED}:
+    if status_value in {
+        PipelineStatus.COMPLETED,
+        PipelineStatus.HEALED,
+        # R2-005: workers publish pipeline_completed for violation runs;
+        # the replay path must agree or late clients mislabel the run.
+        PipelineStatus.CONTRACT_VIOLATION,
+    }:
         return "pipeline_completed"
-    if status_value == PipelineStatus.CANCELLED:
+    if status_value in {
+        PipelineStatus.CANCELLED,
+        # Operator stop ≈ cancel for SSE consumers watching the stream.
+        PipelineStatus.STREAMING_STOPPED,
+    }:
         return "pipeline_cancelled"
     return "pipeline_failed"
 

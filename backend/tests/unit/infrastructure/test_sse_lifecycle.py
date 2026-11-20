@@ -46,3 +46,54 @@ def test_is_terminal_event_true_for_terminal_status():
         "progress", {"status": "FAILED"}) is True
     assert sse_module._is_terminal_event(
         "progress", {"status": "RUNNING"}) is False
+
+
+def test_terminal_statuses_include_violation_and_streaming_stopped():
+    """R2-005/C2-010: violation + stopped runs must take the replay path."""
+    assert {"CONTRACT_VIOLATION", "STREAMING_STOPPED"}.issubset(
+        sse_module._TERMINAL_STATUSES)
+
+
+def test_terminal_event_type_labels_violation_completed():
+    from backend.models import PipelineStatus
+
+    assert sse_module._terminal_event_type(
+        PipelineStatus.CONTRACT_VIOLATION) == "pipeline_completed"
+    assert sse_module._terminal_event_type(
+        PipelineStatus.STREAMING_STOPPED) == "pipeline_cancelled"
+
+
+def test_settle_to_stopped_publishes_terminal_event(test_db, monkeypatch):
+    """R2-005: daemon loop exit to STOPPED must wake SSE watchers."""
+    import uuid as uuid_module
+
+    import orjson
+
+    from backend.models import PipelineRun, PipelineStatus
+    from backend.tasks import streaming_pipeline as sp
+
+    published = {}
+
+    class FakeRedis:
+        def publish(self, channel, payload):
+            published["channel"] = channel
+            published["payload"] = orjson.loads(payload)
+
+        def setex(self, *args, **kwargs):
+            published["cached"] = True
+
+    monkeypatch.setattr(sp, "get_pubsub_redis", lambda: FakeRedis())
+    monkeypatch.setattr("backend.db.redis_pools.get_cache_redis",
+                        lambda: FakeRedis())
+
+    run = PipelineRun(
+        id=uuid_module.uuid4(), name="sse-stop",
+        status=PipelineStatus.STREAMING_ACTIVE,
+        yaml_config="pipeline:\n  name: s\n  steps: []\n",
+    )
+    test_db.add(run)
+    test_db.commit()
+    final = sp._settle_final_status(test_db, run.id)
+    assert final == PipelineStatus.STREAMING_STOPPED
+    assert published.get("channel") == f"pipeline_progress:{run.id}"
+    assert published["payload"]["status"] == "STREAMING_STOPPED"
