@@ -621,8 +621,32 @@ def preview_file(
         "total_rows": uploaded_file.row_count,
         "preview_rows": len(df),
         "columns": list(df.columns),
-        "data": df.to_dict(orient="records"),
+        "data": _neutralize_formula_cells(df).to_dict(orient="records"),
     }
+
+
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralize_formula_cells(df: pd.DataFrame) -> pd.DataFrame:
+    """Prefix spreadsheet-formula cells so previews cannot inject code (M-075).
+
+    Cells whose text starts with ``= + - @`` or tab/CR gain a leading single
+    quote, per OWASP CSV-injection guidance. Only string cells are touched;
+    numeric dtypes pass through unchanged.
+    """
+
+    def _neutralize(value: object) -> object:
+        if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+            return "'" + value
+        return value
+
+    result = df.copy()
+    for column in result.columns:
+        series = result[column]
+        if series.dtype == object or str(series.dtype) == "string":
+            result[column] = series.map(_neutralize)
+    return result
 
 
 def _decode_csv_bytes(raw: bytes) -> tuple[str, str]:
