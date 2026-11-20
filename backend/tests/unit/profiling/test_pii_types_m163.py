@@ -57,17 +57,15 @@ class TestM163PIITypeInference:
         assert infer_semantic_type(s, "postal") == "address"
 
     def test_all_pii_types_covered(self):
-        assert PII_SEMANTIC_TYPES == frozenset(
-            {
-                "email",
-                "phone",
-                "ssn",
-                "credit_card",
-                "ip_address",
-                "person_name",
-                "address",
-            }
-        )
+        assert set(PII_SEMANTIC_TYPES) == {
+            "email",
+            "phone",
+            "ssn",
+            "credit_card",
+            "ip_address",
+            "person_name",
+            "address",
+        }
 
 
 class TestM163EndToEndSuggestions:

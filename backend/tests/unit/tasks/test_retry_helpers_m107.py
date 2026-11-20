@@ -83,7 +83,7 @@ class TestRetrySync:
         import backend.tasks.retry_helpers as helpers
 
         monkeypatch_sleep = helpers._sleep
-        helpers._sleep = lambda _: None  # noqa: E731
+        helpers._sleep = lambda _: None
         try:
             with pytest.raises(ConnectionError):
                 retry_sync(fn, attempts=2, base_seconds=0.01)
