@@ -60,6 +60,7 @@ logger = logging.getLogger(__name__)
 # avoid a circular import between `main.py` and the routers that
 # raise it. (Routers are imported at module load time below.)
 from backend.pipeline.exceptions import ClientDisconnected
+from backend.pipeline.exceptions import PipelineYAMLTooLargeError
 
 
 # Silence health check and metrics access log noise
@@ -322,6 +323,22 @@ Instrumentator(
     should_ignore_untemplated=True,
     excluded_handlers=["/metrics"],
 ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+
+@app.exception_handler(PipelineYAMLTooLargeError)
+async def pipeline_too_large_handler(
+    request: Request, exc: PipelineYAMLTooLargeError
+) -> JSONResponse:
+    """Map oversized pipeline YAML to 413 (not the generic 422)."""
+    request_id = getattr(request.state, "request_id", "unknown")
+    return JSONResponse(
+        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        content={
+            "error_type": exc.__class__.__name__,
+            "message": exc.message,
+            "request_id": request_id,
+        },
+    )
 
 
 @app.exception_handler(PipelineIQError)
