@@ -469,6 +469,7 @@ class PipelineParser:
         self._check_save_filenames(config, errors)
         self._check_validate_rules(config, errors)
         self._check_sql_steps(config, errors)
+        self._check_contracts(config, errors)
         self._check_unsupported_runtime_steps(config, errors)
 
         return ValidationResult(
@@ -731,13 +732,16 @@ class PipelineParser:
                 expression=raw.get("expression", ""),
             )
         if step_type == StepType.STREAM_CONSUME:
+            # M-113: keep raw ints; wrong types/ranges are reported by
+            # _check_required_step_fields with step context (raising here
+            # would break the validate-returns-errors contract).
             return StreamConsumeStepConfig(
                 name=name,
                 step_type=step_type,
                 topic=raw.get("topic", ""),
                 consumer_group=raw.get("consumer_group", ""),
-                batch_size=int(raw.get("batch_size", 1000)),
-                batch_timeout_ms=int(raw.get("batch_timeout_ms", 5000)),
+                batch_size=raw.get("batch_size", 1000),
+                batch_timeout_ms=raw.get("batch_timeout_ms", 5000),
                 deserialize=raw.get("deserialize", "json"),
             )
         if step_type == StepType.STREAM_PUBLISH:
@@ -860,6 +864,10 @@ class PipelineParser:
         """Check 3: No duplicate step names."""
         seen: dict[str, int] = {}
         for step in config.steps:
+            # M-113: unhashable/non-string names are reported by
+            # _check_required_step_fields; skip them here.
+            if not isinstance(step.name, str):
+                continue
             seen[step.name] = seen.get(step.name, 0) + 1
         for name, count in seen.items():
             if count > 1:
@@ -875,7 +883,11 @@ class PipelineParser:
     ) -> None:
         """Check 12: Step names only contain alphanumeric characters and underscores."""
         for step in config.steps:
-            if step.name and not is_valid_identifier(step.name):
+            # M-113: non-string names are reported by
+            # _check_required_step_fields; skip them here.
+            if not isinstance(step.name, str) or not step.name:
+                continue
+            if not is_valid_identifier(step.name):
                 errors.append(
                     ValidationError(
                         step_name=step.name,
@@ -904,14 +916,69 @@ class PipelineParser:
                         suggestion=suggestion,
                     ))
 
+    @staticmethod
+    def _must_be_nonempty_str(
+        errors: list[ValidationError],
+        step_name: str,
+        value: Any,
+        field: str,
+        what: str,
+    ) -> bool:
+        """M-113: report wrong-typed/empty scalar params as 400s, not 500s."""
+        if not isinstance(value, str) or not value.strip():
+            errors.append(
+                ValidationError(
+                    step_name=step_name,
+                    field=field,
+                    message=f"{what} must be a non-empty string",
+                )
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _must_be_str_list(
+        errors: list[ValidationError],
+        step_name: str,
+        value: Any,
+        field: str,
+        what: str,
+    ) -> bool:
+        """M-113: YAML `on:`/`yes:` keys parse as booleans; reject them."""
+        if not isinstance(value, list) or not value:
+            errors.append(
+                ValidationError(
+                    step_name=step_name,
+                    field=field,
+                    message=f"{what} must be a non-empty list of strings",
+                )
+            )
+            return False
+        bad = [v for v in value if not isinstance(v, str) or not v.strip()]
+        if bad:
+            errors.append(
+                ValidationError(
+                    step_name=step_name,
+                    field=field,
+                    message=(
+                        f"{what} must contain only non-empty strings; "
+                        f"got {bad!r} (note: bare YAML `on`/`yes`/`no` "
+                        f"parse as booleans — quote them)"
+                    ),
+                )
+            )
+            return False
+        return True
+
     def _check_required_step_fields(
         self, config: PipelineConfig, errors: list[ValidationError]
     ) -> None:
         """Validate required step fields before semantic reference checks."""
         for step in config.steps:
-            step_name = step.name or "<unnamed>"
+            step_name = step.name if isinstance(
+                getattr(step, "name", None), str) and step.name else "<unnamed>"
 
-            if not step.name or not step.name.strip():
+            if not isinstance(getattr(step, "name", None), str) or not step.name.strip():
                 errors.append(
                     ValidationError(
                         step_name=step_name,
@@ -925,30 +992,18 @@ class PipelineParser:
                 continue
 
             if isinstance(step, LoadStepConfig):
-                if not step.file_id or not step.file_id.strip():
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="file_id",
-                            message="Load step must specify a non-empty file_id",
-                        ))
+                self._must_be_nonempty_str(
+                    errors, step_name, step.file_id, "file_id",
+                    "Load step must specify a non-empty file_id")
                 continue
 
             if isinstance(step, JoinStepConfig):
-                if not step.left or not step.left.strip():
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="left",
-                            message="Join step must specify a non-empty left input",
-                        ))
-                if not step.right or not step.right.strip():
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="right",
-                            message="Join step must specify a non-empty right input",
-                        ))
+                self._must_be_nonempty_str(
+                    errors, step_name, step.left, "left",
+                    "Join step must specify a non-empty left input")
+                self._must_be_nonempty_str(
+                    errors, step_name, step.right, "right",
+                    "Join step must specify a non-empty right input")
             elif not isinstance(step, StreamConsumeStepConfig):
                 input_ref = getattr(step, "input", None)
                 if isinstance(input_ref, str) and not input_ref.strip():
@@ -958,15 +1013,13 @@ class PipelineParser:
                             field="input",
                             message="Step must specify a non-empty input reference",
                         ))
+                # Non-string input refs are reported by
+                # _validate_step_reference with step context.
 
             if isinstance(step, FilterStepConfig):
-                if not step.column or not step.column.strip():
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="column",
-                            message="Filter step must specify a non-empty column",
-                        ))
+                self._must_be_nonempty_str(
+                    errors, step_name, step.column, "column",
+                    "Filter step must specify a non-empty column")
                 if (
                     isinstance(step.operator, FilterOperator)
                     and step.operator
@@ -980,40 +1033,41 @@ class PipelineParser:
                             message="Filter step must specify a value for this operator",
                         ))
 
-            if isinstance(step, SelectStepConfig) and not step.columns:
-                errors.append(
-                    ValidationError(
-                        step_name=step_name,
-                        field="columns",
-                        message="Select step must specify at least one column",
-                    )
-                )
+            if isinstance(step, SelectStepConfig):
+                self._must_be_str_list(
+                    errors, step_name, step.columns, "columns",
+                    "Select step 'columns'")
 
-            if isinstance(step, RenameStepConfig) and not step.mapping:
-                errors.append(
-                    ValidationError(
-                        step_name=step_name,
-                        field="mapping",
-                        message="Rename step must define at least one mapping",
-                    )
-                )
+            if isinstance(step, RenameStepConfig):
+                if not isinstance(step.mapping, dict) or not step.mapping:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="mapping",
+                            message="Rename step 'mapping' must be a non-empty mapping",
+                        ))
+                elif any(not isinstance(k, str) or not isinstance(v, str)
+                         for k, v in step.mapping.items()):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="mapping",
+                            message="Rename step 'mapping' keys and values must be strings",
+                        ))
 
-            if isinstance(step, AggregateStepConfig) and not step.group_by:
-                errors.append(
-                    ValidationError(
-                        step_name=step_name,
-                        field="group_by",
-                        message="Aggregate step must specify at least one group_by column",
-                    ))
+            if isinstance(step, AggregateStepConfig):
+                self._must_be_str_list(
+                    errors, step_name, step.group_by, "group_by",
+                    "Aggregate step 'group_by'")
 
             if isinstance(step, SortStepConfig):
                 by_vals = step.by if isinstance(step.by, list) else [step.by]
-                if not any(str(b).strip() for b in by_vals):
+                if not any(isinstance(b, str) and b.strip() for b in by_vals):
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="by",
-                            message="Sort step must specify a non-empty 'by' column",
+                            message="Sort step must specify a non-empty string 'by' column",
                         ))
                 if not isinstance(step.order, SortOrder):
                     errors.append(
@@ -1023,65 +1077,70 @@ class PipelineParser:
                             message="Sort step 'order' must be 'asc' or 'desc'",
                         ))
 
-            if isinstance(step, ValidateStepConfig) and not step.rules:
+            if (isinstance(step, ValidateStepConfig)
+                    and (not isinstance(step.rules, list)
+                         or not step.rules)):
                 errors.append(
                     ValidationError(
                         step_name=step_name,
                         field="rules",
-                        message="Validate step must define at least one rule",
-                    )
-                )
+                        message="Validate step 'rules' must be a non-empty list",
+                    ))
 
             if isinstance(step, PivotStepConfig):
-                if not step.index:
+                index_vals = (step.index if isinstance(step.index, list)
+                              else [step.index])
+                if not any(isinstance(v, str) and v.strip()
+                           for v in index_vals):
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="index",
-                            message="Pivot step must specify at least one index column",
+                            message="Pivot step must specify at least one string index column",
                         ))
-                if not step.columns or not step.columns.strip():
+                self._must_be_nonempty_str(
+                    errors, step_name, step.columns, "columns",
+                    "Pivot step must specify a non-empty columns field")
+                self._must_be_nonempty_str(
+                    errors, step_name, step.values, "values",
+                    "Pivot step must specify a non-empty values field")
+
+            if isinstance(step, UnpivotStepConfig):
+                self._must_be_str_list(
+                    errors, step_name, step.id_vars, "id_vars",
+                    "Unpivot step 'id_vars'")
+                self._must_be_str_list(
+                    errors, step_name, step.value_vars, "value_vars",
+                    "Unpivot step 'value_vars'")
+
+            if isinstance(step, FillNullsStepConfig):
+                if step.strategy not in VALID_FILL_NULLS_STRATEGIES:
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="strategy",
+                            message=(
+                                f"Fill nulls step strategy must be one of "
+                                f"{sorted(VALID_FILL_NULLS_STRATEGIES)}; "
+                                f"got {step.strategy!r}"
+                            ),
+                        ))
+                if (step.strategy == "constant"
+                        and step.constant_value is None):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="value",
+                            message="Fill nulls step with 'constant' strategy must provide a value",
+                        ))
+                if not isinstance(step.columns, list) or not all(
+                        isinstance(c, str) for c in step.columns):
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="columns",
-                            message="Pivot step must specify a non-empty columns field",
+                            message="Fill nulls step 'columns' must be a list of strings",
                         ))
-                if not step.values or not step.values.strip():
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="values",
-                            message="Pivot step must specify a non-empty values field",
-                        ))
-
-            if isinstance(step, UnpivotStepConfig):
-                if not step.id_vars:
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="id_vars",
-                            message="Unpivot step must define at least one id_vars column",
-                        ))
-                if not step.value_vars:
-                    errors.append(
-                        ValidationError(
-                            step_name=step_name,
-                            field="value_vars",
-                            message="Unpivot step must define at least one value_vars column",
-                        ))
-
-            if (
-                isinstance(step, FillNullsStepConfig)
-                and step.strategy == "constant"
-                and step.constant_value is None
-            ):
-                errors.append(
-                    ValidationError(
-                        step_name=step_name,
-                        field="value",
-                        message="Fill nulls step with 'constant' strategy must provide a value",
-                    ))
 
             if isinstance(step, SampleStepConfig):
                 if step.n is None and step.fraction is None:
@@ -1275,19 +1334,22 @@ class PipelineParser:
     ) -> None:
         """Check 6: Every load step's file_id exists in registered_file_ids."""
         for step in config.steps:
-            if (
+            # M-113: wrong-typed file_ids are reported by
+            # _check_required_step_fields; skip them here.
+            if not (
                 isinstance(step, LoadStepConfig)
-                and step.file_id
+                and isinstance(step.file_id, str)
                 and step.file_id.strip()
-                and step.file_id not in registered_file_ids
             ):
-                    errors.append(
-                        ValidationError(
-                            step_name=step.name,
-                            field="file_id",
-                            message=(
-                                f"file_id '{step.file_id}' is not registered. Registered IDs: {sorted(registered_file_ids)}"),
-                        ))
+                continue
+            if step.file_id not in registered_file_ids:
+                errors.append(
+                    ValidationError(
+                        step_name=step.name,
+                        field="file_id",
+                        message=(
+                            f"file_id '{step.file_id}' is not registered. Registered IDs: {sorted(registered_file_ids)}"),
+                    ))
 
     def _check_filter_operators(
         self, config: PipelineConfig, errors: list[ValidationError]
@@ -1344,6 +1406,14 @@ class PipelineParser:
         """Checks 9 & 10: Aggregation step has aggregations with valid functions."""
         for step in config.steps:
             if isinstance(step, AggregateStepConfig):
+                if not isinstance(step.aggregations, list):
+                    errors.append(
+                        ValidationError(
+                            step_name=step.name, field="aggregations", message=(
+                                "Aggregate step 'aggregations' must be a list "
+                                "of {column, function} mappings"),
+                        ))
+                    continue
                 if not step.aggregations:
                     errors.append(
                         ValidationError(
@@ -1352,7 +1422,27 @@ class PipelineParser:
                             message="Aggregate step must define at least one aggregation",
                         ))
                 for agg in step.aggregations:
-                    func_name = agg.get("function", "") if isinstance(agg, dict) else str(agg)
+                    if not isinstance(agg, dict):
+                        errors.append(
+                            ValidationError(
+                                step_name=step.name,
+                                field="aggregations",
+                                message=(
+                                    "Each aggregation must be a "
+                                    "{column, function} mapping; "
+                                    f"got {agg!r}"
+                                ),
+                            ))
+                        continue
+                    col_name = agg.get("column", "")
+                    if not isinstance(col_name, str) or not col_name.strip():
+                        errors.append(
+                            ValidationError(
+                                step_name=step.name,
+                                field="aggregations.column",
+                                message="Each aggregation must specify a non-empty string 'column'",
+                            ))
+                    func_name = agg.get("function", "")
                     if func_name not in VALID_AGGREGATION_FUNCTIONS:
                         errors.append(
                             ValidationError(
@@ -1411,13 +1501,33 @@ class PipelineParser:
         for step in config.steps:
             if not isinstance(step, ValidateStepConfig):
                 continue
-            for rule in step.rules:
+            rules = step.rules if isinstance(step.rules, list) else []
+            for idx, rule in enumerate(rules):
+                field = f"rules[{idx}]"
+                if not isinstance(rule, dict):
+                    errors.append(
+                        ValidationError(
+                            step_name=step.name, field=field, message=(
+                                f"Validate rule #{idx} must be a mapping; "
+                                f"got {type(rule).__name__}"),
+                        ))
+                    continue
                 check = rule.get("check", "")
                 if check not in SUPPORTED_CHECKS:
                     errors.append(
                         ValidationError(
                             step_name=step.name, field="rules", message=(
                                 f"Unknown check type '{check}'. Supported: {', '.join(sorted(SUPPORTED_CHECKS))}"), ))
+                    continue
+                for param in self._VALIDATE_RULE_PARAMS.get(check, ()):
+                    if param not in rule or rule[param] is None:
+                        errors.append(
+                            ValidationError(
+                                step_name=step.name, field=field, message=(
+                                    f"Validate rule #{idx} (check "
+                                    f"'{check}') is missing required "
+                                    f"parameter '{param}'"),
+                            ))
 
     def _check_sql_steps(
         self,
@@ -1427,6 +1537,10 @@ class PipelineParser:
         """Validate SQL step safety and placeholder usage."""
         for step in config.steps:
             if not isinstance(step, SqlStepConfig):
+                continue
+            # M-113: wrong-typed queries are reported by
+            # _check_required_step_fields; skip them here.
+            if not isinstance(step.query, str):
                 continue
             try:
                 validate_sql_step_query(
@@ -1439,6 +1553,66 @@ class PipelineParser:
                         message=str(exc),
                     )
                 )
+
+    def _check_contracts(
+        self,
+        config: PipelineConfig,
+        errors: list[ValidationError],
+    ) -> None:
+        """M-113: Validate inline step contracts structurally.
+
+        Contracts used to flow straight to the executor, where a
+        malformed mapping (missing name, bad dtype, non-list columns)
+        raised a raw KeyError/ValueError at runtime. Reject them here
+        with step context instead.
+        """
+        from backend.pipeline.contracts import DtypeKind
+
+        valid_dtypes = {d.value for d in DtypeKind}
+
+        for step in config.steps:
+            contract = getattr(step, "contract", None)
+            if contract is None:
+                continue
+            if not isinstance(contract, dict):
+                errors.append(
+                    ValidationError(
+                        step_name=step.name,
+                        field="contract",
+                        message="Step contract must be a mapping",
+                    )
+                )
+                continue
+            columns = contract.get("columns", [])
+            if not isinstance(columns, list):
+                errors.append(
+                    ValidationError(
+                        step_name=step.name,
+                        field="contract",
+                        message="Step contract 'columns' must be a list",
+                    )
+                )
+                continue
+            for idx, col in enumerate(columns):
+                if not isinstance(col, dict) or not isinstance(
+                        col.get("name"), str):
+                    errors.append(
+                        ValidationError(
+                            step_name=step.name,
+                            field=f"contract.columns[{idx}]",
+                            message="Each contract column must be a mapping with a string 'name'",
+                        ))
+                    continue
+                dtype_raw = col.get("dtype")
+                if dtype_raw is not None and dtype_raw not in valid_dtypes:
+                    errors.append(
+                        ValidationError(
+                            step_name=step.name,
+                            field=f"contract.columns[{idx}].dtype",
+                            message=(
+                                f"Unknown contract dtype '{dtype_raw}'. "
+                                f"Valid: {sorted(valid_dtypes)}"),
+                        ))
 
     def _check_unsupported_runtime_steps(
         self,
