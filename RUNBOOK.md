@@ -158,6 +158,7 @@ run this drill on a scratch box quarterly:
 
 ```bash
 cd ~/PipelineIQ
+./scripts/restore.sh backups/<file>.sql.gz --dry-run  # validate only, touches nothing
 make backup && ls -la backups/            # take a fresh backup
 make restore BACKUP=backups/<file>.sql.gz # stops writers, drops, loads, migrates, restarts, verifies
 make verify                                # full end-to-end smoke test

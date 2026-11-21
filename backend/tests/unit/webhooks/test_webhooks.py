@@ -108,8 +108,8 @@ def test_delete_webhook_own(auth_client):
     assert resp.status_code == 204
 
 
-def test_delete_webhook_others_returns_403(auth_client):
-    """Users cannot delete other users' webhooks."""
+def test_delete_webhook_others_returns_404(auth_client):
+    """Users cannot delete other users' webhooks (404 anti-oracle, R2-006)."""
     # Create user 1 with webhook
     auth_client.post(
         "/auth/register",
@@ -147,7 +147,7 @@ def test_delete_webhook_others_returns_403(auth_client):
     h2 = {"Authorization": f"Bearer {r2.json()['access_token']}"}
 
     resp = auth_client.delete(f"/webhooks/{webhook_id}", headers=h2)
-    assert resp.status_code == 403
+    assert resp.status_code == 404
 
 
 def test_webhook_hmac_signature_correct():

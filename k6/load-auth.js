@@ -35,7 +35,7 @@ const TEST_PASSWORD = __ENV.TEST_PASSWORD || 'LoadTest@2024!'
 export default function () {
   const start = Date.now()
   const resp = http.post(
-    `${BASE_URL}/api/auth/login`,
+    `${BASE_URL}/auth/login`,
     JSON.stringify({ email: TEST_EMAIL, password: TEST_PASSWORD }),
     { headers: { 'Content-Type': 'application/json' } },
   )
