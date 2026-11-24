@@ -225,6 +225,31 @@ Three subagents + orchestrator spot-checks, all evidence in
 - /metrics prod-gate relies on `ENVIRONMENT=production` being set correctly
   in every prod manifest (k8s configmap sets it; verify on new targets).
 
+## QA-fix session 2026-11-25 (D1–D5, all fixed and verified)
+
+Independent QA pass found 1 Medium + 4 Lows; all fixed on this branch,
+each with fail-before/pass-after proof or exact-command verification:
+
+| ID | Fix | Proof |
+|---|---|---|
+| D1 postcss GHSA chain via nested Next copy | `overrides: {next: {postcss: ^8.5.32}}` in root `package.json` + lock entry aligned to vetted hoisted 8.5.32 (`ced3711`) | clean `npm ci` from scratch ×3 (`/var/tmp/fenv{3,5,6}`), `npm audit --omit=dev`: **0 vulnerabilities**; full vitest 264 + `tsc` 0 + `next build` 0 on the overridden tree |
+| D2 stale README numbers | `64355b6` | values re-derived (`alembic heads`, 43 files, `pytest --collect-only` 1613) |
+| D3 flaky template-dialog e2e | poll for async selects + options instead of immediate count (`3c3a4c8`) | 5 consecutive full-file runs: 50/50, zero flakes (was 2 flakes/5 runs) |
+| D4 y-websocket `npm test` | canonical script with explicit spec files (`05e910c`) | `npm test`: 30 tests, 29 pass, 0 fail, 1 env-gated skip |
+| D5 split @playwright/test (repo 1.60.0 vs frontend 1.56.1) | aligned frontend devDep to 1.60.0, removed orphaned `playwright@1.56.1` lock entries (`c749825`) | clean `npm ci` reproduces single-version tree; repo-tree `./node_modules/.bin/playwright test 01-auth 03-pipeline-builder`: **15 passed** (was dual-package error) |
+
+Notes: npm `install --package-lock-only` would not restructure the tree in
+this environment (always "up to date"); structural lock changes were made by
+exact hand-edit of lock entries (copied `resolved`/`integrity` from npm's own
+output) and validated by clean `npm ci` + audit + full gates. `next@16`
+breaking upgrade explicitly NOT done — unnecessary once the advisory is
+cleared on the 8.x line.
+
+Final gate on the finished tree: backend **1586 passed / 27 skipped / 0 failed**,
+ruff clean, mypy 404 files clean, frontend 264 + `tsc` 0 + `next build` 0,
+y-websocket 29/0/1-skip, repo-tree Playwright 15/15, `pip-audit` clean,
+`npm audit` clean, migrations up/down/up single head.
+
 ## How to verify
 
 ```bash
