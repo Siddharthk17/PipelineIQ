@@ -14,12 +14,15 @@ Runs on the hermetic SQLite test DB; no live services needed.
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy.orm import sessionmaker
 
 import backend.api.contracts as contracts_mod
 import backend.api.pipelines as pipelines_mod
+import backend.tasks.streaming_pipeline as sp
+from backend.models import PipelineRun, PipelineStatus
 from backend.models.data_contract import IdempotencyKey
 
 
@@ -288,3 +291,99 @@ class TestHReleaseOnError:
         )
         assert action == "owner", (
             f"key still pinned after failed webhook create (got {action})")
+
+
+# ---------------------------------------------------------------------------
+# I: resume/stop race.
+# ---------------------------------------------------------------------------
+
+
+def _seed_stream_run(db, status, user_id, task_id=None):
+    run = PipelineRun(
+        id=uuid.uuid4(),
+        name=f"i_{uuid.uuid4().hex[:8]}",
+        status=status,
+        yaml_config="pipeline:\n  name: i\n  steps: []\n",
+        user_id=user_id,
+        celery_task_id=task_id,
+    )
+    db.add(run)
+    db.commit()
+    return run
+
+
+class TestIResumeStopRace:
+    def test_resume_then_stop_leaves_stopped_without_live_daemon(
+        self, test_db, monkeypatch,
+    ):
+        admin = _make_user(test_db, role="admin")
+        user = SimpleNamespace(id=admin.id, role="admin")
+        run = _seed_stream_run(
+            test_db, PipelineStatus.STREAMING_PAUSED, admin.id)
+        revoked = []
+        fake_app = MagicMock()
+        fake_app.control.revoke.side_effect = lambda *a, **k: revoked.append(
+            a[0] if a else None)
+        monkeypatch.setattr(sp, "celery_app", fake_app)
+
+        other = _other_session(test_db)
+        try:
+            def fake_delay(run_id_str):
+                # Stop wins between resume's dispatch and its task-id
+                # stamp (seconds-long window in production).
+                ok, err = sp.request_stop(run_id_str, user, db=other)
+                assert ok, err
+                return SimpleNamespace(id="D1")
+
+            fake_task = MagicMock()
+            fake_task.delay.side_effect = fake_delay
+            monkeypatch.setattr(sp, "run_streaming_pipeline", fake_task)
+
+            ok, err = sp.request_resume(str(run.id), user, db=test_db)
+            assert not ok, "resume must lose to the concurrent stop"
+        finally:
+            other.close()
+
+        test_db.expire_all()
+        final = test_db.query(PipelineRun).filter(
+            PipelineRun.id == run.id).one()
+        assert final.status == PipelineStatus.STREAMING_STOPPED
+        assert final.celery_task_id != "D1", (
+            "resume stamped its daemon onto a STOPPED run: D1 would boot "
+            "into a stopped run with nothing revoking it")
+        assert "D1" in revoked, "orphaned resume daemon was never revoked"
+
+    def test_stop_revokes_post_transition_task_id(
+        self, test_db, monkeypatch,
+    ):
+        admin = _make_user(test_db, role="admin")
+        user = SimpleNamespace(id=admin.id, role="admin")
+        run = _seed_stream_run(
+            test_db, PipelineStatus.STREAMING_ACTIVE, admin.id,
+            task_id="T-old",
+        )
+        revoked = []
+        fake_app = MagicMock()
+        fake_app.control.revoke.side_effect = lambda *a, **k: revoked.append(
+            a[0] if a else None)
+        monkeypatch.setattr(sp, "celery_app", fake_app)
+
+        real_atomic = sp._atomic_transition
+
+        def _stamp_then_win(db, run_uuid, expected, to_status, extra=None):
+            won = real_atomic(db, run_uuid, expected, to_status, extra)
+            if won:
+                # A concurrent resume stamps a fresh daemon id after our
+                # claim but before our revoke.
+                db.query(PipelineRun).filter(
+                    PipelineRun.id == run_uuid).update(
+                        {"celery_task_id": "T-new"})
+                db.commit()
+            return won
+
+        monkeypatch.setattr(sp, "_atomic_transition", _stamp_then_win)
+        ok, err = sp.request_stop(str(run.id), user, db=test_db)
+        assert ok, err
+        assert revoked == ["T-new"], (
+            f"stop revoked a stale task id {revoked}; the live daemon "
+            "would survive")
