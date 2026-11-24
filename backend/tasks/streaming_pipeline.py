@@ -331,7 +331,17 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
     except Exception:
         logger.exception("Streaming error")
         try:
-            _set_status(db, run_id, PipelineStatus.FAILED)
+            # A concurrent cancel wins over a crashing daemon: conditional
+            # so CANCELLED is never clobbered into FAILED (mirrors
+            # _fail_run and batch _mark_failed).
+            db.rollback()
+            db.query(PipelineRun).filter(
+                PipelineRun.id == run_id,
+                PipelineRun.status != PipelineStatus.CANCELLED,
+            ).update(
+                {"status": PipelineStatus.FAILED},
+                synchronize_session=False,
+            )
             db.commit()
         except Exception:
             pass
@@ -521,13 +531,42 @@ def request_resume(run_id, user, db=None) -> tuple:
             except Exception as exc:
                 return False, f"failed to dispatch daemon for run {run_id}: {exc}"
             new_task_id = getattr(dispatched, "id", None)
-            session.query(PipelineRun).filter(
-                PipelineRun.id == run_uuid
-            ).update({"celery_task_id": new_task_id})
+            # Guard the stamp on ACTIVE: a concurrent stop may have claimed
+            # STOPPED (and already revoked the old task) between our claim
+            # and the dispatch. Stamping unconditionally would plant the new
+            # task id onto a STOPPED row, letting the daemon boot into a
+            # stopped run with nothing revoking it (M-078).
+            updated = (
+                session.query(PipelineRun)
+                .filter(
+                    PipelineRun.id == run_uuid,
+                    PipelineRun.status == PipelineStatus.STREAMING_ACTIVE,
+                )
+                .update(
+                    {"celery_task_id": new_task_id},
+                    synchronize_session=False,
+                )
+            )
             try:
                 session.commit()
             except Exception:
                 session.rollback()
+                updated = 0
+            if not updated:
+                # Lost the race after dispatching: the run is no longer
+                # ours, so revoke the orphan before it boots (mirroring
+                # request_restart) and report the conflict honestly.
+                try:
+                    celery_app.control.revoke(
+                        new_task_id, terminate=True, signal="SIGTERM")
+                except Exception:
+                    logger.warning(
+                        "Revoke of orphan resume daemon %s failed",
+                        new_task_id, exc_info=True,
+                    )
+                return False, _transition_conflict(
+                    session, run_uuid, run_id, "resume",
+                    "STREAMING_PAUSED")
         return True, None
     finally:
         if owned:
@@ -549,13 +588,22 @@ def request_stop(run_id, user, db=None) -> tuple:
         denial = _check_streaming_access(run, user)
         if denial is not None:
             return False, denial
-        task_id = run.celery_task_id
         if not _atomic_transition(
             session, run_uuid, _STOP_FROM, PipelineStatus.STREAMING_STOPPED,
         ):
             return False, _transition_conflict(
                 session, run_uuid, run_id, "stop",
                 "STREAMING_ACTIVE or STREAMING_PAUSED")
+        # Re-read the task id AFTER the transition won: a concurrent resume
+        # may have stamped a fresh daemon id between our initial load and
+        # our claim. Revoking the stale pre-transition id would miss the
+        # live daemon while reporting success (M-078).
+        session.expire_all()
+        task_id = (
+            session.query(PipelineRun.celery_task_id)
+            .filter(PipelineRun.id == run_uuid)
+            .scalar()
+        )
         try:
             celery_app.control.revoke(
                 task_id or str(run_uuid), terminate=True, signal="SIGTERM")
@@ -1293,16 +1341,34 @@ def _rollback_quietly(db) -> None:
 
 
 def _fail_run(db, run_id: str, reason: str) -> None:
-    """Mark a run FAILED with a reason instead of stranding it (M-044)."""
+    """Mark a run FAILED with a reason instead of stranding it (M-044).
+
+    A concurrent user cancel wins (mirroring batch ``_mark_failed``): the
+    UPDATE is conditional on the run NOT being CANCELLED, so a cancel that
+    landed between the daemon's last read and this write is never clobbered
+    into FAILED.
+    """
     logger.critical("Streaming run %s failed: %s", run_id, reason)
     try:
         db.rollback()
-        run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
-        if run is not None:
-            run.status = PipelineStatus.FAILED
-            run.error_message = reason[:2000]
-            run.completed_at = utcnow()
+        updated = (
+            db.query(PipelineRun)
+            .filter(
+                PipelineRun.id == run_id,
+                PipelineRun.status != PipelineStatus.CANCELLED,
+            )
+            .update(
+                {
+                    "status": PipelineStatus.FAILED,
+                    "error_message": reason[:2000],
+                    "completed_at": utcnow(),
+                },
+                synchronize_session=False,
+            )
+        )
         db.commit()
+        if not updated:
+            db.expire_all()
     except Exception:
         db.rollback()
         logger.exception("Failed to mark run %s FAILED", run_id)
