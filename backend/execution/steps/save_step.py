@@ -104,6 +104,7 @@ def execute_save_step(
             },
         )
 
+        _ensure_bucket_reachable(minio, bucket)
         download_url = _get_presign_client(minio).generate_presigned_url(
             "get_object",
             Params={
@@ -126,6 +127,17 @@ def execute_save_step(
         object_name=object_name,
         content_type=content_type,
     )
+
+
+def _ensure_bucket_reachable(client, bucket: str) -> None:
+    """Fail closed before offline presigning (M-115).
+
+    ``generate_presigned_url`` performs pure offline SigV4 signing with no
+    I/O, so signing alone cannot detect a missing bucket or an unreachable
+    endpoint. ``head_bucket`` runs first and any failure surfaces here
+    instead of a download URL that can never work.
+    """
+    client.head_bucket(Bucket=bucket)
 
 
 def _get_presign_client(server_client):
@@ -161,6 +173,7 @@ def refresh_download_url(object_name: str) -> str:
         # M-095: local deployments have no presigned URLs; callers fall
         # back to the stored download reference on this error.
         raise RuntimeError("S3 storage is not configured for this deployment")
+    _ensure_bucket_reachable(minio, settings.S3_BUCKET)
     return _get_presign_client(minio).generate_presigned_url(
         "get_object",
         Params={
