@@ -527,7 +527,14 @@ def build_sort_sql(step: Any) -> str:
             ascending_values = ascending_values * len(by_columns)
         if len(ascending_values) != len(by_columns):
             raise ValueError("Sort 'ascending' length must match 'by' columns")
-        directions = ["ASC" if bool(v) else "DESC" for v in ascending_values]
+        # M-112(d): strict-bool — bool("false") is True, so string
+        # coercion silently flips DESC to ASC. Reject non-bool fail-closed.
+        for v in ascending_values:
+            if type(v) is not bool:
+                raise ValueError(
+                    "Sort 'ascending' must be boolean "
+                    f"(got {v!r}); use true/false, not strings")
+        directions = ["ASC" if v else "DESC" for v in ascending_values]
     else:
         order = _step_value(step, "order", "asc")
         if hasattr(order, "value"):
@@ -722,6 +729,14 @@ def build_sample_sql(step: Any) -> str:
         raise ValueError("Sample step requires either 'n' or 'fraction'")
     if n is not None and fraction is not None:
         raise ValueError("Sample step cannot define both 'n' and 'fraction'")
+    # M-112(e): negative seeds fail closed at parse and here (DuckDB SQL
+    # rejects negative seeds; pandas must not silently differ).
+    if random_state is not None and (
+            type(random_state) is bool
+            or not isinstance(random_state, int)
+            or random_state < 0):
+        raise ValueError(
+            "Sample step 'random_state' must be a non-negative integer")
 
     if n is not None:
         rows = max(0, int(n))

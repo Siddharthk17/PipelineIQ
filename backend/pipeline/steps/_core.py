@@ -98,21 +98,67 @@ class StepExecutionResult:
 # (M-014/M-161), and eliminates user-controlled regex catastrophic
 # backtracking in workers (M-032). NOTE: validators.py `matches_pattern`
 # keeps regex semantics (other cluster's file).
+#
+# M-112(b): NULL never matches a value predicate, even negated, on both
+# engines (SQL semantics). DuckDB `col != lit` / `NOT LIKE` evaluates to
+# NULL for NULL inputs so the row is dropped; pandas `s != v` is True for
+# NaN and `~contains` is True for NaN (after astype(str)), which kept NULL
+# rows only below the 50k-row DuckDB threshold. Every op below ANDs
+# `s.notna()` so NULL rows are dropped on pandas too (same for the LIKE
+# family: CAST(NULL AS VARCHAR) LIKE ... is NULL → dropped on DuckDB).
+def _cmp_eq(s: pd.Series, v: Any) -> pd.Series:
+    return (s.notna() & (s == v)).fillna(False).astype(bool)
+
+
+def _cmp_ne(s: pd.Series, v: Any) -> pd.Series:
+    return (s.notna() & (s != v)).fillna(False).astype(bool)
+
+
+def _cmp_gt(s: pd.Series, v: Any) -> pd.Series:
+    return (s.notna() & (s > v)).fillna(False).astype(bool)
+
+
+def _cmp_lt(s: pd.Series, v: Any) -> pd.Series:
+    return (s.notna() & (s < v)).fillna(False).astype(bool)
+
+
+def _cmp_gte(s: pd.Series, v: Any) -> pd.Series:
+    return (s.notna() & (s >= v)).fillna(False).astype(bool)
+
+
+def _cmp_lte(s: pd.Series, v: Any) -> pd.Series:
+    return (s.notna() & (s <= v)).fillna(False).astype(bool)
+
+
+def _str_contains(s: pd.Series, v: Any) -> pd.Series:
+    return s.notna() & s.astype(str).str.contains(
+        str(v), na=False, regex=False)
+
+
+def _str_not_contains(s: pd.Series, v: Any) -> pd.Series:
+    return s.notna() & ~s.astype(str).str.contains(
+        str(v), na=False, regex=False)
+
+
+def _str_starts(s: pd.Series, v: Any) -> pd.Series:
+    return s.notna() & s.astype(str).str.startswith(str(v), na=False)
+
+
+def _str_ends(s: pd.Series, v: Any) -> pd.Series:
+    return s.notna() & s.astype(str).str.endswith(str(v), na=False)
+
+
 FILTER_OPERATIONS: dict[FilterOperator, Callable[[pd.Series, Any], pd.Series]] = {
-    FilterOperator.EQUALS: lambda s, v: s == v,
-    FilterOperator.NOT_EQUALS: lambda s, v: s != v,
-    FilterOperator.GREATER_THAN: lambda s, v: s > v,
-    FilterOperator.LESS_THAN: lambda s, v: s < v,
-    FilterOperator.GREATER_THAN_OR_EQUAL: lambda s, v: s >= v,
-    FilterOperator.LESS_THAN_OR_EQUAL: lambda s, v: s <= v,
-    FilterOperator.CONTAINS: lambda s, v: s.astype(str).str.contains(str(v), na=False, regex=False),
-    FilterOperator.NOT_CONTAINS: lambda s, v: (
-        ~s.astype(str).str.contains(str(v), na=False, regex=False)
-    ),
-    FilterOperator.STARTS_WITH: lambda s, v: s.astype(str).str.startswith(
-        str(v), na=False
-    ),
-    FilterOperator.ENDS_WITH: lambda s, v: s.astype(str).str.endswith(str(v), na=False),
+    FilterOperator.EQUALS: _cmp_eq,
+    FilterOperator.NOT_EQUALS: _cmp_ne,
+    FilterOperator.GREATER_THAN: _cmp_gt,
+    FilterOperator.LESS_THAN: _cmp_lt,
+    FilterOperator.GREATER_THAN_OR_EQUAL: _cmp_gte,
+    FilterOperator.LESS_THAN_OR_EQUAL: _cmp_lte,
+    FilterOperator.CONTAINS: _str_contains,
+    FilterOperator.NOT_CONTAINS: _str_not_contains,
+    FilterOperator.STARTS_WITH: _str_starts,
+    FilterOperator.ENDS_WITH: _str_ends,
     FilterOperator.IS_NULL: lambda s, _: s.isna(),
     FilterOperator.IS_NOT_NULL: lambda s, _: s.notna(),
 }
@@ -690,7 +736,11 @@ class StepExecutor:
                     )
 
         try:
-            grouped = input_df.groupby(config.group_by).agg(agg_dict)
+            # M-112(a): unified semantics keep NULL keys as their own group
+            # (DuckDB/SQL GROUP BY keeps NULL). pandas defaults to
+            # dropna=True which silently dropped the NULL group below the
+            # 50k-row threshold, so pass dropna=False for parity.
+            grouped = input_df.groupby(config.group_by, dropna=False).agg(agg_dict)
         except Exception as exc:
             raise AggregationError(
                 step_name=config.name,
@@ -742,6 +792,9 @@ class StepExecutor:
             self._validate_column_exists(config.name, col, columns_in)
 
         def _pandas_sort() -> pa.Table:
+            # M-112(d): strict-bool ascending. bool("false") is True, so
+            # string coercion silently flips DESC to ASC on both engines.
+            # Reject non-bool here (parser also rejects at validate time).
             asc = getattr(config, "ascending", None)
             if asc is None:
                 ascending: object = [config.order == SortOrder.ASC] * len(by_cols)
@@ -751,7 +804,12 @@ class StepExecutor:
                     vals = vals * len(by_cols)
                 if len(vals) != len(by_cols):
                     raise ValueError("Sort 'ascending' length must match 'by' columns")
-                ascending = [bool(v) for v in vals]
+                for v in vals:
+                    if type(v) is not bool:
+                        raise ValueError(
+                            "Sort 'ascending' must be boolean "
+                            f"(got {v!r}); use true/false, not strings")
+                ascending = list(vals)
             sorted_df = input_df.sort_values(
                 by=by_cols, ascending=ascending
             ).reset_index(drop=True)
@@ -1128,35 +1186,45 @@ class StepExecutor:
             self._validate_column_exists(config.name, col, columns_in)
 
         def _pandas_fill_nulls() -> pa.Table:
+            # M-112(c): ffill/bfill are aliases for forward/backward fill on
+            # both engines (DuckDB maps them in sql_builder); unknown
+            # strategies fail closed here instead of silently no-opping.
             result_df = input_df.copy()
             for col in config.columns:
-                if config.strategy == "constant":
+                raw = config.strategy
+                strategy = str(raw).lower() if raw is not None else ""
+                strategy = {"ffill": "forward_fill",
+                            "bfill": "backward_fill"}.get(strategy, strategy)
+                if strategy == "constant":
                     if config.constant_value is None:
                         raise ValueError(
                             "constant_value required when strategy is 'constant'"
                         )
                     result_df[col] = result_df[col].fillna(
                         config.constant_value)
-                elif config.strategy == "forward_fill":
+                elif strategy == "forward_fill":
                     result_df[col] = result_df[col].ffill()
-                elif config.strategy == "backward_fill":
+                elif strategy == "backward_fill":
                     result_df[col] = result_df[col].bfill()
-                elif config.strategy == "mean":
+                elif strategy == "mean":
                     if not pd.api.types.is_numeric_dtype(result_df[col]):
                         raise ValueError(
                             "Strategy 'mean' requires numeric column")
                     result_df[col] = result_df[col].fillna(
                         result_df[col].mean())
-                elif config.strategy == "median":
+                elif strategy == "median":
                     if not pd.api.types.is_numeric_dtype(result_df[col]):
                         raise ValueError(
                             "Strategy 'median' requires numeric column")
                     result_df[col] = result_df[col].fillna(
                         result_df[col].median())
-                elif config.strategy == "mode":
+                elif strategy == "mode":
                     mode_val = result_df[col].mode()
                     if len(mode_val) > 0:
                         result_df[col] = result_df[col].fillna(mode_val[0])
+                else:
+                    raise ValueError(
+                        f"Unsupported fill_nulls strategy '{config.strategy}'")
             return pa.Table.from_pandas(result_df, preserve_index=False)
 
         result_table = _pandas_fill_nulls()
@@ -1200,6 +1268,15 @@ class StepExecutor:
         if config.stratify_by:
             self._validate_column_exists(
                 config.name, config.stratify_by, columns_in)
+
+        # M-112(e): negative seeds fail closed (DuckDB SQL rejects them;
+        # fail at parse and here instead of diverging by engine).
+        if config.random_state is not None and (
+                type(config.random_state) is bool
+                or not isinstance(config.random_state, int)
+                or config.random_state < 0):
+            raise ValueError(
+                "Sample step 'random_state' must be a non-negative integer")
 
         def _pandas_sample() -> pa.Table:
             if config.n is not None and config.n > len(input_df):

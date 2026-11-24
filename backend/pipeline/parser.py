@@ -677,11 +677,21 @@ class PipelineParser:
                 keep=raw.get("keep", "first"),
             )
         if step_type == StepType.FILL_NULLS:
+            # M-112(c): accept ffill/bfill aliases for forward/backward fill
+            # (both engines implement them). Normalize to canonical here so
+            # the VALID_FILL_NULLS_STRATEGIES whitelist (kept at 6 canonical
+            # names) validates them.
+            _strategy = raw.get("strategy", "constant")
+            if isinstance(_strategy, str):
+                _alias = {"ffill": "forward_fill",
+                          "bfill": "backward_fill"}.get(_strategy.lower())
+                if _alias is not None:
+                    _strategy = _alias
             return FillNullsStepConfig(
                 name=name,
                 step_type=step_type,
                 input=raw.get("input", ""),
-                strategy=raw.get("strategy", "constant"),
+                strategy=_strategy,
                 constant_value=raw.get("constant_value"),
                 columns=raw.get("columns", []),
             )
@@ -1064,6 +1074,25 @@ class PipelineParser:
                             field="order",
                             message="Sort step 'order' must be 'asc' or 'desc'",
                         ))
+                # M-112(d): strict-bool ascending. bool("false") is True on
+                # both engines, so "false" would silently sort ASC. Reject
+                # non-bool fail-closed (use true/false, not strings/ints).
+                if step.ascending is not None:
+                    _asc_vals = (step.ascending
+                                 if isinstance(step.ascending, list)
+                                 else [step.ascending])
+                    if any(type(v) is not bool for v in _asc_vals):
+                        errors.append(
+                            ValidationError(
+                                step_name=step_name,
+                                field="ascending",
+                                message=(
+                                    "Sort step 'ascending' must be a boolean "
+                                    "or list of booleans "
+                                    f"(got {step.ascending!r}); use true/false, "
+                                    "not strings"
+                                ),
+                            ))
 
             if (isinstance(step, ValidateStepConfig)
                     and (not isinstance(step.rules, list)
@@ -1204,12 +1233,24 @@ class PipelineParser:
                             message="Sample step 'fraction' must be a number in (0, 1]",
                         ))
                 if (step.random_state is not None
-                        and not isinstance(step.random_state, int)):
+                        and (not isinstance(step.random_state, int)
+                             or isinstance(step.random_state, bool))):
                     errors.append(
                         ValidationError(
                             step_name=step_name,
                             field="random_state",
                             message="Sample step 'random_state' must be an integer",
+                        ))
+                # M-112(e): DuckDB SQL rejects negative seeds; reject at
+                # parse so both paths fail closed with a 400 instead of
+                # diverging by engine.
+                elif (step.random_state is not None
+                        and step.random_state < 0):
+                    errors.append(
+                        ValidationError(
+                            step_name=step_name,
+                            field="random_state",
+                            message="Sample step 'random_state' must be a non-negative integer",
                         ))
                 if (step.stratify_by is not None
                         and (not isinstance(step.stratify_by, str)
