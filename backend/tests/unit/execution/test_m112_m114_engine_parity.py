@@ -282,7 +282,7 @@ def test_m112_sort_executor_rejects_string_ascending(recorder) -> None:
         step_type=StepType.SORT,
         input="x",
         by="a",
-        ascending="false",  # type: ignore[arg-type]
+        ascending="false",
     )
     with pytest.raises(ValueError, match="ascending"):
         ex.execute_sort({"x": tbl}, cfg, recorder)
