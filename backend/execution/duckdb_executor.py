@@ -122,6 +122,17 @@ def _s3_credentials() -> tuple[str, str, str, str]:
     return minio_endpoint, minio_access_key, minio_secret_key, minio_region
 
 
+def _escape_duckdb_string_literal(value: str) -> str:
+    """Escape a value interpolated into a single-quoted DuckDB literal.
+
+    M-115: credentials reach DuckDB via ``SET s3_...='...'`` f-strings. A
+    single quote in a key/secret would terminate the literal and alter the
+    statement (SQL injection via config). Doubling quotes is standard
+    SQL/DuckDB literal escaping and keeps the value a pure literal.
+    """
+    return value.replace("'", "''")
+
+
 def _configure_httpfs(conn) -> None:
     """Load the httpfs extension and point it at MinIO/S3."""
     minio_endpoint, minio_access_key, minio_secret_key, minio_region = (
@@ -130,12 +141,12 @@ def _configure_httpfs(conn) -> None:
     try:
         conn.execute("INSTALL httpfs")
         conn.execute("LOAD httpfs")
-        conn.execute(f"SET s3_endpoint='{minio_endpoint}'")
+        conn.execute(f"SET s3_endpoint='{_escape_duckdb_string_literal(minio_endpoint)}'")
         conn.execute("SET s3_use_ssl=false")
         conn.execute("SET s3_url_style='path'")
-        conn.execute(f"SET s3_access_key_id='{minio_access_key}'")
-        conn.execute(f"SET s3_secret_access_key='{minio_secret_key}'")
-        conn.execute(f"SET s3_region='{minio_region}'")
+        conn.execute(f"SET s3_access_key_id='{_escape_duckdb_string_literal(minio_access_key)}'")
+        conn.execute(f"SET s3_secret_access_key='{_escape_duckdb_string_literal(minio_secret_key)}'")
+        conn.execute(f"SET s3_region='{_escape_duckdb_string_literal(minio_region)}'")
         conn.execute("SET s3_allowed_structural_columns=0")
         logger.info("DuckDB httpfs extension loaded for MinIO access (tenant-scoped)")
     except Exception as exc:

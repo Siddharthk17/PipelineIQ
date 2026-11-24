@@ -263,10 +263,22 @@ class S3StorageProvider(StorageProvider):
         response = self.s3.head_object(Bucket=self.bucket, Key=key)
         return response["ContentLength"]
 
+    def _ensure_bucket_accessible(self) -> None:
+        """Fail closed when the bucket is missing or unreachable (M-115).
+
+        ``generate_presigned_url`` is pure offline SigV4 signing with no
+        I/O, so signing alone can never detect a misconfigured endpoint or
+        a missing bucket. ``head_bucket`` runs first and any failure
+        (NoSuchBucket, AccessDenied, EndpointConnectionError, ...) surfaces
+        here instead of a presigned URL that can never work.
+        """
+        self.s3.head_bucket(Bucket=self.bucket)
+
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
     ) -> str | None:
         key = _validate_storage_key(destination_path)
+        self._ensure_bucket_accessible()
         try:
             return self._get_presign_client().generate_presigned_url(
                 ClientMethod="put_object",
@@ -280,6 +292,7 @@ class S3StorageProvider(StorageProvider):
         self, source_path: str, expiration: int = 3600
     ) -> str | None:
         key = _validate_storage_key(source_path)
+        self._ensure_bucket_accessible()
         try:
             return self._get_presign_client().generate_presigned_url(
                 ClientMethod="get_object",
