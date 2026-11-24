@@ -522,12 +522,26 @@ function normalizeValidateConfigForYaml(config: Record<string, unknown>): Record
   const rules = rulesRaw
     .map((rule) => toRecord(rule))
     .filter((rule) => asString(rule.check).trim().length > 0)
-    .map((rule) => ({
-      check: asString(rule.check).trim(),
-      column: asString(rule.column).trim(),
-      severity: asString(rule.severity).trim() || "warning",
-      ...(rule.value !== undefined ? { value: rule.value } : {}),
-    }));
+    .map((rule) => {
+      const normalized: Record<string, unknown> = {
+        check: asString(rule.check).trim(),
+        column: asString(rule.column).trim(),
+        severity: asString(rule.severity).trim() || "warning",
+        ...(rule.value !== undefined ? { value: rule.value } : {}),
+      };
+      // F-1: preserve every other per-rule param verbatim (min/max for
+      // between, values for in_values, pattern for matches_pattern, format
+      // for date_format, ...). The top-level passthrough in
+      // normalizeConfigForYaml cannot see nested rule keys, so the emit
+      // whitelist must not drop keys it does not model — backend
+      // validation (parser.py _VALIDATE_RULE_PARAMS) requires them.
+      for (const [key, value] of Object.entries(rule)) {
+        if (!(key in normalized)) {
+          normalized[key] = value;
+        }
+      }
+      return normalized;
+    });
   return { rules };
 }
 
