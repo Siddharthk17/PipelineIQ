@@ -686,7 +686,22 @@ def build_join_sql(
     )
 
 
-def build_deduplicate_sql(step: Any) -> str:
+def build_deduplicate_sql(
+    step: Any,
+    all_columns: list[str] | None = None,
+) -> str:
+    """Build deterministic deduplicate SQL.
+
+    M-114(f): the old ``ROW_NUMBER() OVER ()`` base had no ORDER BY, so
+    which duplicate was kept was nondeterministic. The base window now
+    orders explicitly: by all input columns when the caller provides the
+    schema (DuckDB path), else by the subset columns (still deterministic,
+    though ties on identical subset values fall back to storage order —
+    identical subset rows keep identical subset values either way). The
+    outer ranked window then orders by the materialized ``__rowid__``,
+    giving a repeatable keep. Set semantics: identical full rows are
+    interchangeable, so ordering by all columns is total for the outcome.
+    """
     subset = [str(col) for col in _as_list(_step_value(step, "subset", []))]
     keep = str(_step_value(step, "keep", "first")).lower()
 
@@ -694,14 +709,19 @@ def build_deduplicate_sql(step: Any) -> str:
         if keep in {"none", "false"}:
             raise ValueError(
                 "DuckDB deduplicate with keep='none' requires subset columns")
-        return "SELECT DISTINCT * FROM __input__"
+        # Deterministic output order for the set operation.
+        return "SELECT DISTINCT * FROM __input__ ORDER BY ALL"
 
     partition = ", ".join(quote_identifier(col) for col in subset)
+    # Deterministic base order: all columns when known, else subset.
+    order_cols = all_columns if all_columns else subset
+    base_order = ", ".join(quote_identifier(str(c)) for c in order_cols)
+    base_window = f"ROW_NUMBER() OVER (ORDER BY {base_order}) AS __rowid__"
     if keep in {"first", "last"}:
         order = "ASC" if keep == "first" else "DESC"
         return (
             "WITH __base AS ("
-            "SELECT *, ROW_NUMBER() OVER () AS __rowid__ FROM __input__"
+            f"SELECT *, {base_window} FROM __input__"
             "), __ranked AS ("
             f"SELECT *, ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY __rowid__ {order}) AS __rn "
             "FROM __base"
@@ -711,7 +731,7 @@ def build_deduplicate_sql(step: Any) -> str:
     if keep in {"none", "false"}:
         return (
             "WITH __base AS ("
-            "SELECT *, ROW_NUMBER() OVER () AS __rowid__ FROM __input__"
+            f"SELECT *, {base_window} FROM __input__"
             "), __ranked AS ("
             f"SELECT *, COUNT(*) OVER (PARTITION BY {partition}) AS __cnt FROM __base"
             ") "

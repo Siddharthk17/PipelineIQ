@@ -25,16 +25,19 @@ import pytest
 
 from backend.execution.duckdb_executor import (
     DuckDBExecutor,
+    _compute_duckdb_thread_count,
     close_worker_duckdb,
     initialize_worker_duckdb,
 )
 from backend.execution.sql_builder import (
+    build_deduplicate_sql,
     build_sample_sql,
     build_sort_sql,
 )
 from backend.pipeline.lineage import LineageRecorder
 from backend.pipeline.parser import (
     AggregateStepConfig,
+    DeduplicateStepConfig,
     FillNullsStepConfig,
     FilterOperator,
     FilterStepConfig,
@@ -330,3 +333,59 @@ def test_m112_sample_executor_rejects_negative_seed(recorder) -> None:
     )
     with pytest.raises(ValueError, match="random_state"):
         ex.execute_sample({"x": tbl}, cfg, recorder)
+
+
+# M-114 (f) deterministic dedup --------------------------------------------------
+def test_m114_dedup_sql_has_deterministic_order_by() -> None:
+    from types import SimpleNamespace
+
+    for keep in ("first", "last"):
+        sql = build_deduplicate_sql(
+            SimpleNamespace(subset=["a"], keep=keep))
+        assert "ROW_NUMBER() OVER ()" not in sql, sql
+        assert "ORDER BY" in sql, sql
+
+
+def test_m114_dedup_duckdb_uses_all_columns_for_order(
+        executors) -> None:
+    _, duck_ex = executors
+    tbl = pa.Table.from_pandas(
+        pd.DataFrame({"a": [1, 1, 2], "b": [5, 6, 7]}),
+        preserve_index=False)
+    cfg = DeduplicateStepConfig(
+        name="d",
+        step_type=StepType.DEDUPLICATE,
+        input="x",
+        subset=["a"],
+        keep="first",
+    )
+    sql = duck_ex._build_step_sql(cfg, tbl, None)
+    assert "ROW_NUMBER() OVER ()" not in sql, sql
+    assert '"b"' in sql or '"a"' in sql, sql
+    out = duck_ex.execute_step(cfg, tbl)
+    assert out.num_rows == 2
+
+
+# M-114 (g) dead max_rows guard removed ------------------------------------------------
+def test_m114_no_max_rows_to_scan_dead_code() -> None:
+    import inspect
+
+    import backend.execution.duckdb_executor as mod
+
+    src = inspect.getsource(mod.DuckDBExecutor.execute_sql)
+    # Dead guard probed SET/current_setting('max_rows_to_scan') — removed
+    # (a doc comment may still name it). Assert no functional use remains.
+    assert "SET max_rows_to_scan" not in src, \
+        "dead max_rows_to_scan guard must be removed"
+    assert "current_setting('max_rows_to_scan')" not in src
+    cfg_src = inspect.getsource(mod._configure_connection)
+    assert "memory_limit" in cfg_src, \
+        "2GB memory_limit bound must be kept"
+
+
+# M-114 (h) concurrency=0 ---------------------------------------------------------
+def test_m114_zero_concurrency_fails_closed() -> None:
+    with pytest.raises(ValueError, match="concurrency"):
+        _compute_duckdb_thread_count(4, 0)
+    with pytest.raises(ValueError, match="concurrency"):
+        _compute_duckdb_thread_count(4, -2)
