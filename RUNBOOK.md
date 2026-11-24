@@ -268,3 +268,28 @@ kubectl get pods -n pipelineiq
 | `GET /livez` | Liveness | Process alive | Pod restart |
 | `GET /readyz` | Readiness | DB + Redis + Storage | Traffic removed |
 | `GET /health` | Readiness alias | Same as /readyz | N/A |
+
+## Ephemeral paths (tmp/shm) operator notes
+
+Scratch space below is never backed up and safe to lose on restart.
+Operator policy for all of it: restrictive permissions (0600 for files
+holding secrets), run-scoped lifetime (tied to the container), age-gated
+cleanup for anything that can outlive a run.
+
+| Path | Writer | What lives there | Lifetime |
+|---|---|---|---|
+| `/tmp/duckdb` | DuckDB executor (`backend/execution/duckdb_executor.py:90-91`, `PRAGMA temp_directory`) | Spill files for sorts/joins exceeding `WORKER_MEMORY_LIMIT_GB` (default 2GB) | Container-local; purge only when no worker runs |
+| `/dev/shm` (workers) | Arrow data bus; stale files reaped at worker shutdown when older than 3600s (`duckdb_executor.py:213-226`) | Arrow IPC shared buffers | Age-gated (1h) + shutdown reap |
+| `/tmp/gunicorn` | api/sse entry (`backend/gunicorn.conf.py:25`; `mkdir -p` in the compose api/sse commands) | Gunicorn access/error logs | Container-local |
+| `/tmp/pipelineiq_api_startup.{lock,done}` | api startup once-guard (`backend/main.py:80-81`) | Run-once init marker | Fresh container = fresh marker |
+| `/tmp/celerybeat-schedule` | celery beat (no volume mounted) | Beat schedule DB | Ephemeral: lost on recreate, rebuilt from code schedules |
+| `/tmp/redis-auth.conf` | redis entry wrapper (`docker-compose.yml`, M-182) | `requirepass` line, mode 0600, owned `redis:redis` | Rewritten at every container start; dies with the container |
+
+Shared-memory sizing (compose): `shm_size: 2gb` on api and all workers
+except worker-gemini (`1gb`) — Docker's 64MB default would OOM large
+DuckDB sorts. k8s manifests set no explicit shm size (no
+`emptyDir: medium: Memory`); pods inherit node `/dev/shm`.
+
+Contrast (NOT scratch): `uploads` is a named volume
+(`uploads:/app/uploads`) — persistent data. MinIO objects are likewise
+outside `pg_dump` (see Disaster Recovery above).
