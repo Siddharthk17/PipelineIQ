@@ -3,6 +3,33 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## [12.28.10]
+
+### Security
+- SQL sandbox escape closed at three layers: validator denylist now blocks `read_*`, `*_scan`, `*_query`, glob/table/query functions, `pragma_*`, file sniffers, `WITH RECURSIVE` and external URIs (with literal/comment masking so quoted identifiers stay visible); DuckDB connections harden with `enable_external_access=false`, disabled community autoload/install, and a statement timeout; S3 credentials interpolated with literal escaping.
+- Cross-tenant run-export path closed: exports resolve only exact artifacts from the run's own save steps plus run-prefixed legacy names (literal comparison, no glob); downloads require run permission and a terminal status.
+- Yjs collaboration rooms are deny-by-default with backend membership checks (fail-closed on error/timeout), unverified rooms refused in production, admin claims re-verified, JWT secret length-gated; collaboration sockets authenticate via HttpOnly cookie only (no token in the WebSocket URL).
+- Demo seeding is explicit opt-in (`PIPELINEIQ_SEED_DEMO=1`, always refuses when `ENVIRONMENT=production`); first-user-becomes-admin removed in favor of `python -m backend.scripts.create_admin`.
+- Rate limiting trusts `X-Real-IP` only from trusted proxies (loopback/RFC1918 by default plus `TRUSTED_PROXY_CIDRS`); direct peers key on the peer IP so headers cannot buy fresh buckets. `/metrics`, `/docs`, `/openapi.json` and `/redoc` are disabled in production.
+- Storage presigned URLs are fail-closed: bucket reachability is verified before signing instead of returning dead URLs; negotiation falls back to the proxied upload instead of 500ing. Flower/Redis/pgbouncer secrets moved out of process argv into 0600 conf files; `pgbouncer.ini` is no longer world-readable.
+- Supply chain: nested PostCSS advisories cleared via a pinned override (`npm audit`: 0 vulnerabilities); `pip-audit`: clean. k8s images pinned to `12.8.4` (no more `:latest` on first-party workloads); `HEALTHCHECK`s added to all service Dockerfiles, which all run as non-root.
+
+### Fixed
+- Pandas/DuckDB engine parity: GROUP BY keeps NULL keys on both engines; NULLs never match value predicates (including negated ones) on either engine; unknown `fill_nulls` strategies fail closed on both paths with `ffill`/`bfill` aliases supported everywhere; `sort.ascending` must be strict bool(s); negative sample seeds rejected at parse; dedup uses deterministic `ORDER BY`; dead `max_rows_to_scan` guard removed; `concurrency=0` fails closed instead of `ZeroDivisionError`.
+- Builder round-trip no longer silently drops backend-supported YAML: step `alias`, per-step `contract`, dict-form aggregations, multi-key sorts with per-key directions, unknown step types (passed through verbatim), validate-rule params (`min/max`, `values`, `pattern`, `format`), scalar pivot `index`, and rename mappings all survive graph edits; fill-nulls emits canonical `strategy`/`constant_value`; string values are no longer trimmed or unquoted on emit.
+- Validation fail-closed gaps: numeric `greater_than`/`less_than`/`between` fail on non-numeric strings instead of passing silently; `allowed_values` ignores NULLs on nullable columns (still governed by `not_null` otherwise); invalid `status_filter` returns 422 instead of the silently unfiltered list; sort `ascending` length is checked at validation (single-element broadcast stays valid); `stratify_by` samples always route to the pandas path; legacy `method`/`value`/`frac` keys are normalized with a warning.
+- Run lifecycle races: cancel is idempotent and atomic (conditional claim, loser re-reads); concurrent duplicate creates replay the owner's response via a shared idempotency helper with release-on-error and stale-claim GC (no migration needed); resume-then-stop can no longer resurrect a stopped streaming daemon; streaming `_fail_run` and the daemon generic-except never clobber `CANCELLED`.
+- List endpoints are paginated (`page`/`limit`, cap 200) with full-count totals; run/dashboard counters cover every `PipelineStatus` so buckets sum exactly; counters no longer silently omit TIMEOUT/RUNNING/HEALING/CANCELLED.
+- Four k8s worker manifests with malformed probe/resource indentation (unparseable YAML) repaired; migrations verified up/down/up on a single head (`0021_perm_heal_uq_backfill`).
+- CI reliability: `npm ci` reproduces the full tree (Playwright unified at 1.60.0, no dual-package error); template e2e test waits for the async file list/options instead of racing them; `y-websocket` gains a canonical `npm test`; CI smoke/e2e stacks seed the demo user the tests log in as; trivy action re-pinned to an existing release; pip-audit invocation fixed for the current CLI.
+- Docs: README migration head/file/test counts corrected (`0021_perm_heal_uq_backfill`, 43 files, 1,613 collected tests); runbook gains trusted-proxy and temp/shm operator notes.
+
+### Changed
+- First-user-becomes-admin removed — bootstrap with `python -m backend.scripts.create_admin` (gated by `PIPELINEIQ_BOOTSTRAP_ADMIN=1`).
+- `GET /pipelines/?status_filter=<typo>` now returns 422 with the valid values instead of the unfiltered list.
+- Unknown `fill_nulls` strategies and non-bool `sort.ascending` are rejected at validation (400) instead of failing at runtime.
+- Builder emits canonical `strategy`/`constant_value` for fill-nulls steps (old `method`/`value` YAML still validates via normalization).
+
 ## [12.8.4]
 
 ### Added
