@@ -173,7 +173,13 @@ def _evaluate_rule(
     elif check == "greater_than":
         value = rule["value"]
         numeric = pd.to_numeric(series, errors="coerce")
-        mask = numeric <= value
+        # B2: fail closed on garbage. pd.to_numeric(coerce) maps
+        # non-numeric strings to NaN, and NaN comparisons are False, so
+        # garbage rows previously never counted as failing. Non-null
+        # values that do not parse as numbers are violations; genuine
+        # NULLs keep the old pass-through (not_null owns them).
+        unparseable = numeric.isna() & series.notna()
+        mask = (numeric <= value) | unparseable
         count = int(mask.sum())
         examples = series[mask].head(3).tolist()
         passed = count == 0
@@ -182,7 +188,9 @@ def _evaluate_rule(
     elif check == "less_than":
         value = rule["value"]
         numeric = pd.to_numeric(series, errors="coerce")
-        mask = numeric >= value
+        # B2: fail closed on garbage (see greater_than).
+        unparseable = numeric.isna() & series.notna()
+        mask = (numeric >= value) | unparseable
         count = int(mask.sum())
         examples = series[mask].head(3).tolist()
         passed = count == 0
@@ -192,7 +200,9 @@ def _evaluate_rule(
         min_val = rule["min"]
         max_val = rule["max"]
         numeric = pd.to_numeric(series, errors="coerce")
-        mask = (numeric < min_val) | (numeric > max_val)
+        # B2: fail closed on garbage (see greater_than).
+        unparseable = numeric.isna() & series.notna()
+        mask = (numeric < min_val) | (numeric > max_val) | unparseable
         count = int(mask.sum())
         examples = series[mask].head(3).tolist()
         passed = count == 0
