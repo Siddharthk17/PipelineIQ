@@ -108,9 +108,15 @@ class TestRateLimiting:
 
 
 class TestClientIpKeying:
-    """Rate limits apply per client IP, not per proxy (S46)."""
+    """Rate limits key on the client IP via a TRUSTED proxy only (M-047).
 
-    def test_different_client_ips_have_independent_buckets(
+    X-Real-IP is honored only when the direct peer is a trusted proxy
+    (loopback/RFC1918 by default). TestClient's peer ("testclient") is
+    not one, so header-based per-IP isolation is covered at unit level
+    with trusted peers below.
+    """
+
+    def test_spoofed_client_ip_from_untrusted_peer_shares_one_bucket(
             self, client, sales_csv_bytes):
         from backend.tests.conftest import build_simple_pipeline_yaml, upload_file
         file_id = upload_file(client, sales_csv_bytes, "sales.csv")
@@ -131,15 +137,34 @@ class TestClientIpKeying:
         )
         assert resp.status_code == 429
 
-        # A different client IP is unaffected by the first bucket.
+        # A different spoofed X-Real-IP from the same untrusted peer
+        # does NOT escape the exhausted bucket (M-047).
         resp = client.post(
             "/api/v1/pipelines/run",
             json={"yaml_config": yaml_config, "name": "test_pipeline"},
             headers={"X-Real-IP": "10.9.9.2"},
         )
-        assert resp.status_code in (200, 202, 422)
+        assert resp.status_code == 429
 
-    def test_client_ip_key_prefers_real_ip_header(self):
+    def test_trusted_proxy_peer_gets_independent_buckets_per_header(self):
+        from fastapi import Request
+
+        from backend.utils.rate_limiter import client_ip_key
+
+        def key(peer, real_ip):
+            scope = {
+                "type": "http",
+                "client": (peer, 1234),
+                "headers": [(b"x-real-ip", real_ip.encode())],
+            }
+            return client_ip_key(Request(scope))
+
+        # Loopback and docker-bridge peers (nginx) keep per-client buckets.
+        assert key("127.0.0.1", "10.9.9.1") == "10.9.9.1"
+        assert key("127.0.0.1", "10.9.9.2") == "10.9.9.2"
+        assert key("172.18.0.2", "10.9.9.1") == "10.9.9.1"
+
+    def test_client_ip_key_ignores_real_ip_header_from_untrusted_peer(self):
         from fastapi import Request
 
         from backend.utils.rate_limiter import client_ip_key
@@ -147,6 +172,18 @@ class TestClientIpKeying:
         scope = {
             "type": "http",
             "client": ("9.9.9.9", 1234),
+            "headers": [(b"x-real-ip", b"10.1.2.3")],
+        }
+        assert client_ip_key(Request(scope)) == "9.9.9.9"
+
+    def test_client_ip_key_prefers_real_ip_header_from_trusted_peer(self):
+        from fastapi import Request
+
+        from backend.utils.rate_limiter import client_ip_key
+
+        scope = {
+            "type": "http",
+            "client": ("127.0.0.1", 1234),
             "headers": [(b"x-real-ip", b"10.1.2.3")],
         }
         assert client_ip_key(Request(scope)) == "10.1.2.3"

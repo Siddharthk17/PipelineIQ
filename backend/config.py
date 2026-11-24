@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     RATE_LIMIT_FILE_UPLOAD: str = "30/minute"
     RATE_LIMIT_VALIDATION: str = "60/minute"
     RATE_LIMIT_READ: str = "120/minute"
+    # M-047: extra trusted proxy CIDRs (comma-separated, e.g.
+    # "203.0.113.0/24,198.51.100.7"). Loopback and RFC1918/private
+    # ranges are trusted by default; set this only when a legitimate
+    # edge proxy sits on a public IP.
+    TRUSTED_PROXY_CIDRS: str = ""
 
     # Schema Drift
 

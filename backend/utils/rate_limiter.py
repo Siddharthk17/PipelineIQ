@@ -12,6 +12,7 @@ Auth decisions are unaffected: JWT revocation stays fail-closed in
 ``backend/auth.py``. This fallback applies to rate limiting only.
 """
 
+import ipaddress
 import logging
 import socket
 from urllib.parse import urlparse
@@ -24,21 +25,76 @@ from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
+# M-047: peers whose X-Real-IP header may be honored. Loopback and
+# RFC1918/private ranges cover the bundled nginx (same host or docker
+# bridge) and local dev/test. Anything else must be listed explicitly
+# via TRUSTED_PROXY_CIDRS.
+_DEFAULT_TRUSTED_PROXY_NETWORKS = (
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
+
+
+def _extra_trusted_proxy_networks() -> list[ipaddress._BaseNetwork]:
+    """Parse TRUSTED_PROXY_CIDRS into networks (invalid entries skipped)."""
+    raw = getattr(settings, "TRUSTED_PROXY_CIDRS", "") or ""
+    networks: list[ipaddress._BaseNetwork] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid TRUSTED_PROXY_CIDRS entry: %r", part)
+    return networks
+
+
+def _peer_is_trusted_proxy(peer: str) -> bool:
+    """True when the direct peer IP belongs to a trusted proxy network."""
+    try:
+        addr = ipaddress.ip_address(peer.strip())
+    except ValueError:
+        # Non-IP peer (e.g. Starlette TestClient "testclient"): fail closed.
+        return False
+    return any(
+        addr in net
+        for net in (*_DEFAULT_TRUSTED_PROXY_NETWORKS,
+                    *_extra_trusted_proxy_networks())
+    )
+
 
 def client_ip_key(request: Request) -> str:
-    """Rate-limit key: the client IP as seen by the edge proxy.
+    """Rate-limit key: the client IP as seen by a trusted edge proxy.
 
-    The bundled nginx overwrites X-Real-IP with the peer address, so it
-    cannot be spoofed through the standard deployment. Deployments that
-    expose the API without that proxy must overwrite X-Real-IP at their
-    own edge, otherwise all clients share one rate-limit bucket (and a
-    spoofed header could evade limits). Falls back to the direct peer IP
-    when the header is absent (tests, dev without proxy).
+    X-Real-IP is honored ONLY when the direct peer IP belongs to a
+    trusted proxy (loopback or RFC1918/private range by default, plus
+    TRUSTED_PROXY_CIDRS). The bundled nginx overwrites X-Real-IP with
+    the peer address, so legitimate deployments keep working (nginx
+    arrives from localhost or the docker bridge). Direct exposures
+    (e.g. render.yaml without that edge) key on the peer IP instead,
+    so a spoofed header cannot buy a fresh rate-limit bucket.
+
+    Falls back to the direct peer IP when the header is absent, blank,
+    or not a valid IP address.
     """
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip and real_ip.strip():
-        return real_ip.strip()
-    return get_remote_address(request)
+    peer = get_remote_address(request)
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip and _peer_is_trusted_proxy(peer):
+        try:
+            ipaddress.ip_address(real_ip)
+        except ValueError:
+            logger.warning(
+                "Ignoring malformed X-Real-IP header from trusted peer %s",
+                peer)
+            return peer
+        return real_ip
+    return peer
 
 
 def _redis_reachable(url: str, timeout: float = 0.5) -> bool:
