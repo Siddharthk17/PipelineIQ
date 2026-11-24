@@ -262,6 +262,10 @@ GitHub Actions on the PR surfaced 3 real failures; all fixed on this branch:
 
 Notes: `npm install --package-lock-only` would not restructure either lock in this environment (always "up to date"); the two hand-edits (root nested-postcss pin, root playwright orphan/nested removal) copy `resolved`/`integrity` verbatim from npm's own output and were each proven by clean-room `npm ci`. The EOVERRIDE lesson is recorded in the D1 entry: an `overrides` value must match any direct `dependencies` spec on the same package.
 
+### CI smoke-login fix (follow-up PR #66)
+
+The docker-smoke job failed at `assert r.status_code == 200, f"Login failed: ...Invalid credentials"`. Root cause is a behavior change from this remediation, not app code: since M-002, demo seeding is opt-in (`PIPELINEIQ_SEED_DEMO=1`), but the CI-generated `.env` files never set the flag — so no demo user existed for the smoke/e2e demo login. Fixed by adding `PIPELINEIQ_SEED_DEMO=1` (with comment) to both CI `.env` heredocs (docker-smoke-test and e2e-tests jobs). Verified: flag absent → seed refuses → login 401s (the CI failure, reproduced); flag present → demo seeded → login 200 + token; seed/auth unit suites green (32 passed).
+
 ## How to verify
 
 ```bash
