@@ -331,7 +331,17 @@ def run_streaming_pipeline(self, run_id: str) -> dict:
     except Exception:
         logger.exception("Streaming error")
         try:
-            _set_status(db, run_id, PipelineStatus.FAILED)
+            # A concurrent cancel wins over a crashing daemon: conditional
+            # so CANCELLED is never clobbered into FAILED (mirrors
+            # _fail_run and batch _mark_failed).
+            db.rollback()
+            db.query(PipelineRun).filter(
+                PipelineRun.id == run_id,
+                PipelineRun.status != PipelineStatus.CANCELLED,
+            ).update(
+                {"status": PipelineStatus.FAILED},
+                synchronize_session=False,
+            )
             db.commit()
         except Exception:
             pass
@@ -1331,16 +1341,34 @@ def _rollback_quietly(db) -> None:
 
 
 def _fail_run(db, run_id: str, reason: str) -> None:
-    """Mark a run FAILED with a reason instead of stranding it (M-044)."""
+    """Mark a run FAILED with a reason instead of stranding it (M-044).
+
+    A concurrent user cancel wins (mirroring batch ``_mark_failed``): the
+    UPDATE is conditional on the run NOT being CANCELLED, so a cancel that
+    landed between the daemon's last read and this write is never clobbered
+    into FAILED.
+    """
     logger.critical("Streaming run %s failed: %s", run_id, reason)
     try:
         db.rollback()
-        run = db.query(PipelineRun).filter(PipelineRun.id == run_id).first()
-        if run is not None:
-            run.status = PipelineStatus.FAILED
-            run.error_message = reason[:2000]
-            run.completed_at = utcnow()
+        updated = (
+            db.query(PipelineRun)
+            .filter(
+                PipelineRun.id == run_id,
+                PipelineRun.status != PipelineStatus.CANCELLED,
+            )
+            .update(
+                {
+                    "status": PipelineStatus.FAILED,
+                    "error_message": reason[:2000],
+                    "completed_at": utcnow(),
+                },
+                synchronize_session=False,
+            )
+        )
         db.commit()
+        if not updated:
+            db.expire_all()
     except Exception:
         db.rollback()
         logger.exception("Failed to mark run %s FAILED", run_id)

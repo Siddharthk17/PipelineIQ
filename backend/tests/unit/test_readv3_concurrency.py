@@ -1,4 +1,4 @@
-"""Regression tests for readversarial-3 concurrency finding G.
+"""Regression tests for readversarial-3 concurrency findings G/H/I/J.
 
 G: pipelines' forked idempotency waiter never expired the cached row, so a
    truly-concurrent duplicate run-create always timed out to 409 instead of
@@ -8,8 +8,15 @@ H: idempotency placeholders were pinned forever on non-HTTP errors
    (contracts released only on HTTPException; schedules/webhooks never
    released) and never expired. Claim now releases on any error and GCs
    stale placeholders (status NULL older than 24h) at claim time.
+I: resume stamped its dispatched task id unconditionally, so a concurrent
+   stop's revoke missed the live daemon and the run resurrected. The stamp
+   is now guarded on ACTIVE (orphan revoked on loss) and stop revokes the
+   post-transition task id.
+J: streaming _fail_run / the daemon generic-except set FAILED
+   unconditionally, clobbering a concurrent CANCELLED. Both are now
+   conditional (mirroring batch _mark_failed).
 
-Runs on the hermetic SQLite test DB; no live services needed.
+All tests run on the hermetic SQLite test DB; no live services needed.
 """
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -387,3 +394,119 @@ class TestIResumeStopRace:
         assert revoked == ["T-new"], (
             f"stop revoked a stale task id {revoked}; the live daemon "
             "would survive")
+
+
+# ---------------------------------------------------------------------------
+# J: never clobber CANCELLED.
+# ---------------------------------------------------------------------------
+
+
+class TestJNeverClobberCancelled:
+    def test_fail_run_keeps_cancelled(self, test_db):
+        admin = _make_user(test_db, role="admin")
+        run = _seed_stream_run(
+            test_db, PipelineStatus.STREAMING_ACTIVE, admin.id)
+
+        sp._fail_run(test_db, run.id, "boom")
+        test_db.expire_all()
+        assert test_db.query(PipelineRun).filter(
+            PipelineRun.id == run.id).one().status == PipelineStatus.FAILED
+
+        # A cancel lands after the daemon's last read, before its write.
+        other = _other_session(test_db)
+        try:
+            victim = other.query(PipelineRun).filter(
+                PipelineRun.id == run.id).one()
+            victim.status = PipelineStatus.CANCELLED
+            other.commit()
+        finally:
+            other.close()
+
+        sp._fail_run(test_db, run.id, "late boom after cancel")
+        test_db.expire_all()
+        final = test_db.query(PipelineRun).filter(
+            PipelineRun.id == run.id).one()
+        assert final.status == PipelineStatus.CANCELLED, (
+            f"concurrent cancel was clobbered to {final.status}")
+
+    def test_crashing_daemon_keeps_cancelled(self, monkeypatch):
+        # Full daemon path with str run ids (as Celery delivers them), so
+        # this needs the throwaway PG: SQLite's UUID binding rejects str.
+        from sqlalchemy import create_engine
+
+        from backend.database import Base
+
+        pg_url = ("postgresql://postgres:pipelineiq_dev_password"
+                  "@localhost:5432/pipelineiq")
+        try:
+            eng = create_engine(pg_url)
+            with eng.connect():
+                pass
+        except Exception:
+            pytest.skip("throwaway PG unavailable")
+        Base.metadata.create_all(eng)
+        factory = sessionmaker(bind=eng)
+        db = factory()
+        try:
+            from backend.models import User
+
+            admin = User(
+                id=uuid.uuid4(),
+                email=f"rc3j_{uuid.uuid4().hex[:8]}@t.local",
+                username=f"rc3j_{uuid.uuid4().hex[:8]}",
+                hashed_password="x",
+                role="admin",
+                is_active=True,
+            )
+            db.add(admin)
+            db.commit()
+            run = _seed_stream_run(
+                db, PipelineStatus.STREAMING_ACTIVE, admin.id)
+            run_id = str(run.id)
+        finally:
+            db.close()
+
+        monkeypatch.setattr(sp, "SessionLocal", factory)
+
+        consume = MagicMock()
+        consume.type = "stream_consume"
+        consume.name = "ingest"
+        consume.topic = "t"
+        consume.consumer_group = None
+        consume.batch_size = 1
+        consume.batch_timeout_ms = 100
+        consume.deserialize = "json"
+        monkeypatch.setattr(
+            sp, "get_parsed_pipeline",
+            lambda yaml_config: SimpleNamespace(steps=[consume]))
+        monkeypatch.setattr(
+            sp, "get_admin_client",
+            lambda: MagicMock(ensure_topic=lambda topic: None))
+        monkeypatch.setattr(sp, "make_dlq_producer", lambda: MagicMock())
+
+        def _subscribe(topics):
+            canceller = factory()
+            try:
+                victim = canceller.query(PipelineRun).filter(
+                    PipelineRun.id == uuid.UUID(run_id)).one()
+                victim.status = PipelineStatus.CANCELLED
+                canceller.commit()
+            finally:
+                canceller.close()
+            raise RuntimeError("kafka down")
+
+        consumer = MagicMock()
+        consumer.subscribe.side_effect = _subscribe
+        monkeypatch.setattr(sp, "_daemon_consumer", lambda *a, **k: consumer)
+
+        with pytest.raises(RuntimeError):
+            sp.run_streaming_pipeline.apply(args=[run_id]).get()
+
+        check = factory()
+        try:
+            final = check.query(PipelineRun).filter(
+                PipelineRun.id == uuid.UUID(run_id)).one().status
+        finally:
+            check.close()
+        assert final == PipelineStatus.CANCELLED, (
+            f"crashing daemon clobbered a concurrent cancel to {final}")
