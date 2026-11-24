@@ -369,42 +369,6 @@ function buildGraphFromSteps(pipelineName: string, rawSteps: unknown[]): Builder
   };
 }
 
-function sanitizeYamlValue(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  let cleaned = value.trim();
-  const first = cleaned[0];
-  const last = cleaned[cleaned.length - 1];
-  if ((first === '"' || first === "'") && first === last) {
-    const inner = cleaned.slice(1, -1);
-    if (inner.length > 0 && !inner.includes(first)) {
-      cleaned = inner;
-    }
-  }
-  return cleaned;
-}
-
-function sanitizeConfig(
-  config: Record<string, unknown>
-): Record<string, unknown> {
-  const cleaned: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(config)) {
-    if (typeof value === "string") {
-      cleaned[key] = sanitizeYamlValue(value);
-    } else if (Array.isArray(value)) {
-      cleaned[key] = value.map((item) =>
-        typeof item === "string" ? sanitizeYamlValue(item) : item
-      );
-    } else if (value && typeof value === "object") {
-      cleaned[key] = sanitizeConfig(
-        value as Record<string, unknown>
-      );
-    } else {
-      cleaned[key] = value;
-    }
-  }
-  return cleaned;
-}
-
 function normalizeJoinConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   return {
     on: asString(config.on),
@@ -445,7 +409,10 @@ function normalizeAggregateConfigForYaml(config: Record<string, unknown>): Recor
 
 function normalizePivotConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   return {
-    index: asStringArray(config.index),
+    // F-2: the backend accepts a scalar-string index (parser.py wraps it
+    // into a list), so preserve it as-is instead of emitting index: [].
+    // Ingress already keeps the scalar verbatim on the node config.
+    index: Array.isArray(config.index) ? asStringArray(config.index) : (config.index ?? []),
     columns: asString(config.columns),
     values: asString(config.values),
     aggfunc: asString(config.aggfunc) || "sum",
@@ -509,10 +476,13 @@ function normalizeSampleConfigForYaml(config: Record<string, unknown>): Record<s
 
 function normalizeRenameConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   const mapping = toRecord(config.mapping);
+  // F-3: keep mapping entries verbatim (no trim of keys/values). Only the
+  // structural guard remains: entries need a non-empty key and a string
+  // value; anything else is backend-invalid and stays dropped.
   const cleaned = Object.fromEntries(
-    Object.entries(mapping)
-      .filter(([key, value]) => key.trim() && typeof value === "string" && value.trim())
-      .map(([key, value]) => [key, typeof value === "string" ? value.trim() : ""]),
+    Object.entries(mapping).filter(
+      ([key, value]) => key.length > 0 && typeof value === "string",
+    ),
   );
   return { mapping: cleaned };
 }
@@ -522,12 +492,26 @@ function normalizeValidateConfigForYaml(config: Record<string, unknown>): Record
   const rules = rulesRaw
     .map((rule) => toRecord(rule))
     .filter((rule) => asString(rule.check).trim().length > 0)
-    .map((rule) => ({
-      check: asString(rule.check).trim(),
-      column: asString(rule.column).trim(),
-      severity: asString(rule.severity).trim() || "warning",
-      ...(rule.value !== undefined ? { value: rule.value } : {}),
-    }));
+    .map((rule) => {
+      const normalized: Record<string, unknown> = {
+        check: asString(rule.check).trim(),
+        column: asString(rule.column).trim(),
+        severity: asString(rule.severity).trim() || "warning",
+        ...(rule.value !== undefined ? { value: rule.value } : {}),
+      };
+      // F-1: preserve every other per-rule param verbatim (min/max for
+      // between, values for in_values, pattern for matches_pattern, format
+      // for date_format, ...). The top-level passthrough in
+      // normalizeConfigForYaml cannot see nested rule keys, so the emit
+      // whitelist must not drop keys it does not model — backend
+      // validation (parser.py _VALIDATE_RULE_PARAMS) requires them.
+      for (const [key, value] of Object.entries(rule)) {
+        if (!(key in normalized)) {
+          normalized[key] = value;
+        }
+      }
+      return normalized;
+    });
   return { rules };
 }
 
@@ -698,14 +682,14 @@ export function graphToYAML(nodesOrGraph: BuilderNode[] | BuilderGraph, edgesPar
       step.right = rightEdge ? stepNameByNodeId.get(rightEdge.source) ?? "" : "";
       // M-046: same whitelist + verbatim-passthrough path as other types, so
       // extras (e.g. a per-step contract on a join) survive round-trip.
-      Object.assign(step, sanitizeConfig(normalizeConfigForYaml("join", resolvedNode.data.config)));
+      Object.assign(step, normalizeConfigForYaml("join", resolvedNode.data.config));
     } else {
       const definition = STEP_DEFINITIONS[stepType];
       if (definition && definition.maxInputs > 0) {
         const sourceEdge = incomingEdges[0];
         step.input = sourceEdge ? stepNameByNodeId.get(sourceEdge.source) ?? "" : "";
       }
-      Object.assign(step, sanitizeConfig(normalizeConfigForYaml(stepType, resolvedNode.data.config)));
+      Object.assign(step, normalizeConfigForYaml(stepType, resolvedNode.data.config));
     }
 
     steps.push(step);
