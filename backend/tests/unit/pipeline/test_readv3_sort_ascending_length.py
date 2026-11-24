@@ -5,8 +5,6 @@ raised ValueError at runtime on BOTH engines. Single-element broadcast
 ([true] + N cols) is intentionally valid on both engines and stays valid.
 """
 
-import pytest
-
 from backend.pipeline.parser import PipelineParser
 
 

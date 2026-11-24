@@ -346,7 +346,7 @@ class TestIResumeStopRace:
             fake_task.delay.side_effect = fake_delay
             monkeypatch.setattr(sp, "run_streaming_pipeline", fake_task)
 
-            ok, err = sp.request_resume(str(run.id), user, db=test_db)
+            ok, _err = sp.request_resume(str(run.id), user, db=test_db)
             assert not ok, "resume must lose to the concurrent stop"
         finally:
             other.close()

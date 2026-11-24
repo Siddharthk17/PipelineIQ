@@ -181,13 +181,14 @@ def create_webhook(
                 body=response.model_dump(mode="json"),
                 resource_id=str(webhook.id),
             )
-        return response
     except Exception:
         # Never pin the key on a failure (M-062): without this, one DB
         # blip after the claim would 409 every future retry forever.
         if idem_row is not None:
             _idempotency_release(db, idem_row)
         raise
+    else:
+        return response
 
 
 @router.get("/", response_model=list[WebhookResponse])

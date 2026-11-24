@@ -6,7 +6,6 @@ result retrieval, cancellation, and export.
 
 import logging
 import os
-import time
 from datetime import UTC
 
 import orjson
@@ -931,7 +930,7 @@ def list_pipeline_runs(
     if status_filter:
         try:
             ps = PipelineStatus(status_filter.upper())
-        except ValueError:
+        except ValueError as err:
             # B3: fail closed — a typo'd filter must not silently return
             # the unfiltered list (the caller may misread the runs).
             raise HTTPException(
@@ -940,7 +939,7 @@ def list_pipeline_runs(
                     f"Invalid status_filter '{status_filter}'. "
                     f"Valid values: {sorted(s.value for s in PipelineStatus)}"
                 ),
-            )
+            ) from err
         query = query.filter(PipelineRun.status == ps)
 
     total = query.count()
