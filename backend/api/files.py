@@ -506,14 +506,25 @@ async def upload_file(
     description="Returns metadata for all uploaded files belonging to the current user.",
 )
 def list_files(
+    page: int = 1,
+    limit: int = 50,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> FileListResponse:
     """List all uploaded files with their metadata."""
+    # M-085: bound the list (catalog default 50 / hard cap 200, clamped
+    # like list_pipeline_runs). total stays the full count so small
+    # result sets behave exactly as before.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    base_query = db.query(UploadedFile).filter(
+        UploadedFile.user_id == current_user.id
+    )
+    total = base_query.count()
     files = (
-        db.query(UploadedFile)
-        .filter(UploadedFile.user_id == current_user.id)
-        .order_by(UploadedFile.created_at.desc())
+        base_query.order_by(UploadedFile.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
     file_responses = [
@@ -528,7 +539,7 @@ def list_files(
         )
         for f in files
     ]
-    return FileListResponse(files=file_responses, total=len(file_responses))
+    return FileListResponse(files=file_responses, total=total)
 
 
 @router.get(

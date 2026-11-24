@@ -298,19 +298,30 @@ def create_schedule(
 @router.get("/", summary="List user's pipeline schedules")
 def list_schedules(
     request: Request,
+    page: int = 1,
+    limit: int = 50,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     # R2-006: admins list all schedules; owners see their own.
+    # M-085: bound the list (clamped like list_pipeline_runs, hard cap
+    # 200 like catalog). total stays the full count so small result
+    # sets behave exactly as before.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
     query = db.query(PipelineSchedule)
     if getattr(current_user, "role", None) != "admin":
         query = query.filter(PipelineSchedule.user_id == current_user.id)
+    total = query.count()
     schedules = (
-        query.order_by(PipelineSchedule.created_at.desc()).all()
+        query.order_by(PipelineSchedule.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
     )
     return {
         "schedules": [_schedule_to_response(s) for s in schedules],
-        "total": len(schedules),
+        "total": total,
     }
 
 

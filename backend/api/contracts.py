@@ -389,6 +389,8 @@ def _to_def_response(contract: PipelineContract) -> ContractDefResponse:
 @router.get("/pipelines/{pipeline_name}", response_model=ContractListResponse)
 def list_contracts(
     pipeline_name: str,
+    page: int = 1,
+    limit: int = 50,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -396,12 +398,18 @@ def list_contracts(
     _ensure_pipeline_contract_access(
         db, current_user, pipeline_name, {"owner", "runner", "viewer"}
     )
+    # M-085: bound the list (clamped like list_pipeline_runs, hard cap
+    # 200 like catalog). total stays the full count.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    base_query = _contract_query(db, current_user).filter(
+        PipelineContract.pipeline_name == pipeline_name
+    )
+    total = base_query.count()
     contracts = (
-        _ordered_versions(
-            _contract_query(db, current_user).filter(
-                PipelineContract.pipeline_name == pipeline_name
-            )
-        )
+        _ordered_versions(base_query)
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
     return ContractListResponse(
@@ -420,7 +428,7 @@ def list_contracts(
             )
             for c in contracts
         ],
-        total=len(contracts),
+        total=total,
     )
 
 
@@ -552,6 +560,8 @@ def get_contract_status(
 @router.get("/pipelines/{pipeline_name}/breaches")
 def list_pipeline_breaches(
     pipeline_name: str,
+    page: int = 1,
+    limit: int = 50,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -568,19 +578,27 @@ def list_pipeline_breaches(
     if not last_run:
         return {"run_id": None, "total_violations": 0, "violations": []}
 
+    # M-085: bound the list (clamped like list_pipeline_runs, hard cap
+    # 200 like catalog). total_violations stays the full count.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    base_query = db.query(ContractViolationRecord).filter(
+        ContractViolationRecord.run_id == last_run.id
+    )
+    total = base_query.count()
     violations = (
-        db.query(ContractViolationRecord)
-        .filter(ContractViolationRecord.run_id == last_run.id)
-        .order_by(
+        base_query.order_by(
             ContractViolationRecord.step_index,
             ContractViolationRecord.severity.desc(),
         )
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
 
     return {
         "run_id": str(last_run.id),
-        "total_violations": len(violations),
+        "total_violations": total,
         "violations": [
             {
                 "id": str(v.id),
@@ -755,6 +773,8 @@ def delete_contract(
 @router.get("/runs/{run_id}")
 def list_run_violations(
     run_id: str,
+    page: int = 1,
+    limit: int = 50,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -772,19 +792,27 @@ def list_run_violations(
             db, current_user, run.name, {"owner", "runner", "viewer"}
         )
 
+    # M-085: bound the list (clamped like list_pipeline_runs, hard cap
+    # 200 like catalog). total_violations stays the full count.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    base_query = db.query(ContractViolationRecord).filter(
+        ContractViolationRecord.run_id == as_uuid(run_id)
+    )
+    total = base_query.count()
     violations = (
-        db.query(ContractViolationRecord)
-        .filter(ContractViolationRecord.run_id == run_id)
-        .order_by(
+        base_query.order_by(
             ContractViolationRecord.step_index,
             ContractViolationRecord.severity.desc(),
         )
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
 
     return {
         "run_id": run_id,
-        "total_violations": len(violations),
+        "total_violations": total,
         "violations": [
             {
                 "id": str(v.id),
@@ -808,6 +836,8 @@ def list_run_violations(
 def list_step_violations(
     run_id: str,
     step_name: str,
+    page: int = 1,
+    limit: int = 50,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -823,20 +853,26 @@ def list_step_violations(
         _ensure_pipeline_contract_access(
             db, current_user, run.name, {"owner", "runner", "viewer"}
         )
+    # M-085: bound the list (clamped like list_pipeline_runs, hard cap
+    # 200 like catalog). total_violations stays the full count.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    base_query = db.query(ContractViolationRecord).filter(
+        ContractViolationRecord.run_id == as_uuid(run_id),
+        ContractViolationRecord.step_name == step_name,
+    )
+    total = base_query.count()
     violations = (
-        db.query(ContractViolationRecord)
-        .filter(
-            ContractViolationRecord.run_id == run_id,
-            ContractViolationRecord.step_name == step_name,
-        )
-        .order_by(ContractViolationRecord.severity.desc())
+        base_query.order_by(ContractViolationRecord.severity.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
 
     return {
         "run_id": run_id,
         "step_name": step_name,
-        "total_violations": len(violations),
+        "total_violations": total,
         "violations": [
             {
                 "id": str(v.id),
