@@ -20,7 +20,6 @@ httpfs extension:
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
 import re
@@ -33,7 +32,7 @@ from celery.signals import worker_process_init as worker_init
 from celery.signals import worker_process_shutdown as worker_shutdown
 
 from backend.config import settings
-from backend.execution.sql_builder import build_sql_for_step
+from backend.execution.sql_builder import build_join_sql, build_sql_for_step
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,52 @@ _worker_connection = _worker_conn
 
 
 def _compute_duckdb_thread_count(cpu_cores: int, celery_concurrency: int) -> int:
+    # M-114(h): fail closed on non-positive config instead of
+    # ZeroDivisionError (concurrency=0) or silent nonsense (negatives).
+    if (isinstance(cpu_cores, bool) or not isinstance(cpu_cores, int)
+            or cpu_cores <= 0):
+        raise ValueError(
+            f"cpu_cores must be a positive integer, got {cpu_cores!r}")
+    if (isinstance(celery_concurrency, bool)
+            or not isinstance(celery_concurrency, int)
+            or celery_concurrency <= 0):
+        raise ValueError(
+            "celery_concurrency must be a positive integer, "
+            f"got {celery_concurrency!r}")
     return max(1, cpu_cores // celery_concurrency)
+
+
+def _statement_timeout_ms() -> int:
+    """Per-query DuckDB statement timeout in milliseconds.
+
+    Bounds runaway user SQL (e.g. cartesian products, huge aggregations)
+    that passes validation. Overridable via ``DUCKDB_STATEMENT_TIMEOUT_MS``.
+    """
+    try:
+        return max(1, int(os.environ.get("DUCKDB_STATEMENT_TIMEOUT_MS", "60000")))
+    except ValueError:
+        return 60000
+
+
+def harden_connection(conn: duckdb.DuckDBPyConnection) -> None:
+    """Apply class-level sandbox controls to a DuckDB connection (M-001).
+
+    - ``enable_external_access=false``: blocks all file-system access
+      (``read_csv``/``read_parquet``/``read_text``/..., ``glob``,
+      replacement scans such as ``FROM '/etc/passwd'``, ``COPY ... TO``).
+    - ``allow_community_extensions=false``,
+      ``autoinstall_known_extensions=false``,
+      ``autoload_known_extensions=false``: no silent extension downloads
+      (e.g. ``sqlite_scan`` auto-install) that would reopen file access.
+    - ``max_execution_time``: statement timeout so unbounded queries
+      (``WITH RECURSIVE`` if validation is ever bypassed, runaway joins)
+      cannot wedge a worker permanently.
+    """
+    conn.sql("SET enable_external_access=false")
+    conn.sql("SET allow_community_extensions=false")
+    conn.sql("SET autoinstall_known_extensions=false")
+    conn.sql("SET autoload_known_extensions=false")
+    conn.sql(f"SET max_execution_time={_statement_timeout_ms()}")
 
 
 def _configure_connection(
@@ -59,10 +103,18 @@ def _configure_connection(
 
     conn.sql("PRAGMA enable_object_cache=true")
 
+    # Class-level sandbox: deny file-system access and bound query time on
+    # every worker/local connection, including the httpfs opt-in path.
+    harden_connection(conn)
+
     if os.environ.get("DUCKDB_ENABLE_HTTPFS", "").lower() != "true":
         logger.info("DuckDB httpfs extension disabled by default")
         return
 
+    logger.warning(
+        "DUCKDB_ENABLE_HTTPFS is set but external access stays disabled "
+        "(M-001): S3-direct reads will fail closed and fall back to download"
+    )
     _configure_httpfs(conn)
 
 
@@ -81,6 +133,17 @@ def _s3_credentials() -> tuple[str, str, str, str]:
     return minio_endpoint, minio_access_key, minio_secret_key, minio_region
 
 
+def _escape_duckdb_string_literal(value: str) -> str:
+    """Escape a value interpolated into a single-quoted DuckDB literal.
+
+    M-115: credentials reach DuckDB via ``SET s3_...='...'`` f-strings. A
+    single quote in a key/secret would terminate the literal and alter the
+    statement (SQL injection via config). Doubling quotes is standard
+    SQL/DuckDB literal escaping and keeps the value a pure literal.
+    """
+    return value.replace("'", "''")
+
+
 def _configure_httpfs(conn) -> None:
     """Load the httpfs extension and point it at MinIO/S3."""
     minio_endpoint, minio_access_key, minio_secret_key, minio_region = (
@@ -89,12 +152,12 @@ def _configure_httpfs(conn) -> None:
     try:
         conn.execute("INSTALL httpfs")
         conn.execute("LOAD httpfs")
-        conn.execute(f"SET s3_endpoint='{minio_endpoint}'")
+        conn.execute(f"SET s3_endpoint='{_escape_duckdb_string_literal(minio_endpoint)}'")
         conn.execute("SET s3_use_ssl=false")
         conn.execute("SET s3_url_style='path'")
-        conn.execute(f"SET s3_access_key_id='{minio_access_key}'")
-        conn.execute(f"SET s3_secret_access_key='{minio_secret_key}'")
-        conn.execute(f"SET s3_region='{minio_region}'")
+        conn.execute(f"SET s3_access_key_id='{_escape_duckdb_string_literal(minio_access_key)}'")
+        conn.execute(f"SET s3_secret_access_key='{_escape_duckdb_string_literal(minio_secret_key)}'")
+        conn.execute(f"SET s3_region='{_escape_duckdb_string_literal(minio_region)}'")
         conn.execute("SET s3_allowed_structural_columns=0")
         logger.info("DuckDB httpfs extension loaded for MinIO access (tenant-scoped)")
     except Exception as exc:
@@ -122,6 +185,12 @@ def initialize_worker_duckdb(*, threads: int | None = None) -> duckdb.DuckDBPyCo
                 threads = _compute_duckdb_thread_count(
                     cpu_cores, celery_concurrency
                 )
+            # M-114(h): explicit threads=0/negative fails closed here
+            # instead of wedging the worker or silently coercing to 1.
+            elif (isinstance(threads, bool) or not isinstance(threads, int)
+                    or threads <= 0):
+                raise ValueError(
+                    f"threads must be a positive integer, got {threads!r}")
 
             logger.info(
                 "Initializing DuckDB for worker: "
@@ -227,9 +296,44 @@ class DuckDBExecutor:
 
         This is the primary entry point for smart routing. It leverages
         the sql_builder to convert a StepConfig into a DuckDB SQL query.
+        Join steps are built with the registered table schemas so DuckDB
+        output columns/values match pandas (M-013).
         """
-        sql = build_sql_for_step(step)
+        sql = self._build_step_sql(step, input_table, extra_tables)
         return self.execute_sql(sql, input_table, extra_tables=extra_tables)
+
+    @staticmethod
+    def _build_step_sql(
+        step: object,
+        input_table: pa.Table,
+        extra_tables: dict[str, pa.Table] | None,
+    ) -> str:
+        """Build step SQL, schema-aware for joins (M-013) and dedup (M-114).
+
+        Deduplicate passes the input schema so the deterministic ORDER BY
+        can cover all columns (total order); without it the builder falls
+        back to subset-only ordering.
+        """
+        from backend.execution.sql_builder import build_deduplicate_sql
+
+        step_type = getattr(step, "step_type", "")
+        if hasattr(step_type, "value"):
+            step_type = step_type.value
+        if str(step_type).lower() == "deduplicate":
+            return build_deduplicate_sql(
+                step, list(input_table.column_names))
+        if str(step_type).lower() != "join":
+            return build_sql_for_step(step)
+        tables = extra_tables or {}
+        right_table = tables.get("__right__")
+        left_table = tables.get("__left__", input_table)
+        if right_table is None or left_table is None:
+            return build_sql_for_step(step)
+        return build_join_sql(
+            step,
+            list(left_table.column_names),
+            list(right_table.column_names),
+        )
 
     def execute_sql(
         self,
@@ -238,8 +342,6 @@ class DuckDBExecutor:
         *,
         extra_tables: dict[str, pa.Table] | None = None,
     ) -> pa.Table:
-        from backend.config import settings as _settings
-
         conn = self._get_connection()
         table_names = ["__input__"]
         conn.register("__input__", input_table)
@@ -255,15 +357,11 @@ class DuckDBExecutor:
                 table_names.append(safe_name)
                 sql = sql.replace(f"{{{name}}}", safe_name)
 
-        old_max_rows = None
+        # M-114(g): DuckDB 2.0.0 has no max_rows_to_scan setting — the old
+        # guard probed it with contextlib.suppress and silently did nothing.
+        # Removed. The OOM guard is memory_limit=2GB set in
+        # _configure_connection (PRAGMA memory_limit).
         try:
-            with contextlib.suppress(Exception):
-                _row = conn.execute(
-                    "SELECT current_setting('max_rows_to_scan')").fetchone()
-                old_max_rows = _row[0] if _row else None
-            with contextlib.suppress(Exception):
-                conn.execute(f"SET max_rows_to_scan={_settings.WORKER_MAX_ROWS_TO_SCAN}")
-
             # NB: DuckDB >= 2.0 removed Connection.arrow()/fetch_arrow_table();
             # use conn.sql() which returns a relation without the copy warning.
             arrow_result = conn.sql(sql).to_arrow_table()
@@ -271,9 +369,6 @@ class DuckDBExecutor:
                 return arrow_result
             return arrow_result.read_all()
         finally:
-            if old_max_rows is not None:
-                with contextlib.suppress(Exception):
-                    conn.execute(f"SET max_rows_to_scan={old_max_rows}")
             for name in table_names:
                 try:
                     conn.unregister(name)

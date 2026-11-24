@@ -35,6 +35,7 @@ from sqlalchemy.pool import StaticPool
 import backend.models  # noqa: F401 (model registration side effect)
 from backend.database import Base, get_db, get_read_db, get_write_db
 from backend.main import app
+from backend.models import User
 from backend.pipeline.lineage import LineageRecorder
 from backend.utils.rate_limiter import limiter
 
@@ -52,6 +53,104 @@ pytestmark = pytest.mark.asyncio(mode="auto")
 
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
+
+# Credentials for the dedicated admin user that the `client` fixture
+# registers through the real /auth/register + /auth/login flow. Deliberately
+# distinct from any email/username used by individual tests so fixture setup
+# can never collide with test-created users (UNIQUE constraint).
+FIXTURE_ADMIN_EMAIL = "fixture.admin@t.local"
+FIXTURE_ADMIN_USERNAME = "fixture_admin"
+FIXTURE_ADMIN_PASSWORD = "FixtureAdmin123!"
+
+
+def _tcp_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
+    """True when a TCP connection to host:port succeeds within timeout."""
+    import socket
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _required_service_targets() -> list[tuple[str, str, int]]:
+    """Live services the suite needs, as (setting name, host, port).
+
+    Derived from the configured settings so CI (single Redis on :6379)
+    and local throwaway stacks (PG :5432, Redis :6379-:6382) are both
+    probed correctly. SQLite database URLs have nothing to probe and are
+    skipped. ``PIPELINEIQ_TEST_PG_URL`` / ``PIPELINEIQ_TEST_REDIS_URLS``
+    (comma-separated) override the probed URLs — used to exercise the
+    fail-fast path itself without stopping shared services.
+    """
+    import os
+    from urllib.parse import urlparse
+
+    from backend.config import settings
+
+    pg_url = os.getenv("PIPELINEIQ_TEST_PG_URL") or settings.DATABASE_URL
+    redis_urls = os.getenv("PIPELINEIQ_TEST_REDIS_URLS")
+    redis_candidates = (
+        [u.strip() for u in redis_urls.split(",") if u.strip()]
+        if redis_urls
+        else [
+            settings.REDIS_BROKER_URL,
+            settings.REDIS_PUBSUB_URL,
+            settings.REDIS_CACHE_URL,
+        ]
+    )
+
+    targets: list[tuple[str, str, int]] = []
+    labeled: list[tuple[str, str, int]] = [("DATABASE_URL", pg_url, 5432)]
+    redis_names = ("REDIS_BROKER_URL", "REDIS_PUBSUB_URL", "REDIS_CACHE_URL")
+    for i, url in enumerate(redis_candidates):
+        label = redis_names[i] if i < len(redis_names) else f"REDIS_URL_{i}"
+        labeled.append((label, url, 6379))
+    for label, url, default_port in labeled:
+        parts = urlparse(url)
+        if parts.scheme == "sqlite" or not parts.hostname:
+            continue
+        targets.append((label, parts.hostname, parts.port or default_port))
+    return targets
+
+
+def pytest_sessionstart(session) -> None:
+    """Fail fast when required live services are unreachable (M-053/B-001).
+
+    Backend tests depend on throwaway Postgres + Redis (JWT revocation
+    checks are fail-closed, the audit side-session opens its own DB
+    connection, rate limiting and task state need Redis). Running without
+    them produces dozens of misleading failures, so abort collection with
+    one actionable message instead of letting tests skip or fail obscurely.
+    """
+    unreachable = [
+        (label, host, port)
+        for label, host, port in _required_service_targets()
+        if not _tcp_reachable(host, port)
+    ]
+    if not unreachable:
+        return
+    details = "\n".join(
+        f"  - {label}: TCP {host}:{port} refused" for label, host, port in unreachable
+    )
+    raise pytest.UsageError(
+        "PipelineIQ backend tests require live throwaway services, "
+        f"but {len(unreachable)} endpoint(s) are unreachable:\n"
+        f"{details}\n"
+        "Start them, then re-run (no data is preserved; tests are hermetic "
+        "per-test via SQLite + tmp dirs):\n"
+        "  docker compose up -d postgres redis-broker redis-pubsub redis-cache\n"
+        "or as bare throwaway processes:\n"
+        "  pg_ctl -D $WORK/pgdata -l $WORK/logs/pg.log start"
+        "  # (run: initdb -D $WORK/pgdata first, if pgdata is missing)\n"
+        "  for p in 6379 6380 6381; do $WORK/bin/redis-server --port $p"
+        " --daemonize yes --save '' --appendonly no; done\n"
+        "Expected by default: postgres on localhost:5432 (db pipelineiq, "
+        "user postgres), redis on localhost:6379/6380/6381. "
+        "Aborting collection — tests are never skipped for missing services. "
+        "See README 'Testing'."
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -95,10 +194,91 @@ def test_db(test_engine) -> Generator[Session, None, None]:
 
 @pytest.fixture()
 def client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
-    """FastAPI TestClient with the test database injected.
+    """FastAPI TestClient authenticated as a REAL admin via real JWT.
 
-    Auth dependencies are overridden with a mock admin user so existing
-    tests that hit protected endpoints continue to work without tokens.
+    No auth dependencies are overridden: every request goes through the
+    production ``get_current_user`` / ``get_current_admin`` /
+    ``get_optional_user`` path (password hashing, JWT issue/verify,
+    Redis revocation check, DB user lookup). The fixture registers a
+    dedicated admin user through ``POST /auth/register`` and logs in
+    through ``POST /auth/login``, then attaches the resulting Bearer
+    token as the client's default ``Authorization`` header. Per-request
+    ``headers=`` still override it (e.g. to test 401/403 paths).
+
+    For the rare test that must bypass authentication entirely, use the
+    explicitly-marked :func:`mock_admin_client` fixture instead.
+    """
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield test_db
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_read_db] = override_get_db
+    app.dependency_overrides[get_write_db] = override_get_db
+
+    # Patch upload dir to use tmp_path
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    with (
+        patch("backend.api.files.settings") as mock_settings,
+        patch("backend.api.pipelines.execute_pipeline_task") as mock_task,
+        patch("backend.tasks.profiling.profile_file.apply_async") as mock_profile_task,
+    ):
+        mock_settings.UPLOAD_DIR = upload_dir
+        mock_settings.ALLOWED_EXTENSIONS = {".csv", ".json"}
+        mock_settings.MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+        mock_settings.MAX_ROWS_PER_FILE = 1000000
+        mock_task.delay = MagicMock(return_value=MagicMock(id="mock-task-id"))
+        mock_profile_task.return_value = MagicMock(id="mock-profile-task-id")
+        test_client = TestClient(app)
+        # Real registration + login so the client presents a genuine JWT.
+        # Registration always yields viewer (M-048); the fixture then
+        # promotes this dedicated test user to admin through the test DB
+        # session (test-only explicit grant, mirroring create_admin.py).
+        register_response = test_client.post(
+            "/auth/register",
+            json={
+                "email": FIXTURE_ADMIN_EMAIL,
+                "username": FIXTURE_ADMIN_USERNAME,
+                "password": FIXTURE_ADMIN_PASSWORD,
+            },
+        )
+        assert register_response.status_code == 201, (
+            f"Fixture admin registration failed: {register_response.text}"
+        )
+        assert register_response.json()["role"] == "viewer", (
+            "registration must yield viewer (M-048)"
+        )
+        promoted = test_db.query(User).filter(
+            User.email == FIXTURE_ADMIN_EMAIL
+        ).first()
+        assert promoted is not None
+        promoted.role = "admin"
+        test_db.commit()
+        login_response = test_client.post(
+            "/auth/login",
+            json={
+                "email": FIXTURE_ADMIN_EMAIL,
+                "password": FIXTURE_ADMIN_PASSWORD,
+            },
+        )
+        assert login_response.status_code == 200, (
+            f"Fixture admin login failed: {login_response.text}"
+        )
+        test_client.headers["Authorization"] = f"Bearer {login_response.json()['access_token']}"
+        yield test_client
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def mock_admin_client(test_db: Session, tmp_path) -> Generator[TestClient, None, None]:
+    """TestClient with auth dependencies overridden by a mock admin.
+
+    BYPASSES REAL AUTHENTICATION — use only for tests that genuinely
+    need to skip the auth layer (e.g. exercising code paths with a user
+    that must not exist in the database). Prefer :func:`client`, which
+    presents a real JWT, for all API behavior tests.
     """
 
     def override_get_db() -> Generator[Session, None, None]:

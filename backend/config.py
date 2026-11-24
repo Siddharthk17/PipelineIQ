@@ -23,6 +23,10 @@ WEAK_SECRET_VALUES = frozenset(
         "ci_test_secret_key_not_for_production",
         "pipelineiq-dev-secret-key-change-in-production-2024-minimum-32chars",
         "pipelineiq-dev-jwt-secret-change-in-production-2024",
+        # The .env.example placeholder (S2-002): it is exactly 32 chars,
+        # so length checks alone accept it — blocklist it explicitly so a
+        # verbatim copy of the example can never boot in production.
+        "REPLACE_WITH_OPENSSL_RAND_HEX_32",
     }
 )
 MAX_SCHEDULE_CONFIG_BYTES = 51200
@@ -70,9 +74,41 @@ class Settings(BaseSettings):
     CELERY_WORKERS_DEFAULT: int = 3
     CELERY_WORKERS_BULK: int = 2
 
+    # Task execution limits (M-094). Defaults match backend/celery_config.py
+    # (300s soft / 360s hard). Override via environment in low-memory or
+    # long-pipeline deployments. NOTE: backend/celery_config.py still holds
+    # the wired values — the Celery worker owner must read these settings
+    # there (static-only follow-up, see REPORT.md).
+    CELERY_TASK_SOFT_TIME_LIMIT: int = 300
+    CELERY_TASK_HARD_TIME_LIMIT: int = 360
+
     UPLOAD_DIR: Path = Path("./uploads")
     MAX_UPLOAD_SIZE: int = 500 * 1024 * 1024  # 500 MB
-    ALLOWED_EXTENSIONS: frozenset = frozenset({".csv", ".json", ".parquet", ".xlsx"})
+    ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
+        {".csv", ".json", ".parquet", ".xlsx"})
+
+    @field_validator("ALLOWED_EXTENSIONS", mode="before")
+    @classmethod
+    def parse_allowed_extensions(cls, value: object) -> object:
+        """Accept comma-separated (`.csv,.json`) or JSON (`[".csv"]`).
+
+        O2-005: the bare `frozenset` annotation crashed boot with
+        `SettingsError` whenever the env var was set, so the key was
+        missing from `.env.example`. Programmatic/comma forms are
+        normalized here; env vars additionally accept JSON (same
+        convention as CORS_ORIGINS).
+        """
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("["):
+                import json
+
+                return frozenset(json.loads(text))
+            return frozenset(
+                part.strip() for part in text.split(",") if part.strip())
+        if isinstance(value, (list, set, tuple)):
+            return frozenset(value)
+        return value
 
     MAX_PIPELINE_STEPS: int = 50
     MAX_ROWS_PER_FILE: int = 1_000_000
@@ -99,6 +135,11 @@ class Settings(BaseSettings):
     RATE_LIMIT_FILE_UPLOAD: str = "30/minute"
     RATE_LIMIT_VALIDATION: str = "60/minute"
     RATE_LIMIT_READ: str = "120/minute"
+    # M-047: extra trusted proxy CIDRs (comma-separated, e.g.
+    # "203.0.113.0/24,198.51.100.7"). Loopback and RFC1918/private
+    # ranges are trusted by default; set this only when a legitimate
+    # edge proxy sits on a public IP.
+    TRUSTED_PROXY_CIDRS: str = ""
 
     # Schema Drift
 
@@ -208,6 +249,45 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def validate_storage_config(self) -> "Settings":
+        """Fail fast on unknown STORAGE_TYPE or incomplete S3 credentials.
+
+        M-188: an unknown STORAGE_TYPE previously fell through to local
+        file handling silently, and S3 mode with missing credentials failed
+        only at first upload. Production (ENVIRONMENT=production) fails
+        closed; other environments raise only on unknown types and warn
+        on missing S3 credentials so local dev keeps working.
+        """
+        storage_type = (self.STORAGE_TYPE or "").strip().lower()
+        if storage_type not in {"local", "s3"}:
+            raise ValueError(
+                f"Invalid STORAGE_TYPE '{self.STORAGE_TYPE}'. "
+                "Must be one of: local, s3"
+            )
+        self.STORAGE_TYPE = storage_type
+        if storage_type == "s3":
+            missing = [
+                name
+                for name, value in (
+                    ("S3_ACCESS_KEY", self.S3_ACCESS_KEY),
+                    ("S3_SECRET_KEY", self.S3_SECRET_KEY),
+                    ("S3_BUCKET", self.S3_BUCKET),
+                )
+                if not value
+            ]
+            if not self.S3_ENDPOINT_URL:
+                missing.append("S3_ENDPOINT_URL")
+            if missing:
+                message = (
+                    "STORAGE_TYPE=s3 requires missing settings: "
+                    + ", ".join(missing)
+                )
+                if self.ENVIRONMENT == "production":
+                    raise ValueError(message)
+                logging.getLogger(__name__).warning(message)
+        return self
+
+    @model_validator(mode="after")
     def validate_secret_key_strength(self) -> "Settings":
         """Prevent startup with default or weak signing keys.
 
@@ -228,9 +308,20 @@ class Settings(BaseSettings):
             env_explicitly_prod = _os.environ.get("ENVIRONMENT") == "production"
             if env_explicitly_prod:
                 raise ValueError(
-                    "SECRET_KEY must be a non-default random value with at least 32 characters."
+                    "SECRET_KEY must be a non-default random value with at least 32 characters. "
+                    "Generate one with: openssl rand -hex 32 (MANUAL owner action — rotate on compromise)."
                 )
+            # M-135: per-process ephemeral key. Multi-process servers WITHOUT
+            # a shared SECRET_KEY (no preload / multiple replicas) will mint
+            # different keys per process and invalidate each other's JWTs.
+            # Production must set SECRET_KEY explicitly (fail-closed above);
+            # this path is dev/CI-only and logs loudly so it is never silent.
             self.SECRET_KEY = _secrets.token_urlsafe(48)
+            logging.getLogger(__name__).warning(
+                "SECRET_KEY auto-generated ephemeral value for %s; "
+                "set SECRET_KEY explicitly for any shared deployment.",
+                self.ENVIRONMENT,
+            )
         return self
 
     @model_validator(mode="after")

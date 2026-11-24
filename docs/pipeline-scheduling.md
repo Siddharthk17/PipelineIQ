@@ -2,6 +2,8 @@
 
 Cron-based recurring execution. The scheduler is a database tick, not dynamic Beat registration: `schedules.check` fires every 60 seconds and dispatches due schedules to the normal batch task.
 
+Timezone-aware (M-117): each schedule carries an IANA timezone (default `"UTC"`). Cron wall-times are interpreted in that zone via `resolve_timezone()` / the `tz` parameters on `get_next_run_at`, `get_next_n_runs`, and `parse_celery_crontab` (`backend/scheduling/cron_utils.py`); unknown zones raise `ValueError` at creation so bad config fails fast. Returned fire times are timezone-aware in the schedule's zone — compare against UTC with `.astimezone(UTC)`. Celery Beat crontabs carry the zone (`tz=`) so firing follows the schedule's local wall-time, including DST.
+
 ![Pipeline Scheduling System](diagrams/scheduling-system.png)
 
 ## How it works

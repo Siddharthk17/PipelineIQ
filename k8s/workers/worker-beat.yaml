@@ -13,9 +13,21 @@ spec:
       labels:
         app: worker-beat
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: beat
-          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          # NOTE (R-O-005): intentionally no liveness/readiness probe here.
+          # celery beat is a singleton scheduler with no queryable endpoint
+          # (`celery inspect ping` only reaches workers). Kubelet restarts
+          # it on crash (restartPolicy via the Deployment default); missed
+          # ticks are visible in the scheduler logs and the reconciler
+          # converges orphaned schedules (M-018).
+          image: ghcr.io/siddharthk17/pipelineiq-backend:12.8.4
           imagePullPolicy: Always
           command:
             - celery

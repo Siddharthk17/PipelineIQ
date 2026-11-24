@@ -17,7 +17,22 @@ import { getYjsServerUrl } from "@/lib/publicUrls";
 
 const YJS_SERVER_URL = getYjsServerUrl();
 const SYNC_DEBOUNCE_MS = 300
-const AUTH_FAILURE_CLOSE_CODE = 4001
+// NOTE (M-005): the Yjs relay authenticates the JWT *and* authorizes room
+// membership server-side. 4001 = bad/expired/revoked token or inactive
+// user; 4401 = authenticated but not a member of this room (or membership
+// could not be verified — the relay denies by default). Both are final:
+// reconnecting will not help, so the hook stops retrying and surfaces the
+// reason via `authError`. The `ws://localhost:1234` fallback in
+// getYjsServerUrl() is dev-only; same-origin /yjs is used elsewhere.
+export const AUTH_FAILURE_CLOSE_CODE = 4001
+export const ROOM_FORBIDDEN_CLOSE_CODE = 4401
+export function isAccessDeniedCloseCode(
+  code: number | undefined | null,
+): boolean {
+  return (
+    code === AUTH_FAILURE_CLOSE_CODE || code === ROOM_FORBIDDEN_CLOSE_CODE
+  )
+}
 const MAX_BACKOFF_TIME = 30000
 
 export interface CollaboratorState {
@@ -67,6 +82,7 @@ export function useCollaborativePipeline({
   const authFailedForRoomRef = useRef<string | null>(null)
 
   const [provider, setProvider] = useState<WebsocketProvider | null>(null)
+  const [authError, setAuthError] = useState<string | null>(null)
   const [yNodes] = useState(() => doc.getMap<SerializedNode>('nodes'))
   const [yEdges] = useState(() => doc.getMap<SerializedEdge>('edges'))
   const [yYaml] = useState(() => doc.getText('yaml'))
@@ -100,9 +116,16 @@ export function useCollaborativePipeline({
       pipelineName,
       doc,
       {
-        // Omit the param entirely when there is no token: sending the
-        // literal string "undefined" would shadow the cookie fallback.
-        params: authToken ? { token: authToken } : {},
+        // F-4: never send the JWT as a ?token= query param (it lands in
+        // proxy/access logs — y-websocket serializes params into the
+        // handshake URL). Authenticate via the HttpOnly cookie only: the
+        // browser sends it on the ws handshake and the relay verifies it
+        // as a fallback (y-websocket/server.js tokenFromCookie). The relay
+        // does not parse Sec-WebSocket-Protocol either, so cookie-only is
+        // the only carriage that avoids the URL. authToken is still used
+        // below as a signed-in signal (fresh-login sessions) but never
+        // placed on the wire here.
+        params: {},
         maxBackoffTime: MAX_BACKOFF_TIME,
         connect: true,
       },
@@ -110,12 +133,18 @@ export function useCollaborativePipeline({
 
     wsProvider.on('connection-close', (event: unknown) => {
       const closeEvent = event as CloseEvent | null
-      if (closeEvent && closeEvent.code === AUTH_FAILURE_CLOSE_CODE) {
+      if (closeEvent && isAccessDeniedCloseCode(closeEvent.code)) {
         authFailedRef.current = true
         authFailedForRoomRef.current = pipelineName
+        const reason =
+          closeEvent.reason ||
+          (closeEvent.code === ROOM_FORBIDDEN_CLOSE_CODE
+            ? 'Not authorized for this room'
+            : 'Authentication failed')
+        setAuthError(reason)
         console.error(
-          `[YJS] Authentication failed for room "${pipelineName}". ` +
-          `Reason: ${closeEvent.reason || 'Unknown'}. Stopping reconnection.`
+          `[YJS] Access denied for room "${pipelineName}". ` +
+          `Reason: ${reason}. Stopping reconnection.`
         )
         wsProvider.disconnect()
       }
@@ -145,6 +174,7 @@ export function useCollaborativePipeline({
     if (authFailedRef.current && authFailedForRoomRef.current === pipelineName) {
       authFailedRef.current = false
       authFailedForRoomRef.current = null
+      setAuthError(null)
     }
   }, [authToken, currentUser?.id, pipelineName])
 
@@ -335,5 +365,7 @@ export function useCollaborativePipeline({
     awareness: provider?.awareness ?? null,
     provider,
     yYaml,
+    // Set when the relay denies access (4001 auth / 4401 room forbidden).
+    authError,
   }
 }

@@ -5,12 +5,16 @@ extension, and content parsing. Uploaded files are stored on disk
 with metadata persisted to the database.
 """
 
+import asyncio
+import codecs
+import contextlib
 import csv
 import logging
 import os
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
-from typing import BinaryIO, cast
+from typing import Any, BinaryIO, NoReturn, cast
 
 import orjson
 import pandas as pd
@@ -61,8 +65,101 @@ legacy_router = APIRouter(prefix="/files", tags=["files-legacy"])
 
 LARGE_FILE_THRESHOLD = 10 * 1024 * 1024
 DIRECT_UPLOAD_TTL_SECONDS = 30 * 60
+
+# Bounds for off-loop work (M-103): sync Redis/parse calls must never stall
+# the event loop. Redis helpers get a short leash; metadata parsing gets a
+# longer one proportional to MAX_UPLOAD_SIZE-bounded inputs.
+_REDIS_TIMEOUT_SECONDS = 5.0
+_METADATA_TIMEOUT_SECONDS = 30.0
+
+
+async def _bounded_to_thread(fn, /, *args, timeout: float, service: str):
+    """Run sync blocking work off the event loop with a hard timeout.
+
+    Timeouts surface as 503 (degraded, retryable) instead of stalling the
+    loop; inner HTTPExceptions (400/415/422) propagate unchanged.
+    """
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout)
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"{service} timed out; retry the request",
+        ) from exc
 MAX_DIRECT_UPLOAD_SIZE = settings.MAX_UPLOAD_SIZE
 PENDING_UPLOAD_PREFIX = "files:pending-upload:"
+# Multipart framing overhead tolerated when comparing a declared
+# Content-Length against the size cap (M-102). A declaration beyond
+# cap + slack cannot be a legal upload, so it is rejected before the
+# body is consumed.
+MULTIPART_OVERHEAD_SLACK = 1024 * 1024
+
+
+class _UploadTooLargeError(Exception):
+    """Raised when a streamed upload exceeds the configured size cap."""
+
+
+class _CappedReader:
+    """File-like proxy enforcing a byte cap on reads (M-102).
+
+    Bounds unbounded upload amplification: the first byte past ``limit``
+    aborts the copy so the caller can delete the partial object and
+    answer 413. All other attributes delegate to the wrapped stream, so
+    it stays compatible with readers that also seek/tell (e.g. S3
+    multipart upload).
+    """
+
+    def __init__(self, raw: BinaryIO, limit: int) -> None:
+        self._raw = raw
+        self._limit = limit
+        self._total = 0
+
+    def read(self, size: int = -1) -> bytes:
+        if self._total > self._limit:
+            raise _UploadTooLargeError(
+                f"Upload exceeds maximum size ({self._limit} bytes)"
+            )
+        allowance = self._limit - self._total + 1
+        chunk = self._raw.read(
+            allowance if size is None or size < 0 else min(size, allowance)
+        )
+        self._total += len(chunk)
+        if self._total > self._limit:
+            raise _UploadTooLargeError(
+                f"Upload exceeds maximum size ({self._limit} bytes)"
+            )
+        return chunk
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._raw, name)
+
+
+def _declared_content_length(request: Request) -> int | None:
+    """Return the request's declared Content-Length, if parseable."""
+    raw = request.headers.get("content-length")
+    if raw is None:
+        return None
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _enforce_declared_size(request: Request, *, slack: int = 0) -> None:
+    """Reject hopelessly oversized bodies before consuming them (M-102)."""
+    declared = _declared_content_length(request)
+    if declared is not None and declared > settings.MAX_UPLOAD_SIZE + slack:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
+        )
+
+
+def _delete_stored_quietly(stored_path: str) -> None:
+    """Best-effort removal of a stored object (never masks the real error)."""
+    with contextlib.suppress(Exception):
+        storage_service.delete(stored_path)
 
 
 def _pending_upload_key(file_id: str) -> str:
@@ -167,7 +264,8 @@ async def request_upload_url(
     absolute_api_prefix = f"{str(request.base_url).rstrip('/')}{api_prefix}"
 
     if request_payload.file_size > LARGE_FILE_THRESHOLD:
-        _cache_pending_upload(
+        await _bounded_to_thread(
+            _cache_pending_upload,
             file_id,
             {
                 "filename": filename,
@@ -175,11 +273,22 @@ async def request_upload_url(
                 "stored_path": str(stored_path),
                 "user_id": str(current_user.id),
             },
+            timeout=_REDIS_TIMEOUT_SECONDS,
+            service="Upload state store",
         )
 
-        presigned_url = storage_service.get_presigned_upload_url(
-            str(stored_path), DIRECT_UPLOAD_TTL_SECONDS
-        )
+        try:
+            presigned_url = storage_service.get_presigned_upload_url(
+                str(stored_path), DIRECT_UPLOAD_TTL_SECONDS
+            )
+        except Exception as exc:
+            # R-08: M-115c made presign fail-closed (raises on unreachable
+            # bucket instead of returning a dead URL). Negotiation itself must
+            # not 500: fall back to the server-proxied upload like the None
+            # path below.
+            logger.warning(
+                "Presigned upload unavailable, using proxied upload: %s", exc)
+            presigned_url = None
         if presigned_url is None:
             presigned_url = (
                 f"{absolute_api_prefix}/direct-upload/{file_id}"
@@ -221,7 +330,12 @@ async def direct_upload_file(
 ) -> dict:
     """Receive direct upload payload and stream it to disk without buffering entire content."""
     _validate_uuid_format(file_id)
-    pending = _get_pending_upload(file_id)
+    pending = await _bounded_to_thread(
+        _get_pending_upload,
+        file_id,
+        timeout=_REDIS_TIMEOUT_SECONDS,
+        service="Upload state store",
+    )
     if pending is None or pending.get("user_id") != str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -230,6 +344,7 @@ async def direct_upload_file(
 
     stored_path = Path(_validated_pending_stored_path(file_id, pending))
     expected_size = int(pending["expected_size"])
+    _enforce_declared_size(request)
     try:
         written = await storage_service.upload_stream(
             request.stream(), str(stored_path), MAX_DIRECT_UPLOAD_SIZE
@@ -265,7 +380,12 @@ async def confirm_direct_upload(
 ) -> FileUploadResponse:
     """Confirm a direct upload and persist its metadata."""
     _validate_uuid_format(file_id)
-    pending = _get_pending_upload(file_id)
+    pending = await _bounded_to_thread(
+        _get_pending_upload,
+        file_id,
+        timeout=_REDIS_TIMEOUT_SECONDS,
+        service="Upload state store",
+    )
     if pending is None or pending.get("user_id") != str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -279,16 +399,38 @@ async def confirm_direct_upload(
             detail="File not found in storage. Upload may have failed.",
         )
 
-    finalized = _finalize_uploaded_file(
+    # M-067: presigned direct-to-S3 uploads bypass the server-side stream
+    # cap, so the confirm step is the enforcement point for oversized or
+    # empty objects. Reject over-cap (413) and delete the orphaned object.
+    actual_size = storage_service.get_size(str(stored_path))
+    if actual_size > settings.MAX_UPLOAD_SIZE:
+        _delete_stored_quietly(str(stored_path))
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
+        )
+    if actual_size == 0:
+        _delete_stored_quietly(str(stored_path))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+
+    finalized = await _finalize_uploaded_file(
         db=db,
         file_id=_as_uuid(file_id),
         original_filename=pending["filename"],
         stored_path=str(stored_path),
-        file_size_bytes=storage_service.get_size(str(stored_path)),
+        file_size_bytes=actual_size,
         request=request,
         current_user=current_user,
     )
-    _clear_pending_upload(file_id)
+    await _bounded_to_thread(
+        _clear_pending_upload,
+        file_id,
+        timeout=_REDIS_TIMEOUT_SECONDS,
+        service="Upload state store",
+    )
     return finalized
 
 
@@ -317,14 +459,24 @@ async def upload_file(
 
     original_filename = os.path.basename(file.filename or "upload.csv")
     _validate_file_extension(original_filename)
+    _enforce_declared_size(request, slack=MULTIPART_OVERHEAD_SLACK)
 
     file_id = uuid.uuid4()
     extension = Path(original_filename).suffix.lower()
     stored_path = f"{file_id}{extension}"
 
     try:
-        storage_service.upload(file.file, stored_path)
+        storage_service.upload(
+            cast(BinaryIO, _CappedReader(file.file, settings.MAX_UPLOAD_SIZE)),
+            stored_path,
+        )
         written = storage_service.get_size(stored_path)
+    except _UploadTooLargeError:
+        _delete_stored_quietly(stored_path)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
+        ) from None
     except HTTPException:
         raise
     except Exception as exc:
@@ -345,7 +497,7 @@ async def upload_file(
             detail=f"File size exceeds maximum ({settings.MAX_UPLOAD_SIZE // (1024 * 1024)} MB)",
         )
 
-    return _finalize_uploaded_file(
+    return await _finalize_uploaded_file(
         db=db,
         file_id=file_id,
         original_filename=original_filename,
@@ -363,14 +515,25 @@ async def upload_file(
     description="Returns metadata for all uploaded files belonging to the current user.",
 )
 def list_files(
+    page: int = 1,
+    limit: int = 50,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> FileListResponse:
     """List all uploaded files with their metadata."""
+    # M-085: bound the list (catalog default 50 / hard cap 200, clamped
+    # like list_pipeline_runs). total stays the full count so small
+    # result sets behave exactly as before.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    base_query = db.query(UploadedFile).filter(
+        UploadedFile.user_id == current_user.id
+    )
+    total = base_query.count()
     files = (
-        db.query(UploadedFile)
-        .filter(UploadedFile.user_id == current_user.id)
-        .order_by(UploadedFile.created_at.desc())
+        base_query.order_by(UploadedFile.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
     file_responses = [
@@ -385,7 +548,7 @@ def list_files(
         )
         for f in files
     ]
-    return FileListResponse(files=file_responses, total=len(file_responses))
+    return FileListResponse(files=file_responses, total=total)
 
 
 @router.get(
@@ -535,8 +698,32 @@ def preview_file(
         "total_rows": uploaded_file.row_count,
         "preview_rows": len(df),
         "columns": list(df.columns),
-        "data": df.to_dict(orient="records"),
+        "data": _neutralize_formula_cells(df).to_dict(orient="records"),
     }
+
+
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralize_formula_cells(df: pd.DataFrame) -> pd.DataFrame:
+    """Prefix spreadsheet-formula cells so previews cannot inject code (M-075).
+
+    Cells whose text starts with ``= + - @`` or tab/CR gain a leading single
+    quote, per OWASP CSV-injection guidance. Only string cells are touched;
+    numeric dtypes pass through unchanged.
+    """
+
+    def _neutralize(value: object) -> object:
+        if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+            return "'" + value
+        return value
+
+    result = df.copy()
+    for column in result.columns:
+        series = result[column]
+        if series.dtype == object or str(series.dtype) == "string":
+            result[column] = series.map(_neutralize)
+    return result
 
 
 def _decode_csv_bytes(raw: bytes) -> tuple[str, str]:
@@ -563,8 +750,38 @@ def _decode_csv_bytes(raw: bytes) -> tuple[str, str]:
     raise UnicodeDecodeError("csv", raw, 0, 1, "no suitable text encoding")
 
 
+def _reject_unsupported_xlsx(filename: str) -> NoReturn:
+    """Reject .xlsx uploads: openpyxl is not installed (M-066)."""
+    raise HTTPException(
+        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        detail=(
+            f"XLSX files such as '{filename}' are not supported by this "
+            "deployment: the optional openpyxl dependency is not installed."
+        ),
+    )
+
+
+# UploadedFile.original_filename is String(255): reject overlong basenames
+# here so an oversized filename is a clean 400, never a DB overflow 500
+# (M-099). The column constraint stays as the backstop.
+_MAX_FILENAME_LENGTH = 255
+
+
+def _validate_filename_length(filename: str) -> None:
+    """Raise 400 naming the field if the filename exceeds the DB column."""
+    if len(filename) > _MAX_FILENAME_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Field 'filename' is too long ({len(filename)} characters; "
+                f"maximum is {_MAX_FILENAME_LENGTH})"
+            ),
+        )
+
+
 def _validate_file_extension(filename: str) -> None:
     """Raise 400 if the file extension is not in ALLOWED_EXTENSIONS."""
+    _validate_filename_length(filename)
     extension = Path(filename).suffix.lower()
     if extension not in settings.ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -574,6 +791,8 @@ def _validate_file_extension(filename: str) -> None:
                 f"Allowed: {sorted(settings.ALLOWED_EXTENSIONS)}"
             ),
         )
+    if extension == ".xlsx":
+        _reject_unsupported_xlsx(filename)
 
 
 def _validate_file_content(filename: str, stored_path: str) -> None:
@@ -614,23 +833,185 @@ def _check_sample_content(extension: str, sample: bytes) -> None:
         if not next(csv.reader(text.splitlines()), None):
             raise ValueError("CSV file has no header row")
     elif extension == ".json":
-        stripped = sample.lstrip()
-        if not stripped.startswith((b"{", b"[")):
-            raise ValueError("JSON file does not start with an object or array")
-        if stripped.startswith(b"{"):
-            first_line = next(
-                (line.strip() for line in sample.splitlines() if line.strip()),
-                b"",
-            )
-            orjson.loads(first_line)
+        _check_json_sample(sample)
+    elif extension == ".parquet" and sample != b"PAR1":
+        raise ValueError("Parquet magic header is missing")
+
+
+_READ_CHUNK_SIZE = 256 * 1024
+_JSON_SCHEMA_SAMPLE_VALUES = 100
+_JSON_WS = frozenset((0x20, 0x09, 0x0A, 0x0D))
+_UTF8_BOM = b"\xef\xbb\xbf"
+# Cap a single CSV field so one huge field cannot exhaust memory (M-017),
+# and bound the dtype sample to the first records (M-017).
+_CSV_MAX_FIELD_BYTES = 16 * 1024 * 1024
+_CSV_DTYPE_SAMPLE_RECORDS = 1000
+
+
+class _MalformedCsvError(ValueError):
+    """Raised when CSV text is structurally invalid (e.g. NUL byte)."""
+
+
+class _JsonMalformedError(ValueError):
+    """Raised when streamed JSON is structurally invalid."""
+
+
+class _JsonTruncatedError(_JsonMalformedError):
+    """Raised when input ends mid-value (tolerated by the sniff window)."""
+
+
+def _iter_json_raw_values(handle: BinaryIO) -> Iterator[bytes]:
+    """Yield raw bytes of each top-level JSON record, streaming (M-017/M-038).
+
+    Array mode (first non-whitespace char ``[``): yields each element of the
+    single top-level array; anything but whitespace after the closing bracket
+    is malformed. Otherwise yields each top-level value in turn (a single
+    object, JSONL/whitespace-separated values). Raises _JsonMalformedError on
+    unbalanced brackets and _JsonTruncatedError when input ends mid-value.
+    Reads the handle in bounded chunks; callers must not reuse the handle.
+    """
+    data = bytearray()
+    scanned = 0
+    eof = False
+    depth = 0
+    stack: list[bool] = []
+    in_string = False
+    escape = False
+    started = False
+    composite = False
+    value_start = 0
+    array_mode: bool | None = None
+    closed_top = False
+    first_read = True
+    while True:
+        if scanned == len(data) and not eof:
+            chunk = handle.read(_READ_CHUNK_SIZE)
+            if chunk:
+                if first_read:
+                    first_read = False
+                    if chunk.startswith(_UTF8_BOM):
+                        chunk = chunk[len(_UTF8_BOM):]
+                data += chunk
+            else:
+                eof = True
+        n = len(data)
+        i = scanned
+        while i < n:
+            ch = data[i]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == 0x5C:
+                    escape = True
+                elif ch == 0x22:
+                    in_string = False
+            elif ch == 0x22:
+                if closed_top:
+                    raise _JsonMalformedError(
+                        "trailing content after top-level array"
+                    )
+                in_string = True
+                if not started:
+                    if array_mode is None and depth == 0:
+                        array_mode = False
+                    started = True
+                    value_start = i
+            elif ch in _JSON_WS or ch == 0x2C:
+                if closed_top:
+                    pass  # trailing whitespace after top-level array
+                elif started and depth == (1 if array_mode else 0):
+                    yield bytes(data[value_start:i])
+                    started = False
+            elif ch == 0x5B or ch == 0x7B:
+                if closed_top:
+                    raise _JsonMalformedError(
+                        "trailing content after top-level array"
+                    )
+                if array_mode is None and depth == 0:
+                    array_mode = ch == 0x5B
+                    if array_mode:
+                        depth += 1
+                        stack.append(True)
+                        i += 1
+                        continue
+                if not started:
+                    started = True
+                    composite = True
+                    value_start = i
+                depth += 1
+                stack.append(ch == 0x5B)
+            elif ch == 0x5D or ch == 0x7D:
+                want_open = ch == 0x5D
+                if not stack or stack[-1] != want_open:
+                    raise _JsonMalformedError("unbalanced brackets")
+                yield_depth = 1 if array_mode else 0
+                if started and depth == yield_depth + 1 and composite:
+                    yield bytes(data[value_start:i + 1])
+                    started = False
+                elif started and depth == yield_depth and not composite:
+                    yield bytes(data[value_start:i])
+                    started = False
+                stack.pop()
+                depth -= 1
+                if array_mode and depth == 0:
+                    closed_top = True
+            else:
+                if closed_top:
+                    raise _JsonMalformedError(
+                        "trailing content after top-level array"
+                    )
+                if not started:
+                    if array_mode is None and depth == 0:
+                        array_mode = False
+                    started = True
+                    composite = False
+                    value_start = i
+            i += 1
+        scanned = n
+        if eof:
+            break
+        if started:
+            del data[:value_start]
+            scanned -= value_start
+            value_start = 0
         else:
-            orjson.loads(sample)
-    elif extension == ".parquet":
-        if sample != b"PAR1":
-            raise ValueError("Parquet magic header is missing")
-    elif extension == ".xlsx":
-        if sample != b"PK\x03\x04":
-            raise ValueError("XLSX ZIP header is missing")
+            data.clear()
+            scanned = 0
+    if in_string or escape:
+        raise _JsonTruncatedError("input ends inside a string")
+    if array_mode and not closed_top:
+        raise _JsonTruncatedError("input ends inside a top-level array")
+    if started:
+        if depth == (1 if array_mode else 0):
+            yield bytes(data[value_start:])
+        else:
+            raise _JsonTruncatedError("input ends inside a JSON value")
+
+
+def _check_json_sample(sample: bytes) -> None:
+    """Validate the head of a JSON upload without requiring all of it (M-038)."""
+    import io as _io
+
+    nosig = sample[3:] if sample.startswith(_UTF8_BOM) else sample
+    if not nosig.lstrip().startswith((b"{", b"[")):
+        raise ValueError("JSON file does not start with an object or array")
+    try:
+        for raw in _iter_json_raw_values(_io.BytesIO(sample)):
+            orjson.loads(raw)
+            break
+    except _JsonTruncatedError:
+        pass  # First value extends past the sniff window; metadata validates fully.
+
+
+def _parse_json_value(raw: bytes, filename: str) -> Any:
+    """Parse one streamed JSON record, mapping errors to 422."""
+    try:
+        return orjson.loads(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': invalid JSON value",
+        ) from exc
 
 
 def _resolve_upload_request_payload(
@@ -661,100 +1042,205 @@ def _extract_file_metadata(
     if extension == ".parquet":
         return _extract_parquet_metadata(stored_path)
     if extension == ".xlsx":
-        return _extract_xlsx_metadata(filename, stored_path)
+        _reject_unsupported_xlsx(filename)
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Cannot parse file with extension '{extension}'",
     )
 
 
+def _detect_csv_encoding(sample: bytes) -> str:
+    """Mirror _decode_csv_bytes codec choice from a prefix (M-017)."""
+    if sample.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return "utf-16"
+    if b"\x00" in sample:
+        try:
+            if "\x00" not in sample.decode("utf-16"):
+                return "utf-16"
+        except (UnicodeDecodeError, ValueError):
+            pass
+    try:
+        sample.decode("utf-8-sig")
+    except (UnicodeDecodeError, ValueError):
+        return "windows-1252"
+    else:
+        return "utf-8-sig"
+
+
+def _iter_csv_text_lines(
+    handle: BinaryIO, encoding: str, initial: bytes = b""
+) -> Iterator[str]:
+    """Yield decoded text lines reading the handle in bounded chunks (M-017)."""
+    decoder = codecs.getincrementaldecoder(encoding)()
+    buf = ""
+    chunk = initial
+    first = True
+    while True:
+        if not first:
+            chunk = handle.read(_READ_CHUNK_SIZE)
+        first = False
+        if not chunk:
+            break
+        buf += decoder.decode(chunk)
+        *lines, buf = buf.split("\n")
+        for line in lines:
+            if "\x00" in line:
+                raise _MalformedCsvError("NUL byte in text content")
+            yield line[:-1] if line.endswith("\r") else line
+    buf += decoder.decode(b"", final=True)
+    if buf:
+        if "\x00" in buf:
+            raise _MalformedCsvError("NUL byte in text content")
+        yield buf[:-1] if buf.endswith("\r") else buf
+
+
+@contextlib.contextmanager
+def _bounded_csv_fields() -> Iterator[None]:
+    """Cap single CSV field size so one huge field cannot exhaust memory."""
+    previous = csv.field_size_limit(_CSV_MAX_FIELD_BYTES)
+    try:
+        yield
+    finally:
+        csv.field_size_limit(previous)
+
+
 def _extract_csv_metadata(
         stored_path: str) -> tuple[int, list[str], dict[str, str]]:
-    """Read CSV metadata with bounded memory usage."""
+    """Read CSV metadata streaming row by row with bounded memory (M-017)."""
     import io
 
-    try:
-        with storage_service.download(stored_path) as handle:
-            raw = handle.read()
-        text, encoding = _decode_csv_bytes(raw)
-    except UnicodeDecodeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to parse file '{stored_path}': not decodable text "
-            "(tried UTF-8, UTF-16 and Windows-1252)",
-        ) from exc
-    try:
-        reader = csv.reader(io.StringIO(text, newline=""))
-        header = next(reader, None)
-        if header is None:
+    with storage_service.download(stored_path) as handle:
+        peek = handle.read(_READ_CHUNK_SIZE)
+        if not peek:
             return 0, [], {}
-        row_count = sum(1 for _ in reader)
-        columns = [str(column) for column in header]
+        encoding = _detect_csv_encoding(peek)
+        with _bounded_csv_fields():
+            reader = csv.reader(
+                _iter_csv_text_lines(handle, encoding, initial=peek),
+                strict=True,
+            )
+            try:
+                header = next(reader, None)
+                if header is None:
+                    return 0, [], {}
+                columns = [str(column) for column in header]
+                sample_records: list[list[str]] = []
+                row_count = 0
+                capped = False
+                for record in reader:
+                    row_count += 1
+                    if len(sample_records) < _CSV_DTYPE_SAMPLE_RECORDS:
+                        sample_records.append(record)
+                    if row_count > settings.MAX_ROWS_PER_FILE:
+                        capped = True
+                        break
+            except _MalformedCsvError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Malformed CSV in file '{stored_path}': {exc}",
+                ) from exc
+            except csv.Error as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Malformed CSV in file '{stored_path}': {exc}",
+                ) from exc
+            except UnicodeDecodeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Failed to parse file '{stored_path}': {exc}",
+                ) from exc
+    if capped:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
+        )
+    if not sample_records:
+        return row_count, columns, {}
+    try:
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(columns)
+        writer.writerows(sample_records)
+        buf.seek(0)
+        sample_df = pd.read_csv(buf, nrows=_CSV_DTYPE_SAMPLE_RECORDS)
+        dtypes = {
+            str(column): str(dtype)
+            for column, dtype in sample_df.dtypes.items()
+        }
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{stored_path}': {exc}",
         ) from exc
-
-    if not columns:
-        return row_count, columns, {}
-
-    sample_rows = max(1, min(1000, row_count))
-    sample_df = pd.read_csv(
-        io.BytesIO(raw), nrows=sample_rows, encoding=encoding)
-    dtypes = {column: str(dtype) for column, dtype in sample_df.dtypes.items()}
     return row_count, columns, dtypes
 
 
 def _extract_json_metadata(
     filename: str, stored_path: str
 ) -> tuple[int, list[str], dict[str, str]]:
-    """Extract metadata for JSON uploads."""
+    """Extract metadata for JSON uploads with bounded memory (M-017/M-038)."""
     try:
-        # Try JSONL (newline-delimited JSON) first for efficiency
         with storage_service.download(stored_path) as handle:
-            import io
-
-            text_handle = io.TextIOWrapper(handle, encoding="utf-8")
-            first_line = text_handle.readline()
-            if not first_line:
-                return 0, [], {}
-
-            if first_line.strip().startswith("{"):
-                # Process as JSONL
-                row_count = 1
-                with storage_service.download(stored_path) as handle:
-                    # Re-open to read all lines
-                    import io
-
-                    text_handle = io.TextIOWrapper(handle, encoding="utf-8")
-                    for _ in text_handle:
-                        row_count += 1
-
-                import orjson
-
-                # We already have first_line from the first attempt
-                first_obj = orjson.loads(first_line)
-                columns = list(first_obj.keys())
-
-                # Sample first line for dtypes
-                sample_df = pd.DataFrame([first_obj])
-                dtypes = {col: str(dtype)
-                          for col, dtype in sample_df.dtypes.items()}
-                return row_count - 1, columns, dtypes
-
-        # Fallback to standard JSON list
-        with storage_service.download(stored_path) as handle:
-            df = pd.read_json(handle)
-            columns = list(df.columns)
-            dtypes = {column: str(dtype)
-                      for column, dtype in df.dtypes.items()}
-            return len(df), columns, dtypes
+            row_count, sample, capped = _scan_json_records(handle, filename)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
+    if capped:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
+        )
+    try:
+        sample_df = pd.DataFrame(sample)
+        columns = [str(column) for column in sample_df.columns]
+        dtypes = {str(col): str(dtype) for col, dtype in sample_df.dtypes.items()}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': {exc}",
+        ) from exc
+    return row_count, columns, dtypes
+
+
+def _scan_json_records(
+    handle: BinaryIO, filename: str
+) -> tuple[int, list[Any], bool]:
+    """Stream JSON records; return (row_count, schema sample, row_capped)."""
+    records = _iter_json_raw_values(handle)
+    try:
+        first_raw = next(records, None)
+    except _JsonMalformedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': {exc}",
+        ) from exc
+    if first_raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': empty file",
+        )
+    sample = [_parse_json_value(first_raw, filename)]
+    row_count = 1
+    capped = False
+    try:
+        for raw in records:
+            value = _parse_json_value(raw, filename)
+            row_count += 1
+            if len(sample) < _JSON_SCHEMA_SAMPLE_VALUES:
+                sample.append(value)
+            if row_count > settings.MAX_ROWS_PER_FILE:
+                capped = True
+                break
+    except _JsonMalformedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to parse file '{filename}': {exc}",
+        ) from exc
+    return row_count, sample, capped
 
 
 def _extract_parquet_metadata(stored_path: str) -> tuple[int, list[str], dict[str, str]]:
@@ -774,33 +1260,27 @@ def _extract_parquet_metadata(stored_path: str) -> tuple[int, list[str], dict[st
         ) from exc
 
 
-def _extract_xlsx_metadata(filename: str, stored_path: str) -> tuple[int, list[str], dict[str, str]]:
-    try:
-        with storage_service.download(stored_path) as handle:
-            df = pd.read_excel(handle, nrows=1000)
-        columns = [str(column) for column in df.columns]
-        dtypes = {column: str(dtype) for column, dtype in df.dtypes.items()}
-        return len(df), columns, dtypes
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to parse file '{filename}': {exc}",
-        ) from exc
-
-
 def _build_schema_drift_response(
     db: Session,
     file_id,
     original_filename: str,
     columns: list[str],
     dtypes: dict,
+    user_id,
 ) -> SchemaDriftResponse | None:
+    """Compare against the uploader's own previous snapshot with the same name.
+
+    The baseline lookup is scoped to (owner, filename): snapshots uploaded
+    by other tenants with the same ``original_filename`` must never leak
+    their column names/dtypes into this response.
+    """
     drift_report = None
     previous_snapshot = (
         db.query(SchemaSnapshot)
         .join(UploadedFile, SchemaSnapshot.file_id == UploadedFile.id)
         .filter(
             UploadedFile.original_filename == original_filename,
+            UploadedFile.user_id == user_id,
             SchemaSnapshot.file_id != _as_uuid(file_id),
         )
         .order_by(SchemaSnapshot.captured_at.desc())
@@ -872,7 +1352,7 @@ def _enqueue_profile_task(file_id: str) -> None:
         )
 
 
-def _finalize_uploaded_file(
+async def _finalize_uploaded_file(
     db: Session,
     file_id,
     original_filename: str,
@@ -882,11 +1362,21 @@ def _finalize_uploaded_file(
     current_user: User,
 ) -> FileUploadResponse:
     """Persist uploaded file metadata, snapshot, and optional drift report."""
-    _validate_file_content(original_filename, stored_path)
-    row_count, columns, dtypes = _extract_file_metadata(
-        original_filename, stored_path)
+    try:
+        _validate_file_content(original_filename, stored_path)
+        row_count, columns, dtypes = await _bounded_to_thread(
+            _extract_file_metadata,
+            original_filename,
+            stored_path,
+            timeout=_METADATA_TIMEOUT_SECONDS,
+            service="File metadata extraction",
+        )
+    except HTTPException:
+        # Never orphan the stored object when validation/metadata fails (M-101).
+        _delete_stored_quietly(str(stored_path))
+        raise
     if row_count > settings.MAX_ROWS_PER_FILE:
-        storage_service.delete(stored_path)
+        _delete_stored_quietly(str(stored_path))
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"File exceeds maximum rows ({settings.MAX_ROWS_PER_FILE})",
@@ -921,6 +1411,7 @@ def _finalize_uploaded_file(
         original_filename=original_filename,
         columns=columns,
         dtypes=dtypes,
+        user_id=current_user.id,
     )
 
     logger.info(
@@ -958,7 +1449,7 @@ def _finalize_uploaded_file(
     )
 
 
-def _unsupported_preview_extension(extension: str) -> None:
+def _unsupported_preview_extension(extension: str) -> NoReturn:
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Cannot parse file with extension '{extension}'",
@@ -969,23 +1460,17 @@ def _parse_file_preview(
         filename: str,
         handle: BinaryIO,
         nrows: int) -> pd.DataFrame:
-    """Parse only the first N rows of a file for preview (avoids reading full file)."""
+    """Parse only the first N rows of a file for preview (bounded reads)."""
     extension = Path(filename).suffix.lower()
     try:
         if extension == ".csv":
-            import io
-
-            raw = handle.read()
-            text, _ = _decode_csv_bytes(raw)
-            return pd.read_csv(io.StringIO(text), nrows=nrows)
+            return _preview_csv(handle, nrows)
         elif extension == ".json":
-            df = pd.read_json(handle)
-            return df.head(nrows)
+            return _preview_json(filename, handle, nrows)
         elif extension == ".parquet":
-            df = pd.read_parquet(handle)
-            return df.head(nrows)
+            return _preview_parquet(handle, nrows)
         elif extension == ".xlsx":
-            return pd.read_excel(handle, nrows=nrows)
+            _reject_unsupported_xlsx(filename)
         else:
             _unsupported_preview_extension(extension)
     except HTTPException:
@@ -995,6 +1480,69 @@ def _parse_file_preview(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Failed to parse file '{filename}': {exc}",
         ) from exc
+
+
+def _preview_csv(handle: BinaryIO, nrows: int) -> pd.DataFrame:
+    """Read only the first nrows of a CSV with bounded memory."""
+    import io
+
+    peek = handle.read(_READ_CHUNK_SIZE)
+    if not peek:
+        return pd.DataFrame()
+    encoding = _detect_csv_encoding(peek)
+    with _bounded_csv_fields():
+        reader = csv.reader(
+            _iter_csv_text_lines(handle, encoding, initial=peek),
+            strict=True,
+        )
+        header = next(reader, None)
+        if header is None:
+            return pd.DataFrame()
+        records = []
+        for record in reader:
+            records.append(record)
+            if len(records) >= nrows:
+                break
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    writer.writerows(records)
+    buf.seek(0)
+    return pd.read_csv(buf, nrows=nrows)
+
+
+def _preview_json(
+        filename: str, handle: BinaryIO, nrows: int) -> pd.DataFrame:
+    """Read only the first nrows JSON records with bounded memory."""
+    records = []
+    for raw in _iter_json_raw_values(handle):
+        records.append(_parse_json_value(raw, filename))
+        if len(records) >= nrows:
+            break
+    if not records:
+        return pd.DataFrame()
+    return pd.DataFrame(records)
+
+
+def _preview_parquet(handle: BinaryIO, nrows: int) -> pd.DataFrame:
+    """Read only the first nrows of a parquet file via row groups."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    parquet_file = pq.ParquetFile(handle)
+    tables = []
+    rows = 0
+    for index in range(parquet_file.num_row_groups):
+        table = parquet_file.read_row_group(index)
+        take = min(table.num_rows, nrows - rows)
+        if take > 0:
+            tables.append(table.slice(0, take))
+            rows += take
+        if rows >= nrows:
+            break
+    if not tables:
+        return pd.DataFrame()
+    return pa.concat_tables(tables).to_pandas()
 
 
 @router.get(

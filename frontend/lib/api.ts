@@ -211,7 +211,20 @@ async function fetchWithAuth<T>(baseUrl: string, endpoint: string, options?: Req
       detail,
     );
   }
-  return res.json() as Promise<T>;
+  // M-184: 204/empty bodies have no JSON — res.json() throws
+  // "Unexpected end of JSON input" and masks delete/disconnect success.
+  if (res.status === 204) return undefined as T;
+  const okText = await res.text();
+  if (!okText) return undefined as T;
+  try {
+    return JSON.parse(okText) as T;
+  } catch {
+    throw new ApiError(
+      res.status,
+      res.statusText || "Request failed",
+      okText,
+    );
+  }
 }
 
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
@@ -415,11 +428,21 @@ export async function getImpactAnalysis(runId: string, step: string, column: str
 export async function checkHealth(): Promise<{ status: string; version: string; db: string; redis: string }> {
   const res = await fetch(`${API_BASE_URL}/health`);
   if (!res.ok) {
+    // F-5: read the body exactly once as text, then interpret it — the
+    // previous json()-then-text() fallback consumed an already-read
+    // stream for non-JSON error bodies (proxy HTML pages), throwing
+    // "Body is unusable" TypeError instead of ApiError. Same pattern as
+    // fetchWithAuth above.
     let detail: unknown;
     try {
-      detail = await res.json();
+      const text = await res.text();
+      try {
+        detail = text ? JSON.parse(text) : res.statusText;
+      } catch {
+        detail = text || res.statusText || "Health check failed";
+      }
     } catch {
-      detail = await res.text();
+      detail = res.statusText || "Health check failed";
     }
     throw new ApiError(
       res.status,

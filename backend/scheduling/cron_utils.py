@@ -2,13 +2,25 @@
 Utilities for working with cron expressions.
 Uses `croniter` for validation and next-run calculation.
 Uses a lookup table for human-readable descriptions.
+
+Timezone-aware scheduling (M-117): cron wall-times are interpreted in an
+IANA timezone per schedule (``tz`` parameter, default ``"UTC"``). Returned
+datetimes are timezone-aware in the requested zone.
 """
-from datetime import UTC, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     from croniter import croniter
 except ImportError as exc:
     raise ImportError("Run: pip install croniter>=1.4.0") from exc
+
+# Preview bounds (M-028): the preview loop is CPU-bound in the API
+# process, so the count is clamped server-side no matter what callers ask.
+PREVIEW_DEFAULT_N = 5
+PREVIEW_MAX_N = 100
+# Upper bound for schedule run-history pages.
+RUN_HISTORY_MAX_LIMIT = 500
 
 
 # Validation
@@ -31,31 +43,75 @@ def validate_cron(expression: str) -> tuple[bool, str]:
 
     else:
         return True, ""
-def get_next_run_at(expression: str, from_time: datetime | None = None) -> datetime:
+def resolve_timezone(tz: str | None) -> ZoneInfo:
+    """Resolve an IANA timezone name (M-117).
+
+    ``None``/empty defaults to UTC. Raises ``ValueError`` for unknown
+    zones so misconfigured schedules fail at creation, not silently at
+    fire time.
+    """
+    name = (tz or "UTC").strip() or "UTC"
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"Unknown timezone: '{tz}'") from exc
+
+
+def get_next_run_at(
+    expression: str,
+    from_time: datetime | None = None,
+    tz: str | None = "UTC",
+) -> datetime:
     """
     Get the next scheduled run time after from_time (default: now).
-    Returns a timezone-aware datetime in UTC.
+
+    The cron wall-time is interpreted in the ``tz`` IANA timezone
+    (default ``"UTC"``); the returned datetime is timezone-aware in
+    that zone (M-117). Callers comparing against UTC ``now()`` should
+    convert via ``.astimezone(UTC)``.
     """
+    zone = resolve_timezone(tz)
     if from_time is None:
-        from_time = datetime.now(UTC)
+        from_time = datetime.now(zone)
+    elif from_time.tzinfo is None:
+        from_time = from_time.replace(tzinfo=zone)
+    else:
+        from_time = from_time.astimezone(zone)
 
     # croniter works with naive datetimes — strip timezone for calculation
     naive_from = from_time.replace(tzinfo=None)
     cron = croniter(expression.strip(), naive_from)
     next_naive = cron.get_next(datetime)
 
-    # Re-attach UTC timezone
-    return next_naive.replace(tzinfo=UTC)
+    # Re-attach the schedule's timezone (UTC default preserves history).
+    return next_naive.replace(tzinfo=zone)
 
 
-def get_next_n_runs(expression: str, n: int = 5) -> list[datetime]:
-    """Get the next N scheduled run times (for the schedule preview UI)."""
+def get_next_n_runs(
+    expression: str,
+    n: int = PREVIEW_DEFAULT_N,
+    tz: str | None = "UTC",
+) -> list[datetime]:
+    """Get the next N scheduled run times (for the schedule preview UI).
+
+    ``n`` is clamped to [1, PREVIEW_MAX_N] (M-028): the loop is
+    CPU-bound in the caller, so an unbounded ``n`` is an authenticated
+    CPU-DoS vector. Times are interpreted in the ``tz`` IANA timezone
+    (default ``"UTC"``) and returned aware in that zone (M-117).
+    """
     results = []
-    from_time = datetime.now(UTC)
+    zone = resolve_timezone(tz)
+    from_time = datetime.now(zone)
+
+    try:
+        count = int(n)
+    except (TypeError, ValueError):
+        count = PREVIEW_DEFAULT_N
+    count = max(1, min(count, PREVIEW_MAX_N))
 
     cron = croniter(expression.strip(), from_time.replace(tzinfo=None))
-    for _ in range(n):
-        next_run = cron.get_next(datetime).replace(tzinfo=UTC)
+    for _ in range(count):
+        next_run = cron.get_next(datetime).replace(tzinfo=zone)
         results.append(next_run)
 
     return results
@@ -152,11 +208,21 @@ def _build_cron_description(
         return f"every day at {time_str}"
 
 
-def parse_celery_crontab(expression: str):
+def parse_celery_crontab(expression: str, timezone: str = "UTC"):
     """
     Convert a cron string to a Celery crontab schedule object.
+
+    ``timezone`` is an IANA name (default ``"UTC"``). In Celery 5.x the
+    crontab derives its zone from the app's ``timezone`` setting, so the
+    zone is carried via a cached per-zone Celery app (M-117). Beat firing
+    in-zone additionally requires the schedule to be evaluated against
+    that object; the DB tick (``schedules.check``) remains the source of
+    truth via tz-aware ``get_next_run_at``. Raises ``ValueError`` for bad
+    expressions or unknown zones.
     """
     from celery.schedules import crontab
+
+    zone = resolve_timezone(timezone)
 
     parts = expression.strip().split()
     if len(parts) != 5:
@@ -170,4 +236,24 @@ def parse_celery_crontab(expression: str):
         day_of_week=dow,
         day_of_month=dom,
         month_of_year=month,
+        app=_celery_app_for_zone(str(zone)),
     )
+
+
+_CELERY_TZ_APPS: dict = {}
+
+
+def _celery_app_for_zone(zone_name: str):
+    """Return a cached Celery app fixed to ``zone_name`` (M-117).
+
+    Creating a ``Celery(timezone=...)`` instance per call is wasteful;
+    apps are cached by zone name. The app is never used to send tasks —
+    only to give the crontab its ``tz``.
+    """
+    app = _CELERY_TZ_APPS.get(zone_name)
+    if app is None:
+        from celery import Celery
+
+        app = Celery(timezone=zone_name)
+        _CELERY_TZ_APPS[zone_name] = app
+    return app

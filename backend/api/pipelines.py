@@ -12,8 +12,10 @@ import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from kombu.exceptions import OperationalError as KombuOperationalError
 from redis.exceptions import RedisError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from backend.api.authz import canonical_pipeline_name
 from backend.auth import get_current_user
 from backend.config import settings
 from backend.db.redis_pools import get_cache_redis, get_pubsub_redis
@@ -27,6 +29,7 @@ from backend.models import (
     UploadedFile,
     User,
 )
+from backend.models.data_contract import IdempotencyKey
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.parser import PipelineParser, StepType
 from backend.pipeline.planner import generate_execution_plan
@@ -76,7 +79,10 @@ def _create_and_queue_pipeline_run(
 ) -> RunPipelineResponse:
     """Create a PipelineRun record and queue Celery execution."""
     config = parsed_config or get_parsed_pipeline(yaml_config)
-    pipeline_name = name or config.name
+    # Canonical identity (M-064): the explicit request name wins, else the
+    # YAML name. This is the same resolver the permission check validated,
+    # so the grant and the stored run can never diverge.
+    pipeline_name = canonical_pipeline_name(name, config.name)
 
     pipeline_run = PipelineRun(
         name=pipeline_name,
@@ -289,6 +295,145 @@ def _owned_file_ids(db: Session, user: User) -> set[str]:
     return {str(row[0]) for row in query.all()}
 
 
+def _validate_claim_name(pipeline_name: str | None) -> str:
+    """Validate the effective pipeline/run name before any ownership claim.
+
+    Names are validated BEFORE the first-run OWNER grant (M-089) so a
+    caller cannot squat or probe names with requests that will fail
+    validation anyway. Delegates to the shared canonical resolver
+    (backend.api.authz) so the claim, the stored run, and the saved
+    version all use one identity (M-064).
+    """
+    try:
+        return canonical_pipeline_name(pipeline_name)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+
+def _get_idempotency_key(request: Request) -> str | None:
+    """Extract and validate the Idempotency-Key header (M-062)."""
+    raw = request.headers.get("idempotency-key")
+    if raw is None:
+        return None
+    key = raw.strip()
+    if not key or len(key) > 255 or any(c in key for c in ("\r", "\n")):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid Idempotency-Key header: must be 1-255 characters "
+            "without line breaks",
+        )
+    return key
+
+
+_IDEMPOTENT_INFLIGHT_TIMEOUT_S = 5.0
+_IDEMPOTENT_POLL_INTERVAL_S = 0.2
+
+
+def _idempotency_claim(
+    db: Session, *, scope: str, key: str, user_id
+) -> tuple[str, IdempotencyKey | None]:
+    """Claim an idempotency key or return the stored outcome (M-062).
+
+    Returns ("owner", row) when this request won the key, ("replay", row)
+    when a completed response is stored, or ("inflight", row) when another
+    request is still producing the response. Stale placeholders (crashed
+    owner, older than the TTL) are reclaimed so the key is reusable (M-062).
+    """
+    from backend.api.contracts import (
+        _idempotency_gc_stale,
+        _placeholder_is_stale,
+    )
+    _idempotency_gc_stale(db, scope)
+    existing = (
+        db.query(IdempotencyKey)
+        .filter(
+            IdempotencyKey.scope == scope,
+            IdempotencyKey.key == key,
+            IdempotencyKey.user_id == user_id,
+        )
+        .first()
+    )
+    if existing is not None:
+        if existing.status_code is not None:
+            return "replay", existing
+        if _placeholder_is_stale(existing):
+            try:
+                db.delete(existing)
+                db.commit()
+            except Exception:
+                logger.warning("Failed to reclaim stale idempotency "
+                               "placeholder", exc_info=True)
+                db.rollback()
+                return "inflight", existing
+            existing = None
+        else:
+            return "inflight", existing
+    row = IdempotencyKey(
+        scope=scope, key=key, user_id=user_id,
+        status_code=None, response_body=None,
+    )
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(IdempotencyKey)
+            .filter(
+                IdempotencyKey.scope == scope,
+                IdempotencyKey.key == key,
+                IdempotencyKey.user_id == user_id,
+            )
+            .first()
+        )
+        if existing is not None and existing.status_code is not None:
+            return "replay", existing
+        return "inflight", existing
+    db.refresh(row)
+    return "owner", row
+
+
+def _idempotency_release(db: Session, row: IdempotencyKey) -> None:
+    """Release a claim placeholder that never produced a response (M-062).
+
+    Only removes the row while it is still incomplete, so a concurrent
+    completion can never be deleted by a loser.
+    """
+    try:
+        doomed = (
+            db.query(IdempotencyKey)
+            .filter(
+                IdempotencyKey.id == row.id,
+                IdempotencyKey.status_code.is_(None),
+            )
+            .first()
+        )
+        if doomed is not None:
+            db.delete(doomed)
+            db.commit()
+    except Exception:  # best-effort cleanup only
+        logger.warning("Failed to release idempotency placeholder", exc_info=True)
+        db.rollback()
+
+
+def _idempotency_complete(
+    db: Session,
+    row: IdempotencyKey,
+    *,
+    status_code: int,
+    body: dict,
+    resource_id: str | None = None,
+) -> None:
+    row.status_code = status_code
+    row.response_body = body
+    row.resource_id = resource_id
+    db.add(row)
+    db.commit()
+
+
 def _check_pipeline_permission(
     db: Session,
     user: User,
@@ -336,6 +481,11 @@ def _check_pipeline_permission(
             # becomes its owner. Names already in use by anyone else stay
             # off-limits — otherwise anyone could co-opt another user's
             # pipeline, contracts and versions just by reusing its name.
+            # The claim is atomic (M-007): the partial unique index on
+            # (pipeline_name) WHERE permission_level='owner' plus the
+            # (pipeline_name, user_id) unique constraint turn a concurrent
+            # double-claim into an IntegrityError for exactly one loser,
+            # which is re-checked below instead of becoming a second OWNER.
             from backend.models import PermissionLevel, PipelineContract, PipelinePermission
 
             name_in_use = (
@@ -359,13 +509,30 @@ def _check_pipeline_permission(
                     permission_level=PermissionLevel.OWNER,
                 )
                 db.add(new_perm)
-                db.commit()
-                logger.info(
-                    "Granted owner permission to user %s for pipeline %s",
-                    user.id,
-                    pipeline_name,
+                try:
+                    db.commit()
+                except IntegrityError:
+                    # Lost a concurrent first-claim race, or this user
+                    # already holds a row: re-read before deciding.
+                    db.rollback()
+                else:
+                    logger.info(
+                        "Granted owner permission to user %s for pipeline %s",
+                        user.id,
+                        pipeline_name,
+                    )
+                    return
+                own_row = (
+                    db.query(PipelinePermission.id)
+                    .filter(
+                        PipelinePermission.pipeline_name == pipeline_name,
+                        PipelinePermission.user_id == user.id,
+                    )
+                    .first()
                 )
-                return
+                if own_row:
+                    # Same-user concurrent retry won elsewhere; proceed.
+                    return
 
         # No grant at all: 404 (not 403) so the existence of another
         # user's pipeline/run cannot be probed via the status code.
@@ -395,17 +562,36 @@ def _check_run_permission(
     _check_pipeline_permission(db, user, pipeline_run.name, required_levels)
 
 
-def _safe_output_pattern(output_dir, pattern: str):
-    from pathlib import Path
+def _resolve_owned_filename(root, name: str | None):
+    """Literal, traversal-safe join of a recorded artifact name under root.
 
-    safe_name = os.path.basename(str(pattern).strip())
-    if not safe_name or safe_name in {".", ".."}:
+    Returns the resolved path when ``name`` is a plain filename recorded on
+    this run's own save steps and the file exists under ``root``; otherwise
+    returns None. Recorded names are used literally -- never as glob
+    patterns -- so attacker-controlled names cannot match other tenants'
+    files in the shared directory.
+    """
+    if not isinstance(name, str):
         return None
-    root = Path(output_dir).resolve()
-    candidate = (root / safe_name).resolve()
-    if candidate != root and root not in candidate.parents:
+    candidate = name.strip()
+    if not candidate or candidate in {".", ".."}:
         return None
-    return candidate
+    if (".." in candidate or "/" in candidate or "\\" in candidate
+            or "\x00" in candidate):
+        return None
+    if any(ch in candidate for ch in "*?[]"):
+        # Literal filenames only: never interpret recorded names as patterns.
+        return None
+    full = root / candidate
+    try:
+        resolved = full.resolve()
+    except OSError:
+        return None
+    if resolved != root and root not in resolved.parents:
+        return None
+    if not resolved.is_file():
+        return None
+    return resolved
 
 
 @router.post("/run",
@@ -425,12 +611,83 @@ def run_pipeline(
     """Create a pipeline run record and queue it for execution."""
     # Parse YAML to get the pipeline name for permission check
     config = get_parsed_pipeline(body.yaml_config)
-    pipeline_name = body.name or config.name
+    # Name validation runs BEFORE any ownership claim (M-089): a request
+    # that will fail validation must never squat the pipeline name.
+    pipeline_name = _validate_claim_name(body.name or config.name)
 
-    _check_pipeline_permission(
-        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
-    )
+    # Idempotency-Key replay short-circuits before any side effect (M-062).
+    idem_key = _get_idempotency_key(request)
+    idem_row: IdempotencyKey | None = None
+    if idem_key is not None:
+        action, idem_row = _idempotency_claim(
+            db, scope="pipeline_run", key=idem_key, user_id=current_user.id
+        )
+        if action == "replay":
+            assert idem_row is not None and idem_row.response_body is not None
+            return RunPipelineResponse(**idem_row.response_body)
+        if action == "inflight":
+            assert idem_row is not None
+            # Shared waiter (backend.api.contracts): it expires the cached
+            # row before re-reading, so a concurrent owner's completion is
+            # seen instead of timing out to a spurious 409 (M-062).
+            from backend.api.contracts import (
+                _idempotency_wait as _shared_idempotency_wait,
+            )
+            done = _shared_idempotency_wait(db, idem_row)
+            if done is not None and done.response_body is not None:
+                return RunPipelineResponse(**done.response_body)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotent request still in progress",
+            )
 
+    try:
+        return _run_validated_and_queued(
+            body, config, pipeline_name, request, db, current_user, idem_row
+        )
+    except Exception:
+        # A request that never produced a response must not pin its key:
+        # release the placeholder so retries get a fresh attempt (M-062).
+        if idem_row is not None:
+            _idempotency_release(db, idem_row)
+        raise
+
+
+def _referenced_wasm_ids(config) -> list[str]:
+    """Collect wasm_file_id references from a parsed pipeline config."""
+    ids: list[str] = []
+    for step in getattr(config, "steps", []):
+        wid = getattr(step, "wasm_file_id", None)
+        if isinstance(wid, str) and wid.strip():
+            ids.append(wid.strip())
+    return ids
+
+
+def _validate_wasm_ownership(db: Session, config, user_id) -> None:
+    """Reject runs referencing Wasm modules owned by another user (M-077).
+
+    Every ``wasm_file_id`` must resolve through the aiwasm ownership
+    helpers: missing and foreign ids both 404 with the same message, so
+    module ids cannot be probed across tenants.
+    """
+    ids = _referenced_wasm_ids(config)
+    if not ids:
+        return
+    from backend.routers.wasm import assert_wasm_ids_owned
+
+    assert_wasm_ids_owned(db, ids, user_id)
+
+
+def _run_validated_and_queued(
+    body,
+    config,
+    pipeline_name: str,
+    request: Request,
+    db: Session,
+    current_user: User,
+    idem_row: IdempotencyKey | None,
+) -> RunPipelineResponse:
+    """Validate, claim ownership, queue execution, record idempotency."""
     # Verify all referenced file IDs exist in the database and general config
     # is valid
     registered_ids = _owned_file_ids(db, current_user)
@@ -483,7 +740,15 @@ def run_pipeline(
             },
         )
 
-    return _create_and_queue_pipeline_run(
+    # Ownership is claimed only after the request is known-valid (M-089).
+    # Wasm module ownership is validated here too: a run referencing
+    # another tenant's module must 404 before any ownership claim (M-077).
+    _validate_wasm_ownership(db, config, current_user.id)
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
+    )
+
+    run_resp = _create_and_queue_pipeline_run(
         yaml_config=body.yaml_config,
         name=body.name,
         parsed_config=config,
@@ -491,6 +756,15 @@ def run_pipeline(
         db=db,
         current_user=current_user,
     )
+    if idem_row is not None:
+        _idempotency_complete(
+            db,
+            idem_row,
+            status_code=status.HTTP_202_ACCEPTED,
+            body=run_resp.model_dump(mode="json"),
+            resource_id=run_resp.run_id,
+        )
+    return run_resp
 
 
 @legacy_runs_router.post(
@@ -533,12 +807,61 @@ async def run_pipeline_legacy(
             detail="'name' must be a string when provided",
         )
     config = get_parsed_pipeline(yaml_config)
-    pipeline_name = name or config.name
-    _check_pipeline_permission(
-        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
-    )
+    # Name validation runs BEFORE any ownership claim (M-089).
+    pipeline_name = _validate_claim_name(name or config.name)
+
+    # Idempotency-Key replay short-circuits before any side effect (M-062).
+    idem_key = _get_idempotency_key(request)
+    idem_row: IdempotencyKey | None = None
+    if idem_key is not None:
+        action, idem_row = _idempotency_claim(
+            db, scope="pipeline_run", key=idem_key, user_id=current_user.id
+        )
+        if action == "replay":
+            assert idem_row is not None and idem_row.response_body is not None
+            return RunPipelineResponse(**idem_row.response_body)
+        if action == "inflight":
+            assert idem_row is not None
+            # Shared waiter (backend.api.contracts): it expires the cached
+            # row before re-reading, so a concurrent owner's completion is
+            # seen instead of timing out to a spurious 409 (M-062).
+            from backend.api.contracts import (
+                _idempotency_wait as _shared_idempotency_wait,
+            )
+            done = _shared_idempotency_wait(db, idem_row)
+            if done is not None and done.response_body is not None:
+                return RunPipelineResponse(**done.response_body)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate idempotent request still in progress",
+            )
+
     registered_ids = _owned_file_ids(db, current_user)
     validation_result = _pipeline_parser.validate(config, registered_ids)
+    try:
+        return _run_legacy_validated_and_queued(
+            yaml_config, name, config, validation_result,
+            pipeline_name, request, db, current_user, idem_row,
+        )
+    except Exception:
+        # A request that never produced a response must not pin its key (M-062).
+        if idem_row is not None:
+            _idempotency_release(db, idem_row)
+        raise
+
+
+def _run_legacy_validated_and_queued(
+    yaml_config: str,
+    name: str | None,
+    config,
+    validation_result,
+    pipeline_name: str,
+    request: Request,
+    db: Session,
+    current_user: User,
+    idem_row: IdempotencyKey | None,
+) -> RunPipelineResponse:
+    """Validate, claim ownership, queue execution, record idempotency."""
     if not validation_result.is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -555,7 +878,13 @@ async def run_pipeline_legacy(
                 ],
             },
         )
-    return _create_and_queue_pipeline_run(
+    # Ownership is claimed only after the request is known-valid (M-089).
+    # Wasm module ownership is validated here too (M-077).
+    _validate_wasm_ownership(db, config, current_user.id)
+    _check_pipeline_permission(
+        db, current_user, pipeline_name, ["owner", "runner"], grant_owner=True
+    )
+    response_model = _create_and_queue_pipeline_run(
         yaml_config=yaml_config,
         name=name,
         parsed_config=config,
@@ -563,6 +892,15 @@ async def run_pipeline_legacy(
         db=db,
         current_user=current_user,
     )
+    if idem_row is not None:
+        _idempotency_complete(
+            db,
+            idem_row,
+            status_code=status.HTTP_202_ACCEPTED,
+            body=response_model.model_dump(mode="json"),
+            resource_id=response_model.run_id,
+        )
+    return response_model
 
 
 @router.get(
@@ -581,7 +919,10 @@ def list_pipeline_runs(
     current_user: User = Depends(get_current_user),
 ) -> PipelineRunListResponse:
     """List pipeline runs with pagination, ordered by creation time."""
-    page = max(1, page)
+    # M-144: cap the page as well as the limit — (page-1)*limit feeds
+    # OFFSET, and an unbounded page overflows the integer binding (500)
+    # on SQLite and Postgres alike.
+    page = max(1, min(page, 1_000_000))
     limit = max(1, min(limit, 100))
 
     query = db.query(PipelineRun).filter(
@@ -589,9 +930,17 @@ def list_pipeline_runs(
     if status_filter:
         try:
             ps = PipelineStatus(status_filter.upper())
-            query = query.filter(PipelineRun.status == ps)
-        except ValueError:
-            pass
+        except ValueError as err:
+            # B3: fail closed — a typo'd filter must not silently return
+            # the unfiltered list (the caller may misread the runs).
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid status_filter '{status_filter}'. "
+                    f"Valid values: {sorted(s.value for s in PipelineStatus)}"
+                ),
+            ) from err
+        query = query.filter(PipelineRun.status == ps)
 
     total = query.count()
     runs = (
@@ -658,6 +1007,80 @@ def get_pipeline_stats(
         .scalar()
         or 0
     )
+    # M-085: count every PipelineStatus value so the buckets sum to
+    # total_runs and success_rate (completed / total) stays consistent.
+    running = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.RUNNING,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    healing = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.HEALING,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    cancelled = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.CANCELLED,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    timeout = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.TIMEOUT,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    contract_violation = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.CONTRACT_VIOLATION,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    streaming_active = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.STREAMING_ACTIVE,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    streaming_paused = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.STREAMING_PAUSED,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    streaming_stopped = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.STREAMING_STOPPED,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
     total_files = (
         db.query(func.count(UploadedFile.id))
         .filter(UploadedFile.user_id == current_user.id)
@@ -683,6 +1106,14 @@ def get_pipeline_stats(
         "completed": completed,
         "failed": failed,
         "pending": pending,
+        "running": running,
+        "healing": healing,
+        "cancelled": cancelled,
+        "timeout": timeout,
+        "contract_violation": contract_violation,
+        "streaming_active": streaming_active,
+        "streaming_paused": streaming_paused,
+        "streaming_stopped": streaming_stopped,
         "success_rate": round(
             completed / total_runs * 100,
             1) if total_runs > 0 else 0,
@@ -732,6 +1163,8 @@ def list_healing_attempts(
     run_id: str,
     request: Request,
     response: Response,
+    page: int = 1,
+    limit: int = 50,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> list[HealingAttemptResponse]:
@@ -749,10 +1182,16 @@ def list_healing_attempts(
         db, current_user, pipeline_run, ["owner", "runner", "viewer"]
     )
 
+    # M-085: bound the list (clamped like list_pipeline_runs, hard cap
+    # 200 like catalog).
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
     attempts = (
         db.query(HealingAttempt)
         .filter(HealingAttempt.pipeline_run_id == pipeline_run.id)
         .order_by(HealingAttempt.attempt_number.asc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
     return [_healing_attempt_to_response(a) for a in attempts]
@@ -968,7 +1407,7 @@ def _status_cache_key(run_id: str) -> str:
 @router.post(
     "/{run_id}/cancel",
     summary="Cancel a running pipeline",
-    description="Cancel a PENDING or RUNNING pipeline run and revoke its Celery task.",
+    description="Cancel a PENDING, RUNNING, HEALING or streaming pipeline run and revoke its Celery task.",
 )
 def cancel_pipeline_run(
     run_id: str,
@@ -988,17 +1427,67 @@ def cancel_pipeline_run(
 
     _check_run_permission(db, current_user, pipeline_run, ["owner", "runner"])
 
-    if pipeline_run.status not in (
+    # R2-003: cancel is idempotent — a second cancel returns the current
+    # CANCELLED state instead of 409 (safe for retried requests).
+    if pipeline_run.status == PipelineStatus.CANCELLED:
+        return {"run_id": run_id, "status": "CANCELLED"}
+
+    # HEALING runs hold a live worker task (autonomous healing executes
+    # synchronously inside execute_pipeline_task), so they are cancellable
+    # like any other in-flight state (M-152). Revoke SIGTERMs the worker;
+    # the CANCELLED flip below sticks because the worker is gone.
+    _CANCELLABLE = (
             PipelineStatus.PENDING,
             PipelineStatus.RUNNING,
+            PipelineStatus.HEALING,
             PipelineStatus.STREAMING_ACTIVE,
-            PipelineStatus.STREAMING_PAUSED):
+            PipelineStatus.STREAMING_PAUSED)
+    if pipeline_run.status not in _CANCELLABLE:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cannot cancel pipeline with status '{pipeline_run.status.value}'",
         )
 
-    # Revoke the Celery task
+    # R2-003: atomic check-and-set. The pre-check above is only a fast
+    # path; the UPDATE below claims CANCELLED only from a cancellable
+    # state, so a worker that finished between our read and write wins
+    # (rowcount 0 -> re-read -> honest 409) instead of being clobbered.
+    from backend.utils.time_utils import utcnow
+
+    claimed = (
+        db.query(PipelineRun)
+        .filter(
+            PipelineRun.id == pipeline_run.id,
+            PipelineRun.status.in_(_CANCELLABLE),
+        )
+        .update(
+            {
+                "status": PipelineStatus.CANCELLED,
+                "completed_at": utcnow(),
+                "error_message": "Cancelled by user",
+            },
+            synchronize_session=False,
+        )
+    )
+    if claimed != 1:
+        # Lost the race: re-read to report honestly. Already-CANCELLED
+        # (concurrent cancel) is idempotent success; anything else is 409.
+        db.expire_all()
+        fresh = db.query(PipelineRun).filter(
+            PipelineRun.id == pipeline_run.id).first()
+        if fresh is not None and fresh.status == PipelineStatus.CANCELLED:
+            return {"run_id": run_id, "status": "CANCELLED"}
+        detail = fresh.status.value if fresh is not None else "unknown"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot cancel pipeline with status '{detail}'",
+        )
+    db.commit()
+    db.refresh(pipeline_run)
+
+    # Revoke the Celery task best-effort AFTER the claim sticks: a revoke
+    # failure must not un-cancel the run (the worker polls status and the
+    # reconciler reaps orphans). The task id is read from the claimed row.
     from backend.celery_app import celery_app as _celery_app
 
     task_id = pipeline_run.celery_task_id or run_id
@@ -1011,13 +1500,6 @@ def cancel_pipeline_run(
             task_id,
             exc,
         )
-
-    from backend.utils.time_utils import utcnow
-
-    pipeline_run.status = PipelineStatus.CANCELLED
-    pipeline_run.completed_at = utcnow()
-    pipeline_run.error_message = "Cancelled by user"
-    db.commit()
 
     cancel_payload = {
         "run_id": run_id,
@@ -1215,65 +1697,55 @@ def export_pipeline_output(
     save_results = [
         sr for sr in pipeline_run.step_results if sr.step_type == "save"]
 
-    # Prefer concrete local artifacts when present, even if S3 storage is enabled.
+    # Resolve local artifacts belonging to THIS run only. No globbing: every
+    # candidate is either an exact artifact name recorded on this run's own
+    # save steps, or prefixed with this run's validated UUID -- both joined
+    # literally under UPLOAD_DIR with symlink-aware confinement. Attacker
+    # controlled save filenames / step names can therefore never match
+    # another tenant's files in the shared directory.
     output_dir = settings.UPLOAD_DIR
-    import glob as glob_module
+    root = Path(output_dir).resolve()
 
     output_files: list[str] = []
     seen: set[str] = set()
 
-    def _add_matches(pattern: Path) -> None:
-        root = Path(output_dir).resolve()
-        resolved_pattern = Path(pattern).resolve()
-        if resolved_pattern != root and root not in resolved_pattern.parents:
+    def _add_owned(name: str | None) -> None:
+        resolved = _resolve_owned_filename(root, name)
+        if resolved is None:
             return
-        for match in glob_module.glob(str(pattern)):
-            resolved_match = Path(match).resolve()
-            if root not in resolved_match.parents:
-                continue
-            if str(resolved_match) not in seen:
-                seen.add(str(resolved_match))
-                output_files.append(str(resolved_match))
+        key = str(resolved)
+        if key not in seen:
+            seen.add(key)
+            output_files.append(key)
 
-    # Older conventions may include run_id in output filenames.
-    for pattern in [
-            output_dir /
-            f"{run_id}*.csv",
-            output_dir /
-            f"{run_id}*.json"]:
-        _add_matches(pattern)
-
-    # Current save step writes: "{filename}_{uuid}.csv"
+    # Exact artifact names recorded on this run's own save steps.
     for sr in save_results:
-        for ext in [".csv", ".json"]:
-            _add_matches(output_dir / f"{sr.step_name}_*{ext}")
-            _add_matches(output_dir / f"{sr.step_name}{ext}")
+        _add_owned(sr.output_filename)
 
-    # Parse YAML and look for save.filename values.
+    # Legacy convention: artifacts prefixed with this run's id. run_id was
+    # validated as a UUID above, so the prefix is run-scoped; matching uses
+    # literal string comparison, never the glob module.
     try:
-        parsed_pipeline = get_parsed_pipeline(pipeline_run.yaml_config)
-        for step in parsed_pipeline.steps:
-            if getattr(step, "step_type", None) != "save":
-                continue
-            filename = str(getattr(step, "filename", "")).strip()
-            if not filename:
-                continue
-            filename = os.path.basename(filename)
-            for ext in [".csv", ".json"]:
-                safe_pattern = _safe_output_pattern(output_dir, filename)
-                if safe_pattern is not None:
-                    _add_matches(safe_pattern)
-                safe_pattern = _safe_output_pattern(output_dir, f"{filename}_*{ext}")
-                if safe_pattern is not None:
-                    _add_matches(safe_pattern)
-                if not filename.endswith(ext):
-                    safe_pattern = _safe_output_pattern(output_dir, f"{filename}{ext}")
-                    if safe_pattern is not None:
-                        _add_matches(safe_pattern)
-    except Exception:
-        logger.warning(
-            "Could not parse YAML while locating export file for run_id=%s",
-            run_id)
+        entries = sorted(root.iterdir(), key=lambda p: p.name)
+    except OSError:
+        entries = []
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        if not entry.name.startswith(run_id):
+            continue
+        if not entry.name.endswith((".csv", ".json")):
+            continue
+        try:
+            resolved_entry = entry.resolve()
+        except OSError:
+            continue
+        if resolved_entry != root and root not in resolved_entry.parents:
+            continue
+        key = str(resolved_entry)
+        if key not in seen:
+            seen.add(key)
+            output_files.append(key)
 
     if output_files:
         output_path = Path(output_files[0])

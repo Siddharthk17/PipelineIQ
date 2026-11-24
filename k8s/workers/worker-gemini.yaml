@@ -13,9 +13,15 @@ spec:
       labels:
         app: worker-gemini
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: worker
-          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          image: ghcr.io/siddharthk17/pipelineiq-backend:12.8.4
           imagePullPolicy: Always
           command:
             - celery
@@ -33,6 +39,30 @@ spec:
                 name: pipelineiq-config
             - secretRef:
                 name: pipelineiq-secrets
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - backend.celery_app
+                - inspect
+                - ping
+                - --timeout=5
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - backend.celery_app
+                - inspect
+                - ping
+                - --timeout=5
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
           resources:
             requests:
               memory: "256Mi"

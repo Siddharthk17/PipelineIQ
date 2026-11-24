@@ -24,6 +24,8 @@ from minio import Minio
 from minio.commonconfig import Filter
 from minio.lifecycleconfig import Expiration, LifecycleConfig, Rule
 
+from backend.config import settings
+
 logger = logging.getLogger(__name__)
 
 BUCKETS = [
@@ -34,12 +36,52 @@ BUCKETS = [
 ]
 
 
+def _resolve_minio_endpoint(endpoint_url: str | None) -> tuple[str, bool]:
+    """Split an S3 endpoint URL into (host, secure) for the MinIO SDK.
+
+    Settings carry a full URL (``http://minio:9000``) while the MinIO SDK
+    takes a bare host plus a ``secure`` flag.
+    """
+    raw = (endpoint_url or "").strip().rstrip("/")
+    if "://" in raw:
+        scheme, _, host = raw.partition("://")
+        return host, scheme.lower() == "https"
+    return raw, False
+
+
 def _minio_client() -> Minio:
+    # M-115: single credential source. The S3_* settings are authoritative
+    # so bucket ensure/lifecycle/stats always hit the same endpoint and
+    # credentials the storage provider writes with. MINIO_* env vars remain
+    # ONLY as an explicit fallback for local deployments with no
+    # S3_ENDPOINT_URL configured — they never override S3_* settings.
+    # M-061: bound lifecycle/stats calls so a dead MinIO fails fast
+    # instead of hanging the storage analytics endpoints.
+    import urllib3
+
+    http_client = urllib3.PoolManager(
+        timeout=urllib3.Timeout(connect=5.0, read=30.0),
+        retries=urllib3.Retry(total=1),
+    )
+    if settings.S3_ENDPOINT_URL:
+        host, secure = _resolve_minio_endpoint(settings.S3_ENDPOINT_URL)
+        access_key = settings.S3_ACCESS_KEY
+        secret_key = settings.S3_SECRET_KEY
+        logger.debug("MinIO client from S3_* settings: endpoint=%s", host)
+    else:
+        host = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+        access_key = os.environ.get("MINIO_ROOT_USER", "minio")
+        secret_key = os.environ.get("MINIO_ROOT_PASSWORD", "minio123")
+        secure = False
+        logger.debug(
+            "MinIO client from MINIO_* env fallback "
+            "(no S3_ENDPOINT_URL configured): endpoint=%s", host)
     return Minio(
-        os.environ.get("MINIO_ENDPOINT", "minio:9000"),
-        access_key=os.environ.get("MINIO_ROOT_USER", "minio"),
-        secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minio123"),
-        secure=False,
+        host,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=secure,
+        http_client=http_client,
     )
 
 

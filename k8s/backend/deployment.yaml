@@ -23,10 +23,16 @@ spec:
       annotations:
         rollme: "initial"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: pipelineiq-sa
       initContainers:
         - name: migrate
-          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          image: ghcr.io/siddharthk17/pipelineiq-backend:12.8.4
           imagePullPolicy: Always
           command: ["alembic", "upgrade", "head"]
           workingDir: /app
@@ -37,7 +43,7 @@ spec:
                 name: pipelineiq-secrets
       containers:
         - name: api
-          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          image: ghcr.io/siddharthk17/pipelineiq-backend:12.8.4
           imagePullPolicy: Always
           ports:
             - containerPort: 8000

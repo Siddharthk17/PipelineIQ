@@ -1,4 +1,4 @@
-FROM python:3.11-slim AS builder
+FROM python:3.11.13-slim AS builder
 
 WORKDIR /build
 
@@ -7,10 +7,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
+# System-wide install into /usr/local (shared with production stage).
+# NOTE: no `pip --user` here — the old `--user` install landed in /root/.local
+# (mode 700), unreadable by the runtime `appuser`, so the image could not boot.
+RUN pip install --no-cache-dir --prefix=/usr/local -r requirements.txt
 
 
-FROM python:3.11-slim AS production
+FROM python:3.11.13-slim AS production
 
 WORKDIR /app
 
@@ -18,9 +21,7 @@ RUN apt-get update && apt-get install -y \
     libpq5 curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /root/.local /root/.local
-
-ENV PATH=/root/.local/bin:$PATH
+COPY --from=builder /usr/local /usr/local
 
 RUN groupadd --gid 1000 appuser && \
     useradd --uid 1000 --gid appuser --shell /bin/bash --create-home appuser

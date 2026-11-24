@@ -75,11 +75,15 @@ def test_read_permissions():
     })
     run_id = resp.json()["run_id"]
     
-    # Wait for completion
+    # Wait for completion (bounded: fail deterministically instead of
+    # hanging forever when the worker stack is wedged — M-127).
+    deadline = time.monotonic() + 120
     while True:
         resp = admin_session.get(f"{BASE_URL}/pipelines/{run_id}")
+        assert resp.status_code == 200, f"Run status failed: {resp.status_code} {resp.text}"
         if resp.json()["status"] == "COMPLETED":
             break
+        assert time.monotonic() < deadline, "Timed out waiting for run COMPLETED"
         time.sleep(1)
 
     # 4. Test Export (Should fail for Viewer without permission)

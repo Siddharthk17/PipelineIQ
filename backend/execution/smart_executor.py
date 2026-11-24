@@ -56,12 +56,14 @@ class SmartExecutor:
 
     @property
     def _current_run_id(self) -> str | None:
-        """Current pipeline run id, forwarded to the inner executors.
+        """Current pipeline run id, forwarded to the pandas executor.
 
         Steps execute on the composed pandas/duckdb executors, not on this
-        wrapper, so assigning here propagates the id everywhere it is read
-        (previously the inner executors never saw it and every save step
-        minted a random artifact id instead).
+        wrapper, so assigning here propagates the id to the pandas executor
+        where save steps read it (previously the inner executor never saw it
+        and every save step minted a random artifact id instead). The DuckDB
+        executor runs SQL only and never consumes a run id, so nothing is
+        forwarded to it.
         """
         return self.__current_run_id
 
@@ -69,7 +71,6 @@ class SmartExecutor:
     def _current_run_id(self, value: str | None) -> None:
         self.__current_run_id = value
         self.pandas_executor._current_run_id = value
-        self.duckdb_executor._current_run_id = value
 
     @staticmethod
     def _step_type(step: StepConfig) -> str:
@@ -258,7 +259,10 @@ class SmartExecutor:
                     ]
                     result = self._as_result(
                         step, output_table,
-                        rows_in=max(left_table.num_rows, right_table.num_rows),
+                        # C2-007: rows_in must match the pandas engine
+                        # (left+right), not max — telemetry must not depend
+                        # on which side of the 50k threshold a table falls.
+                        rows_in=left_table.num_rows + right_table.num_rows,
                         columns_in=columns_in,
                         duration_ms=duration_ms,
                         engine="duckdb",
@@ -280,6 +284,15 @@ class SmartExecutor:
                     step_type in self.DUCKDB_CAPABLE_STEPS
                     and input_table.num_rows >= self.DUCKDB_THRESHOLD
                 )
+                if step_type == "sample" and getattr(step, "stratify_by", None):
+                    # C2-009: DuckDB USING SAMPLE cannot stratify; routing a
+                    # stratified sample there silently converts it into a
+                    # uniform reservoir sample. Stay on pandas (correctness
+                    # over speed) regardless of table size.
+                    should_route_to_duckdb = False
+                    engine = "pandas"
+                    _step_span.set_attribute(
+                        "pipelineiq.step.engine", "pandas")
                 if not should_route_to_duckdb:
                     result = self.pandas_executor.execute(table_registry, step, recorder)
                     _step_span.set_attribute("pipelineiq.rows.out", result.rows_out)
@@ -294,6 +307,17 @@ class SmartExecutor:
                 output_table = self.duckdb_executor.execute_step(
                     step, input_table, extra_tables=extra_tables
                 )
+                if step_type == "pivot":
+                    # C2-008: pandas pivot_table fills missing cells with
+                    # fill_value (default 0) but DuckDB PIVOT emits NULL.
+                    # The pivot columns are data-dependent so they cannot
+                    # be enumerated in SQL; fill post-hoc like pandas does.
+                    fill_value = getattr(step, "fill_value", None)
+                    if fill_value is not None:
+                        filled = output_table.to_pandas().fillna(
+                            value=fill_value)
+                        output_table = pa.Table.from_pandas(
+                            filled, preserve_index=False)
                 duration_ms = int((time.perf_counter() - start) * 1000)
                 result = self._as_result(
                     step, output_table,

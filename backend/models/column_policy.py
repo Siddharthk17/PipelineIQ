@@ -9,6 +9,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
@@ -42,7 +43,7 @@ class ColumnPolicy(Base):
     allowed_roles: Mapped[list[str]] = mapped_column(
         _AllowedRoles,
         nullable=False,
-        server_default="{}",
+        server_default=text("'{}'"),
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,

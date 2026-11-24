@@ -42,9 +42,10 @@ class RegisterRequest(BaseModel):
     @classmethod
     def validate_email(cls, v: str) -> str:
         pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
-        if not re.match(pattern, v):
+        normalized = v.strip().lower()
+        if not re.match(pattern, normalized):
             raise ValueError("Invalid email format")
-        return v.lower()
+        return normalized
 
     @field_validator("username")
     @classmethod
@@ -75,6 +76,11 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 class UserResponse(BaseModel):
@@ -129,7 +135,13 @@ async def register(
     body: RegisterRequest,
     db: Session = get_write_db_dependency(),
 ):
-    """Register a new user. First user becomes admin automatically."""
+    """Register a new user.
+
+    New registrations ALWAYS receive the ``viewer`` role. The initial
+    admin account is created exclusively through the explicit bootstrap
+    CLI (``python -m backend.scripts.create_admin``, gated by
+    ``PIPELINEIQ_BOOTSTRAP_ADMIN=1``) — never implicitly by signup order.
+    """
     if db.get_bind().dialect.name == "postgresql":
         db.execute(text("LOCK TABLE users IN EXCLUSIVE MODE"))
 
@@ -146,9 +158,11 @@ async def register(
             detail=f"A user with this {field} already exists",
         )
 
-    # First user becomes admin
-    user_count = db.query(User).count()
-    role = "admin" if user_count == 0 else "viewer"
+    # Registration never grants admin: first-user auto-promotion was
+    # removed (privilege escalation on fresh deployments). Admins are
+    # created only via the env-flagged bootstrap CLI or by an existing
+    # admin through PATCH /auth/users/{id}/role.
+    role = "viewer"
 
     user = User(
         email=body.email,
@@ -260,11 +274,23 @@ async def logout(
 
 @router.get("/users")
 async def list_users(
+    page: int = 1,
+    limit: int = 50,
     current_user: User = Depends(get_current_admin),
     db: Session = get_read_db_dependency(),
 ):
     """List all users (admin only)."""
-    users = db.query(User).order_by(User.created_at).all()
+    # M-085: bound the admin list (clamped like list_pipeline_runs,
+    # hard cap 200 like catalog). Shape stays a bare list.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    users = (
+        db.query(User)
+        .order_by(User.created_at)
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
     return [_user_to_response(u) for u in users]
 
 

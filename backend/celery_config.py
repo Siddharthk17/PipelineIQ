@@ -26,6 +26,7 @@ task_routes = {
     "tasks.run_streaming_pipeline": {"queue": "streaming"},
     "tasks.deliver_webhook": {"queue": "critical"},
     "tasks.maintain_storage": {"queue": "bulk"},
+    "tasks.sweep_orphaned_uploads": {"queue": "bulk"},
     "tasks.reconcile_stuck_runs": {"queue": "bulk"},
 }
 
@@ -39,9 +40,13 @@ task_acks_late = True
 worker_prefetch_multiplier = 1
 broker_connection_retry_on_startup = True
 
-# Default execution safety.
-task_soft_time_limit = 300
-task_time_limit = 360
+# Default execution safety (M-094: values come from Settings so operators can
+# raise them for long pipelines via CELERY_TASK_SOFT/HARD_TIME_LIMIT env vars;
+# backend/config.py documents the same defaults).
+from backend.config import settings as _pipeline_settings
+
+task_soft_time_limit = _pipeline_settings.CELERY_TASK_SOFT_TIME_LIMIT
+task_time_limit = _pipeline_settings.CELERY_TASK_HARD_TIME_LIMIT
 task_default_retry_delay = 30
 # Task-level retry policies are defined per-task via decorators.
 task_annotations: dict = {}
@@ -57,6 +62,10 @@ beat_schedule = {
     "maintain-storage": {
         "task": "tasks.maintain_storage",
         "schedule": 300.0,  # every 5 minutes
+    },
+    "sweep-orphaned-uploads": {
+        "task": "tasks.sweep_orphaned_uploads",
+        "schedule": 86400.0,  # daily; bounded batch, lock-guarded (M-107)
     },
     "reconcile-stuck-runs": {
         "task": "tasks.reconcile_stuck_runs",

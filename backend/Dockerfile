@@ -28,4 +28,10 @@ USER appuser
 EXPOSE 8000
 EXPOSE 8001
 
+# M-187: image-level health probe (compose per-service healthchecks override
+# this for workers/beat/flower/sse; standalone `docker run` of the api/sse
+# roles gets a working default). Python stdlib only — no curl in this image.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=10).status==200 else 1)"
+
 CMD ["gunicorn", "backend.main:app", "--config", "backend/gunicorn.conf.py"]

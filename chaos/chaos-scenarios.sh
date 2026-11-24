@@ -1,7 +1,20 @@
 #!/bin/bash
 set -e
 NAMESPACE="pipelineiq"
-BASE_URL="${BASE_URL:-https://pipelineiq-api.onrender.com}"
+# M-029/M-139: default to the local stack. Pointing at anything else
+# (Render/Vercel/prod) requires CHAOS_ALLOW_PROD=1 so a copy-pasted
+# invocation can never fault-inject production by default.
+BASE_URL="${BASE_URL:-http://localhost:8000}"
+case "$BASE_URL" in
+  http://localhost*|http://127.*|http://10.*|http://172.1[6-9].*|http://172.2[0-9].*|http://172.3[01].*|http://192.168.*)
+    ;;
+  *)
+    if [ "${CHAOS_ALLOW_PROD:-}" != "1" ]; then
+      echo "chaos: refusing to run against non-local target $BASE_URL without CHAOS_ALLOW_PROD=1" >&2
+      exit 1
+    fi
+    ;;
+esac
 
 check_api_health() {
   local max_attempts=$1

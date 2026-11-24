@@ -16,7 +16,7 @@ from pandas.api.types import (
 )
 from sqlalchemy.orm import Session
 
-from backend.execution.duckdb_executor import DuckDBExecutor
+from backend.execution.duckdb_executor import DuckDBExecutor, harden_connection
 from backend.models import UploadedFile
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.services.storage_service import storage_service
@@ -59,6 +59,8 @@ def run_patch_in_sandbox(
         connection = duckdb.connect(database=":memory:")
         connection.execute("PRAGMA threads=2")
         connection.execute("SET memory_limit='500MB'")
+        # Same class-level sandbox as worker connections (M-001).
+        harden_connection(connection)
 
         executor = DuckDBExecutor(
             connection_getter=lambda: connection,

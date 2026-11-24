@@ -586,12 +586,15 @@ export function usePipelineEditor({
     [edges, fileById, nodes],
   );
 
+  // M-119: solo (non-collaborative) editing must not open a Yjs relay
+  // connection. Passing the user/token through caused every solo session
+  // to join a room; gate both on `collaborative` so the hook stays idle.
   const collab = useCollaborativePipeline({
     pipelineName: pipelineName || "my_pipeline",
     initialNodes: nodes,
     initialEdges: edges,
     initialYaml: yamlText,
-    currentUser: currentUser ?? undefined,
+    currentUser: collaborative ? currentUser ?? undefined : undefined,
     authToken: collaborative ? (authToken ?? undefined) : undefined,
     onNodesChange: (newNodes) => { setNodes(newNodes as BuilderNode[]); },
     onEdgesChange: (newEdges) => { setEdges(newEdges as BuilderEdge[]); },

@@ -67,14 +67,29 @@ def build_openlineage_event(
 
 
 def _map_status_to_event_type(status: str) -> str:
-    mapping = {
-        "success": "COMPLETE",
-        "healed": "COMPLETE",
-        "failed": "FAIL",
-        "running": "RUNNING",
-        "pending": "START",
-    }
-    return mapping.get(status.lower(), "COMPLETE")
+    """Map a PipelineStatus value to an OpenLineage event type.
+
+    Terminal states must never collapse to COMPLETE: cancelled runs are
+    ABORT, failures/timeouts/contract violations are FAIL, and unknown
+    values are OTHER (fail-visible) rather than a false success.
+    """
+    normalized = (status or "").upper()
+    if normalized in ("COMPLETED", "HEALED", "SUCCESS"):
+        return "COMPLETE"
+    if normalized in ("FAILED", "TIMEOUT", "CONTRACT_VIOLATION"):
+        return "FAIL"
+    if normalized in ("CANCELLED", "STREAMING_STOPPED"):
+        return "ABORT"
+    if normalized in (
+        "RUNNING",
+        "HEALING",
+        "STREAMING_ACTIVE",
+        "STREAMING_PAUSED",
+    ):
+        return "RUNNING"
+    if normalized == "PENDING":
+        return "START"
+    return "OTHER"
 
 
 def _build_inputs(lineage_graph: nx.DiGraph, file_ids: list[str]) -> list[dict]:

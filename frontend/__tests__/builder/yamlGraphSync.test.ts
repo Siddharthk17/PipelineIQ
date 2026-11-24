@@ -197,7 +197,7 @@ describe("graphToYAML", () => {
     expect(loadPos).toBeLessThan(filterPos);
   });
 
-  it("cycle detection returns empty string", () => {
+  it("cycle detection throws instead of wiping YAML", () => {
     const nodes = [
       makeNode("a", "filter"),
       makeNode("b", "filter"),
@@ -206,8 +206,9 @@ describe("graphToYAML", () => {
       { id: "a__b", source: "a", target: "b" },
       { id: "b__a", source: "b", target: "a" },
     ];
-    const result = graphToYAML(nodes, edges, "cycle_test");
-    expect(result).toBe("");
+    // M-119: returning "" let the emit path overwrite user YAML with an
+    // empty document; the caller now catches and keeps the YAML intact.
+    expect(() => graphToYAML(nodes, edges, "cycle_test")).toThrow(/cycle/i);
   });
 
   it("preserves step config values", () => {
@@ -223,7 +224,10 @@ describe("graphToYAML", () => {
     expect(result).toContain("name: load_sales");
   });
 
-  it("sanitizes embedded quotes from config values", () => {
+  it("preserves literal quotes in config values verbatim", () => {
+    // F-3: emit must not mutate string values — a value containing literal
+    // quotes round-trips unchanged (previously this stripped one layer of
+    // quotes, silently changing the value).
     const node: BuilderNode = {
       id: "load_data",
       type: "stepNode",
@@ -237,7 +241,7 @@ describe("graphToYAML", () => {
     };
     const result = graphToYAML([node], [], "test");
     const parsed = yaml.load(result) as { pipeline: { steps: Array<{ file_id: string }> } };
-    expect(parsed.pipeline.steps[0].file_id).toBe("file-uuid-123");
+    expect(parsed.pipeline.steps[0].file_id).toBe('"file-uuid-123"');
     expect(result).not.toContain('""file-uuid-123""');
   });
 });

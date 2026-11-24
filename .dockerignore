@@ -11,6 +11,11 @@ __pycache__
 *.pyd
 .coverage
 .env
+.env.*
+*.pem
+k8s/secrets.yaml
+k8s/*.secret.yaml
+secrets/
 uploads
 backend/uploads
 backend/vendor
@@ -26,6 +31,7 @@ postgres
 prometheus
 postman
 tests
+!backend/tests
 y-websocket
 *.md
 *.log

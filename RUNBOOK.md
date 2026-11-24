@@ -158,6 +158,7 @@ run this drill on a scratch box quarterly:
 
 ```bash
 cd ~/PipelineIQ
+./scripts/restore.sh backups/<file>.sql.gz --dry-run  # validate only, touches nothing
 make backup && ls -la backups/            # take a fresh backup
 make restore BACKUP=backups/<file>.sql.gz # stops writers, drops, loads, migrates, restarts, verifies
 make verify                                # full end-to-end smoke test
@@ -267,3 +268,43 @@ kubectl get pods -n pipelineiq
 | `GET /livez` | Liveness | Process alive | Pod restart |
 | `GET /readyz` | Readiness | DB + Redis + Storage | Traffic removed |
 | `GET /health` | Readiness alias | Same as /readyz | N/A |
+
+## Ephemeral paths (tmp/shm) operator notes
+
+Scratch space below is never backed up and safe to lose on restart.
+Operator policy for all of it: restrictive permissions (0600 for files
+holding secrets), run-scoped lifetime (tied to the container), age-gated
+cleanup for anything that can outlive a run.
+
+| Path | Writer | What lives there | Lifetime |
+|---|---|---|---|
+| `/tmp/duckdb` | DuckDB executor (`backend/execution/duckdb_executor.py:90-91`, `PRAGMA temp_directory`) | Spill files for sorts/joins exceeding `WORKER_MEMORY_LIMIT_GB` (default 2GB) | Container-local; purge only when no worker runs |
+| `/dev/shm` (workers) | Arrow data bus; stale files reaped at worker shutdown when older than 3600s (`duckdb_executor.py:213-226`) | Arrow IPC shared buffers | Age-gated (1h) + shutdown reap |
+| `/tmp/gunicorn` | api/sse entry (`backend/gunicorn.conf.py:25`; `mkdir -p` in the compose api/sse commands) | Gunicorn access/error logs | Container-local |
+| `/tmp/pipelineiq_api_startup.{lock,done}` | api startup once-guard (`backend/main.py:80-81`) | Run-once init marker | Fresh container = fresh marker |
+| `/tmp/celerybeat-schedule` | celery beat (no volume mounted) | Beat schedule DB | Ephemeral: lost on recreate, rebuilt from code schedules |
+| `/tmp/redis-auth.conf` | redis entry wrapper (`docker-compose.yml`, M-182) | `requirepass` line, mode 0600, owned `redis:redis` | Rewritten at every container start; dies with the container |
+
+Shared-memory sizing (compose): `shm_size: 2gb` on api and all workers
+except worker-gemini (`1gb`) — Docker's 64MB default would OOM large
+DuckDB sorts. k8s manifests set no explicit shm size (no
+`emptyDir: medium: Memory`); pods inherit node `/dev/shm`.
+
+Contrast (NOT scratch): `uploads` is a named volume
+(`uploads:/app/uploads`) — persistent data. MinIO objects are likewise
+outside `pg_dump` (see Disaster Recovery above).
+
+## Rate limiting and trusted proxies (R-06)
+
+Login/register/run/upload endpoints are rate-limited per client IP. The app
+honors `X-Real-IP` only when the direct peer is a trusted proxy (loopback or
+RFC1918/private by default, plus `TRUSTED_PROXY_CIDRS`); otherwise it keys on
+the peer IP. The bundled nginx overwrites `X-Real-IP` with the peer address,
+so compose deployments are correct with no extra setting.
+
+If you expose the API without that nginx edge (direct container, render-style
+deploy, private cloud L4 LB): make sure YOUR edge overwrites `X-Real-IP` (or
+strips it). A private-IP hop that forwards client-controlled `X-Real-IP`
+verbatim lets clients rotate the header for a fresh rate-limit bucket on every
+request. When the edge cannot overwrite, restrict `TRUSTED_PROXY_CIDRS` to the
+exact proxy IPs and confirm the peer the app sees is public.

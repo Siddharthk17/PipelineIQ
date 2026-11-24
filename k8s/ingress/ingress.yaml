@@ -17,6 +17,13 @@ spec:
     - host: pipelineiq-api.onrender.com
       http:
         paths:
+          - path: /yjs
+            pathType: Prefix
+            backend:
+              service:
+                name: y-websocket
+                port:
+                  number: 1234
           - path: /
             pathType: Prefix
             backend:

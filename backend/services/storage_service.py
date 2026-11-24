@@ -14,7 +14,15 @@ from backend.config import settings
 
 # MinIO rejects SigV2 query-auth (AWSAccessKeyId/Signature/Expires).
 # botocore may default to SigV2 for HTTP/IP endpoints, so pin SigV4.
-_SIGV4 = Config(signature_version="s3v4")
+# M-061: bound every S3 control-plane call — without connect/read timeouts
+# a dead MinIO hangs tier stats and health checks indefinitely.
+S3_CLIENT_CONFIG = Config(
+    signature_version="s3v4",
+    connect_timeout=5,
+    read_timeout=30,
+    retries={"max_attempts": 2},
+)
+_SIGV4 = S3_CLIENT_CONFIG
 
 
 def _validate_storage_key(key: str) -> str:
@@ -165,7 +173,7 @@ class S3StorageProvider(StorageProvider):
             aws_access_key_id=settings.S3_ACCESS_KEY,
             aws_secret_access_key=settings.S3_SECRET_KEY,
             endpoint_url=settings.S3_ENDPOINT_URL,
-            config=_SIGV4,
+            config=S3_CLIENT_CONFIG,
         )
         self.bucket = settings.S3_BUCKET
         self._presign_client = None
@@ -189,7 +197,7 @@ class S3StorageProvider(StorageProvider):
                     aws_access_key_id=settings.S3_ACCESS_KEY,
                     aws_secret_access_key=settings.S3_SECRET_KEY,
                     endpoint_url=endpoint,
-                    config=_SIGV4,
+                    config=S3_CLIENT_CONFIG,
                 )
         return self._presign_client
 
@@ -255,10 +263,22 @@ class S3StorageProvider(StorageProvider):
         response = self.s3.head_object(Bucket=self.bucket, Key=key)
         return response["ContentLength"]
 
+    def _ensure_bucket_accessible(self) -> None:
+        """Fail closed when the bucket is missing or unreachable (M-115).
+
+        ``generate_presigned_url`` is pure offline SigV4 signing with no
+        I/O, so signing alone can never detect a misconfigured endpoint or
+        a missing bucket. ``head_bucket`` runs first and any failure
+        (NoSuchBucket, AccessDenied, EndpointConnectionError, ...) surfaces
+        here instead of a presigned URL that can never work.
+        """
+        self.s3.head_bucket(Bucket=self.bucket)
+
     def get_presigned_upload_url(
         self, destination_path: str, expiration: int = 3600
     ) -> str | None:
         key = _validate_storage_key(destination_path)
+        self._ensure_bucket_accessible()
         try:
             return self._get_presign_client().generate_presigned_url(
                 ClientMethod="put_object",
@@ -272,6 +292,7 @@ class S3StorageProvider(StorageProvider):
         self, source_path: str, expiration: int = 3600
     ) -> str | None:
         key = _validate_storage_key(source_path)
+        self._ensure_bucket_accessible()
         try:
             return self._get_presign_client().generate_presigned_url(
                 ClientMethod="get_object",

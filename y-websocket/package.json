@@ -5,7 +5,8 @@
   "description": "Y-WebSocket server for PipelineIQ multiplayer collaboration",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test __tests__/server.test.js __tests__/room-authorization.test.js __tests__/shared-room.test.js"
   },
   "dependencies": {
     "jsonwebtoken": "^9.0.2",

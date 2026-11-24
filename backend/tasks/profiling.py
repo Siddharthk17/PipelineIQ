@@ -5,19 +5,19 @@ Runs on the 'bulk' queue — never blocks the API.
 """
 
 import logging
+from collections.abc import Iterator
 from contextlib import closing, suppress
 from pathlib import Path
+from typing import BinaryIO
 
+import orjson
 import pandas as pd
 
 from backend.celery_app import celery_app
 from backend.config import settings
 from backend.database import SessionLocal
 from backend.models import FileProfile, UploadedFile
-from backend.profiling.analyzer import (
-    compute_completeness,
-    profile_dataframe,
-)
+from backend.profiling.analyzer import profile_dataframe
 from backend.services.storage_service import storage_service
 from backend.utils.uuid_utils import as_uuid
 
@@ -27,12 +27,144 @@ SUPPORTED_FORMATS = {
     ".csv",
     ".json",
     ".parquet",
-    ".xlsx",
 }
 
 
 class ProfileSourceNotFoundError(ValueError):
     """Raised when the uploaded file record or stored object is no longer available."""
+
+
+_READ_CHUNK_SIZE = 256 * 1024
+_JSON_WS = frozenset((0x20, 0x09, 0x0A, 0x0D))
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+class _JsonMalformedError(ValueError):
+    """Raised when streamed JSON is structurally invalid or truncated."""
+
+
+def _iter_json_raw_values(handle: BinaryIO) -> Iterator[bytes]:
+    """Yield raw bytes of each top-level JSON record, streaming (M-017).
+
+    Mirrors ``backend.api.files._iter_json_raw_values`` (duplicated to avoid
+    a circular import between the API and task modules). Array mode yields
+    each element of a single top-level array; otherwise each top-level value
+    is yielded in turn.
+    """
+    data = bytearray()
+    scanned = 0
+    eof = False
+    depth = 0
+    stack: list[bool] = []
+    in_string = False
+    escape = False
+    started = False
+    composite = False
+    value_start = 0
+    array_mode: bool | None = None
+    closed_top = False
+    first_read = True
+    while True:
+        if scanned == len(data) and not eof:
+            chunk = handle.read(_READ_CHUNK_SIZE)
+            if chunk:
+                if first_read:
+                    first_read = False
+                    if chunk.startswith(_UTF8_BOM):
+                        chunk = chunk[len(_UTF8_BOM):]
+                data += chunk
+            else:
+                eof = True
+        n = len(data)
+        i = scanned
+        while i < n:
+            ch = data[i]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == 0x5C:
+                    escape = True
+                elif ch == 0x22:
+                    in_string = False
+            elif ch == 0x22:
+                if closed_top:
+                    raise _JsonMalformedError(
+                        "trailing content after top-level array"
+                    )
+                in_string = True
+                if not started:
+                    if array_mode is None and depth == 0:
+                        array_mode = False
+                    started = True
+                    value_start = i
+            elif ch in _JSON_WS or ch == 0x2C:
+                if started and depth == (1 if array_mode else 0):
+                    yield bytes(data[value_start:i])
+                    started = False
+            elif ch == 0x5B or ch == 0x7B:
+                if closed_top:
+                    raise _JsonMalformedError(
+                        "trailing content after top-level array"
+                    )
+                if array_mode is None and depth == 0:
+                    array_mode = ch == 0x5B
+                    if array_mode:
+                        depth += 1
+                        stack.append(True)
+                        i += 1
+                        continue
+                if not started:
+                    started = True
+                    composite = True
+                    value_start = i
+                depth += 1
+                stack.append(ch == 0x5B)
+            elif ch == 0x5D or ch == 0x7D:
+                want_open = ch == 0x5D
+                if not stack or stack[-1] != want_open:
+                    raise _JsonMalformedError("unbalanced brackets")
+                yield_depth = 1 if array_mode else 0
+                if started and depth == yield_depth + 1 and composite:
+                    yield bytes(data[value_start:i + 1])
+                    started = False
+                elif started and depth == yield_depth and not composite:
+                    yield bytes(data[value_start:i])
+                    started = False
+                stack.pop()
+                depth -= 1
+                if array_mode and depth == 0:
+                    closed_top = True
+            else:
+                if closed_top:
+                    raise _JsonMalformedError(
+                        "trailing content after top-level array"
+                    )
+                if not started:
+                    if array_mode is None and depth == 0:
+                        array_mode = False
+                    started = True
+                    composite = False
+                    value_start = i
+            i += 1
+        scanned = n
+        if eof:
+            break
+        if started:
+            del data[:value_start]
+            scanned -= value_start
+            value_start = 0
+        else:
+            data.clear()
+            scanned = 0
+    if in_string or escape:
+        raise _JsonMalformedError("input ends inside a string")
+    if array_mode and not closed_top:
+        raise _JsonMalformedError("input ends inside a top-level array")
+    if started:
+        if depth == (1 if array_mode else 0):
+            yield bytes(data[value_start:])
+        else:
+            raise _JsonMalformedError("input ends inside a JSON value")
 
 
 @celery_app.task(
@@ -54,7 +186,11 @@ def profile_file(self, file_id: str) -> dict:
         was_sampled = bool(df.attrs.get("_pipelineiq_sampled"))
 
         profile = profile_dataframe(df)
-        completeness = compute_completeness(df)
+        # M-142: derive completeness from the profile's per-column
+        # null_counts instead of a second full isna pass over the frame.
+        # Exactly equal to compute_completeness(df) (covered by
+        # test_profile_single_pass.py).
+        completeness = _completeness_from_profile(profile, len(df))
 
         if was_sampled:
             for col_profile in profile.values():
@@ -155,17 +291,40 @@ def _load_file_from_disk(file_id: str) -> pd.DataFrame:
         db.close()
 
 
+def _completeness_from_profile(profile: dict, row_count: int) -> float:
+    """Overall completeness derived from a single profile pass (M-142).
+
+    profile_dataframe() already counts nulls per column; reusing those
+    counts avoids a second full-frame isna pass. Exactly equivalent to
+    compute_completeness(df): sum of per-column null_count equals
+    df.isna().sum().sum(), and an empty frame/columns yields 100.0.
+    """
+    if row_count == 0 or not profile:
+        return 100.0
+    total_cells = row_count * len(profile)
+    null_cells = sum(col.get("null_count", 0) for col in profile.values())
+    return round(100.0 - (null_cells / total_cells * 100), 2)
+
+
 def _read_profile_dataframe(handle, extension: str, max_rows: int | None) -> pd.DataFrame:
     if extension == ".csv":
         return pd.read_csv(handle, nrows=max_rows)
     if extension == ".json":
         if max_rows is None:
             return pd.read_json(handle)
-        try:
-            return pd.read_json(handle, lines=True, nrows=max_rows)
-        except ValueError:
-            handle.seek(0)
-            return pd.read_json(handle).head(max_rows)
+        # Stream records so sampling never parses the whole file (M-017).
+        records = []
+        for raw in _iter_json_raw_values(handle):
+            try:
+                value = orjson.loads(raw)
+            except ValueError as exc:
+                raise ValueError(f"invalid JSON value: {exc}") from exc
+            records.append(value)
+            if len(records) >= max_rows:
+                break
+        if not records:
+            return pd.DataFrame()
+        return pd.DataFrame(records)
     if extension == ".parquet":
         if max_rows is None:
             return pd.read_parquet(handle)
@@ -185,8 +344,6 @@ def _read_profile_dataframe(handle, extension: str, max_rows: int | None) -> pd.
             if rows >= max_rows:
                 break
         return pa.concat_tables(tables).to_pandas() if tables else pd.DataFrame()
-    if extension == ".xlsx":
-        return pd.read_excel(handle, engine="openpyxl", nrows=max_rows)
     raise ValueError(f"Unsupported file format: {extension}")
 
 

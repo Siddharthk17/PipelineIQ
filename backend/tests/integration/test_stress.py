@@ -29,6 +29,12 @@ def stress_client(test_db: Session, tmp_path):
 
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()
+    saved = (
+        file_settings.UPLOAD_DIR,
+        file_settings.ALLOWED_EXTENSIONS,
+        file_settings.MAX_UPLOAD_SIZE,
+        file_settings.MAX_ROWS_PER_FILE,
+    )
     file_settings.UPLOAD_DIR = upload_dir
     file_settings.ALLOWED_EXTENSIONS = frozenset({".csv", ".json"})
     file_settings.MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # Increase for stress test
@@ -38,10 +44,21 @@ def stress_client(test_db: Session, tmp_path):
 
     from backend.api.pipelines import execute_pipeline_task
 
+    real_delay = execute_pipeline_task.delay
     execute_pipeline_task.delay = MagicMock(
         return_value=MagicMock(id="mock-task-id"))
 
-    return TestClient(app)
+    try:
+        yield TestClient(app)
+    finally:
+        (
+            file_settings.UPLOAD_DIR,
+            file_settings.ALLOWED_EXTENSIONS,
+            file_settings.MAX_UPLOAD_SIZE,
+            file_settings.MAX_ROWS_PER_FILE,
+        ) = saved
+        execute_pipeline_task.delay = real_delay
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture()

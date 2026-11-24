@@ -114,3 +114,87 @@ def _run(client, url):
             client, url, content=b"{}", headers={"Content-Type": "x"}
         )
     )
+
+
+class TestS2003SyncPinning:
+    """S2-003: sync webhook/Slack delivery pins DNS + fetches no redirects."""
+
+    def test_sync_delivery_posts_to_pinned_ip_with_host(
+            self, monkeypatch):
+        import backend.services.webhook_service as ws
+        from backend.models import Webhook
+
+        calls = {}
+
+        class FakeResp:
+            status_code = 200
+            text = "ok"
+
+        class FakeClient:
+            def __init__(self, *a, **k):
+                calls["client_kw"] = k
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, url, content=None, headers=None, extensions=None):
+                calls.update(
+                    url=url, headers=headers, extensions=extensions)
+                return FakeResp()
+
+        monkeypatch.setattr(
+            "backend.services.webhook_service.pin_url_to_validated_ip",
+            lambda url: ("https://93.184.216.34/hook", "hooks.example.test", {}),
+        )
+        monkeypatch.setattr(
+            "backend.services.webhook_service.validate_public_http_url",
+            lambda url: url,
+        )
+        import httpx as _httpx
+
+        monkeypatch.setattr(_httpx, "Client", FakeClient)
+        import uuid as uuid_module
+        hook = Webhook(
+            id=uuid_module.uuid4(), user_id=uuid_module.uuid4(),
+            url="https://hooks.example.test/hook", events=["x"])
+        from unittest.mock import MagicMock
+        db = MagicMock()
+        ws.deliver_webhook_sync(hook, "ping", {"data": {}}, db=db)
+        assert calls["url"] == "https://93.184.216.34/hook"
+        assert calls["headers"]["Host"] == "hooks.example.test"
+        assert calls["client_kw"].get("follow_redirects") is False
+
+    def test_slack_posts_pinned_without_redirects(self, monkeypatch):
+        import httpx as real_httpx
+
+        import backend.services.notification_service as ns
+
+        calls = {}
+
+        class FakeResp:
+            status_code = 200
+            text = "ok"
+
+        def fake_post(url, json=None, headers=None, timeout=None,
+                      follow_redirects=None):
+            calls.update(
+                url=url, headers=headers, follow_redirects=follow_redirects)
+            return FakeResp()
+
+        monkeypatch.setattr(
+            "backend.services.notification_service.pin_url_to_validated_ip",
+            lambda url: ("https://1.2.3.4/services/AAA", "hooks.slack.com", {}),
+        )
+        monkeypatch.setattr(
+            "backend.services.notification_service.validate_public_http_url",
+            lambda url: url,
+        )
+        monkeypatch.setattr(real_httpx, "post", fake_post)
+        assert ns.send_slack_notification(
+            "https://hooks.slack.com/services/AAA", "hi") is True
+        assert calls["url"] == "https://1.2.3.4/services/AAA"
+        assert calls["headers"] == {"Host": "hooks.slack.com"}
+        assert calls["follow_redirects"] is False

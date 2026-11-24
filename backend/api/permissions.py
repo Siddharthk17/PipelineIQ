@@ -8,11 +8,18 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from backend.api.authz import require_pipeline_owner
 from backend.auth import get_current_user
 from backend.dependencies import get_read_db_dependency, get_write_db_dependency
-from backend.models import PermissionLevel, PipelinePermission, User
+from backend.models import (
+    PermissionLevel,
+    PipelineContract,
+    PipelinePermission,
+    User,
+)
 from backend.services.audit_service import log_action
 from backend.utils.uuid_utils import as_uuid, validate_uuid_format
 
@@ -59,23 +66,14 @@ def _permission_to_response(perm: PipelinePermission) -> PermissionResponse:
     )
 
 
-def _require_owner(db: Session, pipeline_name: str, user: User) -> None:
-    """Raise 403 if the user is not an owner of the pipeline."""
-    owner_perm = (
-        db.query(PipelinePermission)
-        .filter(
-            PipelinePermission.pipeline_name == pipeline_name,
-            PipelinePermission.user_id == user.id,
-            PipelinePermission.permission_level == PermissionLevel.OWNER,
-        )
-        .first()
-    )
-    # Also allow admins
-    if not owner_perm and user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only pipeline owners or admins can manage permissions",
-        )
+def _require_owner(db: Session, pipeline_name: str, user: User) -> str:
+    """Raise 403 if the user is not an owner of the pipeline.
+
+    Delegates to the shared :func:`require_pipeline_owner` helper (M-093)
+    and returns the canonical pipeline name. Kept as a thin wrapper for
+    backward compatibility with existing importers.
+    """
+    return require_pipeline_owner(db, user, pipeline_name)
 
 
 @router.post(
@@ -92,14 +90,14 @@ def grant_permission(
     current_user: User = Depends(get_current_user),
 ) -> PermissionResponse:
     """Grant a user permission on a specific pipeline (owner only)."""
-    _require_owner(db, pipeline_name, current_user)
+    pipeline_name = _require_owner(db, pipeline_name, current_user)
 
     try:
         level = PermissionLevel(body.permission_level)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid permission level '{body.permission_level}'. Must be 'owner', 'runner', or 'viewer'.",
+            detail="Invalid permission level. Must be 'owner', 'runner', or 'viewer'.",
         ) from exc
 
     validate_uuid_format(body.user_id)
@@ -110,7 +108,9 @@ def grant_permission(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Target user not found")
 
-    # Check if permission already exists
+    # Re granting the same level is an explicit conflict, not a silent
+    # no-op (M-153). Changing the level is an explicit role change and is
+    # audited like the initial grant (M-150).
     existing = (
         db.query(PipelinePermission)
         .filter(
@@ -119,11 +119,34 @@ def grant_permission(
         )
         .first()
     )
-    if existing:
-        # Update existing permission
+    if existing is not None and existing.permission_level == level:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="User already holds this permission level on the pipeline.",
+        )
+    if existing is not None:
+        old_level = (
+            existing.permission_level.value
+            if hasattr(existing.permission_level, "value")
+            else str(existing.permission_level)
+        )
         existing.permission_level = level
         db.commit()
         db.refresh(existing)
+        log_action(
+            db,
+            "permission_updated",
+            user_id=current_user.id,
+            resource_type="pipeline_permission",
+            resource_id=existing.id,
+            details={
+                "pipeline_name": pipeline_name,
+                "target_user": body.user_id,
+                "old_level": old_level,
+                "level": body.permission_level,
+            },
+            request=request,
+        )
         return _permission_to_response(existing)
 
     perm = PipelinePermission(
@@ -132,7 +155,29 @@ def grant_permission(
         permission_level=level,
     )
     db.add(perm)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Lost a concurrent grant race (M-105): another request inserted
+        # the same (pipeline, user) row between our check and our insert.
+        # Roll back and report an explicit conflict instead of 500ing; the
+        # caller retries and then sees the current level via GET.
+        db.rollback()
+        existing = (
+            db.query(PipelinePermission)
+            .filter(
+                PipelinePermission.pipeline_name == pipeline_name,
+                PipelinePermission.user_id == as_uuid(body.user_id),
+            )
+            .first()
+        )
+        if existing is None:
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Permission was granted concurrently; fetch the current "
+            "grant and retry if a change is still needed.",
+        ) from None
     db.refresh(perm)
 
     log_action(
@@ -164,7 +209,7 @@ def list_permissions(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """List all permission entries for a specific pipeline (owner/admin only)."""
-    _require_owner(db, pipeline_name, current_user)
+    pipeline_name = _require_owner(db, pipeline_name, current_user)
     permissions = (
         db.query(PipelinePermission)
         .filter(PipelinePermission.pipeline_name == pipeline_name)
@@ -190,7 +235,7 @@ def revoke_permission(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Revoke a user's permission on a specific pipeline (owner only)."""
-    _require_owner(db, pipeline_name, current_user)
+    pipeline_name = _require_owner(db, pipeline_name, current_user)
     validate_uuid_format(user_id)
 
     perm = (
@@ -205,6 +250,36 @@ def revoke_permission(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Permission not found")
+
+    # Last-owner guard (M-153): revoking the final OWNER grant would orphan
+    # the pipeline with no one able to administer it. Refuse unless another
+    # ownership path (a second OWNER grant or a contract owner) remains.
+    perm_level = (
+        perm.permission_level.value
+        if hasattr(perm.permission_level, "value")
+        else str(perm.permission_level)
+    )
+    if perm_level == "owner":
+        remaining_owners = (
+            db.query(PipelinePermission.id)
+            .filter(
+                PipelinePermission.pipeline_name == pipeline_name,
+                PipelinePermission.permission_level == PermissionLevel.OWNER,
+                PipelinePermission.user_id != as_uuid(user_id),
+            )
+            .first()
+        )
+        contract_owner = (
+            db.query(PipelineContract.id)
+            .filter(PipelineContract.pipeline_name == pipeline_name)
+            .first()
+        )
+        if remaining_owners is None and contract_owner is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot revoke the last owner grant on a pipeline; "
+                "transfer ownership first.",
+            )
 
     db.delete(perm)
     db.commit()

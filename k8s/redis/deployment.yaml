@@ -16,9 +16,12 @@ spec:
       labels:
         app: redis-broker
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: redis:7.4.2-alpine
           env:
             - name: REDIS_PASSWORD
               valueFrom:
@@ -81,9 +84,12 @@ spec:
       labels:
         app: redis-pubsub
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: redis:7.4.2-alpine
           env:
             - name: REDIS_PASSWORD
               valueFrom:
@@ -138,9 +144,12 @@ spec:
       labels:
         app: redis-cache
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: redis:7.4.2-alpine
           env:
             - name: REDIS_PASSWORD
               valueFrom:
@@ -199,9 +208,12 @@ spec:
       labels:
         app: redis-yjs
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: redis:7.4.2-alpine
           env:
             - name: REDIS_PASSWORD
               valueFrom:

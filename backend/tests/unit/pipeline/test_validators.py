@@ -192,3 +192,34 @@ class TestValidationEdgeCases:
         )
         assert response.status_code == 200
         assert response.json()["is_valid"] is True
+
+
+class TestC2004NotEmptyNulls:
+    """C2-004: not_empty must flag NULLs, not just ''/'  '."""
+
+    def test_none_and_nan_fail_not_empty(self):
+        import pandas as pd
+
+        from backend.pipeline.validators import execute_validate
+
+        df = pd.DataFrame({"nick": ["", "  ", None, "x"]})
+        result = execute_validate(
+            df, [{"column": "nick", "check": "not_empty"}], "t")
+        assert result.passed is False
+        assert result.rule_results[0].failing_count == 3
+
+
+class TestS2008NestedQuantifierRejected:
+    """S2-008: validator-side patterns reject ReDoS shapes fail-closed."""
+
+    def test_nested_quantifier_fails_without_eval(self):
+        import pandas as pd
+
+        from backend.pipeline.validators import execute_validate
+
+        df = pd.DataFrame({"x": ["aaa", "b"]})
+        result = execute_validate(
+            df, [{"column": "x", "check": "matches_pattern",
+                  "pattern": "(a+)+$"}], "t")
+        assert result.passed is False
+        assert "nested quantifiers" in result.rule_results[0].message

@@ -53,7 +53,11 @@ def is_safe_filename(filename: str) -> bool:
     """Check if a filename is safe and doesn't contain path traversal attempts.
 
     Returns False if filename contains '..' or any path separators.
+    Non-string input is never a safe filename: return False instead of
+    raising TypeError so validation fails closed on type confusion.
     """
+    if not isinstance(filename, str):
+        return False
     if not filename:
         return False
     return not (".." in filename or "/" in filename or "\\" in filename)

@@ -25,6 +25,7 @@ from sqlalchemy import (
     Uuid,
     event,
     func,
+    text,
 )
 from sqlalchemy import (
     Enum as SQLEnum,
@@ -121,7 +122,7 @@ class PipelineRun(Base):
     total_rows_out: Mapped[int | None] = mapped_column(
         Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    user_id: Mapped[str | None] = mapped_column(
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     celery_task_id: Mapped[str | None] = mapped_column(
@@ -134,7 +135,19 @@ class PipelineRun(Base):
         "pipeline_schedules.id", ondelete="SET NULL"), nullable=True)
 
     __table_args__ = (
+        # ix_ variant (ASC) predates 1a158ef49016 and was never dropped;
+        # idx_ variants (DESC) are restored by 0020 (M-035).
         Index("ix_pipeline_runs_user_created", "user_id", "created_at"),
+        Index(
+            "idx_pipeline_runs_user_created",
+            "user_id",
+            text("created_at DESC"),
+        ),
+        Index(
+            "idx_pipeline_runs_pipeline_name",
+            "name",
+            text("created_at DESC"),
+        ),
         Index("ix_pipeline_runs_status_created", "status", "created_at"),
     )
 
@@ -212,6 +225,10 @@ class StepResult(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
+    __table_args__ = (
+        Index("idx_step_results_run_id", "pipeline_run_id", "step_index"),
+    )
+
     pipeline_run: Mapped["PipelineRun"] = relationship(
         "PipelineRun", back_populates="step_results"
     )
@@ -238,6 +255,10 @@ class LineageGraph(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
+    __table_args__ = (
+        Index("idx_lineage_graphs_run_id", "pipeline_run_id"),
+    )
+
     pipeline_run: Mapped["PipelineRun"] = relationship(
         "PipelineRun", back_populates="lineage_graph"
     )
@@ -252,7 +273,7 @@ class HealingAttempt(Base):
         Uuid, primary_key=True, default=_generate_uuid)
     run_id: Mapped[uuid.UUID] = mapped_column(
         "pipeline_run_id",
-        Uuid, ForeignKey("pipeline_runs.id"), nullable=False, index=True
+        Uuid, ForeignKey("pipeline_runs.id"), nullable=False
     )
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[HealingAttemptStatus] = mapped_column(
@@ -275,7 +296,7 @@ class HealingAttempt(Base):
     gemini_patch = mapped_column(PgJSONB, nullable=True)
     sandbox_result = mapped_column(PgJSONB, nullable=True)
     applied: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     confidence: Mapped[float | None] = mapped_column(
         Numeric(5, 4), nullable=True)
@@ -306,6 +327,15 @@ class HealingAttempt(Base):
     pipeline_run_id = synonym("run_id")
     failed_step_name = synonym("failed_step")
 
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id", "attempt_number",
+            name="uq_healing_attempts_run_attempt",
+        ),
+        Index("ix_healing_attempts_pipeline_run_id", "pipeline_run_id"),
+        Index("ix_healing_attempts_applied", "applied"),
+    )
+
     pipeline_run: Mapped["PipelineRun"] = relationship(
         "PipelineRun", back_populates="healing_attempts"
     )
@@ -331,16 +361,23 @@ class UploadedFile(Base):
     columns: Mapped[list] = mapped_column(PgJSONB, nullable=False)
     dtypes: Mapped[dict] = mapped_column(PgJSONB, nullable=False)
     version: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1, server_default="1"
+        Integer, nullable=False, default=1, server_default=text("1")
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    previous_version_id: Mapped[str | None] = mapped_column(
+    previous_version_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("uploaded_files.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_uploaded_files_original_filename", "original_filename"),
+        # Supports the periodic orphan-sweep query (M-107): unreferenced
+        # rows older than the retention horizon, oldest first.
+        Index("ix_uploaded_files_created_at", "created_at"),
     )
 
     schema_snapshots: Mapped[list["SchemaSnapshot"]] = relationship(
@@ -400,13 +437,26 @@ class User(Base):
 
     __tablename__ = "users"
 
+    # Explicit names (M-079): PG auto-generates these exact names for
+    # column-level unique=True, but an unnamed metadata constraint can
+    # never be matched, dropped, or compared by name. Declaring them
+    # keeps metadata, autogenerate, and the DB identical.
+    __table_args__ = (
+        UniqueConstraint("email", name="users_email_key"),
+        UniqueConstraint("username", name="users_username_key"),
+        # Unique *indexes* (kept from 1a158ef49016): the lookup path for
+        # login/identity queries. unique=True here mirrors the DB.
+        Index("ix_users_email", "email", unique=True),
+        Index("ix_users_username", "username", unique=True),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     email: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False, index=True
+        String(255), nullable=False
     )
     username: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False, index=True
+        String(100), nullable=False
     )
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(
@@ -444,7 +494,7 @@ class Webhook(Base):
         default=lambda: ["pipeline_completed", "pipeline_failed"],
     )
     is_active: Mapped[bool] = mapped_column(
-        Boolean, server_default="true", default=True
+        Boolean, server_default=text("true"), default=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -497,7 +547,7 @@ class AuditLog(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
-    user_id: Mapped[str | None] = mapped_column(
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     action: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -544,7 +594,7 @@ class PipelineSchedule(Base):
     cron_human: Mapped[str | None] = mapped_column(
         String(200), nullable=True)
     is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
     last_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -555,18 +605,31 @@ class PipelineSchedule(Base):
     last_run_status: Mapped[str | None] = mapped_column(
         String(20), nullable=True)
     total_runs: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     successful_runs: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     failed_runs: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     healed_runs: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        # Partial index: only active schedules are scanned by Celery Beat.
+        # sqlite_where keeps the dev/test (create_all) path working (M-097).
+        Index(
+            "idx_pipeline_schedules_active",
+            "is_active",
+            "next_run_at",
+            postgresql_where=text("is_active = true"),
+            sqlite_where=text("is_active"),
+        ),
+        Index("idx_pipeline_schedules_user", "user_id", "created_at"),
     )
 
 
@@ -588,6 +651,10 @@ class ScheduleRun(Base):
     duration_seconds: Mapped[int | None
                              ] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index("idx_schedule_runs_schedule_id", "schedule_id", "triggered_at"),
+    )
 
 
 class NotificationConfig(Base):
@@ -616,7 +683,7 @@ class NotificationConfig(Base):
         default=lambda: ["pipeline_completed", "pipeline_failed"],
     )
     is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true"
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -648,11 +715,28 @@ class PipelinePermission(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
+    __table_args__ = (
+        # Restored (was dropped by 1a158ef49016): one owner grant per
+        # (pipeline, user). Name matches the original PG constraint so
+        # downgrade/upgrade round-trips stay stable.
+        UniqueConstraint(
+            "pipeline_name", "user_id",
+            name="pipeline_permissions_pipeline_name_user_id_key",
+        ),
+    )
+
 
 class FileProfile(Base):
     """Automatic data profile computed for each uploaded file."""
 
     __tablename__ = "file_profiles"
+
+    __table_args__ = (
+        # Restored (was dropped by 1a158ef49016): the ORIGINAL definition
+        # is a unique *index*, not a table constraint — keep exactly that
+        # so metadata matches the database (M-172).
+        Index("idx_file_profiles_file_id", "file_id", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
@@ -660,7 +744,6 @@ class FileProfile(Base):
         Uuid,
         ForeignKey("uploaded_files.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
     )
     computed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -676,19 +759,72 @@ class FileProfile(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class StorageEvent(Base):
+    """Arrow data-bus tier event (hot/warm/cold writes, reads, evictions).
+
+    Mirrors backend/alembic/versions/i1a2b3c4d5e8_add_storage_events.py
+    exactly (table, columns, check constraints, indexes). The event logger
+    and tier-health endpoints use raw SQL against this table; the model
+    exists so create_all/migrations stay in sync (M-172).
+    """
+
+    __tablename__ = "storage_events"
+
+    __table_args__ = (
+        CheckConstraint(
+            "event_type IN ('write_hot','write_warm','write_cold',"
+            "'read_hot','read_warm','read_cold',"
+            "'evict_hot_to_warm','evict_warm_to_cold',"
+            "'cleanup_run','lifecycle_expire')",
+            name="ck_storage_event_type",
+        ),
+        CheckConstraint(
+            "tier IN ('hot','warm','cold')",
+            name="ck_storage_tier",
+        ),
+        Index("idx_storage_events_run", "run_id"),
+        Index("idx_storage_events_time", "created_at"),
+        Index("idx_storage_events_tier", "tier", "event_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=_generate_uuid)
+    run_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    step_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    tier: Mapped[str] = mapped_column(String(10), nullable=False)
+    payload_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    object_name: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+
 class WasmModule(Base):
     """Registered WebAssembly UDF module for wasm_compute pipeline steps.
 
     Modules are stored in MinIO/S3 and referenced by pipeline YAML configs.
     Each module is validated on upload (exports, fuel budget, no WASI imports).
+
+    Names are unique per owning user (M-154), not globally: two tenants
+    may each register a module called e.g. ``clean`` without colliding or
+    probing each other's names through 500s/409s.
     """
 
     __tablename__ = "wasm_modules"
 
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "name",
+            name="uq_wasm_modules_user_name",
+        ),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=_generate_uuid)
     name: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False, index=True)
+        String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     storage_key: Mapped[str] = mapped_column(
         String(512), nullable=False, unique=True)
@@ -700,9 +836,9 @@ class WasmModule(Base):
     fuel_budget: Mapped[int] = mapped_column(
         Integer, nullable=False, default=10_000_000)
     pipeline_usage_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0")
+        Integer, nullable=False, default=0, server_default=text("0"))
     is_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true")
+        Boolean, nullable=False, default=True, server_default=text("true"))
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -722,13 +858,13 @@ class StreamingStats(Base):
         Uuid, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), primary_key=True
     )
     batches_processed: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="0")
+        Integer, nullable=False, server_default=text("0"))
     messages_processed: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, server_default="0")
+        BigInteger, nullable=False, server_default=text("0"))
     messages_failed: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, server_default="0")
+        BigInteger, nullable=False, server_default=text("0"))
     messages_dlq: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, server_default="0")
+        BigInteger, nullable=False, server_default=text("0"))
     throughput_per_sec: Mapped[float | None] = mapped_column(
         Float, nullable=True)
     consumer_lag: Mapped[int | None] = mapped_column(
@@ -747,12 +883,12 @@ class DataAsset(Base):
     __tablename__ = "data_assets"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, server_default=func.gen_random_uuid())
+        Uuid, primary_key=True, default=_generate_uuid)
     asset_type: Mapped[str] = mapped_column(String(20), nullable=False)
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     namespace: Mapped[str] = mapped_column(String(500), nullable=False)
     metadata_: Mapped[dict | None] = mapped_column(
-        "metadata", PgJSONB, nullable=True, server_default="{}")
+        "metadata", PgJSONB, nullable=True, server_default=text("'{}'"))
     owner_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -767,6 +903,17 @@ class DataAsset(Base):
             "asset_type IN ('file', 'column', 'pipeline', 'topic')",
             name="ck_data_assets_type",
         ),
+        # Restored (were dropped by 1a158ef49016). The trigram GIN index
+        # needs pg_trgm (created by the migration); on SQLite create_all
+        # renders a plain btree index with the same name (M-097).
+        Index(
+            "idx_data_assets_name_trgm",
+            "name",
+            postgresql_using="gin",
+            postgresql_ops={"name": "gin_trgm_ops"},
+        ),
+        Index("idx_data_assets_type", "asset_type"),
+        Index("idx_data_assets_owner", "owner_id"),
     )
 
 
@@ -776,7 +923,7 @@ class AssetRelationship(Base):
     __tablename__ = "asset_relationships"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, server_default=func.gen_random_uuid())
+        Uuid, primary_key=True, default=_generate_uuid)
     source_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("data_assets.id", ondelete="CASCADE"), nullable=False)
     target_id: Mapped[uuid.UUID] = mapped_column(
@@ -792,4 +939,8 @@ class AssetRelationship(Base):
             "relation IN ('reads_from', 'writes_to', 'transforms', 'joins')",
             name="ck_asset_rel_relation",
         ),
+        # Restored (were dropped by 1a158ef49016).
+        Index("idx_asset_rel_source", "source_id"),
+        Index("idx_asset_rel_target", "target_id"),
+        Index("idx_asset_rel_source_pipeline", "source_id", "pipeline_name"),
     )

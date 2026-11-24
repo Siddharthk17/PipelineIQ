@@ -88,12 +88,13 @@ def export_all_openlineage(
     """
     completed_statuses = ["COMPLETED", "HEALED"]
 
+    query = select(PipelineRun).where(
+        PipelineRun.status.in_(completed_statuses)
+    )
+    if current_user.role != "admin":
+        query = query.where(PipelineRun.user_id == current_user.id)
     result = db.execute(
-        select(PipelineRun)
-        .where(PipelineRun.user_id == current_user.id)
-        .where(PipelineRun.status.in_(completed_statuses))
-        .order_by(PipelineRun.created_at.desc())
-        .limit(limit)
+        query.order_by(PipelineRun.created_at.desc()).limit(limit)
     )
     runs = result.scalars().all()
 

@@ -12,6 +12,7 @@ checks the current status and only proceeds if PENDING.
 import contextlib
 import logging
 import re
+import uuid as uuid_lib
 
 import orjson
 from redis.exceptions import RedisError
@@ -252,6 +253,7 @@ def check_and_enforce_contract(
                     db,
                     pipeline_run.name or "",
                     active_contract.consumers or [],
+                    owner_id=active_contract.user_id,
                 )
             logger.warning("%s", report.summary)
 
@@ -271,22 +273,31 @@ def check_and_enforce_contract(
 def execute_pipeline_task(self, run_id: str) -> dict[str, str]:
     """Execute a pipeline run asynchronously.
 
-    This task is idempotent: if the run_id already has a non-PENDING
-    status, the task logs a warning and returns early.
+    Task-level idempotency (M-033): the PENDING -> RUNNING transition is
+    claimed with a single conditional UPDATE, so concurrent duplicate
+    deliveries race on the database row instead of check-then-act in
+    Python. Only the claim winner executes; losers return the current
+    status without touching Arrow state or result tables.
     """
     db = SessionLocal()
+    claimed = False
     try:
-        pipeline_run = db.query(PipelineRun).filter(
-            PipelineRun.id == run_id).first()
-
+        pipeline_run = _try_claim_run(
+            db, run_id, getattr(self.request, "id", None))
         if pipeline_run is None:
-            logger.error("Pipeline run %s not found in database", run_id)
-            return {"run_id": run_id, "status": "NOT_FOUND"}
-
-        if not _should_execute(pipeline_run):
-            return {"run_id": run_id, "status": pipeline_run.status.value}
-
-        pipeline_run.celery_task_id = self.request.id
+            existing = db.query(PipelineRun).filter(
+                PipelineRun.id == _coerce_run_uuid(run_id)).first()
+            if existing is None:
+                logger.error(
+                    "Pipeline run %s not found in database", run_id)
+                return {"run_id": run_id, "status": "NOT_FOUND"}
+            logger.warning(
+                "Duplicate delivery for run %s (status %s); skipping",
+                run_id,
+                existing.status.value,
+            )
+            return {"run_id": run_id, "status": existing.status.value}
+        claimed = True
 
         # Capture OpenTelemetry trace context for distributed tracing
         try:
@@ -294,12 +305,11 @@ def execute_pipeline_task(self, run_id: str) -> dict[str, str]:
             span_ctx = current_span_context()
             if span_ctx.get("trace_id"):
                 pipeline_run.trace_id = span_ctx["trace_id"]
+                db.commit()
         except Exception:
             logger.debug("Failed to capture OTel trace context", exc_info=True)
+            db.rollback()
 
-        db.commit()
-
-        _mark_running(db, pipeline_run)
         summary = _execute_with_autonomous_healing(db, pipeline_run)
         _persist_results(db, pipeline_run, summary)
     except Exception as exc:
@@ -309,32 +319,118 @@ def execute_pipeline_task(self, run_id: str) -> dict[str, str]:
             exc,
             exc_info=True,
         )
-        safe_error = _sanitize_error_message(exc) or ""
-        _mark_failed(db, run_id, safe_error)
-        _publish_terminal_event(
-            run_id,
-            "pipeline_failed",
-            PipelineStatus.FAILED.value,
-            safe_error,
-        )
+        # R-R-004/R2-003: a user cancel landing mid-run (e.g. inside
+        # healing/LLM) must not be clobbered into FAILED. Re-read the row
+        # under a row lock on PG (like _persist_results): if the run is
+        # CANCELLED, the worker lost the race — keep the user's verdict.
+        # _mark_failed below is additionally conditional, so even a cancel
+        # landing between this read and the write still wins.
+        db.expire_all()
+        status_q = db.query(PipelineRun.status).filter(
+            PipelineRun.id == run_id)
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            status_q = status_q.with_for_update()
+        cancelled = status_q.scalar()
+        if str(cancelled) == PipelineStatus.CANCELLED.value or (
+            hasattr(cancelled, "value")
+            and cancelled.value == PipelineStatus.CANCELLED.value
+        ):
+            logger.info(
+                "Run %s was cancelled during execution; keeping CANCELLED",
+                run_id,
+            )
+        else:
+            safe_error = _sanitize_error_message(exc) or ""
+            _mark_failed(db, run_id, safe_error)
+            _publish_terminal_event(
+                run_id,
+                "pipeline_failed",
+                PipelineStatus.FAILED.value,
+                safe_error,
+            )
         raise
     else:
         return {"run_id": run_id, "status": pipeline_run.status.value}
     finally:
-        try:
-            from backend.execution.arrow_bus import get_arrow_bus
+        if claimed:
+            # Only the claim winner owns Arrow bus state; a duplicate
+            # delivery that lost the claim must not wipe the winner's
+            # in-flight tables (M-033).
+            try:
+                from backend.execution.arrow_bus import get_arrow_bus
 
-            cleanup_result = get_arrow_bus().cleanup_run(run_id)
-            logger.info(
-                "Arrow bus cleanup: run_id=%s, hot=%d, warm=%d, cold=%d",
-                run_id[:16],
-                cleanup_result.get("hot", 0),
-                cleanup_result.get("warm", 0),
-                cleanup_result.get("cold", 0),
-            )
-        except Exception:
-            logger.debug("Arrow bus cleanup skipped for run_id=%s", run_id)
+                cleanup_result = get_arrow_bus().cleanup_run(run_id)
+                logger.info(
+                    "Arrow bus cleanup: run_id=%s, hot=%d, warm=%d, cold=%d",
+                    run_id[:16],
+                    cleanup_result.get("hot", 0),
+                    cleanup_result.get("warm", 0),
+                    cleanup_result.get("cold", 0),
+                )
+            except Exception:
+                logger.debug("Arrow bus cleanup skipped for run_id=%s", run_id)
         db.close()
+
+
+def _coerce_run_uuid(run_id: object) -> uuid_lib.UUID | None:
+    """Coerce a run id to UUID (Uuid columns need real UUIDs on SQLite)."""
+    if isinstance(run_id, uuid_lib.UUID):
+        return run_id
+    try:
+        return uuid_lib.UUID(str(run_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _try_claim_run(db, run_id: str, celery_task_id: str | None):
+    """Atomically claim a PENDING run for execution (M-033).
+
+    A single conditional UPDATE moves PENDING -> RUNNING. Concurrent
+    duplicate deliveries serialize on the row: exactly one sees
+    rowcount 1 (winner); the rest see 0 and return None (losers).
+    Returns the claimed run, or None when the run is missing or
+    already claimed.
+    """
+    from sqlalchemy import update
+
+    run_uuid = _coerce_run_uuid(run_id)
+    if run_uuid is None:
+        return None
+    try:
+        result = db.execute(
+            update(PipelineRun)
+            .where(
+                PipelineRun.id == run_uuid,
+                PipelineRun.status == PipelineStatus.PENDING,
+            )
+            .values(
+                status=PipelineStatus.RUNNING,
+                started_at=utcnow(),
+                celery_task_id=celery_task_id,
+            )
+        )
+        if result.rowcount != 1:
+            db.rollback()
+            return None
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "Failed to claim pipeline run %s", run_id, exc_info=True)
+        return None
+    claimed_run = db.query(PipelineRun).filter(
+        PipelineRun.id == run_uuid).first()
+    if claimed_run is None or claimed_run.status != PipelineStatus.RUNNING:
+        return None
+    _cache_progress_payload(
+        str(claimed_run.id),
+        {
+            "run_id": str(claimed_run.id),
+            "event_type": "pipeline_started",
+            "status": PipelineStatus.RUNNING.value,
+        },
+    )
+    return claimed_run
 
 
 def _should_execute(pipeline_run: PipelineRun) -> bool:
@@ -365,16 +461,31 @@ def _mark_running(db, pipeline_run: PipelineRun) -> None:
 
 
 def _mark_failed(db, run_id: str, error_message: str) -> None:
-    """Mark a pipeline run as FAILED in the database."""
+    """Mark a pipeline run as FAILED in the database.
+
+    R2-003: a concurrent user cancel must win. The UPDATE is conditional
+    on the run NOT being CANCELLED, so a cancel that landed between the
+    worker's last read and this write is never clobbered into FAILED.
+    """
     safe_error = _sanitize_error_message(error_message) or ""
     try:
-        pipeline_run = db.query(PipelineRun).filter(
-            PipelineRun.id == run_id).first()
-        if pipeline_run:
-            pipeline_run.status = PipelineStatus.FAILED
-            pipeline_run.completed_at = utcnow()
-            pipeline_run.error_message = safe_error
-            db.commit()
+        updated = (
+            db.query(PipelineRun)
+            .filter(
+                PipelineRun.id == run_id,
+                PipelineRun.status != PipelineStatus.CANCELLED,
+            )
+            .update(
+                {
+                    "status": PipelineStatus.FAILED,
+                    "completed_at": utcnow(),
+                    "error_message": safe_error,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        if updated == 1:
             _cache_progress_payload(
                 run_id,
                 {
@@ -384,18 +495,27 @@ def _mark_failed(db, run_id: str, error_message: str) -> None:
                     "error_message": safe_error,
                 },
             )
+        else:
+            db.expire_all()
     except Exception:
         logger.exception("Failed to mark pipeline %s as FAILED", run_id)
         db.rollback()
 
 
 def _load_wasm_modules(
-    db, wasm_ids: set[str]
+    db, wasm_ids: set[str], owner_id=None,
 ) -> dict[str, bytes]:
     """Load Wasm module binaries from MinIO/S3 storage.
 
     Returns a dict mapping wasm_file_id to raw .wasm binary bytes.
     Only loads modules that are active and belong to the query set.
+
+    S2-001: scoped to the run owner. Save-time gates
+    (``assert_wasm_ids_owned``) check ownership, but the worker trusted
+    stored YAML outright — any stored YAML reaching the worker with a
+    foreign id (pre-gate rows, healing/migration mutations) executed
+    another tenant's bytes. UUIDs are unguessable so exploitation needs
+    a UUID-disclosure primitive; still, defense in depth is cheap here.
     """
     if not wasm_ids:
         return {}
@@ -412,10 +532,13 @@ def _load_wasm_modules(
     if not uuid_ids:
         return {}
 
-    modules = db.query(WasmModule).filter(
+    query = db.query(WasmModule).filter(
         WasmModule.id.in_(uuid_ids),
         WasmModule.is_active.is_(True),
-    ).all()
+    )
+    if owner_id is not None:
+        query = query.filter(WasmModule.user_id == owner_id)
+    modules = query.all()
 
     if not modules:
         return {}
@@ -464,11 +587,15 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
         for fid in referenced_file_ids:
             with contextlib.suppress(ValueError, AttributeError):
                 uuid_ids.append(as_uuid(fid))
-        uploaded_files = (
-            db.query(UploadedFile).filter(UploadedFile.id.in_(uuid_ids)).all()
-            if uuid_ids
-            else []
-        )
+        # S2-001: scope file loads to the run owner (mirrors the WASM
+        # scoping below). Save-time gates check ownership, but the worker
+        # must not trust stored YAML outright.
+        file_query = db.query(UploadedFile).filter(
+            UploadedFile.id.in_(uuid_ids))
+        if pipeline_run.user_id is not None:
+            file_query = file_query.filter(
+                UploadedFile.user_id == pipeline_run.user_id)
+        uploaded_files = file_query.all() if uuid_ids else []
     else:
         uploaded_files = []
 
@@ -477,7 +604,8 @@ def _run_pipeline(db, pipeline_run: PipelineRun):
         str(f.id): {"original_filename": f.original_filename} for f in uploaded_files
     }
 
-    wasm_modules = _load_wasm_modules(db, referenced_wasm_ids)
+    wasm_modules = _load_wasm_modules(
+        db, referenced_wasm_ids, owner_id=pipeline_run.user_id)
 
     user_role = "viewer"
     if pipeline_run.user_id:
@@ -732,9 +860,14 @@ def _collect_file_ids_from_config(yaml_config: str) -> list[str]:
 
 def _save_version_if_needed(*, db, pipeline_run: PipelineRun) -> None:
     config = get_parsed_pipeline(pipeline_run.yaml_config)
+    # Canonical identity (M-064): versions are stored under the run's
+    # canonical name (the same name the permission check granted on), not
+    # the YAML name, so a request name that differs from ``pipeline.name``
+    # cannot split one pipeline into two version histories.
+    pipeline_name = pipeline_run.name or config.name
     latest_version = (
         db.query(PipelineVersion)
-        .filter(PipelineVersion.pipeline_name == config.name)
+        .filter(PipelineVersion.pipeline_name == pipeline_name)
         .order_by(PipelineVersion.version_number.desc())
         .first()
     )
@@ -742,7 +875,7 @@ def _save_version_if_needed(*, db, pipeline_run: PipelineRun) -> None:
         return
 
     save_version(
-        pipeline_name=config.name,
+        pipeline_name=pipeline_name,
         yaml_config=pipeline_run.yaml_config,
         run_id=pipeline_run.id,
         db=db,
@@ -907,6 +1040,30 @@ def _persist_results(db, pipeline_run: PipelineRun, summary) -> None:
     if not cancelled:
         check_and_enforce_contract(db, pipeline_run, summary)
 
+    # R-R-009: close the lost-cancel race. A cancel that committed after
+    # our last refresh would be overwritten by the commit below (a late
+    # finish clobbering an explicit user stop). Re-read the status under
+    # a row lock immediately before commit; a concurrent CANCELLED wins.
+    # SQLite ignores FOR UPDATE, so only take the lock on PostgreSQL
+    # (SQLite tests are single-writer and deterministic).
+    if (
+        not cancelled
+        and db.bind is not None
+        and db.bind.dialect.name == "postgresql"
+    ):
+        fresh_status = (
+            db.query(PipelineRun.status)
+            .filter(PipelineRun.id == pipeline_run.id)
+            .with_for_update()
+            .scalar()
+        )
+        fresh_value = getattr(fresh_status, "value", fresh_status)
+        if str(fresh_value) == PipelineStatus.CANCELLED.value:
+            cancelled = True
+            pipeline_run.status = PipelineStatus.CANCELLED
+            pipeline_run.completed_at = utcnow()
+            event_type = "pipeline_cancelled"
+
     try:
         from backend.repositories.catalog import register_run_assets
 
@@ -1022,51 +1179,68 @@ def _block_downstream_schedules(
     db,
     breached_pipeline_name: str,
     consumers: list[str],
+    owner_id=None,
 ) -> int:
     """Block downstream pipeline schedules when a contract breach has severity=block.
 
-    Finds all active schedules whose pipeline_name appears in the consumers list
-    and pushes their next_run_at forward by 1 hour to prevent immediate triggering.
-    This gives engineers time to investigate and fix the breach before dependent
-    pipelines run against bad data.
-
-    Returns the number of schedules blocked.
+    Matching is scoped to (owner, pipeline_name) (M-076): only active
+    schedules owned by the breaching contract's owner are paused. A bare
+    pipeline-name match would let one tenant's breach pause another
+    tenant's schedules that merely share the name.
     """
-    from datetime import timedelta
-
-    from sqlalchemy import update
+    from backend.contracts.enforcement import block_downstream_schedules
 
     if not consumers:
         return 0
 
-    blocked_count = 0
-    for consumer_name in consumers:
-        affected = db.execute(
-            update(PipelineSchedule)
-            .where(
-                PipelineSchedule.pipeline_name == consumer_name,
-                PipelineSchedule.is_active.is_(True),
-            )
-            .values(
-                next_run_at=utcnow() + timedelta(hours=1),
-                last_run_status="BLOCKED_BY_CONTRACT",
-            )
+    if owner_id is None:
+        # Fallback when the caller cannot provide the contract owner
+        # (legacy path): match by bare name. Callers that know the owner
+        # must pass it so cross-tenant schedules are never touched.
+        logger.warning(
+            "Blocking downstream schedules for '%s' without owner scope; "
+            "cross-tenant matches are still possible on this path",
+            breached_pipeline_name,
         )
-        count = affected.rowcount
-        if count > 0:
-            blocked_count += count
-            logger.info(
-                "Blocked %d schedule(s) for downstream pipeline '%s' "
-                "(breached: '%s')",
-                count,
-                consumer_name,
-                breached_pipeline_name,
+        from datetime import timedelta
+
+        from sqlalchemy import update
+
+        blocked_count = 0
+        for consumer_name in consumers:
+            affected = db.execute(
+                update(PipelineSchedule)
+                .where(
+                    PipelineSchedule.pipeline_name == consumer_name,
+                    PipelineSchedule.is_active.is_(True),
+                )
+                .values(
+                    next_run_at=utcnow() + timedelta(hours=1),
+                    last_run_status="BLOCKED_BY_CONTRACT",
+                )
             )
+            count = affected.rowcount
+            if count > 0:
+                blocked_count += count
+                logger.info(
+                    "Blocked %d schedule(s) for downstream pipeline '%s' "
+                    "(breached: '%s')",
+                    count,
+                    consumer_name,
+                    breached_pipeline_name,
+                )
 
-    if blocked_count > 0:
-        db.commit()
+        if blocked_count > 0:
+            db.commit()
 
-    return blocked_count
+        return blocked_count
+
+    return block_downstream_schedules(
+        db,
+        owner_id=owner_id,
+        breached_pipeline_name=breached_pipeline_name,
+        consumers=consumers,
+    )
 
 
 def _update_schedule_stats(db, pipeline_run: PipelineRun) -> None:

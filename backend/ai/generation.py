@@ -3,6 +3,7 @@ AI pipeline generation service.
 Builds prompts, calls Gemini via Celery task, validates responses,
 retries once on validation failure.
 """
+
 import asyncio
 import json
 import logging
@@ -19,11 +20,13 @@ from backend.ai.prompts import (
     SELF_FIX_PROMPT,
     STEP_TYPE_REFERENCE,
 )
+from backend.ai.safety import redact_pii, wrap_untrusted
 from backend.models import FileProfile, UploadedFile
 from backend.pipeline.cache import get_parsed_pipeline
 from backend.pipeline.parser import PipelineParser
 from backend.services.pipeline_validation import collect_schema_validation_errors
 from backend.tasks.gemini_tasks import call_gemini_task
+from backend.utils.uuid_utils import as_uuid
 
 logger = logging.getLogger(__name__)
 _pipeline_parser = PipelineParser()
@@ -95,12 +98,14 @@ _GEMINI_PLACEHOLDER_MARKERS = (
     "would apply transformations if gemini api was available",
 )
 
+
 @dataclass
 class GenerationResult:
     yaml: str
     valid: bool
     attempts: int
     error: str | None = None
+
 
 @dataclass
 class RepairResult:
@@ -110,11 +115,13 @@ class RepairResult:
     valid: bool
     error: str | None = None
 
+
 def _structured_output_config() -> dict:
     return {
         "response_mime_type": "application/json",
         "response_schema": _STRUCTURED_PIPELINE_RESPONSE_SCHEMA,
     }
+
 
 def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
     """
@@ -130,18 +137,23 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
 
     for i, file_id in enumerate(file_ids, 1):
         try:
+            # Coerce to UUID: comparing the UUID column against a raw str
+            # raises (M-108) and degraded every section to an error, so
+            # Gemini never saw real schemas and hallucinated column names.
+            try:
+                file_uuid = as_uuid(file_id)
+            except Exception:
+                sections.append(f"File {i}: [file_id: {file_id}] — invalid file_id")
+                continue
             # Get file record
-            file_record = db.query(UploadedFile).filter(
-                UploadedFile.id == file_id).first()
+            file_record = db.query(UploadedFile).filter(UploadedFile.id == file_uuid).first()
 
             if not file_record:
-                sections.append(
-                    f"File {i}: [file_id: {file_id}] — file record not found")
+                sections.append(f"File {i}: [file_id: {file_id}] — file record not found")
                 continue
 
             # Get profile - safely handle any format
-            profile_record = db.query(FileProfile).filter(
-                FileProfile.file_id == file_id).first()
+            profile_record = db.query(FileProfile).filter(FileProfile.file_id == file_uuid).first()
             profile = {}
             if profile_record and profile_record.status == "complete":
                 raw_profile = profile_record.profile
@@ -185,10 +197,10 @@ def build_file_schemas_section(file_ids: list[str], db: Session) -> str:
 
         except Exception:
             logger.exception(f"Error building schema for file_id={file_id}")
-            sections.append(
-                f"File {i}: [file_id: {file_id}] — error loading schema")
+            sections.append(f"File {i}: [file_id: {file_id}] — error loading schema")
 
     return "\n\n".join(sections)
+
 
 async def generate_pipeline_from_description(
     description: str,
@@ -202,11 +214,15 @@ async def generate_pipeline_from_description(
     # Build the file schemas section
     file_schemas_section = build_file_schemas_section(file_ids, db)
 
+    # M-175: scrub PII/secrets from the user-controlled description before
+    # it is sent to Gemini, and delimit it as untrusted content.
+    safe_request = wrap_untrusted(redact_pii(description))
+
     # Build the full prompt
     prompt = GENERATION_SYSTEM_PROMPT.format(
         step_type_reference=STEP_TYPE_REFERENCE,
         file_schemas_section=file_schemas_section,
-        user_request=description,
+        user_request=safe_request,
     )
 
     # Attempt 1: Generate
@@ -220,12 +236,7 @@ async def generate_pipeline_from_description(
         )
         raw_yaml = _structured_pipeline_to_yaml(raw_response)
     except Exception as e:
-        return GenerationResult(
-            yaml="",
-            valid=False,
-            attempts=1,
-            error=f"AI service error: {e!s}"
-        )
+        return GenerationResult(yaml="", valid=False, attempts=1, error=f"AI service error: {e!s}")
 
     validation_error = None
 
@@ -255,10 +266,7 @@ async def generate_pipeline_from_description(
         corrected_yaml = _structured_pipeline_to_yaml(corrected_response)
     except Exception as e:
         return GenerationResult(
-            yaml=raw_yaml,
-            valid=False,
-            attempts=2,
-            error=f"Self-fix failed: {e!s}"
+            yaml=raw_yaml, valid=False, attempts=2, error=f"Self-fix failed: {e!s}"
         )
 
     # Validate Attempt 2
@@ -280,6 +288,7 @@ async def generate_pipeline_from_description(
             error=str(e2),
         )
 
+
 async def repair_pipeline_from_error(
     original_yaml: str,
     failed_step: str,
@@ -294,11 +303,14 @@ async def repair_pipeline_from_error(
     """
     file_schemas_section = build_file_schemas_section(file_ids, db)
 
+    # M-175: the failure details are user/data-controlled — scrub PII and
+    # delimit them as untrusted content. The YAML itself is structural
+    # (file_ids, step/column names) and is left intact.
     prompt = REPAIR_SYSTEM_PROMPT.format(
         original_yaml=original_yaml,
         failed_step=failed_step,
         error_type=error_type,
-        error_message=error_message,
+        error_message=wrap_untrusted(redact_pii(error_message)),
         file_schemas_section=file_schemas_section,
     )
 
@@ -365,34 +377,37 @@ async def repair_pipeline_from_error(
         error=validation_error,
     )
 
+
 def compute_yaml_diff(original: str, corrected: str) -> list[dict]:
     """
     Compute a line-by-line diff between the original and corrected YAML.
     Returns a list of lines with type: 'added', 'removed', or 'unchanged'.
     """
     import difflib
+
     orig_lines = original.splitlines()
     corr_lines = corrected.splitlines()
 
     diff = []
     matcher = difflib.SequenceMatcher(None, orig_lines, corr_lines)
     for op, i1, i2, j1, j2 in matcher.get_opcodes():
-        if op == 'equal':
+        if op == "equal":
             for line in orig_lines[i1:i2]:
                 diff.append({"type": "unchanged", "content": line})
-        elif op == 'insert':
+        elif op == "insert":
             for line in corr_lines[j1:j2]:
                 diff.append({"type": "added", "content": line})
-        elif op == 'delete':
+        elif op == "delete":
             for line in orig_lines[i1:i2]:
                 diff.append({"type": "removed", "content": line})
-        elif op == 'replace':
+        elif op == "replace":
             for line in orig_lines[i1:i2]:
                 diff.append({"type": "removed", "content": line})
             for line in corr_lines[j1:j2]:
                 diff.append({"type": "added", "content": line})
 
     return diff
+
 
 def _detect_ai_service_error(text: str) -> str | None:
     lowered = text.lower()
@@ -402,12 +417,14 @@ def _detect_ai_service_error(text: str) -> str | None:
         return "AI repair service is temporarily unavailable. Please try again later."
     return None
 
+
 async def _call_gemini_async(
-        prompt: str,
-        temperature: float,
-        max_tokens: int,
-        generation_config_overrides: dict | None = None,
-        request_id: str | None = None) -> str:
+    prompt: str,
+    temperature: float,
+    max_tokens: int,
+    generation_config_overrides: dict | None = None,
+    request_id: str | None = None,
+) -> str:
     """
     Submit a Gemini task and await the result.
     Uses Celery task async to respect the gemini queue's rate limits.
@@ -440,9 +457,7 @@ async def _call_gemini_async(
         # strings, so Celery state correctly reports FAILURE and downstream
         # systems can rely on the result payload.
         if isinstance(e, GeminiQuotaExhaustedError):
-            raise Exception(
-                "Google Gemini AI quota exhausted. Please try again later."
-            ) from e
+            raise Exception("Google Gemini AI quota exhausted. Please try again later.") from e
         if isinstance(e, GeminiClientError):
             raise Exception(f"Gemini AI service error: {e}") from e
 
@@ -457,13 +472,13 @@ async def _call_gemini_async(
     # builds (or in-process tests that mock the task). New workers raise
     # proper exceptions and never return these strings.
     if isinstance(result, str) and result == "GEMINI_QUOTA_EXHAUSTED":
-        raise Exception(
-            "Google Gemini AI quota exhausted. Please try again later.")
+        raise Exception("Google Gemini AI quota exhausted. Please try again later.")
 
     if isinstance(result, str) and result.startswith("GEMINI_ERROR:"):
         raise Exception(f"Gemini AI service error: {result[14:]}")
 
     return result
+
 
 def _clean_yaml_response(raw: str) -> str:
     """
@@ -489,6 +504,7 @@ def _clean_yaml_response(raw: str) -> str:
         text = text[pipeline_start:]
 
     return text.strip()
+
 
 def _structured_pipeline_to_yaml(raw_response: str) -> str:
     """Convert Gemini structured JSON output into canonical PipelineIQ YAML."""
@@ -533,6 +549,7 @@ def _structured_pipeline_to_yaml(raw_response: str) -> str:
         sort_keys=False,
         allow_unicode=False,
     ).strip()
+
 
 def _validate_generated_yaml(
     yaml_text: str,

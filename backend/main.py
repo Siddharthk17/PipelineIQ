@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 # Import the shared `ClientDisconnected` from the exceptions module to
 # avoid a circular import between `main.py` and the routers that
 # raise it. (Routers are imported at module load time below.)
-from backend.pipeline.exceptions import ClientDisconnected
+from backend.pipeline.exceptions import ClientDisconnected, PipelineYAMLTooLargeError
 
 
 # Silence health check and metrics access log noise
@@ -314,14 +314,32 @@ async def client_disconnected_handler(
     """
     return Response(status_code=499)
 
-# Prometheus metrics — imported from centralized module to avoid circular
-# imports
+# Prometheus metrics — exposed only outside production, under the same gate
+# as /docs, /redoc and /openapi.json above (M-158). Local Prometheus
+# scrapes api:8000/metrics in dev/compose; in production the route stays
+# unregistered so unauthenticated cardinality data is never served.
+if settings.ENVIRONMENT != "production":
+    Instrumentator(
+        should_group_status_codes=False,
+        should_ignore_untemplated=True,
+        excluded_handlers=["/metrics"],
+    ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
-Instrumentator(
-    should_group_status_codes=False,
-    should_ignore_untemplated=True,
-    excluded_handlers=["/metrics"],
-).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+@app.exception_handler(PipelineYAMLTooLargeError)
+async def pipeline_too_large_handler(
+    request: Request, exc: PipelineYAMLTooLargeError
+) -> JSONResponse:
+    """Map oversized pipeline YAML to 413 (not the generic 422)."""
+    request_id = getattr(request.state, "request_id", "unknown")
+    return JSONResponse(
+        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        content={
+            "error_type": exc.__class__.__name__,
+            "message": exc.message,
+            "request_id": request_id,
+        },
+    )
 
 
 @app.exception_handler(PipelineIQError)
@@ -347,33 +365,122 @@ async def pipelineiq_error_handler(
     )
 
 
+# Maximum logged value sizes for the 422 handler (M-055): values are
+# truncated, keys are kept so field-level debugging still works.
+_MAX_LOG_VALUE_CHARS = 200
+_MAX_LOG_LIST_ITEMS = 20
+_MAX_LOG_DEPTH = 6
+_REDACTED = "[REDACTED]"
+
+_SENSITIVE_KEY_PARTS = frozenset({
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_token",
+    "refresh_token",
+    "client_secret",
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "credential",
+    "private_key",
+    "privatekey",
+    "session",
+    "pin",
+    "otp",
+    "passcode",
+})
+
+
+def _looks_sensitive(key: object) -> bool:
+    """Return True when a field/header name looks secret-bearing."""
+    name = str(key).lower().replace("-", "_")
+    return any(part in name for part in _SENSITIVE_KEY_PARTS)
+
+
+def _truncate_log_value(value: object) -> object:
+    if isinstance(value, str):
+        return value[:_MAX_LOG_VALUE_CHARS]
+    return value
+
+
+def _redact_log_value(key: object, value: object, _depth: int = 0) -> object:
+    """Redact secret-bearing values from structures before logging.
+
+    Field names are preserved; only values are replaced or truncated.
+    Deny-logs values, never keys.
+    """
+    if _depth > _MAX_LOG_DEPTH:
+        return _REDACTED
+    if key is not None and _looks_sensitive(key):
+        return _REDACTED
+    if isinstance(value, dict):
+        return {
+            k: _redact_log_value(k, v, _depth + 1)
+            for k, v in list(value.items())[: _MAX_LOG_LIST_ITEMS * 5]
+        }
+    if isinstance(value, (list, tuple)):
+        items = list(value)[:_MAX_LOG_LIST_ITEMS]
+        redacted = [_redact_log_value(None, v, _depth + 1) for v in items]
+        if len(value) > len(items):
+            redacted.append(f"...(+{len(value) - len(items)} more)")
+        return redacted
+    if isinstance(value, str):
+        return value[:_MAX_LOG_VALUE_CHARS]
+    if isinstance(value, (bytes, bytearray)):
+        return f"<{len(value)} bytes>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    # Pydantic ctx carries arbitrary objects (e.g. ValueError); stringify
+    # so the response/logging stays JSON-serializable.
+    return str(value)[:_MAX_LOG_VALUE_CHARS]
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """Handle Pydantic validation errors with field-level details.
 
-    Logs the offending request body, query params, path params, and the
-    field-level error so 422s are no longer a black box in production.
+    Logs error locations with secrets redacted: values for
+    password/secret/token-like keys are never logged (field names are
+    kept), string values are truncated, and the body capture stays
+    bounded. Use the ``request_id`` to correlate with the client.
     """
     request_id = getattr(request.state, "request_id", "unknown")
-    # Sanitize errors: Pydantic V2 may include non-serializable ctx values
+    # Sanitize errors: Pydantic V2 may include non-serializable ctx values.
+    # ``input`` echoes the submitted value, so redact it whenever the
+    # field name looks secret-bearing.
     safe_errors = []
     for err in exc.errors():
         safe_err = {k: v for k, v in err.items() if k != "ctx"}
         if "ctx" in err:
-            safe_err["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
+            safe_err["ctx"] = {
+                k: _redact_log_value(k, v) for k, v in err["ctx"].items()
+            }
+        loc = err.get("loc", ())
+        if isinstance(loc, (list, tuple)) and any(
+            _looks_sensitive(str(part)) for part in loc
+        ):
+            safe_err["input"] = "[REDACTED]"
+        elif "input" in safe_err and isinstance(safe_err["input"], str):
+            safe_err["input"] = _truncate_log_value(safe_err["input"])
         safe_errors.append(safe_err)
 
     # Capture the request body (best-effort; re-emit a fresh stream so
     # the rest of the stack can still read it). Skip binary bodies and
-    # bodies larger than 16 KB to keep logs bounded.
+    # bodies larger than 16 KB to keep logs bounded. Secret-bearing
+    # values are redacted before logging (M-055).
     body_summary: dict = {}
     try:
         raw = await request.body()
         if raw and len(raw) <= 16 * 1024:
             try:
-                body_summary["json"] = orjson.loads(raw)
+                parsed_body = orjson.loads(raw)
+                body_summary["json"] = _redact_log_value(None, parsed_body)
             except Exception:
                 body_summary["text_preview"] = raw[:512].decode(
                     "utf-8", errors="replace"
@@ -381,25 +488,26 @@ async def validation_error_handler(
         elif raw:
             body_summary["truncated_bytes"] = len(raw)
     except Exception as body_err:
-        body_summary["unavailable_reason"] = str(body_err)
+        body_summary["unavailable_reason"] = str(body_err)[:200]
 
-    # Path, query, headers (sanitized for Authorization)
+    # Path, query, headers (Authorization/cookie/token-like values redacted;
+    # the raw URL is never logged because it may carry ?token= credentials).
     location = {
-        "path_params": dict(request.path_params),
-        "query_params": dict(request.query_params),
+        "path_params": _redact_log_value(None, dict(request.path_params)),
+        "query_params": _redact_log_value(None, dict(request.query_params)),
         "body": body_summary,
     }
     headers_sanitized = {
-        k: v
+        k: ("[REDACTED]" if _looks_sensitive(k) else _truncate_log_value(v))
         for k, v in request.headers.items()
-        if k.lower() not in {"authorization", "cookie"}
     }
+    sanitized_url = request.url.path
 
     logger = structlog.get_logger()
     logger.error(
         "validation_error",
         method=request.method,
-        url=str(request.url),
+        url=sanitized_url,
         headers=headers_sanitized,
         location=location,
         errors=safe_errors,
@@ -407,10 +515,10 @@ async def validation_error_handler(
     # Also log to standard logger for Docker log visibility
     import json as _json
     logging.getLogger("pipelineiq").warning(
-        "422 Unprocessable Entity on %s %s", request.method, request.url
+        "422 Unprocessable Entity on %s %s", request.method, sanitized_url
     )
     logging.getLogger("pipelineiq").error(
-        "Missing/invalid fields: %s", _json.dumps(safe_errors, indent=2)
+        "Missing/invalid fields: %s", _json.dumps(safe_errors, indent=2)[:4000]
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -472,6 +580,29 @@ app.add_middleware(
         host.strip() for host in settings.TRUSTED_HOSTS.split(",") if host.strip()
     ],
 )
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add baseline security headers to every API response (M-138).
+
+    The API serves JSON, never HTML: a deny-by-default frame policy plus
+    nosniff/referrer/permissions policies. HSTS is emitted only when the
+    request arrived over TLS (compose terminates plain HTTP on loopback;
+    production TLS terminates at the ingress).
+    """
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=()"
+    )
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 @app.middleware("http")
@@ -623,8 +754,22 @@ def live_check() -> dict:
     include_in_schema=False,
     response_model=None,
 )
-def readiness_check() -> dict:
-    """Readiness probe for all critical runtime dependencies."""
+def readiness_check() -> Response:
+    """Readiness probe for all critical runtime dependencies.
+
+    Truthful HTTP semantics (M-170): 200 only when every check passes,
+    503 while any dependency (DB, Redis, storage) is down so load
+    balancers and Kubernetes (readinessProbe) stop routing traffic here.
+    """
+    body = _readiness_body()
+    return JSONResponse(
+        status_code=200 if body["status"] == "ok" else 503,
+        content=body,
+    )
+
+
+def _readiness_body() -> dict:
+    """Shared readiness payload for /readyz (truthful code) and /health."""
     checks = _collect_health_checks()
     overall = "ok" if all(value == "ok" for value in checks.values()) else "degraded"
     redis_summary = (
@@ -666,8 +811,13 @@ def readiness_check() -> dict:
     response_model=None,
 )
 def health_check() -> dict:
-    """Backward-compatible alias for readiness checks."""
-    return readiness_check()
+    """Backward-compatible alias for readiness checks.
+
+    Always 200 with a status field (existing tests, compose healthchecks
+    and CI smoke assert 200 + status in ok/degraded). The truthful
+    gate is /readyz, which returns 503 while degraded.
+    """
+    return _readiness_body()
 
 
 def _collect_health_checks() -> dict[str, str]:

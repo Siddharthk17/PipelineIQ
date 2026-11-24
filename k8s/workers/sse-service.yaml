@@ -15,13 +15,19 @@ spec:
       labels:
         app: sse-service
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: sse
-          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          image: ghcr.io/siddharthk17/pipelineiq-backend:12.8.4
           imagePullPolicy: Always
           command:
             - gunicorn
-            - backend.sse_app:app
+            - backend.sse_app:sse_app
             - -k
             - uvicorn.workers.UvicornWorker
             - -w
@@ -39,6 +45,20 @@ spec:
           env:
             - name: OTEL_SERVICE_NAME
               value: pipelineiq-sse-service
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
           resources:
             requests:
               memory: "128Mi"

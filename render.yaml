@@ -9,6 +9,30 @@ services:
     envVars:
       - key: DATABASE_URL
         sync: false
+      - key: DATABASE_WRITE_URL
+        sync: false
+      - key: DATABASE_READ_URL
+        sync: false
+      - key: REDIS_BROKER_URL
+        sync: false
+      - key: REDIS_BACKEND_URL
+        sync: false
+      - key: REDIS_PUBSUB_URL
+        sync: false
+      - key: REDIS_CACHE_URL
+        sync: false
+      - key: REDIS_YJS_URL
+        sync: false
+      - key: CELERY_RESULT_BACKEND
+        sync: false
+      - key: FLOWER_PASSWORD
+        sync: false
+      - key: GRAFANA_PASSWORD
+        sync: false
+      # O2-006: the single-service Render deploy runs neither Flower nor
+      # Grafana, but validate_production_operational_secrets still requires
+      # both set to strong values in production (fail-closed by design —
+      # prevents shipping a Compose/VM deploy with default creds).
       - key: SECRET_KEY
         generateValue: true
       - key: ENVIRONMENT
@@ -17,10 +41,12 @@ services:
         value: "12.8.4"
       - key: UPLOAD_DIR
         value: /tmp/uploads
-      - key: FIRST_SUPERUSER_EMAIL
-        value: admin@pipelineiq.app
-      - key: FIRST_SUPERUSER_PASSWORD
-        sync: false
+      # NOTE (M-048/R-O-003): no FIRST_SUPERUSER_* vars — the backend never
+      # consumed them, so they created a false impression that an admin is
+      # provisioned. Create the first admin explicitly after first deploy:
+      #   PIPELINEIQ_BOOTSTRAP_ADMIN=1 ADMIN_EMAIL=you@example.com \
+      #     ADMIN_PASSWORD=$(openssl rand -hex 24) \
+      #     python -m backend.scripts.create_admin
       - key: CORS_ORIGINS
         value: '["https://pipeline-iq0.vercel.app","https://pipelineiq-api.onrender.com"]'
       - key: GEMINI_API_KEY
@@ -29,4 +55,12 @@ services:
         value: gemini-2.5-flash
       - key: GEMINI_FALLBACK_MODELS
         value: gemini-2.0-flash,gemini-1.5-flash
+    # O2-001: migrate schema before each deploy. Without this, a fresh
+    # Render deploy boots against an empty managed Postgres (AUTO_CREATE
+    # TABLES defaults off) and every request 500s. Mirrors the k8s
+    # migrate initContainer (k8s/backend/deployment.yaml).
+    preDeployCommand: alembic upgrade head
     healthCheckPath: /health
+    # NOTE: UPLOAD_DIR=/tmp/uploads is ephemeral on Render (no disk).
+    # Production uploads need STORAGE_TYPE=s3 with a bucket (see
+    # .env.example S3_* keys) or a Render disk mounted at UPLOAD_DIR.
