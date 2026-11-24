@@ -116,9 +116,16 @@ export function useCollaborativePipeline({
       pipelineName,
       doc,
       {
-        // Omit the param entirely when there is no token: sending the
-        // literal string "undefined" would shadow the cookie fallback.
-        params: authToken ? { token: authToken } : {},
+        // F-4: never send the JWT as a ?token= query param (it lands in
+        // proxy/access logs — y-websocket serializes params into the
+        // handshake URL). Authenticate via the HttpOnly cookie only: the
+        // browser sends it on the ws handshake and the relay verifies it
+        // as a fallback (y-websocket/server.js tokenFromCookie). The relay
+        // does not parse Sec-WebSocket-Protocol either, so cookie-only is
+        // the only carriage that avoids the URL. authToken is still used
+        // below as a signed-in signal (fresh-login sessions) but never
+        // placed on the wire here.
+        params: {},
         maxBackoffTime: MAX_BACKOFF_TIME,
         connect: true,
       },
