@@ -106,11 +106,11 @@ python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 export DATABASE_URL="postgresql://pipelineiq:your_password@localhost:5432/pipelineiq"
 export REDIS_CACHE_URL="redis://:your_password@localhost:6381/0"
-alembic upgrade heads
+alembic upgrade head
 python -m pytest tests/unit/pipeline/test_parser.py -v
 ```
 
-Migrations merged to a single head (`a6fc98d90644`), so plain `alembic upgrade head` works. See [Database](#database).
+Migrations merged to a single head (`0021_perm_heal_uq_backfill`), so plain `alembic upgrade head` works. See [Database](#database).
 
 ### Frontend only (development)
 
@@ -591,7 +591,7 @@ Structlog emits JSON logs with `request_id` (from `X-Request-ID`, generated when
 
 ## Testing
 
-### Backend — 1,251 tests collected
+### Backend — 1,613 tests collected
 
 ```bash
 cd backend
@@ -681,7 +681,7 @@ bash scripts/run-load-tests.sh                     # runs all three k6 profiles 
 
 ## Database
 
-PostgreSQL 15. Migrations live in `backend/alembic/versions/` (38 files, single head `a6fc98d90644` — a no-op merge of the former `0013` and `k1a2b3c4d5e0` branches, which touch disjoint objects):
+PostgreSQL 15. Migrations live in `backend/alembic/versions/` (43 files, single head `0021_perm_heal_uq_backfill`):
 
 ```bash
 alembic upgrade head                   # run pending migrations (single head)
