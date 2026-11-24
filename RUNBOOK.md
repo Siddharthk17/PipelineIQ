@@ -293,3 +293,18 @@ DuckDB sorts. k8s manifests set no explicit shm size (no
 Contrast (NOT scratch): `uploads` is a named volume
 (`uploads:/app/uploads`) — persistent data. MinIO objects are likewise
 outside `pg_dump` (see Disaster Recovery above).
+
+## Rate limiting and trusted proxies (R-06)
+
+Login/register/run/upload endpoints are rate-limited per client IP. The app
+honors `X-Real-IP` only when the direct peer is a trusted proxy (loopback or
+RFC1918/private by default, plus `TRUSTED_PROXY_CIDRS`); otherwise it keys on
+the peer IP. The bundled nginx overwrites `X-Real-IP` with the peer address,
+so compose deployments are correct with no extra setting.
+
+If you expose the API without that nginx edge (direct container, render-style
+deploy, private cloud L4 LB): make sure YOUR edge overwrites `X-Real-IP` (or
+strips it). A private-IP hop that forwards client-controlled `X-Real-IP`
+verbatim lets clients rotate the header for a fresh rate-limit bucket on every
+request. When the edge cannot overwrite, restrict `TRUSTED_PROXY_CIDRS` to the
+exact proxy IPs and confirm the peer the app sees is public.
