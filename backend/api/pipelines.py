@@ -915,9 +915,17 @@ def list_pipeline_runs(
     if status_filter:
         try:
             ps = PipelineStatus(status_filter.upper())
-            query = query.filter(PipelineRun.status == ps)
         except ValueError:
-            pass
+            # B3: fail closed — a typo'd filter must not silently return
+            # the unfiltered list (the caller may misread the runs).
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Invalid status_filter '{status_filter}'. "
+                    f"Valid values: {sorted(s.value for s in PipelineStatus)}"
+                ),
+            )
+        query = query.filter(PipelineRun.status == ps)
 
     total = query.count()
     runs = (
