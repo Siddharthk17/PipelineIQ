@@ -240,12 +240,16 @@ test.describe("Visual Pipeline Builder", () => {
     await expect(dialog).toBeVisible({ timeout: 10_000 });
 
     // Every required file placeholder needs a real file before submitting.
+    // The file list loads asynchronously after the dialog opens (D3), so
+    // poll until at least one select exists instead of counting immediately.
     const selects = dialog.locator("select");
+    await expect.poll(async () => selects.count(), { timeout: 10_000 }).toBeGreaterThan(0);
     const count = await selects.count();
-    expect(count).toBeGreaterThan(0);
     for (let i = 0; i < count; i++) {
       const options = selects.nth(i).locator("option");
       // First option is the "Select a file…" placeholder; pick the first real file.
+      // Options also load asynchronously (D3), so wait for a real choice first.
+      await expect.poll(async () => options.count(), { timeout: 10_000 }).toBeGreaterThan(1);
       await selects.nth(i).selectOption({ index: 1 });
       void options;
     }
