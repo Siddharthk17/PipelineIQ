@@ -111,8 +111,9 @@ function normalizeSortConfigForUi(step: Record<string, unknown>): Record<string,
   delete config.right;
 
   if (Array.isArray(config.by)) {
-    const columns = asStringArray(config.by);
-    config.by = columns[0] ?? "";
+    // M-046: keep every key verbatim (backend accepts list `by` for
+    // multi-key sorts). The config panel only edits single-column sorts.
+    config.by = asStringArray(config.by);
   }
   if (
     !config.order &&
@@ -121,7 +122,9 @@ function normalizeSortConfigForUi(step: Record<string, unknown>): Record<string,
   ) {
     config.order = config.ascending[0] ? "asc" : "desc";
   }
-  delete config.ascending;
+  // M-046: keep `ascending` — the backend prefers it over `order`
+  // (steps/_core.py, sql_builder.py), so deleting it dropped per-key
+  // directions on round-trip.
   return config;
 }
 
@@ -259,9 +262,29 @@ function buildGraphFromSteps(pipelineName: string, rawSteps: unknown[]): Builder
     rawStepRecords.push(step);
 
     const rawType = asString(step.type);
-    const stepType: VisualStepType = isVisualStepType(rawType) ? rawType : "transform";
-    const stepName = asString(step.name).trim() || `${STEP_DEFINITIONS[stepType].label}_${index + 1}`;
+    // M-046: never coerce an unrecognized backend type to "transform" —
+    // keep it verbatim so the emit path can pass it (and its params)
+    // through untouched. Renderers handle the missing definition
+    // (StepNode shows an "Unknown type" placeholder; the config panel stays
+    // closed; connection validation fail-closes).
+    const stepType = rawType as VisualStepType;
+    const definition = isVisualStepType(rawType) ? STEP_DEFINITIONS[rawType] : undefined;
+    const stepName = asString(step.name).trim() || `${definition?.label || rawType || "step"}_${index + 1}`;
     const id = makeNodeId(stepName, index, usedNodeIds);
+
+    const config = extractConfigForUi(stepType, step);
+    if (!definition) {
+      // Unmodeled type: graphToYAML cannot infer input wiring from a step
+      // definition, so keep the original input/left/right refs in the config
+      // for verbatim re-emit. (Users cannot rewire these nodes — connection
+      // validation rejects unknown types — so a deleted edge can leave a
+      // stale ref here; backend validation reports dangling refs.)
+      for (const key of ["input", "left", "right"] as const) {
+        if (step[key] !== undefined) {
+          config[key] = step[key];
+        }
+      }
+    }
 
     nodes.push({
       id,
@@ -270,8 +293,8 @@ function buildGraphFromSteps(pipelineName: string, rawSteps: unknown[]): Builder
       data: {
         label: stepName,
         type: stepType,
-        config: extractConfigForUi(stepType, step),
-        backendSupported: STEP_DEFINITIONS[stepType].backendSupported,
+        config,
+        backendSupported: definition?.backendSupported ?? false,
       },
     });
 
@@ -391,14 +414,31 @@ function normalizeJoinConfigForYaml(config: Record<string, unknown>): Record<str
 
 function normalizeAggregateConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   const groupBy = asStringArray(config.group_by);
-  const aggregationsRaw = Array.isArray(config.aggregations) ? config.aggregations : [];
-  const aggregations = aggregationsRaw
+  const rawAggregations = config.aggregations;
+  // M-046: the backend accepts dict-form aggregations ({column: function})
+  // as well as the list form (parser.py). Normalize both to the list form.
+  const aggregationList = Array.isArray(rawAggregations)
+    ? rawAggregations
+    : rawAggregations && typeof rawAggregations === "object"
+      ? Object.entries(rawAggregations).map(([column, fn]) => ({ column, function: fn }))
+      : [];
+  const aggregations = aggregationList
     .map((agg) => toRecord(agg))
     .filter((agg) => asString(agg.column).trim() && asString(agg.function).trim())
-    .map((agg) => ({
-      column: asString(agg.column).trim(),
-      function: asString(agg.function).trim(),
-    }));
+    .map((agg) => {
+      const normalized: Record<string, unknown> = {
+        column: asString(agg.column).trim(),
+        function: asString(agg.function).trim(),
+      };
+      // M-046: keep backend-supported per-aggregation keys (e.g. `alias`,
+      // used for output column naming) instead of dropping them.
+      for (const [key, value] of Object.entries(agg)) {
+        if (key !== "column" && key !== "function" && !(key in normalized)) {
+          normalized[key] = value;
+        }
+      }
+      return normalized;
+    });
 
   return { group_by: groupBy, aggregations };
 }
@@ -423,13 +463,16 @@ function normalizeUnpivotConfigForYaml(config: Record<string, unknown>): Record<
 }
 
 function normalizeFillNullsConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
-  const method = asString(config.strategy) || "constant";
+  // M-046: emit the backend-canonical keys (`strategy`/`constant_value`,
+  // parser.py + steps/_core.py). The old `method`/`value` names are only
+  // tolerated on the DuckDB path and fail parser validation.
+  const strategy = asString(config.strategy) || "constant";
   const payload: Record<string, unknown> = {
-    method,
+    strategy,
     columns: asStringArray(config.columns),
   };
-  if (method === "constant") {
-    payload.value = config.constant_value ?? "";
+  if (strategy === "constant") {
+    payload.constant_value = config.constant_value ?? "";
   }
   return payload;
 }
@@ -437,8 +480,10 @@ function normalizeFillNullsConfigForYaml(config: Record<string, unknown>): Recor
 function normalizeSampleConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
 
-  const hasFraction = typeof config.fraction === "number" && Number.isFinite(config.fraction);
-  const hasN = typeof config.n === "number" && Number.isFinite(config.n);
+  // M-046: pass values through verbatim instead of dropping non-numeric
+  // ones — backend validation (not the emit path) reports bad types.
+  const hasFraction = config.fraction !== undefined && config.fraction !== null;
+  const hasN = config.n !== undefined && config.n !== null;
 
   if (hasN && !hasFraction) {
     payload.n = config.n;
@@ -448,7 +493,7 @@ function normalizeSampleConfigForYaml(config: Record<string, unknown>): Record<s
     payload.fraction = config.fraction;
   }
 
-  if (typeof config.random_state === "number" && Number.isFinite(config.random_state)) {
+  if (config.random_state !== undefined) {
     payload.random_state = config.random_state;
   } else {
     payload.random_state = 42;
@@ -486,7 +531,7 @@ function normalizeValidateConfigForYaml(config: Record<string, unknown>): Record
   return { rules };
 }
 
-function normalizeConfigForYaml(
+function normalizeKnownConfigForYaml(
   stepType: VisualStepType,
   config: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -505,7 +550,8 @@ function normalizeConfigForYaml(
       return normalizeAggregateConfigForYaml(config);
     case "sort":
       return {
-        by: asString(config.by),
+        // M-046: `by` may be a multi-key list; keep its shape verbatim.
+        by: Array.isArray(config.by) ? asStringArray(config.by) : asString(config.by),
         order: asString(config.order) || "asc",
       };
     case "select":
@@ -559,7 +605,28 @@ function normalizeConfigForYaml(
         serialize: asString(config.serialize) || "json",
         key_column: config.key_column ? asString(config.key_column) : null,
       };
+    default:
+      // M-046: unmodeled (unknown-to-the-builder) step type — emit nothing
+      // here; the passthrough wrapper below re-emits the stored config keys.
+      return {};
   }
+}
+
+function normalizeConfigForYaml(
+  stepType: VisualStepType,
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const base = normalizeKnownConfigForYaml(stepType, config);
+  // M-046: keep backend-supported keys the whitelist above does not model
+  // (alias, contract, ascending, future keys) verbatim instead of dropping
+  // them on round-trip.
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(config)) {
+    if (!(key in merged)) {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
 
 export function graphToYAML(nodesOrGraph: BuilderNode[] | BuilderGraph, edgesParam?: BuilderEdge[], pipelineNameParam?: string): string {
@@ -629,7 +696,9 @@ export function graphToYAML(nodesOrGraph: BuilderNode[] | BuilderGraph, edgesPar
 
       step.left = leftEdge ? stepNameByNodeId.get(leftEdge.source) ?? "" : "";
       step.right = rightEdge ? stepNameByNodeId.get(rightEdge.source) ?? "" : "";
-      Object.assign(step, sanitizeConfig(normalizeJoinConfigForYaml(resolvedNode.data.config)));
+      // M-046: same whitelist + verbatim-passthrough path as other types, so
+      // extras (e.g. a per-step contract on a join) survive round-trip.
+      Object.assign(step, sanitizeConfig(normalizeConfigForYaml("join", resolvedNode.data.config)));
     } else {
       const definition = STEP_DEFINITIONS[stepType];
       if (definition && definition.maxInputs > 0) {
