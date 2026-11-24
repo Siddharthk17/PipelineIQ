@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     )
 
     APP_NAME: str = "PipelineIQ"
-    APP_VERSION: str = "12.8.4"
+    APP_VERSION: str = "12.28.10"
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
     AUTO_CREATE_TABLES: bool = False
