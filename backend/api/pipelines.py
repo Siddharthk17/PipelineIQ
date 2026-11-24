@@ -380,19 +380,6 @@ def _idempotency_claim(
     return "owner", row
 
 
-def _idempotency_wait(db: Session, row: IdempotencyKey) -> IdempotencyKey | None:
-    """Wait briefly for an in-flight duplicate to complete (M-062)."""
-    deadline = time.monotonic() + _IDEMPOTENT_INFLIGHT_TIMEOUT_S
-    while time.monotonic() < deadline:
-        time.sleep(_IDEMPOTENT_POLL_INTERVAL_S)
-        refreshed = (
-            db.query(IdempotencyKey).filter(IdempotencyKey.id == row.id).first()
-        )
-        if refreshed is not None and refreshed.status_code is not None:
-            return refreshed
-    return None
-
-
 def _idempotency_release(db: Session, row: IdempotencyKey) -> None:
     """Release a claim placeholder that never produced a response (M-062).
 
@@ -624,7 +611,13 @@ def run_pipeline(
             return RunPipelineResponse(**idem_row.response_body)
         if action == "inflight":
             assert idem_row is not None
-            done = _idempotency_wait(db, idem_row)
+            # Shared waiter (backend.api.contracts): it expires the cached
+            # row before re-reading, so a concurrent owner's completion is
+            # seen instead of timing out to a spurious 409 (M-062).
+            from backend.api.contracts import (
+                _idempotency_wait as _shared_idempotency_wait,
+            )
+            done = _shared_idempotency_wait(db, idem_row)
             if done is not None and done.response_body is not None:
                 return RunPipelineResponse(**done.response_body)
             raise HTTPException(
@@ -813,7 +806,13 @@ async def run_pipeline_legacy(
             return RunPipelineResponse(**idem_row.response_body)
         if action == "inflight":
             assert idem_row is not None
-            done = _idempotency_wait(db, idem_row)
+            # Shared waiter (backend.api.contracts): it expires the cached
+            # row before re-reading, so a concurrent owner's completion is
+            # seen instead of timing out to a spurious 409 (M-062).
+            from backend.api.contracts import (
+                _idempotency_wait as _shared_idempotency_wait,
+            )
+            done = _shared_idempotency_wait(db, idem_row)
             if done is not None and done.response_body is not None:
                 return RunPipelineResponse(**done.response_body)
             raise HTTPException(
