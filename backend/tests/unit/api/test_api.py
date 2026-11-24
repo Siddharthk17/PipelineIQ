@@ -118,6 +118,28 @@ class TestFileUpload:
         assert data["upload_url"].startswith("/api/v1/files/direct-upload/")
         assert data["confirm_endpoint"].startswith("/api/v1/files/")
 
+    def test_request_upload_url_presign_failure_falls_back_to_proxy(
+            self, client, monkeypatch):
+        """Presign raise (M-115c fail-closed, R-08) must not 500 negotiation."""
+        from botocore.exceptions import ClientError
+
+        def _raise(*args, **kwargs):
+            raise ClientError(
+                {"Error": {"Code": "NoSuchBucket", "Message": "gone"}},
+                "HeadBucket")
+
+        monkeypatch.setattr(
+            "backend.api.files.storage_service.get_presigned_upload_url",
+            _raise)
+        response = client.post(
+            "/api/v1/files/request-upload-url",
+            json={"filename": "large.csv", "file_size": 12 * 1024 * 1024},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["method"] == "direct"
+        assert data["upload_url"].startswith("/api/v1/files/direct-upload/")
+
     def test_direct_upload_then_confirm_returns_file_metadata(
             self, client, monkeypatch):
         """Direct upload flow should allow PUT + confirm to finalize metadata."""

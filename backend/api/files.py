@@ -277,9 +277,18 @@ async def request_upload_url(
             service="Upload state store",
         )
 
-        presigned_url = storage_service.get_presigned_upload_url(
-            str(stored_path), DIRECT_UPLOAD_TTL_SECONDS
-        )
+        try:
+            presigned_url = storage_service.get_presigned_upload_url(
+                str(stored_path), DIRECT_UPLOAD_TTL_SECONDS
+            )
+        except Exception as exc:
+            # R-08: M-115c made presign fail-closed (raises on unreachable
+            # bucket instead of returning a dead URL). Negotiation itself must
+            # not 500: fall back to the server-proxied upload like the None
+            # path below.
+            logger.warning(
+                "Presigned upload unavailable, using proxied upload: %s", exc)
+            presigned_url = None
         if presigned_url is None:
             presigned_url = (
                 f"{absolute_api_prefix}/direct-upload/{file_id}"
