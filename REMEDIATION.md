@@ -250,6 +250,18 @@ ruff clean, mypy 404 files clean, frontend 264 + `tsc` 0 + `next build` 0,
 y-websocket 29/0/1-skip, repo-tree Playwright 15/15, `pip-audit` clean,
 `npm audit` clean, migrations up/down/up single head.
 
+## CI-fix session 2026-11-25 (PR #64 red → green)
+
+GitHub Actions on the PR surfaced 3 real failures; all fixed on this branch:
+
+| Failure | Root cause | Fix | Proof |
+|---|---|---|---|
+| `trivy-action@0.28.0` unresolvable | tag does not exist (newest is v0.36.0) | pin `v0.36.0` (`5c74052`) | every other pinned action verified 200 via API; codeql pin re-checked valid (earlier 404 was my split-string bug) |
+| `pip-audit --disable-pip` exit 1 | current pip-audit CLI rejects `--disable-pip` with unhashed requirements unless `--no-deps` | drop the flag, keep `--desc` (`5c74052`) | `pip-audit -r backend/requirements.txt` → clean, exit 0 |
+| frontend Docker `npm ci` exit 1: lockfile 1.56.1 vs package 1.60.0 + nested postcss 8.4.31 | standalone `frontend/package-lock.json` (tracked, used by the image build) was never updated by D1/D5, which only touched the root lock | aligned frontend devDep to 1.60.0, bumped direct postcss `^8.5.6→^8.5.32`, added matching `overrides`, regenerated the standalone lock (`bf2a254`) | clean-room `npm ci` + `npm audit` 0 vulns + vitest 264 + `tsc` 0 + `next build` 0 on the exact committed files (md5-verified) |
+
+Notes: `npm install --package-lock-only` would not restructure either lock in this environment (always "up to date"); the two hand-edits (root nested-postcss pin, root playwright orphan/nested removal) copy `resolved`/`integrity` verbatim from npm's own output and were each proven by clean-room `npm ci`. The EOVERRIDE lesson is recorded in the D1 entry: an `overrides` value must match any direct `dependencies` spec on the same package.
+
 ## How to verify
 
 ```bash

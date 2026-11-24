@@ -6,10 +6,10 @@ name: Supply Chain Security
 # Gate philosophy (documented, deliberate):
 # - pip-audit, license allowlist, hadolint: BLOCKING. Deterministic, no
 #   known exceptions — a failure here is a real problem, fix forward.
-# - npm audit: fails only on CRITICAL. Two HIGH advisories in the Next.js /
-#   PostCSS chain are knowingly tracked for the Next 16 major upgrade
-#   (see CHANGELOG 12.7.3 and SECURITY.md); they must not go red silently,
-#   so the full report is uploaded as an artifact on every run.
+# - npm audit: fails only on CRITICAL. The former HIGH advisories in the
+#   Next.js / PostCSS chain were cleared via a postcss override
+#   (see CHANGELOG 12.8.4+); the full report is still uploaded as an
+#   artifact on every run so nothing goes red silently.
 # - Trivy filesystem scan: SARIF to the Security tab (report-only). It
 #   graduates to blocking once the baseline is clean for 4 consecutive weeks.
 
@@ -45,7 +45,7 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
       - name: Audit pinned backend requirements
-        run: pip-audit --requirement backend/requirements.txt --disable-pip --desc
+        run: pip-audit --requirement backend/requirements.txt --desc
 
   license-allowlist:
     name: License allowlist (no copyleft)
@@ -130,7 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Scan repo for vulns + misconfigurations
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
