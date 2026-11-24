@@ -369,42 +369,6 @@ function buildGraphFromSteps(pipelineName: string, rawSteps: unknown[]): Builder
   };
 }
 
-function sanitizeYamlValue(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  let cleaned = value.trim();
-  const first = cleaned[0];
-  const last = cleaned[cleaned.length - 1];
-  if ((first === '"' || first === "'") && first === last) {
-    const inner = cleaned.slice(1, -1);
-    if (inner.length > 0 && !inner.includes(first)) {
-      cleaned = inner;
-    }
-  }
-  return cleaned;
-}
-
-function sanitizeConfig(
-  config: Record<string, unknown>
-): Record<string, unknown> {
-  const cleaned: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(config)) {
-    if (typeof value === "string") {
-      cleaned[key] = sanitizeYamlValue(value);
-    } else if (Array.isArray(value)) {
-      cleaned[key] = value.map((item) =>
-        typeof item === "string" ? sanitizeYamlValue(item) : item
-      );
-    } else if (value && typeof value === "object") {
-      cleaned[key] = sanitizeConfig(
-        value as Record<string, unknown>
-      );
-    } else {
-      cleaned[key] = value;
-    }
-  }
-  return cleaned;
-}
-
 function normalizeJoinConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   return {
     on: asString(config.on),
@@ -512,10 +476,13 @@ function normalizeSampleConfigForYaml(config: Record<string, unknown>): Record<s
 
 function normalizeRenameConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   const mapping = toRecord(config.mapping);
+  // F-3: keep mapping entries verbatim (no trim of keys/values). Only the
+  // structural guard remains: entries need a non-empty key and a string
+  // value; anything else is backend-invalid and stays dropped.
   const cleaned = Object.fromEntries(
-    Object.entries(mapping)
-      .filter(([key, value]) => key.trim() && typeof value === "string" && value.trim())
-      .map(([key, value]) => [key, typeof value === "string" ? value.trim() : ""]),
+    Object.entries(mapping).filter(
+      ([key, value]) => key.length > 0 && typeof value === "string",
+    ),
   );
   return { mapping: cleaned };
 }
@@ -715,14 +682,14 @@ export function graphToYAML(nodesOrGraph: BuilderNode[] | BuilderGraph, edgesPar
       step.right = rightEdge ? stepNameByNodeId.get(rightEdge.source) ?? "" : "";
       // M-046: same whitelist + verbatim-passthrough path as other types, so
       // extras (e.g. a per-step contract on a join) survive round-trip.
-      Object.assign(step, sanitizeConfig(normalizeConfigForYaml("join", resolvedNode.data.config)));
+      Object.assign(step, normalizeConfigForYaml("join", resolvedNode.data.config));
     } else {
       const definition = STEP_DEFINITIONS[stepType];
       if (definition && definition.maxInputs > 0) {
         const sourceEdge = incomingEdges[0];
         step.input = sourceEdge ? stepNameByNodeId.get(sourceEdge.source) ?? "" : "";
       }
-      Object.assign(step, sanitizeConfig(normalizeConfigForYaml(stepType, resolvedNode.data.config)));
+      Object.assign(step, normalizeConfigForYaml(stepType, resolvedNode.data.config));
     }
 
     steps.push(step);
