@@ -314,14 +314,16 @@ async def client_disconnected_handler(
     """
     return Response(status_code=499)
 
-# Prometheus metrics — imported from centralized module to avoid circular
-# imports
-
-Instrumentator(
-    should_group_status_codes=False,
-    should_ignore_untemplated=True,
-    excluded_handlers=["/metrics"],
-).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+# Prometheus metrics — exposed only outside production, under the same gate
+# as /docs, /redoc and /openapi.json above (M-158). Local Prometheus
+# scrapes api:8000/metrics in dev/compose; in production the route stays
+# unregistered so unauthenticated cardinality data is never served.
+if settings.ENVIRONMENT != "production":
+    Instrumentator(
+        should_group_status_codes=False,
+        should_ignore_untemplated=True,
+        excluded_handlers=["/metrics"],
+    ).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 @app.exception_handler(PipelineYAMLTooLargeError)
