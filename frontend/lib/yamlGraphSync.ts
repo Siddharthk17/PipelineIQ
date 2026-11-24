@@ -445,7 +445,10 @@ function normalizeAggregateConfigForYaml(config: Record<string, unknown>): Recor
 
 function normalizePivotConfigForYaml(config: Record<string, unknown>): Record<string, unknown> {
   return {
-    index: asStringArray(config.index),
+    // F-2: the backend accepts a scalar-string index (parser.py wraps it
+    // into a list), so preserve it as-is instead of emitting index: [].
+    // Ingress already keeps the scalar verbatim on the node config.
+    index: Array.isArray(config.index) ? asStringArray(config.index) : (config.index ?? []),
     columns: asString(config.columns),
     values: asString(config.values),
     aggfunc: asString(config.aggfunc) || "sum",
