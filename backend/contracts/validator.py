@@ -523,6 +523,12 @@ def validate_against_contract(
             col = output_table.column(field_idx)
             try:
                 unique_vals = pc.unique(col).to_pylist()  # type: ignore[attr-defined]  # pyarrow stubs omit kernels (present at runtime)
+                # B1: NULLs are governed by the `nullable` rule (not_null
+                # above), not by the enum. str(None)="None" is never in the
+                # allowed set, so without this exclusion a nullable column
+                # could never pass with NULLs present.
+                if _is_nullable(col_spec.get("nullable", False)):
+                    unique_vals = [v for v in unique_vals if v is not None]
                 allowed_set = set(str(v) for v in allowed)
                 disallowed = [v for v in unique_vals if str(v) not in allowed_set]
             except Exception:

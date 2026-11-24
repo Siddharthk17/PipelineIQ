@@ -97,10 +97,37 @@ def test_m111_xlsx_rejected_with_honest_415():
 
 
 # --- M-144: pagination / status_filter / webhook id never 500 ---------------
-def test_m144_negative_huge_pagination_and_bad_status_never_500(auth_client):
+def test_m144_negative_huge_pagination_clamped_never_500(auth_client):
+    headers = _register_headers(auth_client)
+    resp = auth_client.get(
+        "/api/v1/pipelines/?page=-5&limit=1000000",
+        headers=headers,
+    )
+    assert resp.status_code == 200
+
+
+def test_b3_invalid_status_filter_is_422_not_silent(auth_client):
+    # B3 (readv3-correctness): a typo'd status_filter must fail closed
+    # with 422, not silently return the unfiltered list (previously this
+    # asserted 200 under M-144's ignore-behavior; the contract changed).
     headers = _register_headers(auth_client)
     resp = auth_client.get(
         "/api/v1/pipelines/?page=-5&limit=1000000&status_filter=bogus",
+        headers=headers,
+    )
+    assert resp.status_code == 422
+    assert "status_filter" in resp.json()["detail"]
+
+
+def test_b3_valid_status_filter_still_filters(auth_client):
+    headers = _register_headers(auth_client)
+    resp = auth_client.get(
+        "/api/v1/pipelines/?status_filter=completed",
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    resp = auth_client.get(
+        "/api/v1/pipelines/?status_filter=COMPLETED",
         headers=headers,
     )
     assert resp.status_code == 200
