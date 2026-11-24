@@ -1093,6 +1093,25 @@ class PipelineParser:
                                     "not strings"
                                 ),
                             ))
+                    else:
+                        # N1: length must be 1 (broadcast, mirroring both
+                        # engines) or match the 'by' column count —
+                        # otherwise pandas AND DuckDB raise at runtime.
+                        _by_count = len(
+                            [c for c in by_vals if str(c).strip()])
+                        if (_by_count > 0 and len(_asc_vals) != 1
+                                and len(_asc_vals) != _by_count):
+                            errors.append(
+                                ValidationError(
+                                    step_name=step_name,
+                                    field="ascending",
+                                    message=(
+                                        "Sort step 'ascending' length "
+                                        f"({len(_asc_vals)}) must match 'by' "
+                                        f"columns ({_by_count}) or be a single "
+                                        "boolean to broadcast to all columns"
+                                    ),
+                                ))
 
             if (isinstance(step, ValidateStepConfig)
                     and (not isinstance(step.rules, list)
