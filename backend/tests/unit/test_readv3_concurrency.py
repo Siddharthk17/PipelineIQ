@@ -4,19 +4,43 @@ G: pipelines' forked idempotency waiter never expired the cached row, so a
    truly-concurrent duplicate run-create always timed out to 409 instead of
    replaying the owner's 202. The fork is deleted; the run paths delegate to
    the contracts helper (which expires before re-reading).
+H: idempotency placeholders were pinned forever on non-HTTP errors
+   (contracts released only on HTTPException; schedules/webhooks never
+   released) and never expired. Claim now releases on any error and GCs
+   stale placeholders (status NULL older than 24h) at claim time.
 
 Runs on the hermetic SQLite test DB; no live services needed.
 """
 import uuid
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 import backend.api.contracts as contracts_mod
 import backend.api.pipelines as pipelines_mod
+from backend.models.data_contract import IdempotencyKey
 
 
 def _user_id():
     return uuid.uuid4()
+
+
+def _make_user(db, role="admin"):
+    from backend.models import User
+
+    user = User(
+        id=uuid.uuid4(),
+        email=f"rc3_{uuid.uuid4().hex[:8]}@t.local",
+        username=f"rc3_{uuid.uuid4().hex[:8]}",
+        hashed_password="x",
+        role=role,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    return user
 
 
 def _other_session(db):
@@ -80,3 +104,187 @@ class TestGSharedWaiter:
             assert done.response_body == {"run_id": "r1"}
         finally:
             other.close()
+
+
+# ---------------------------------------------------------------------------
+# H: release-on-error + stale-placeholder GC.
+# ---------------------------------------------------------------------------
+
+
+def _backdate_placeholder(db, row, age):
+    row.created_at = datetime.now(UTC).replace(tzinfo=None) - age
+    db.add(row)
+    db.commit()
+
+
+class TestHStalePlaceholderGC:
+    def test_stale_placeholder_reclaimed_at_claim(self, test_db):
+        user_id = _user_id()
+        stale = IdempotencyKey(
+            scope="contract_create", key="h-stale", user_id=user_id,
+            status_code=None, response_body=None,
+        )
+        test_db.add(stale)
+        test_db.commit()
+        _backdate_placeholder(test_db, stale, timedelta(hours=25))
+
+        action, row = contracts_mod._idempotency_claim(
+            test_db, scope="contract_create", key="h-stale",
+            user_id=user_id,
+        )
+        assert action == "owner", (
+            f"stale placeholder must be reclaimed, got {action}")
+        rows = test_db.query(IdempotencyKey).filter(
+            IdempotencyKey.scope == "contract_create",
+            IdempotencyKey.key == "h-stale").all()
+        assert len(rows) == 1 and rows[0].id == row.id
+
+    def test_fresh_placeholder_still_inflight(self, test_db):
+        user_id = _user_id()
+        action, _ = contracts_mod._idempotency_claim(
+            test_db, scope="contract_create", key="h-fresh",
+            user_id=user_id,
+        )
+        assert action == "owner"
+        action2, _ = contracts_mod._idempotency_claim(
+            test_db, scope="contract_create", key="h-fresh",
+            user_id=user_id,
+        )
+        assert action2 == "inflight"
+
+    def test_stale_sweep_cleans_other_keys(self, test_db):
+        user_id = _user_id()
+        for k in ("h-sweep-1", "h-sweep-2"):
+            row = IdempotencyKey(
+                scope="schedule_create", key=k, user_id=user_id,
+                status_code=None, response_body=None,
+            )
+            test_db.add(row)
+        test_db.commit()
+        for k in ("h-sweep-1", "h-sweep-2"):
+            row = test_db.query(IdempotencyKey).filter(
+                IdempotencyKey.key == k).one()
+            _backdate_placeholder(test_db, row, timedelta(hours=30))
+        # Claiming an unrelated key sweeps the stale ones in the scope.
+        action, _ = contracts_mod._idempotency_claim(
+            test_db, scope="schedule_create", key="h-sweep-new",
+            user_id=user_id,
+        )
+        assert action == "owner"
+        leftover = test_db.query(IdempotencyKey).filter(
+            IdempotencyKey.scope == "schedule_create",
+            IdempotencyKey.key.in_(["h-sweep-1", "h-sweep-2"])).count()
+        assert leftover == 0
+
+    def test_pipeline_claim_reclaims_stale(self, test_db):
+        user_id = _user_id()
+        stale = IdempotencyKey(
+            scope="pipeline_run", key="h-pipe-stale", user_id=user_id,
+            status_code=None, response_body=None,
+        )
+        test_db.add(stale)
+        test_db.commit()
+        _backdate_placeholder(test_db, stale, timedelta(hours=25))
+        action, _ = pipelines_mod._idempotency_claim(
+            test_db, scope="pipeline_run", key="h-pipe-stale",
+            user_id=user_id,
+        )
+        assert action == "owner"
+
+
+class TestHReleaseOnError:
+    def test_contract_create_db_blip_frees_key(self, test_db, monkeypatch):
+        from backend.schemas import ContractCreateRequest
+
+        admin = _make_user(test_db, role="admin")
+        body = ContractCreateRequest(
+            yaml_content=(
+                "columns:\n"
+                "  order_id:\n"
+                "    type: integer\n"
+                "    nullable: false\n"
+            ),
+            severity="warn",
+            consumers=[],
+        )
+        request = SimpleNamespace(headers={"idempotency-key": "h-blip"})
+
+        def _blip(*args, **kwargs):
+            raise RuntimeError("simulated DB blip mid-commit")
+
+        monkeypatch.setattr(
+            contracts_mod, "_create_contract_version", _blip)
+        with pytest.raises(RuntimeError):
+            contracts_mod.create_contract(
+                "h_pipe", body, request, test_db, admin)
+        # Retry with the same key must get a fresh attempt, not a
+        # permanent 409 "still in progress".
+        action, _ = contracts_mod._idempotency_claim(
+            test_db, scope="contract_create", key="h-blip",
+            user_id=admin.id,
+        )
+        assert action == "owner", (
+            f"key still pinned after failed create (got {action})")
+
+    def test_schedule_create_failure_frees_key(self, test_db, monkeypatch):
+        import backend.api.schedules as schedules_mod
+        from backend.models import UploadedFile
+
+        admin = _make_user(test_db, role="admin")
+        seed = UploadedFile(
+            original_filename="h.csv",
+            stored_path="/tmp/h.csv",
+            file_size_bytes=10,
+            row_count=1,
+            column_count=1,
+            columns=["a"],
+            dtypes={"a": "int64"},
+            user_id=admin.id,
+        )
+        test_db.add(seed)
+        test_db.commit()
+        body = schedules_mod.CreateScheduleRequest(
+            pipeline_name="h_sched",
+            yaml_config=(
+                "pipeline:\n  name: h_sched\n  steps:\n"
+                "    - name: load_it\n"
+                "      type: load\n"
+                f"      file_id: {seed.id}\n"
+            ),
+            cron_expression="0 3 * * *",
+        )
+        request = SimpleNamespace(headers={"idempotency-key": "h-sched"})
+
+        def _blip(*args, **kwargs):
+            raise RuntimeError("simulated audit outage")
+
+        monkeypatch.setattr(schedules_mod, "log_action", _blip)
+        with pytest.raises(RuntimeError):
+            schedules_mod.create_schedule(request, body, test_db, admin)
+        action, _ = contracts_mod._idempotency_claim(
+            test_db, scope="schedule_create", key="h-sched",
+            user_id=admin.id,
+        )
+        assert action == "owner", (
+            f"key still pinned after failed schedule create (got {action})")
+
+    def test_webhook_create_failure_frees_key(self, test_db, monkeypatch):
+        import backend.api.webhooks as webhooks_mod
+
+        admin = _make_user(test_db, role="admin")
+        body = webhooks_mod.WebhookCreate.model_construct(
+            url="https://example.com/hook", secret=None, events=None)
+        request = SimpleNamespace(headers={"idempotency-key": "h-wh"})
+
+        def _blip(*args, **kwargs):
+            raise RuntimeError("simulated audit outage")
+
+        monkeypatch.setattr(webhooks_mod, "log_action", _blip)
+        with pytest.raises(RuntimeError):
+            webhooks_mod.create_webhook(body, request, test_db, admin)
+        action, _ = contracts_mod._idempotency_claim(
+            test_db, scope="webhook_create", key="h-wh",
+            user_id=admin.id,
+        )
+        assert action == "owner", (
+            f"key still pinned after failed webhook create (got {action})")

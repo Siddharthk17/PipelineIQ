@@ -115,6 +115,7 @@ def create_webhook(
         _get_idempotency_key,
         _idempotency_claim,
         _idempotency_complete,
+        _idempotency_release,
         _idempotency_wait,
     )
 
@@ -138,48 +139,55 @@ def create_webhook(
                 detail="Duplicate idempotent request still in progress",
             )
 
-    webhook = Webhook(
-        user_id=current_user.id,
-        url=body.url,
-        secret=body.secret,
-        events=body.events or ["pipeline_completed", "pipeline_failed"],
-    )
-    db.add(webhook)
     try:
-        db.commit()
-    except Exception:
-        # Leave the session usable for the caller (M-173); the dependency
-        # closes it, but a poisoned session would break retries/audit.
-        db.rollback()
-        raise
-    db.refresh(webhook)
-
-    log_action(
-        db,
-        "webhook_created",
-        user_id=current_user.id,
-        resource_type="webhook",
-        resource_id=webhook.id,
-        details={
-            "url": body.url})
-
-    response = WebhookResponse(
-        id=str(webhook.id),
-        url=webhook.url,
-        events=webhook.events,
-        is_active=webhook.is_active,
-        created_at=webhook.created_at,
-        has_secret=webhook.secret is not None,
-    )
-    if idem_row is not None:
-        _idempotency_complete(
-            db,
-            idem_row,
-            status_code=status.HTTP_201_CREATED,
-            body=response.model_dump(mode="json"),
-            resource_id=str(webhook.id),
+        webhook = Webhook(
+            user_id=current_user.id,
+            url=body.url,
+            secret=body.secret,
+            events=body.events or ["pipeline_completed", "pipeline_failed"],
         )
-    return response
+        db.add(webhook)
+        try:
+            db.commit()
+        except Exception:
+            # Leave the session usable for the caller (M-173); the dependency
+            # closes it, but a poisoned session would break retries/audit.
+            db.rollback()
+            raise
+        db.refresh(webhook)
+
+        log_action(
+            db,
+            "webhook_created",
+            user_id=current_user.id,
+            resource_type="webhook",
+            resource_id=webhook.id,
+            details={
+                "url": body.url})
+
+        response = WebhookResponse(
+            id=str(webhook.id),
+            url=webhook.url,
+            events=webhook.events,
+            is_active=webhook.is_active,
+            created_at=webhook.created_at,
+            has_secret=webhook.secret is not None,
+        )
+        if idem_row is not None:
+            _idempotency_complete(
+                db,
+                idem_row,
+                status_code=status.HTTP_201_CREATED,
+                body=response.model_dump(mode="json"),
+                resource_id=str(webhook.id),
+            )
+        return response
+    except Exception:
+        # Never pin the key on a failure (M-062): without this, one DB
+        # blip after the claim would 409 every future retry forever.
+        if idem_row is not None:
+            _idempotency_release(db, idem_row)
+        raise
 
 
 @router.get("/", response_model=list[WebhookResponse])

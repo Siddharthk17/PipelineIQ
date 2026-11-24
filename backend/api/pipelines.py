@@ -340,8 +340,14 @@ def _idempotency_claim(
 
     Returns ("owner", row) when this request won the key, ("replay", row)
     when a completed response is stored, or ("inflight", row) when another
-    request is still producing the response.
+    request is still producing the response. Stale placeholders (crashed
+    owner, older than the TTL) are reclaimed so the key is reusable (M-062).
     """
+    from backend.api.contracts import (
+        _idempotency_gc_stale,
+        _placeholder_is_stale,
+    )
+    _idempotency_gc_stale(db, scope)
     existing = (
         db.query(IdempotencyKey)
         .filter(
@@ -354,7 +360,18 @@ def _idempotency_claim(
     if existing is not None:
         if existing.status_code is not None:
             return "replay", existing
-        return "inflight", existing
+        if _placeholder_is_stale(existing):
+            try:
+                db.delete(existing)
+                db.commit()
+            except Exception:
+                logger.warning("Failed to reclaim stale idempotency "
+                               "placeholder", exc_info=True)
+                db.rollback()
+                return "inflight", existing
+            existing = None
+        else:
+            return "inflight", existing
     row = IdempotencyKey(
         scope=scope, key=key, user_id=user_id,
         status_code=None, response_body=None,

@@ -239,6 +239,7 @@ def create_schedule(
         _get_idempotency_key,
         _idempotency_claim,
         _idempotency_complete,
+        _idempotency_release,
         _idempotency_wait,
     )
 
@@ -262,37 +263,44 @@ def create_schedule(
                 detail="Duplicate idempotent request still in progress",
             )
 
-    schedule = PipelineSchedule(
-        user_id=current_user.id,
-        pipeline_name=body.pipeline_name,
-        yaml_config=body.yaml_config,
-        cron_expression=body.cron_expression,
-        cron_human=human,
-        is_active=True,
-        next_run_at=next_run,
-    )
-    db.add(schedule)
-    db.commit()
-    db.refresh(schedule)
-
-    log_action(
-        db, "schedule_created", user_id=current_user.id,
-        resource_type="schedule", resource_id=schedule.id,
-        details={"pipeline_name": body.pipeline_name, "cron": body.cron_expression},
-        request=request)
-
-    logger.info("Schedule created: id=%s, pipeline=%s, cron=%s",
-                schedule.id, body.pipeline_name, body.cron_expression)
-    response = _schedule_to_response(schedule)
-    if idem_row is not None:
-        _idempotency_complete(
-            db,
-            idem_row,
-            status_code=status.HTTP_201_CREATED,
-            body=response.model_dump(mode="json"),
-            resource_id=str(schedule.id),
+    try:
+        schedule = PipelineSchedule(
+            user_id=current_user.id,
+            pipeline_name=body.pipeline_name,
+            yaml_config=body.yaml_config,
+            cron_expression=body.cron_expression,
+            cron_human=human,
+            is_active=True,
+            next_run_at=next_run,
         )
-    return response
+        db.add(schedule)
+        db.commit()
+        db.refresh(schedule)
+
+        log_action(
+            db, "schedule_created", user_id=current_user.id,
+            resource_type="schedule", resource_id=schedule.id,
+            details={"pipeline_name": body.pipeline_name, "cron": body.cron_expression},
+            request=request)
+
+        logger.info("Schedule created: id=%s, pipeline=%s, cron=%s",
+                    schedule.id, body.pipeline_name, body.cron_expression)
+        response = _schedule_to_response(schedule)
+        if idem_row is not None:
+            _idempotency_complete(
+                db,
+                idem_row,
+                status_code=status.HTTP_201_CREATED,
+                body=response.model_dump(mode="json"),
+                resource_id=str(schedule.id),
+            )
+        return response
+    except Exception:
+        # Never pin the key on a failure (M-062): without this, one DB
+        # blip after the claim would 409 every future retry forever.
+        if idem_row is not None:
+            _idempotency_release(db, idem_row)
+        raise
 
 
 @router.get("/", summary="List user's pipeline schedules")

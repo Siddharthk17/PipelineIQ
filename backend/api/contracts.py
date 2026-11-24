@@ -6,6 +6,7 @@ read-only access to contract violations detected during pipeline execution.
 
 import logging
 import time
+from datetime import UTC, datetime, timedelta
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -43,6 +44,51 @@ _IDEMPOTENT_POLL_INTERVAL_S = 0.2
 
 # Upper bound on retries for deactivate-then-insert version races (M-008).
 _VERSION_WRITE_MAX_ATTEMPTS = 3
+
+# A claim placeholder (status_code NULL) older than this never belonged to a
+# live request: the duplicate-wait budget is seconds, so a day-old row is a
+# leftover of a crashed request. Such rows are reclaimed opportunistically
+# at claim time so a dead key cannot pin its (scope, key, user) forever and
+# the table cannot grow without bound. No migration, no TTL column (M-062).
+_STALE_PLACEHOLDER_TTL = timedelta(hours=24)
+
+# Bound on rows swept per claim so one request never pays for the whole
+# table; leftovers are picked up by later claims.
+_STALE_GC_BATCH_LIMIT = 100
+
+
+def _placeholder_is_stale(row: IdempotencyKey) -> bool:
+    """True when `row` is an uncompleted claim older than the TTL."""
+    if row.status_code is not None or row.created_at is None:
+        return False
+    seen = row.created_at
+    if seen.tzinfo is None:
+        # SQLite returns naive datetimes; PG returns aware. Normalize so
+        # the comparison is valid on either backend.
+        seen = seen.replace(tzinfo=UTC)
+    return seen < datetime.now(UTC) - _STALE_PLACEHOLDER_TTL
+
+
+def _idempotency_gc_stale(db: Session, scope: str) -> None:
+    """Delete stale claim placeholders for `scope`, best-effort (M-062)."""
+    try:
+        candidates = (
+            db.query(IdempotencyKey)
+            .filter(
+                IdempotencyKey.scope == scope,
+                IdempotencyKey.status_code.is_(None),
+            )
+            .limit(_STALE_GC_BATCH_LIMIT)
+            .all()
+        )
+        for candidate in candidates:
+            if _placeholder_is_stale(candidate):
+                db.delete(candidate)
+        db.commit()
+    except Exception:  # never fail a claim because housekeeping failed
+        logger.warning("Stale idempotency-placeholder GC failed",
+                       exc_info=True)
+        db.rollback()
 
 
 def _ensure_pipeline_contract_access(
@@ -228,29 +274,45 @@ def _idempotency_claim(
     request is still producing the response. The unique constraint makes
     concurrent duplicate claims collapse to a single owner.
     """
+    _idempotency_gc_stale(db, scope)
     existing = _idempotency_lookup(db, scope=scope, key=key, user_id=user_id)
     if existing is not None:
         if existing.status_code is not None:
             return "replay", existing
-        return "inflight", existing
-    row = IdempotencyKey(
-        scope=scope,
-        key=key,
-        user_id=user_id,
-        status_code=None,
-        response_body=None,
-    )
-    db.add(row)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        existing = _idempotency_lookup(db, scope=scope, key=key, user_id=user_id)
-        if existing is not None and existing.status_code is not None:
-            return "replay", existing
-        return "inflight", existing
-    db.refresh(row)
-    return "owner", row
+        if _placeholder_is_stale(existing):
+            # Leftover of a crashed request: reclaim it instead of 409ing
+            # forever on a key whose owner will never come back (M-062).
+            try:
+                db.delete(existing)
+                db.commit()
+            except Exception:
+                logger.warning("Failed to reclaim stale idempotency "
+                               "placeholder", exc_info=True)
+                db.rollback()
+                return "inflight", existing
+            existing = None
+        else:
+            return "inflight", existing
+    if existing is None:
+        row = IdempotencyKey(
+            scope=scope,
+            key=key,
+            user_id=user_id,
+            status_code=None,
+            response_body=None,
+        )
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            existing = _idempotency_lookup(
+                db, scope=scope, key=key, user_id=user_id)
+            if existing is not None and existing.status_code is not None:
+                return "replay", existing
+            return "inflight", existing
+        db.refresh(row)
+        return "owner", row
 
 
 def _idempotency_wait(
@@ -489,6 +551,13 @@ def create_contract(
             )
             if stored is not None and stored.response_body is not None:
                 return ContractDefResponse(**stored.response_body)
+        if idem_row is not None:
+            _idempotency_release(db, idem_row)
+        raise
+    except Exception:
+        # A non-HTTP failure (DB blip mid-commit, bug) must not pin the key
+        # forever: release the placeholder so a retry gets a fresh attempt
+        # instead of 409 "still in progress" until the end of time (M-062).
         if idem_row is not None:
             _idempotency_release(db, idem_row)
         raise
