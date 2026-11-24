@@ -44,6 +44,11 @@
   "keywords": [],
   "author": "",
   "license": "Apache-2.0",
+  "overrides": {
+    "next": {
+      "postcss": "^8.5.32"
+    }
+  },
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/Siddharthk17/PipelineIQ/issues"
