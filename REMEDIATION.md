@@ -127,6 +127,104 @@ C2-012 duplicate `__table_args__` removed; C2-013 backup/restore
 - O2-007 live-container/CVE verification not run here (no docker daemon;
   backend/frontend suites + static checks are the gate).
 
+## Resume session 2026-11-24/25 (16 open items + re-audit cycle 3)
+
+Prior `/tmp` scratch (venv, proofs, agent reports) was wiped by the environment;
+ledger survived on the `remediation-ledger` branch (`ledger/master.md`, 177
+entries). New work dir `/tmp/remediation-pipelineiq-20261124T175057Z`
+(state.md, tooling.md, plan.md, verified-*.md, readversarial3-*.md).
+Resume tag `resume-20261124-175057`. Stayed on `remediation/20261116-071013`
+(it is the remediation branch; tree was clean). Project `.venv` was broken
+(dangling symlinks, wrong Python); rebuilt a py3.11 venv under the work dir.
+Fresh venv + PG16 @ :5432 + redislite :6379-82.
+
+### Re-verification of the 16 ledger entries with no fix commit
+
+Three subagents + orchestrator spot-checks, all evidence in
+`ledger/verified-{engine,apiops,deploy}.md`:
+
+- ALREADY-FIXED: M-054 (weak-secret blocklist), M-120 (requirements.lock),
+  M-019 readyz-half (503 when degraded).
+- FALSE-POSITIVE: M-177 (ingress routes /yjs too). BY-DESIGN: M-019 health
+  alias (documented 200 + truthful payload).
+- CONFIRMED and fixed this session: M-046 (Medium), M-047 rate-key half
+  (Medium; login-order half already fixed), M-085 narrowed (Low; N+1 not
+  evidenced), M-112 (Medium), M-114 (Low), M-115 (Medium), M-125 narrowed
+  (Low), M-158 /metrics half (Low; docs/debug halves OK), M-181 mitigated
+  (Info), M-182 (Low), M-187 narrowed (Info). M-186 compose dev-build stays
+  a documented residual.
+- Own false positive of this session (corrected, not the audits'): the root
+  `package-lock.json` looked stale checking top-level keys only — npm
+  workspaces legitimately nest non-hoisted deps; clean `npm ci` reproduces
+  the full tree (vitest 82 pass, tsc 0). No commit made.
+
+### Fix wave (all merged --no-ff, zero conflicts)
+
+| Finding | Commit(s) | Test |
+|---|---|---|
+| M-046 builder round-trip loss | fix/frontend-builder-resume | yamlRoundTripPreservation (7) |
+| M-112/M-114 engine parity | fix/engine-correctness-resume | engine parity (19) |
+| M-047 rate-key spoof | fix/rate-limit-resume | trusted-proxy (10) + updated budgeting suite |
+| M-085 lists/counters | fix/api-lists-resume | list pagination (13) |
+| M-115 storage | fix/storage-resume | fail-closed (13) + repaired presigned-endpoint mocks |
+| M-125/M-182/M-187/M-158/M-181 deploy | fix/deploy-hygiene-resume | metrics exposure (2); YAML/config proofs |
+| k8s worker YAML malformed (pre-existing, found via M-125) | 88c022d | safe_load_all parses |
+| mypy unused-ignore from wave | afe9e41 | — |
+| R-08 presign 500 | 5fcf2d3 | presign-fallback test |
+| R-06 doc | d5ddfca | — |
+
+### Environment notes (this session's hard lessons)
+
+- `.env` points at compose hostnames. Tests need every `*_URL` overridden to
+  localhost (DATABASE_WRITE/READ_URL, all REDIS_*, CELERY_*); see work-dir
+  `test-env.sh`. Un-overridden hosts cost ~7.5s DNS each and fail tests
+  (`duration < 1.0`, Oracle-order login timing, etc.).
+- Throwaway PG needs `CREATE EXTENSION pg_trgm` (cancel-race test).
+- `/tmp` has a quota (EDQUOT at ~3GB): keep venv/worktrees lean, exclude
+  uploads from backups, run `npm ci` trees on `/var/tmp`.
+- Initial full-suite hangs were DNS backoff against `minio:9000`, not code.
+  `--timeout=300` bounds every run now.
+
+### Re-audit cycle 3 (blind, 4 tracks)
+
+- Security (static-only session): 0 Critical/High, 1 Medium (R-06: RFC1918
+  X-Real-IP trust is bypassable behind a non-overwriting private hop —
+  kept by design for default compose, documented in RUNBOOK), 3 Low, rest Info.
+- Concurrency: 5 prior fixes verified; new G (idempotency waiter never sees
+  completion — Medium), H (placeholder pinning — Medium), I (resume/stop
+  race — Medium), J (CANCELLED clobber — Low). All fixed, merged.
+- Frontend: new F-1 validate-rule params dropped (High), F-2 pivot scalar
+  index (Medium), F-3 whitespace/quote mangling (Medium), F-4 JWT in WS URL
+  (Medium), F-5 health error type (Low). All fixed, merged (one existing test
+  updated to the new correct expectation, same strength).
+- Correctness: 18/18 prior fixes verified; new B1 nullable enums, B2 numeric
+  fail-open validators, B3 status_filter ignore, N1 sort-length, N2 stratify
+  divergence (all Medium), N3 legacy keys (Low). All fixed, merged.
+- Round-2 lint fallout (6 ruff errors) repaired by hand with targeted suites
+  green (ec2ec2d).
+
+### Final gate (post everything, this session)
+
+- backend: **1586 passed, 27 skipped, 0 failed** on the final tree
+  (`full-v5-final.log`, 237s, `--timeout=300`); ruff clean; mypy clean
+  (404 files).
+- frontend: full vitest 28 files / 264 passed, `tsc --noEmit` exit 0
+  (clean `npm ci` tree on `/var/tmp`, byte-identical sources).
+- Blocked (unchanged): docker build/push, container/IaC scans, k6
+  load test (no docker daemon); e2e Playwright (needs full stack).
+
+### Updated residuals (added this session)
+
+- R-06: documented; code kept (see RUNBOOK "Rate limiting and trusted
+  proxies"). Revisit if a private-hop-without-overwrite topology appears.
+- Demo admin password stays published behind the explicit opt-in flag
+  (public demo by design; production refuses seeding).
+- Yjs join-time-only authz (revocation lags on long-lived sockets).
+- R-11/R-12 runtime proofs (alias-cap timing, ReDoS timing) still open as
+  test-only follow-ups; static evidence is in place.
+- /metrics prod-gate relies on `ENVIRONMENT=production` being set correctly
+  in every prod manifest (k8s configmap sets it; verify on new targets).
+
 ## How to verify
 
 ```bash
