@@ -681,7 +681,24 @@ class PipelineParser:
             # (both engines implement them). Normalize to canonical here so
             # the VALID_FILL_NULLS_STRATEGIES whitelist (kept at 6 canonical
             # names) validates them.
-            _strategy = raw.get("strategy", "constant")
+            # N3: tolerate pre-M-046 builder YAML using legacy `method` /
+            # `value` keys (DuckDB SQL builder already falls back to them).
+            # Canonical keys win; warn-level log, no error.
+            _strategy = raw.get("strategy", raw.get("method", "constant"))
+            if "method" in raw and "strategy" not in raw:
+                logger.warning(
+                    "Step '%s' uses legacy fill_nulls key 'method'; "
+                    "use 'strategy' instead",
+                    name,
+                )
+            _constant_value = raw.get(
+                "constant_value", raw.get("value"))
+            if "value" in raw and "constant_value" not in raw:
+                logger.warning(
+                    "Step '%s' uses legacy fill_nulls key 'value'; "
+                    "use 'constant_value' instead",
+                    name,
+                )
             if isinstance(_strategy, str):
                 _alias = {"ffill": "forward_fill",
                           "bfill": "backward_fill"}.get(_strategy.lower())
@@ -692,16 +709,26 @@ class PipelineParser:
                 step_type=step_type,
                 input=raw.get("input", ""),
                 strategy=_strategy,
-                constant_value=raw.get("constant_value"),
+                constant_value=_constant_value,
                 columns=raw.get("columns", []),
             )
         if step_type == StepType.SAMPLE:
+            # N3: tolerate pre-M-046 builder YAML using legacy `frac`
+            # (DuckDB SQL builder already falls back to it). Canonical
+            # `fraction` wins; warn-level log, no error.
+            _fraction = raw.get("fraction", raw.get("frac"))
+            if "frac" in raw and "fraction" not in raw:
+                logger.warning(
+                    "Step '%s' uses legacy sample key 'frac'; "
+                    "use 'fraction' instead",
+                    name,
+                )
             return SampleStepConfig(
                 name=name,
                 step_type=step_type,
                 input=raw.get("input", ""),
                 n=raw.get("n"),
-                fraction=raw.get("fraction"),
+                fraction=_fraction,
                 random_state=raw.get("random_state", 42),
                 stratify_by=raw.get("stratify_by"),
             )
