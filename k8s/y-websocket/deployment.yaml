@@ -23,7 +23,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: y-websocket
-          image: ghcr.io/siddharthk17/pipelineiq-y-websocket:latest
+          image: ghcr.io/siddharthk17/pipelineiq-y-websocket:12.8.4
           imagePullPolicy: Always
           ports:
             - containerPort: 1234
