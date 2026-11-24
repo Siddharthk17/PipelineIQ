@@ -428,11 +428,21 @@ export async function getImpactAnalysis(runId: string, step: string, column: str
 export async function checkHealth(): Promise<{ status: string; version: string; db: string; redis: string }> {
   const res = await fetch(`${API_BASE_URL}/health`);
   if (!res.ok) {
+    // F-5: read the body exactly once as text, then interpret it — the
+    // previous json()-then-text() fallback consumed an already-read
+    // stream for non-JSON error bodies (proxy HTML pages), throwing
+    // "Body is unusable" TypeError instead of ApiError. Same pattern as
+    // fetchWithAuth above.
     let detail: unknown;
     try {
-      detail = await res.json();
+      const text = await res.text();
+      try {
+        detail = text ? JSON.parse(text) : res.statusText;
+      } catch {
+        detail = text || res.statusText || "Health check failed";
+      }
     } catch {
-      detail = await res.text();
+      detail = res.statusText || "Health check failed";
     }
     throw new ApiError(
       res.status,
