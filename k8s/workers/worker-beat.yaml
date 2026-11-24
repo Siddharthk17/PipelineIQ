@@ -27,7 +27,7 @@ spec:
           # it on crash (restartPolicy via the Deployment default); missed
           # ticks are visible in the scheduler logs and the reconciler
           # converges orphaned schedules (M-018).
-          image: ghcr.io/siddharthk17/pipelineiq-backend:latest
+          image: ghcr.io/siddharthk17/pipelineiq-backend:12.8.4
           imagePullPolicy: Always
           command:
             - celery

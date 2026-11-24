@@ -60,6 +60,9 @@ if [ "${DB_CLIENT_ALIAS_USER}" != "${DB_USER}" ]; then
 fi
 
 chown postgres:postgres /etc/pgbouncer/pgbouncer.ini /etc/pgbouncer/userlist.txt
-chmod 600 /etc/pgbouncer/userlist.txt
+# M-182: pgbouncer.ini embeds ${DB_PASSWORD} in the database connection
+# string, so it needs the same 0600 treatment as userlist.txt (0644 default
+# would expose the password to any local user).
+chmod 600 /etc/pgbouncer/pgbouncer.ini /etc/pgbouncer/userlist.txt
 
 exec su-exec postgres pgbouncer /etc/pgbouncer/pgbouncer.ini

@@ -655,21 +655,21 @@ services:
   redis-broker:
     image: redis:7.4.2-alpine
     container_name: pipelineiq-redis-broker
-    # M-123 (static note): every redis role enforces --requirepass wired to
-    # the same REDIS_PASSWORD. With an empty REDIS_PASSWORD the server would
-    # fail closed at startup; no daemon here to live-verify, see REPORT.md.
+    # M-123/M-182 (static note): every redis role enforces requirepass wired
+    # to the same REDIS_PASSWORD. The password is written at container entry
+    # into a 0600 conf file owned by the redis user from the runtime
+    # environment — never on argv (visible in `docker inspect` / ps). An
+    # empty REDIS_PASSWORD fails closed here at startup; no daemon here to
+    # live-verify, see REPORT.md.
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     sysctls:
       net.core.somaxconn: 511
     command: >
-      redis-server
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
-      --save ""
-      --appendonly no
-      --requirepass ${REDIS_PASSWORD}
-      --loglevel notice
+      sh -c 'umask 077 && if [ -z "$${REDIS_PASSWORD}" ]; then echo "FATAL: REDIS_PASSWORD must not be empty" >&2; exit 1; fi &&
+      printf "requirepass %s\n" "$${REDIS_PASSWORD}" > /tmp/redis-auth.conf && chmod 600 /tmp/redis-auth.conf &&
+      chown redis:redis /tmp/redis-auth.conf &&
+      exec gosu redis redis-server /tmp/redis-auth.conf --maxmemory 512mb --maxmemory-policy allkeys-lru --save "" --appendonly no --loglevel notice'
     ports:
       - "127.0.0.1:6379:6379"
     # NOTE: intentionally no volume — broker runs with --save "" --appendonly no,
@@ -691,14 +691,10 @@ services:
     sysctls:
       net.core.somaxconn: 511
     command: >
-      redis-server
-      --port 6380
-      --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
-      --save ""
-      --appendonly no
-      --requirepass ${REDIS_PASSWORD}
-      --loglevel notice
+      sh -c 'umask 077 && if [ -z "$${REDIS_PASSWORD}" ]; then echo "FATAL: REDIS_PASSWORD must not be empty" >&2; exit 1; fi &&
+      printf "requirepass %s\n" "$${REDIS_PASSWORD}" > /tmp/redis-auth.conf && chmod 600 /tmp/redis-auth.conf &&
+      chown redis:redis /tmp/redis-auth.conf &&
+      exec gosu redis redis-server /tmp/redis-auth.conf --port 6380 --maxmemory 512mb --maxmemory-policy allkeys-lru --save "" --appendonly no --loglevel notice'
     ports:
       - "127.0.0.1:6380:6380"
     healthcheck:
@@ -721,15 +717,10 @@ services:
     sysctls:
       net.core.somaxconn: 511
     command: >
-      redis-server
-      --port 6381
-      --maxmemory 1gb
-      --maxmemory-policy allkeys-lru
-      --maxmemory-samples 10
-      --save ""
-      --appendonly no
-      --requirepass ${REDIS_PASSWORD}
-      --loglevel notice
+      sh -c 'umask 077 && if [ -z "$${REDIS_PASSWORD}" ]; then echo "FATAL: REDIS_PASSWORD must not be empty" >&2; exit 1; fi &&
+      printf "requirepass %s\n" "$${REDIS_PASSWORD}" > /tmp/redis-auth.conf && chmod 600 /tmp/redis-auth.conf &&
+      chown redis:redis /tmp/redis-auth.conf &&
+      exec gosu redis redis-server /tmp/redis-auth.conf --port 6381 --maxmemory 1gb --maxmemory-policy allkeys-lru --maxmemory-samples 10 --save "" --appendonly no --loglevel notice'
     ports:
       - "127.0.0.1:6381:6381"
     volumes:
@@ -788,12 +779,10 @@ services:
     sysctls:
       net.core.somaxconn: 511
     command: >
-      redis-server
-      --port 6382
-      --maxmemory 128mb
-      --appendonly yes
-      --requirepass ${REDIS_PASSWORD}
-      --loglevel notice
+      sh -c 'umask 077 && if [ -z "$${REDIS_PASSWORD}" ]; then echo "FATAL: REDIS_PASSWORD must not be empty" >&2; exit 1; fi &&
+      printf "requirepass %s\n" "$${REDIS_PASSWORD}" > /tmp/redis-auth.conf && chmod 600 /tmp/redis-auth.conf &&
+      chown redis:redis /tmp/redis-auth.conf &&
+      exec gosu redis redis-server /tmp/redis-auth.conf --port 6382 --maxmemory 128mb --appendonly yes --loglevel notice'
     ports:
       - "127.0.0.1:6382:6382"
     volumes:
@@ -866,14 +855,20 @@ services:
     mem_limit: 512m
     security_opt:
       - no-new-privileges:true
+    # M-182: broker URL and --basic_auth are expanded at container runtime
+    # from the environment (same $$ pattern as the redis healthchecks), so
+    # secret values never land in the compose-rendered argv (`docker compose
+    # config` / `docker inspect`). Quoted (M-115). Residual: flower itself
+    # only accepts --basic_auth on argv, so the expanded secret is still
+    # visible in the *running* process table — no file-based option exists.
     command: >
-      sh -c "sleep 5 &&
-      celery --broker=redis://:${REDIS_PASSWORD}@redis-broker:6379/0
+      sh -c 'sleep 5 &&
+      exec celery --broker="redis://:$${REDIS_PASSWORD}@redis-broker:6379/0"
       -A backend.celery_app:celery_app flower
       --port=5555
       --url_prefix=flower
-      --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
-      --inspect_timeout=10000"
+      --basic_auth="$${FLOWER_USER}:$${FLOWER_PASSWORD}"
+      --inspect_timeout=10000'
     ports:
       - "127.0.0.1:5555:5555"
     healthcheck:
