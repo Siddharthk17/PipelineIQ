@@ -84,6 +84,42 @@ def get_dashboard_stats(
                 PipelineRun.id)) .filter(
             PipelineRun.user_id == user_id,
             PipelineRun.status == PipelineStatus.CANCELLED) .scalar() or 0)
+    # M-085: count every PipelineStatus value so the buckets sum to
+    # total_runs and success_rate (completed / total) stays consistent.
+    timeout = (
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.TIMEOUT) .scalar() or 0)
+    contract_violation = (
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.CONTRACT_VIOLATION
+        ) .scalar() or 0)
+    streaming_active = (
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.STREAMING_ACTIVE
+        ) .scalar() or 0)
+    streaming_paused = (
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.STREAMING_PAUSED
+        ) .scalar() or 0)
+    streaming_stopped = (
+        db.query(
+            func.count(
+                PipelineRun.id)) .filter(
+            PipelineRun.user_id == user_id,
+            PipelineRun.status == PipelineStatus.STREAMING_STOPPED
+        ) .scalar() or 0)
 
     # Success rate
     success_rate = round(
@@ -125,6 +161,11 @@ def get_dashboard_stats(
         "running": running,
         "healing": healing,
         "cancelled": cancelled,
+        "timeout": timeout,
+        "contract_violation": contract_violation,
+        "streaming_active": streaming_active,
+        "streaming_paused": streaming_paused,
+        "streaming_stopped": streaming_stopped,
         "success_rate": success_rate,
         "total_files": total_files,
         "pipelines_by_status": {
@@ -134,6 +175,11 @@ def get_dashboard_stats(
             "RUNNING": running,
             "HEALING": healing,
             "CANCELLED": cancelled,
+            "TIMEOUT": timeout,
+            "CONTRACT_VIOLATION": contract_violation,
+            "STREAMING_ACTIVE": streaming_active,
+            "STREAMING_PAUSED": streaming_paused,
+            "STREAMING_STOPPED": streaming_stopped,
         },
         "most_used_pipelines": [
             {"name": name, "run_count": count}

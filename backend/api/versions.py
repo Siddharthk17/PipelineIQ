@@ -38,6 +38,8 @@ def _check_pipeline_permission(
 @router.get("/{pipeline_name}")
 def list_versions(
     pipeline_name: str,
+    page: int = 1,
+    limit: int = 50,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ):
@@ -45,14 +47,23 @@ def list_versions(
     pipeline_name = _check_pipeline_permission(
         db, current_user, pipeline_name, ["owner", "runner", "viewer"]
     )
-    versions = (
+    # M-085: bound the list (clamped like list_pipeline_runs, hard cap
+    # 200 like catalog). total_versions stays the full count.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    base_query = (
         db.query(PipelineVersion)
         .filter(PipelineVersion.pipeline_name == pipeline_name)
-        .order_by(PipelineVersion.version_number.desc())
+    )
+    total = base_query.count()
+    versions = (
+        base_query.order_by(PipelineVersion.version_number.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
     return {"pipeline_name": pipeline_name,
-            "total_versions": len(versions),
+            "total_versions": total,
             "versions": [{"id": str(v.id),
                           "version_number": v.version_number,
                           "pipeline_name": v.pipeline_name,

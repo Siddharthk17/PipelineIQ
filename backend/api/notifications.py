@@ -144,19 +144,29 @@ def create_notification_config(
 )
 def list_notification_configs(
     request: Request,
+    page: int = 1,
+    limit: int = 50,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """List all notification configs for the authenticated user."""
+    # M-085: bound the list (clamped like list_pipeline_runs, hard cap
+    # 200 like catalog). total stays the full count.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    base_query = db.query(NotificationConfig).filter(
+        NotificationConfig.user_id == current_user.id
+    )
+    total = base_query.count()
     configs = (
-        db.query(NotificationConfig)
-        .filter(NotificationConfig.user_id == current_user.id)
-        .order_by(NotificationConfig.created_at.desc())
+        base_query.order_by(NotificationConfig.created_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
     return {
         "configs": [_config_to_response(c) for c in configs],
-        "total": len(configs),
+        "total": total,
     }
 
 

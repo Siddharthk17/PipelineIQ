@@ -274,11 +274,23 @@ async def logout(
 
 @router.get("/users")
 async def list_users(
+    page: int = 1,
+    limit: int = 50,
     current_user: User = Depends(get_current_admin),
     db: Session = get_read_db_dependency(),
 ):
     """List all users (admin only)."""
-    users = db.query(User).order_by(User.created_at).all()
+    # M-085: bound the admin list (clamped like list_pipeline_runs,
+    # hard cap 200 like catalog). Shape stays a bare list.
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
+    users = (
+        db.query(User)
+        .order_by(User.created_at)
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
     return [_user_to_response(u) for u in users]
 
 

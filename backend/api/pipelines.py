@@ -984,6 +984,80 @@ def get_pipeline_stats(
         .scalar()
         or 0
     )
+    # M-085: count every PipelineStatus value so the buckets sum to
+    # total_runs and success_rate (completed / total) stays consistent.
+    running = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.RUNNING,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    healing = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.HEALING,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    cancelled = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.CANCELLED,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    timeout = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.TIMEOUT,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    contract_violation = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.CONTRACT_VIOLATION,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    streaming_active = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.STREAMING_ACTIVE,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    streaming_paused = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.STREAMING_PAUSED,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
+    streaming_stopped = (
+        db.query(func.count(PipelineRun.id))
+        .filter(
+            PipelineRun.status == PipelineStatus.STREAMING_STOPPED,
+            PipelineRun.user_id == current_user.id,
+        )
+        .scalar()
+        or 0
+    )
     total_files = (
         db.query(func.count(UploadedFile.id))
         .filter(UploadedFile.user_id == current_user.id)
@@ -1009,6 +1083,14 @@ def get_pipeline_stats(
         "completed": completed,
         "failed": failed,
         "pending": pending,
+        "running": running,
+        "healing": healing,
+        "cancelled": cancelled,
+        "timeout": timeout,
+        "contract_violation": contract_violation,
+        "streaming_active": streaming_active,
+        "streaming_paused": streaming_paused,
+        "streaming_stopped": streaming_stopped,
         "success_rate": round(
             completed / total_runs * 100,
             1) if total_runs > 0 else 0,
@@ -1058,6 +1140,8 @@ def list_healing_attempts(
     run_id: str,
     request: Request,
     response: Response,
+    page: int = 1,
+    limit: int = 50,
     db: Session = get_read_db_dependency(),
     current_user: User = Depends(get_current_user),
 ) -> list[HealingAttemptResponse]:
@@ -1075,10 +1159,16 @@ def list_healing_attempts(
         db, current_user, pipeline_run, ["owner", "runner", "viewer"]
     )
 
+    # M-085: bound the list (clamped like list_pipeline_runs, hard cap
+    # 200 like catalog).
+    page = max(1, min(page, 1_000_000))
+    limit = max(1, min(limit, 200))
     attempts = (
         db.query(HealingAttempt)
         .filter(HealingAttempt.pipeline_run_id == pipeline_run.id)
         .order_by(HealingAttempt.attempt_number.asc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
     return [_healing_attempt_to_response(a) for a in attempts]
