@@ -257,6 +257,10 @@ jobs:
           GEMINI_FALLBACK_MODELS=gemini-2.0-flash,gemini-1.5-flash
           FLOWER_USER=admin
           FLOWER_PASSWORD=ci_flower_password
+          # The smoke/e2e tests log in as the seeded demo user, and seeding
+          # is opt-in since M-002 — without this flag the login gets a 401.
+          # CI-only throwaway stacks; production never sets it.
+          PIPELINEIQ_SEED_DEMO=1
           GRAFANA_USER=admin
           GRAFANA_PASSWORD=ci_grafana_password
           APP_VERSION=12.8.4
@@ -486,6 +490,10 @@ jobs:
           GEMINI_FALLBACK_MODELS=gemini-2.0-flash,gemini-1.5-flash
           FLOWER_USER=admin
           FLOWER_PASSWORD=ci_flower_password
+          # The smoke/e2e tests log in as the seeded demo user, and seeding
+          # is opt-in since M-002 — without this flag the login gets a 401.
+          # CI-only throwaway stacks; production never sets it.
+          PIPELINEIQ_SEED_DEMO=1
           GRAFANA_USER=admin
           GRAFANA_PASSWORD=ci_grafana_password
           APP_VERSION=12.8.4
