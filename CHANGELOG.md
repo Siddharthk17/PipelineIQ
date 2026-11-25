@@ -3,6 +3,16 @@
 All notable changes to PipelineIQ are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/)
 
+## 12.28.11 (2026-11-25)
+
+## What's Changed
+* Release 12.28.10: pin APP_VERSION everywhere by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/70
+* Fix e2e CI: self-contained compose stack instead of dead prod URLs by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/71
+* Fail fast on ephemeral SECRET_KEY; CI asserts shared signing secret by @Siddharthk17 in https://github.com/Siddharthk17/PipelineIQ/pull/73
+
+
+**Full Changelog**: https://github.com/Siddharthk17/PipelineIQ/compare/v12.28.10...v12.28.11
+
 ## [12.28.10]
 
 ### Security
