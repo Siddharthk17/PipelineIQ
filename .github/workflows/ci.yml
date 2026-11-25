@@ -403,10 +403,89 @@ jobs:
         # browser-only install (runners already carry the system libs).
         run: npx playwright install --with-deps chromium || npx playwright install chromium
 
+      # Self-contained: boot the full compose stack instead of depending on
+      # an external production deployment. The old PRODUCTION_URL /
+      # PRODUCTION_API_URL secrets pointed at a deployment that may sleep
+      # (cold start exceeds the 30s global-setup login timeout) or not
+      # exist at all (PRODUCTION_URL was never set), which failed every run
+      # in global-setup with a login POST timeout before a single test ran.
+      - name: Create .env for E2E stack
+        run: |
+          cat > .env << EOF
+          DATABASE_URL=postgresql://pipelineiq:ci_password@pgbouncer:5432/pipelineiq
+          DATABASE_WRITE_URL=postgresql://pipelineiq:ci_password@pgbouncer:5432/pipelineiq
+          DATABASE_READ_URL=postgresql://pipelineiq:ci_password@pgbouncer-replica:5432/pipelineiq
+          POSTGRES_USER=pipelineiq
+          POSTGRES_PASSWORD=ci_password
+          POSTGRES_DB=pipelineiq
+          REPLICATION_USER=replicator
+          REPLICATION_PASSWORD=ci_password
+          MINIO_IMAGE_TAG=latest
+          MINIO_ROOT_USER=minioadmin
+          MINIO_ROOT_PASSWORD=minioadmin123
+          REDIS_PASSWORD=ci_redis_password
+          REDIS_BROKER_URL=redis://redis-broker:6379/0
+          REDIS_BACKEND_URL=redis://redis-broker:6379/1
+          REDIS_PUBSUB_URL=redis://redis-pubsub:6380/0
+          REDIS_CACHE_URL=redis://redis-cache:6381/0
+          REDIS_YJS_URL=redis://redis-yjs:6382/0
+          REDPANDA_BROKERS=redpanda:9093
+          CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
+          SECRET_KEY=ci_secret_key_for_testing_only
+          JWT_SECRET=ci_secret_key_for_testing_only
+          UPLOAD_DIR=/app/uploads
+          MAX_UPLOAD_SIZE=52428800
+          CACHE_TTL_STATS=30
+          RATE_LIMIT_PIPELINE_RUN=100/minute
+          RATE_LIMIT_FILE_UPLOAD=100/minute
+          RATE_LIMIT_VALIDATION=100/minute
+          RATE_LIMIT_READ=1000/minute
+          DRIFT_DETECTION_ENABLED=true
+          MAX_VERSIONS_PER_PIPELINE=50
+          S3_ACCESS_KEY=minioadmin
+          S3_SECRET_KEY=minioadmin123
+          S3_BUCKET=pipelineiq-uploads
+          S3_ENDPOINT_URL=http://minio:9000
+          STORAGE_TYPE=s3
+          GEMINI_API_KEY=ci_fake_gemini_key_for_testing
+          GEMINI_MODEL=gemini-2.5-flash
+          GEMINI_FALLBACK_MODELS=gemini-2.0-flash,gemini-1.5-flash
+          FLOWER_USER=admin
+          FLOWER_PASSWORD=ci_flower_password
+          # The e2e tests log in as the seeded demo user, and seeding is
+          # opt-in since M-002 — without this flag the login gets a 401.
+          # CI-only throwaway stacks; production never sets it.
+          PIPELINEIQ_SEED_DEMO=1
+          GRAFANA_USER=admin
+          GRAFANA_PASSWORD=ci_grafana_password
+          APP_VERSION=12.28.10
+          CELERY_WORKERS_CRITICAL=1
+          CELERY_WORKERS_DEFAULT=1
+          CELERY_WORKERS_BULK=1
+          EOF
+
+      - name: Set kernel sysctl for Redis
+        run: sudo sysctl -w vm.overcommit_memory=1
+
+      - name: Build and start all services
+        run: |
+          docker compose build
+          docker compose up -d
+          echo "Waiting for all services to be healthy..."
+          sleep 60
+
+      - name: Verify stack healthy
+        run: |
+          docker compose ps
+          curl --retry 5 --retry-delay 5 -f http://localhost/health
+          echo "✓ API healthy through Nginx"
+          curl --retry 5 --retry-delay 5 -f http://localhost/readyz
+          echo "✓ Readyz truthful"
+
       - name: Run E2E tests
         env:
-          E2E_BASE_URL: ${{ secrets.PRODUCTION_URL }}
-          E2E_API_URL: ${{ secrets.PRODUCTION_API_URL }}
+          E2E_BASE_URL: http://localhost
+          E2E_API_URL: http://localhost
         run: |
           npx playwright test \
             --reporter=html \
@@ -416,6 +495,12 @@ jobs:
             e2e/03-pipeline-builder.spec.ts \
             e2e/10-templates.spec.ts
 
+      - name: Dump service state on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail=50 api || true
+
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
         if: always()
@@ -423,6 +508,10 @@ jobs:
           name: playwright-report
           path: playwright-results/
           retention-days: 14
+
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes
 
   # JOB 6: Streaming E2E Tests
   week9-streaming-e2e:
