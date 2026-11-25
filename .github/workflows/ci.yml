@@ -263,7 +263,7 @@ jobs:
           PIPELINEIQ_SEED_DEMO=1
           GRAFANA_USER=admin
           GRAFANA_PASSWORD=ci_grafana_password
-          APP_VERSION=12.8.4
+          APP_VERSION=12.28.10
           CELERY_WORKERS_CRITICAL=1
           CELERY_WORKERS_DEFAULT=1
           CELERY_WORKERS_BULK=1
@@ -496,7 +496,7 @@ jobs:
           PIPELINEIQ_SEED_DEMO=1
           GRAFANA_USER=admin
           GRAFANA_PASSWORD=ci_grafana_password
-          APP_VERSION=12.8.4
+          APP_VERSION=12.28.10
           CELERY_WORKERS_CRITICAL=1
           CELERY_WORKERS_DEFAULT=1
           CELERY_WORKERS_BULK=1

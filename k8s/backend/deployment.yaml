@@ -32,7 +32,7 @@ spec:
       serviceAccountName: pipelineiq-sa
       initContainers:
         - name: migrate
-          image: ghcr.io/siddharthk17/pipelineiq-backend:12.8.4
+          image: ghcr.io/siddharthk17/pipelineiq-backend:12.28.10
           imagePullPolicy: Always
           command: ["alembic", "upgrade", "head"]
           workingDir: /app
@@ -43,7 +43,7 @@ spec:
                 name: pipelineiq-secrets
       containers:
         - name: api
-          image: ghcr.io/siddharthk17/pipelineiq-backend:12.8.4
+          image: ghcr.io/siddharthk17/pipelineiq-backend:12.28.10
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
