@@ -31,6 +31,16 @@ WEAK_SECRET_VALUES = frozenset(
 )
 MAX_SCHEDULE_CONFIG_BYTES = 51200
 
+# Set to True when the SECRET_KEY validator below falls back to an
+# auto-generated ephemeral key. Served entrypoints (API, SSE) must refuse
+# to boot in that state: an ephemeral key is per-process, so JWTs it mints
+# can never verify anywhere else (edge middleware, other workers, browser
+# sessions) — a split-brain deployment that still returns 200 on /health
+# and /auth/login and only fails visibly in browsers. Import-time consumers
+# (alembic, tests, one-off scripts) are unaffected; only the serving
+# lifespans check this flag.
+SECRET_KEY_WAS_GENERATED = False
+
 
 class Settings(BaseSettings):
     """PipelineIQ application settings.
@@ -316,6 +326,8 @@ class Settings(BaseSettings):
             # different keys per process and invalidate each other's JWTs.
             # Production must set SECRET_KEY explicitly (fail-closed above);
             # this path is dev/CI-only and logs loudly so it is never silent.
+            global SECRET_KEY_WAS_GENERATED
+            SECRET_KEY_WAS_GENERATED = True
             self.SECRET_KEY = _secrets.token_urlsafe(48)
             logging.getLogger(__name__).warning(
                 "SECRET_KEY auto-generated ephemeral value for %s; "

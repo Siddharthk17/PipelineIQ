@@ -35,6 +35,28 @@ security = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
 
 
+def require_explicit_signing_key() -> None:
+    """Refuse to serve with an auto-generated ephemeral SECRET_KEY.
+
+    Called once from each serving lifespan (API, SSE) at startup. An
+    ephemeral key is minted per settings construction, so any multi-process
+    or multi-container deployment without an explicit shared SECRET_KEY
+    mints divergent keys: /health and /auth/login still return 200 (each
+    process verifies its own tokens) while browser sessions and sibling
+    workers 401/redirect forever. Failing fast here turns that silent
+    split-brain into a one-line boot error naming the fix.
+    """
+    import backend.config as _config
+
+    if _config.SECRET_KEY_WAS_GENERATED:
+        raise RuntimeError(
+            "Refusing to serve: SECRET_KEY was auto-generated (missing, "
+            "empty, or a known placeholder). Set a random value with at "
+            "least 32 characters in the SECRET_KEY environment variable "
+            "(e.g. `openssl rand -hex 32`) so every process shares it."
+        )
+
+
 def _bcrypt_check_sync(plain_bytes: bytes, hashed_bytes: bytes) -> bool:
     return bcrypt.checkpw(plain_bytes, hashed_bytes)
 

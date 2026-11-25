@@ -98,6 +98,11 @@ if settings.SENTRY_DSN:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler for startup and shutdown."""
+    from backend.auth import require_explicit_signing_key
+
+    # Fail fast on split-brain signing: an auto-generated ephemeral key
+    # verifies only inside this process (see backend/auth.py).
+    require_explicit_signing_key()
     logger.info(
         "Starting %s v%s (debug=%s, log_level=%s)",
         settings.APP_NAME,

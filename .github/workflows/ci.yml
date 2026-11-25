@@ -482,6 +482,26 @@ jobs:
           curl --retry 5 --retry-delay 5 -f http://localhost/readyz
           echo "✓ Readyz truthful"
 
+      - name: Assert shared JWT secret (fail fast on split-brain signing)
+        # A backend booted with an auto-generated ephemeral SECRET_KEY still
+        # answers /health and /auth/login 200 (it verifies its own tokens),
+        # but the edge middleware and sibling workers reject every token, so
+        # all browser specs bounce at /login with no useful error. Catch that
+        # here in seconds instead of debugging 18 timeouts.
+        run: |
+          if docker compose logs api 2>/dev/null | grep -q "auto-generated ephemeral"; then
+            echo "::error::api booted with an ephemeral SECRET_KEY — browser sessions can never stick."
+            docker compose logs --tail=20 api || true
+            exit 1
+          fi
+          API_KEY_HASH=$(docker compose exec -T api sh -c 'printenv SECRET_KEY | sha256sum' | cut -d' ' -f1)
+          FE_KEY_HASH=$(docker compose exec -T frontend sh -c 'printenv AUTH_JWT_SECRET' | sha256sum | cut -d' ' -f1)
+          if [ -z "$API_KEY_HASH" ] || [ "$API_KEY_HASH" != "$FE_KEY_HASH" ]; then
+            echo "::error::api SECRET_KEY and frontend AUTH_JWT_SECRET disagree — JWTs minted by one side will fail on the other."
+            exit 1
+          fi
+          echo "✓ api and edge agree on the signing secret"
+
       - name: Run E2E tests
         env:
           E2E_BASE_URL: http://localhost
