@@ -49,6 +49,11 @@ async def sse_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     instead of hanging on leaked connections.
     """
     logger.info("SSE service starting")
+    from backend.auth import require_explicit_signing_key
+
+    # Same split-brain guard as the API lifespan: never stream on an
+    # ephemeral per-process signing key.
+    require_explicit_signing_key()
     _fail_fast_on_pg_unreachable()
     logger.info("SSE service startup complete")
     try:
