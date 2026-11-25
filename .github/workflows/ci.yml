@@ -236,8 +236,8 @@ jobs:
           REDIS_YJS_URL=redis://redis-yjs:6382/0
           REDPANDA_BROKERS=redpanda:9093
           CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
-          SECRET_KEY=ci_secret_key_for_testing_only
-          JWT_SECRET=ci_secret_key_for_testing_only
+          SECRET_KEY=ci_secret_key_for_testing_only_32chr
+          JWT_SECRET=ci_secret_key_for_testing_only_32chr
           UPLOAD_DIR=/app/uploads
           MAX_UPLOAD_SIZE=52428800
           CACHE_TTL_STATS=30
@@ -431,8 +431,8 @@ jobs:
           REDIS_YJS_URL=redis://redis-yjs:6382/0
           REDPANDA_BROKERS=redpanda:9093
           CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
-          SECRET_KEY=ci_secret_key_for_testing_only
-          JWT_SECRET=ci_secret_key_for_testing_only
+          SECRET_KEY=ci_secret_key_for_testing_only_32chr
+          JWT_SECRET=ci_secret_key_for_testing_only_32chr
           UPLOAD_DIR=/app/uploads
           MAX_UPLOAD_SIZE=52428800
           CACHE_TTL_STATS=30
@@ -578,8 +578,8 @@ jobs:
           REDIS_YJS_URL=redis://redis-yjs:6382/0
           REDPANDA_BROKERS=redpanda:9093
           CELERY_RESULT_BACKEND=redis://redis-broker:6379/1
-          SECRET_KEY=ci_secret_key_for_testing_only
-          JWT_SECRET=ci_secret_key_for_testing_only
+          SECRET_KEY=ci_secret_key_for_testing_only_32chr
+          JWT_SECRET=ci_secret_key_for_testing_only_32chr
           UPLOAD_DIR=/app/uploads
           MAX_UPLOAD_SIZE=52428800
           CACHE_TTL_STATS=30
